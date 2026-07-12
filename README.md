@@ -37,22 +37,25 @@ Delivery modes a Rust host fits especially well:
 - **Server-driven** — hold the tree + state in native Rust, stream tree-op diffs to
   a thin generic client, and round-trip interactions.
 
-## Status — stage-0 bootstrap
+## Status — codec floor shipped
 
 Shipped:
 
-- **`canonical`** — the make-or-break canonical number formatter (the `.NET "R"`
-  float layout the wire form requires), with the corpus divergence-zone vectors
-  under test.
-- **`wire`** — the codec surface and the six-code decode-error envelope (bodies
-  stubbed).
-- **conformance** (`tests/conformance.rs`) — the corpus harness wiring: it locates
-  the shared `wire-format-fixtures` corpus and skips cleanly when the repo is
-  checked out alone.
+- **`canonical`** — the full canonical-JSON layer: the make-or-break number
+  formatter (the `.NET "R"` float layout the wire form requires), a hand-rolled
+  stdlib-only JSON parser, and the byte-exact canonical renderer (Ordinal key
+  sort, the pinned escapes).
+- **`wire`** — the typed wire model (every closed wire DU as a native `enum`)
+  plus the working codec: `decode_node` / `encode_node` / `decode_op` /
+  `encode_op`, with the six-code `DecodeError` envelope and `$`-rooted paths.
+- **conformance** (`tests/conformance.rs`) — certification against the shared
+  `wire-format-fixtures` corpus: every node + op round-trip fixture re-encodes
+  **byte-identically**, and every reject fixture surfaces the canonical error
+  code + path prefix. Skips cleanly when the repo is checked out alone.
 
-The node/op codec, tree-op apply engine, validator, and server-HTML / WASM-client
-emission are roadmap work (the "floor" tier and beyond). Nothing here claims a
-working codec yet.
+The tree-op apply engine, pre-emit validator, lenient-profile / envelope /
+elicitation conformance families, and server-HTML / WASM-client emission are
+roadmap work beyond the floor.
 
 ## Layout
 
@@ -61,15 +64,18 @@ fuaran-rs/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs           # crate doc + VERSION
-│   ├── canonical/       # canonical-JSON primitives — number form (shipped); key sort + escaping (floor)
+│   ├── canonical/       # canonical-JSON layer — number form, parser, canonical renderer
 │   │   ├── mod.rs
-│   │   └── float.rs
-│   └── wire/            # Node / TreeOp codec surface + DecodeError envelope (bodies = floor)
+│   │   ├── float.rs
+│   │   └── json.rs
+│   └── wire/            # typed wire model + Node / TreeOp codec + DecodeError envelope
 │       ├── mod.rs
-│       ├── node.rs
+│       ├── model.rs
+│       ├── decode.rs
+│       ├── encode.rs
 │       └── result.rs
 ├── tests/
-│   └── conformance.rs   # shared-corpus certification harness (smoke leg shipped)
+│   └── conformance.rs   # shared-corpus certification (round-trip + reject legs)
 ├── run.ps1              # cargo fmt --check -> clippy -> build -> test
 ├── LICENSE              # Apache-2.0
 ├── README.md

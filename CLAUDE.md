@@ -6,9 +6,9 @@ to the F# (`Fuaran.UI`), TypeScript (`@fuaran-ui/*`), Python (`fuaran_py`), and 
 backend / edge / embedded host *and* a **browser-native `wasm32` client** — the
 canonical-JSON codec, a tree-op apply engine, a pre-emit validator, and both
 server-side and WASM-client emission, all conformant to the shared wire format. What
-ships **today** is the floor's first brick — the canonical number formatter plus the
-corpus harness wiring; the codec, apply engine, validator, and emission are roadmap
-work.
+ships **today** is the codec floor — the canonical-JSON layer (number form, parser,
+byte-exact renderer) and the typed node/op codec, corpus-certified on the round-trip
+and reject families; the apply engine, validator, and emission are roadmap work.
 
 **Framing — load-bearing, do not regress.** The emission surface is the **canonical
 JSON wire format, for every host**. The language tiers are **human-developer
@@ -59,9 +59,9 @@ its arm lands.
 ```
 fuaran-rs/
 ├── src/lib.rs           # crate doc + VERSION
-├── src/canonical/       # canonical-JSON primitives — float.rs (number form) shipped; key sort + escaping = floor
-├── src/wire/            # Node / TreeOp codec surface + DecodeError six-code envelope (bodies = floor)
-├── tests/conformance.rs # shared-corpus certification harness (smoke leg shipped)
+├── src/canonical/       # canonical-JSON layer — float.rs (number form) + json.rs (parser + canonical renderer)
+├── src/wire/            # model.rs (typed tree, native enums) + decode.rs / encode.rs + the DecodeError envelope
+├── tests/conformance.rs # shared-corpus certification (round-trip + reject legs live)
 ├── Cargo.toml
 ├── run.ps1              # Stage-0 entry point — cargo fmt --check + clippy + build + test
 ├── LICENSE              # Apache 2.0 + Diametrical Ltd copyright
@@ -96,12 +96,18 @@ for every malformed fixture. The **forward-coupling rule** (`WIRE_FORMAT.md` §1
 means a new `NodeKind` / `Spec` / `TreeOp` / `Binding` / `Action` case must move every
 host in one change — `fuaran-rs` is now one of those hosts.
 
-### Conformance coverage (stage-0 bootstrap)
+### Conformance coverage (codec floor)
 
-Shipped: the canonical number formatter (`canonical::format_finite_double`, pinned to
-the corpus `metric-float-*` divergence-zone vectors) and the corpus harness wiring
-(`tests/conformance.rs` locates `../wire-format-fixtures/` and skips when absent). The
-node/op round-trip + reject legs land with the codec floor.
+Shipped: the canonical-JSON layer (`canonical::format_finite_double` pinned to the
+corpus `metric-float-*` divergence-zone vectors, plus the hand-rolled parser and
+byte-exact canonical renderer) and the typed node/op codec
+(`wire::{decode_node, encode_node, decode_op, encode_op}`). `tests/conformance.rs`
+certifies against the shared corpus: every **node-round-trip** and **op-round-trip**
+fixture re-encodes byte-identically, and every **reject** fixture surfaces the
+canonical error code + `$`-rooted path prefix (the harness locates
+`../wire-format-fixtures/` via `manifest.json` — the authoritative enumeration — and
+skips when absent). The lenient-accept, envelope, and elicitation families are later
+tiers, counted and skipped explicitly by the harness.
 
 ## Interactivity — a client-side host, not only a headless one
 
