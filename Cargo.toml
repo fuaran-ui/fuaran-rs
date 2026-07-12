@@ -1,0 +1,20 @@
+[package]
+name = "fuaran-rs"
+version = "0.0.1-alpha"
+edition = "2024"
+rust-version = "1.85"
+description = "Rust host of the Fuaran UI wire format — a dependency-light, idiomatic-Rust reference implementation of the canonical-JSON contract a Rust service, WASM client, or embedded host reads, writes, and drives."
+license = "Apache-2.0"
+repository = "https://github.com/fuaran-ui/fuaran-rs"
+# Stage-0 bootstrap: not a published crate yet.
+publish = false
+
+[lib]
+name = "fuaran_rs"
+path = "src/lib.rs"
+
+[dependencies]
+# The runtime host uses the Rust standard library only — no third-party crates.
+# Rust's stdlib has no JSON, so the canonical JSON layer is hand-written for
+# byte-exact output regardless (the same "hand-write the hard part" stance every
+# host takes). Third-party crates appear only as dev tooling if ever.
