@@ -1,9 +1,15 @@
-//! The canonical `Node` / `TreeOp` codec surface of the `fuaran-rs` host. Stage-0
-//! bootstrap: the error envelope is defined; the decode/encode bodies are the
-//! roadmap floor.
+//! The canonical `Node` / `TreeOp` codec of the `fuaran-rs` host: the typed
+//! wire model ([`model`]), the structural decoder ([`decode_node`] /
+//! [`decode_op`] — six-code [`DecodeError`] envelope, `$`-rooted paths), and
+//! the byte-stable canonical encoder ([`encode_node`] / [`encode_op`]).
+//! Certified against the shared conformance corpus by `tests/conformance.rs`.
 
-mod node;
+mod decode;
+mod encode;
+mod model;
 mod result;
 
-pub use node::{Node, NotImplemented, decode_node, encode_node};
+pub use decode::{decode_node, decode_op};
+pub use encode::{encode_node, encode_op};
+pub use model::*;
 pub use result::{DecodeError, DecodeErrorCode};

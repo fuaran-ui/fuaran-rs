@@ -8,10 +8,11 @@
 //! (`WIRE_FORMAT.md`) and certified against the shared conformance corpus. See
 //! `README.md` and `CLAUDE.md`.
 //!
-//! Status: stage-0 bootstrap. The canonical number formatter (the [`canonical`]
-//! module) is the first shipped brick; the node/op codec, apply engine, and
-//! validator are roadmap work (the "floor" tier). Nothing here claims a working
-//! codec yet.
+//! Status: the codec floor is shipped — the canonical JSON layer ([`canonical`])
+//! and the typed node/op codec ([`wire`]): [`wire::decode_node`] /
+//! [`wire::encode_node`] / [`wire::decode_op`] / [`wire::encode_op`], certified
+//! byte-for-byte against the shared conformance corpus (round-trip + reject
+//! families). The apply engine, validator, and emission tiers are roadmap work.
 
 pub mod canonical;
 pub mod wire;

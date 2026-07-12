@@ -1,24 +1,30 @@
-//! Certifies the `fuaran-rs` host against the shared `wire-format-fixtures` corpus.
-//! Stage-0: a smoke leg that locates the corpus manifest and confirms it declares
-//! fixtures. The byte-for-byte round-trip and reject legs land with the codec
-//! (roadmap floor) and are skipped here.
+//! Certifies the `fuaran-rs` host against the shared `wire-format-fixtures`
+//! corpus (the executable conformance suite of the Fuaran UI wire format).
 //!
-//! Rust's standard library has no JSON parser, so the stage-0 smoke leg does a
-//! dependency-free presence + fixture-count check; the real manifest parse arrives
-//! with the codec floor, alongside the hand-written canonical JSON layer.
+//! Per the corpus contract, `manifest.json` is the authoritative fixture
+//! enumeration; per entry:
+//! - `node-round-trip` / `op-round-trip` — decode `inputFile` with the named
+//!   decoder, re-encode, assert **byte-equal** to `expectedFile`;
+//! - `reject` — decode `inputFile`; assert the error's code equals
+//!   `expectedErrorCode` and its path starts with `expectedPath`.
+//!
+//! The remaining families (lenient-accept, envelope, elicitation) are later
+//! tiers — counted and skipped explicitly so a silent gap cannot read as
+//! coverage. When the corpus is absent (standalone checkout) every leg skips.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-/// Walks up from the crate directory looking for the shared `wire-format-fixtures`
-/// corpus (a sibling of the `fuaran-rs` repo under Fuaran-UI). Returns `None` when
-/// absent, so the repo stays standalone-testable — the corpus legs skip (pass)
-/// rather than fail when the repo is checked out alone.
+use fuaran_rs::canonical::{JVal, parse};
+use fuaran_rs::wire::{decode_node, decode_op, encode_node, encode_op};
+
+/// Walks up from the crate directory looking for the shared corpus (a sibling
+/// checkout). `None` keeps the repo standalone-testable — legs skip, not fail.
 fn find_corpus() -> Option<PathBuf> {
     let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
     loop {
-        let manifest = dir.join("wire-format-fixtures").join("manifest.json");
-        if manifest.is_file() {
-            return Some(manifest);
+        let root = dir.join("wire-format-fixtures");
+        if root.join("manifest.json").is_file() {
+            return Some(root);
         }
         if !dir.pop() {
             return None;
@@ -26,31 +32,189 @@ fn find_corpus() -> Option<PathBuf> {
     }
 }
 
-/// Stage-0 smoke leg: prove the harness can locate the shared corpus manifest and
-/// that it declares fixtures. Round-trip + reject legs land with the codec floor.
-#[test]
-fn corpus_manifest_loads() {
-    let Some(manifest) = find_corpus() else {
-        eprintln!(
-            "wire-format-fixtures corpus not found alongside the repo; skipping (standalone checkout)"
-        );
-        return;
-    };
-    let raw = std::fs::read_to_string(&manifest).expect("reading manifest");
-    assert!(!raw.trim().is_empty(), "corpus manifest is empty");
-    // Dependency-free fixture count: the manifest lists one `"id"` per fixture.
-    let fixture_count = raw.matches("\"id\"").count();
-    assert!(fixture_count > 0, "corpus manifest declares no fixtures");
-    eprintln!(
-        "corpus located: {fixture_count} fixtures declared (round-trip + reject legs pending the codec floor)"
-    );
+struct Fixture {
+    id: String,
+    kind: String,
+    decoder: String,
+    input_file: String,
+    expected_file: Option<String>,
+    expected_error_code: Option<String>,
+    expected_path: Option<String>,
 }
 
-/// Placeholder for the byte-for-byte round-trip and reject legs, which require the
-/// codec (roadmap floor). Nothing to assert yet.
+fn str_field(fields: &JVal, key: &str) -> Option<String> {
+    match fields.field(key) {
+        Some(JVal::Str(s)) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+fn load_manifest(corpus: &Path) -> Vec<Fixture> {
+    let raw = std::fs::read_to_string(corpus.join("manifest.json")).expect("reading manifest");
+    let manifest = parse(&raw).expect("manifest.json parses with the host's own JSON layer");
+    let Some(JVal::Arr(entries)) = manifest.field("fixtures") else {
+        panic!("manifest.json declares no fixtures array");
+    };
+    entries
+        .iter()
+        .map(|e| Fixture {
+            id: str_field(e, "id").expect("fixture id"),
+            kind: str_field(e, "kind").expect("fixture kind"),
+            decoder: str_field(e, "decoder").unwrap_or_default(),
+            input_file: str_field(e, "inputFile").expect("fixture inputFile"),
+            expected_file: str_field(e, "expectedFile"),
+            expected_error_code: str_field(e, "expectedErrorCode"),
+            expected_path: str_field(e, "expectedPath"),
+        })
+        .collect()
+}
+
+fn read_fixture(corpus: &Path, rel: &str) -> String {
+    std::fs::read_to_string(corpus.join(rel))
+        .unwrap_or_else(|e| panic!("reading fixture file '{rel}': {e}"))
+}
+
+/// The round-trip legs: every node + op fixture must re-encode byte-identically.
 #[test]
-fn codec_round_trip_pending() {
-    eprintln!(
-        "node/op round-trip + reject legs pending the codec floor — see CLAUDE.md and the fuaran roadmap"
+fn corpus_round_trips_byte_identical() {
+    let Some(corpus) = find_corpus() else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+    let mut failures: Vec<String> = vec![];
+    let mut ran = 0;
+    for fixture in load_manifest(&corpus) {
+        let is_node = fixture.kind == "node-round-trip";
+        let is_op = fixture.kind == "op-round-trip";
+        if !is_node && !is_op {
+            continue;
+        }
+        ran += 1;
+        let input = read_fixture(&corpus, &fixture.input_file);
+        let expected_rel = fixture
+            .expected_file
+            .as_deref()
+            .unwrap_or(&fixture.input_file);
+        let expected = read_fixture(&corpus, expected_rel);
+        let re_encoded = if is_node {
+            decode_node(&input).map(|n| encode_node(&n))
+        } else {
+            decode_op(&input).map(|op| encode_op(&op))
+        };
+        match re_encoded {
+            Err(e) => failures.push(format!(
+                "{}: decode failed: {} at {}: {}",
+                fixture.id,
+                e.code.as_str(),
+                e.path,
+                e.message
+            )),
+            Ok(actual) if actual != expected => {
+                let diff_at = actual
+                    .bytes()
+                    .zip(expected.bytes())
+                    .position(|(a, b)| a != b)
+                    .unwrap_or_else(|| actual.len().min(expected.len()));
+                let lo = diff_at.saturating_sub(40);
+                failures.push(format!(
+                    "{}: re-encode diverges at byte {} —\n  expected …{}…\n  actual   …{}…",
+                    fixture.id,
+                    diff_at,
+                    &expected[lo..(diff_at + 40).min(expected.len())],
+                    &actual[lo..(diff_at + 40).min(actual.len())],
+                ));
+            }
+            Ok(_) => {}
+        }
+    }
+    assert!(ran > 0, "corpus declared no round-trip fixtures");
+    assert!(
+        failures.is_empty(),
+        "{} of {} round-trip fixtures failed:\n{}",
+        failures.len(),
+        ran,
+        failures.join("\n")
     );
+    eprintln!("round-trip legs: {ran} fixtures byte-identical");
+}
+
+/// The reject leg: every malformed fixture fails decode with the canonical
+/// code + a `$`-rooted path carrying the expected prefix.
+#[test]
+fn corpus_rejects_surface_canonical_code_and_path() {
+    let Some(corpus) = find_corpus() else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+    let mut failures: Vec<String> = vec![];
+    let mut ran = 0;
+    for fixture in load_manifest(&corpus) {
+        if fixture.kind != "reject" {
+            continue;
+        }
+        ran += 1;
+        let input = read_fixture(&corpus, &fixture.input_file);
+        let error = match fixture.decoder.as_str() {
+            "node" => decode_node(&input).map(|_| ()).err(),
+            "op" => decode_op(&input).map(|_| ()).err(),
+            other => {
+                failures.push(format!("{}: unknown decoder '{other}'", fixture.id));
+                continue;
+            }
+        };
+        let expected_code = fixture.expected_error_code.as_deref().unwrap_or("");
+        let expected_path = fixture.expected_path.as_deref().unwrap_or("");
+        match error {
+            None => failures.push(format!(
+                "{}: decode ACCEPTED a malformed input (expected {expected_code} at {expected_path})",
+                fixture.id
+            )),
+            Some(e) => {
+                if e.code.as_str() != expected_code {
+                    failures.push(format!(
+                        "{}: wrong code — expected {expected_code}, got {} at {}: {}",
+                        fixture.id,
+                        e.code.as_str(),
+                        e.path,
+                        e.message
+                    ));
+                } else if !e.path.starts_with(expected_path) {
+                    failures.push(format!(
+                        "{}: wrong path — expected prefix {expected_path}, got {}",
+                        fixture.id, e.path
+                    ));
+                }
+            }
+        }
+    }
+    assert!(ran > 0, "corpus declared no reject fixtures");
+    assert!(
+        failures.is_empty(),
+        "{} of {} reject fixtures failed:\n{}",
+        failures.len(),
+        ran,
+        failures.join("\n")
+    );
+    eprintln!("reject leg: {ran} fixtures surface the canonical code + path");
+}
+
+/// Names the corpus families this host does not yet run, so the skip is
+/// explicit rather than silent (lenient-accept / envelope / elicitation are
+/// later tiers than the codec floor).
+#[test]
+fn corpus_families_beyond_the_floor_are_explicitly_skipped() {
+    let Some(corpus) = find_corpus() else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+    let mut skipped: std::collections::BTreeMap<String, usize> = Default::default();
+    for fixture in load_manifest(&corpus) {
+        match fixture.kind.as_str() {
+            "node-round-trip" | "op-round-trip" | "reject" => {}
+            other => *skipped.entry(other.to_string()).or_insert(0) += 1,
+        }
+    }
+    for (kind, count) in &skipped {
+        eprintln!("skipped family (beyond the codec floor): {kind} × {count}");
+    }
 }

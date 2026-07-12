@@ -39,12 +39,14 @@ impl fmt::Display for DecodeErrorCode {
 
 /// The structured, recoverable error a decode returns. `path` is the `$`-rooted
 /// location of the fault (e.g. `"$.kind.text"`); the reject corpus asserts the
-/// `code` plus a `path` prefix.
+/// `code` plus a `path` prefix. `expected_shape` is the optional AI-recovery
+/// hint (`WIRE_FORMAT.md` §6) — e.g. the valid cases of a `$type` position.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodeError {
     pub code: DecodeErrorCode,
     pub path: String,
     pub message: String,
+    pub expected_shape: Option<String>,
 }
 
 impl fmt::Display for DecodeError {
