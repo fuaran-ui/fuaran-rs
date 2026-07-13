@@ -17,6 +17,7 @@
 pub mod canonical;
 pub mod client;
 pub mod ops;
+pub mod opstream;
 pub mod render;
 pub mod validator;
 pub mod wire;
