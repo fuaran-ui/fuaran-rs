@@ -21,6 +21,7 @@ pub mod introspect;
 pub mod ops;
 pub mod opstream;
 pub mod render;
+pub mod teleport;
 pub mod theme;
 pub mod transform;
 pub mod validator;

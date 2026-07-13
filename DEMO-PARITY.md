@@ -28,7 +28,7 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 | `layout-observe` (structural overflow/reflow flags) | ✅ | `introspect/layout.rs` | `LayoutObserver.Flags.derive` port + behaviour suite |
 | `transform-eval` (Binding.Transform dataframe pipeline) | ✅ | `transform/` | pinned cross-host semantics (null/coercion/round-half-away/div-by-zero/stability) + canonical round-trip |
 | `theme-contrast` (theme resolve + WCAG contrast) | ✅ | `theme/` | WCAG reference constants (black/white = 21.0, #767676 grey = AA boundary, alpha compositing) |
-| `teleport` (FT1 deflate+base64url+SHA-256 envelope, §17) | ⬜ | — | (planned) |
+| `teleport` (FT1 deflate+base64url+SHA-256 envelope, §17) | ✅ | `teleport/` | byte-exact string round-trip + digest-tamper/version/oversize rejects; hand-written RFC 1951 DEFLATE (self round-trip + stored/fixed/dynamic inflate) |
 | `action-gate` (default-deny dispatch/decode gate) | 🟡 | `wire/` + `validator/` | decode-reject IS the structural gate; a dispatch allowlist is the remaining piece |
 | `email-safe render` (Send Me digest projection) | ⬜ | — | (planned) |
 | `versioning-envelope` (§15 profile/Unknown tolerance) | ⬜ | — | `envelope/` (planned) |
@@ -57,7 +57,7 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 | Every Screen | Intent | render, responsive-layout | ✅ (reference-CSS breakpoints fold the grid — no host code) |
 | Blind Surveyor | Machine | layout-observe | ✅ |
 | Unit Test | Machine | introspection, layout-observe | ✅ |
-| Teleport | Value | teleport, codec, validator, versioning-envelope | ⬜ |
+| Teleport | Value | teleport, codec, validator, versioning-envelope | ✅ (FT1 bundle: serialise running app → string → resume, digest-verified) |
 
 ## Build order (leverage-first)
 
@@ -66,18 +66,21 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 3. **introspection + search-pattern + layout-observe** ✅ — Unit Test, Grep Apps, Blind Surveyor, + partial Kintsugi / Pattern Bank.
 4. **theme-contrast** ✅ — Infinite Skins, Kintsugi (the contrast sense).
 5. **transform-eval** ✅ — Living Sheet, Pattern Bank (the computed metric), Pandas.
-6. **teleport (+ versioning-envelope)** — Teleport.
+6. **teleport** ✅ — Teleport (hand-written RFC 1951 DEFLATE + base64url + FT1 envelope).
 7. **email-safe render** — Send Me.
 8. **tree-diff op-script** — What-If (+ Pandas re-run patch).
 
 ## Where parity stands
 
 The spine (`codec` + `apply` + `render` + `validator` + `client` + `opstream` +
-`dag/merge` + `introspect` + `theme` + `transform`) now runs the mechanic of
-**almost the whole site** — 18 of 21 demos fully covered: Rosetta, Degradation,
-Pandas, Bouncer, Notarised, Relay, Time Machine, Git for Interfaces,
-Counterfactual, Grep Apps, Every Screen, Blind Surveyor, Unit Test, Kintsugi,
-Infinite Skins, Living Sheet, Pattern Bank. Partial (a named sub-capability
-remaining): Send Me (email digest), Bazaar (capability-gate enforcement), What-If
-(tree-diff). Remaining net-new capability: **teleport** (Teleport), plus the
-small **email-digest render** + **tree-diff** + **capability-gate** pieces.
+`dag/merge` + `introspect` + `theme` + `transform` + `teleport`) now runs the
+mechanic of **19 of 21 demos** — Rosetta, Degradation, Pandas, Bouncer,
+Notarised, Relay, Time Machine, Git for Interfaces, Counterfactual, Grep Apps,
+Every Screen, Blind Surveyor, Unit Test, Kintsugi, Infinite Skins, Living Sheet,
+Pattern Bank, Teleport, plus the crawlable/live tiers of Send Me. **Every
+net-new capability is now shipped;** what remains is three small enrichments on
+already-partial demos: Send Me (an email-safe digest projection), Bazaar (an
+explicit capability-gate allowlist on top of the decode-reject gate), and What-If
+(a tree-diff → op-script generator over the shipped apply engine). None is a
+new substrate — each is a bounded projection/generator over capabilities the
+host already has.
