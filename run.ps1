@@ -67,18 +67,33 @@ function Invoke-CrossTargetLeg {
 
     if ($IsAndroid) {
         # Android .so legs need the NDK linker; cargo-ndk wraps it. Skip cleanly when absent.
+        # NOTE: invoke the cargo subcommand `cargo ndk` — plain `cargo build --target
+        # <android-triple>` fails to find the NDK linker even with cargo-ndk installed, and
+        # calling cargo-ndk.exe directly mis-parses (cargo supplies `ndk` as the first arg).
         $cargoNdk = Get-Command cargo-ndk -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $cargoNdk) {
-            Write-Host "==> skip $Target — cargo-ndk not found (cargo install cargo-ndk + set ANDROID_NDK_HOME to enable)." -ForegroundColor Yellow
+            Write-Host "==> skip $Target — cargo-ndk not found (cargo install cargo-ndk to enable)." -ForegroundColor Yellow
             return
         }
-        # 16KB page-size alignment is REQUIRED for .so on modern Android (acceptance item).
+        $ndk = $env:ANDROID_NDK_HOME
+        if (-not $ndk) { $ndk = [Environment]::GetEnvironmentVariable('ANDROID_NDK_HOME', 'User') }
+        if (-not $ndk) { $ndk = $env:ANDROID_NDK_ROOT }
+        if (-not $ndk -or -not (Test-Path $ndk)) {
+            Write-Host "==> skip $Target — ANDROID_NDK_HOME not set / not found (install the Android NDK + set ANDROID_NDK_HOME to enable)." -ForegroundColor Yellow
+            return
+        }
+        $env:ANDROID_NDK_HOME = $ndk
+        # 16KB page alignment is a 64-bit concern (arm64-v8a, x86_64) — required by Google there;
+        # 32-bit armv7 uses 4KB pages. cargo-ndk (NDK r28+) defaults to 16KB on 64-bit; the flag is
+        # belt-and-braces, applied to the 64-bit ABIs only.
         $prevFlags = $env:RUSTFLAGS
-        $pageFlag = "-C link-arg=-Wl,-z,max-page-size=16384"
-        $env:RUSTFLAGS = if ([string]::IsNullOrEmpty($prevFlags)) { $pageFlag } else { "$prevFlags $pageFlag" }
+        if ($Target -ne "armv7-linux-androideabi") {
+            $pageFlag = "-C link-arg=-Wl,-z,max-page-size=16384"
+            $env:RUSTFLAGS = if ([string]::IsNullOrEmpty($prevFlags)) { $pageFlag } else { "$prevFlags $pageFlag" }
+        }
         try {
-            Write-Host "==> cargo build --target $Target --release (16KB-page .so)" -ForegroundColor Cyan
-            & $cargo build --target $Target --release
+            Write-Host "==> cargo ndk -t $Target build --release (.so)" -ForegroundColor Cyan
+            & $cargo ndk -t $Target build --release
             if ($LASTEXITCODE -ne 0) { throw "Android cross build failed for $Target." }
         }
         finally { $env:RUSTFLAGS = $prevFlags }
