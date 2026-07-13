@@ -9,6 +9,7 @@ mod encode;
 mod model;
 mod result;
 
+pub(crate) use decode::coerce;
 pub use decode::{decode_node, decode_op};
 pub use encode::{encode_node, encode_op};
 pub use model::*;

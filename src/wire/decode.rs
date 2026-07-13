@@ -2725,3 +2725,94 @@ pub fn decode_op(json: &str) -> Result<TreeOp, DecodeError> {
         Err(e) => Err(invalid_json(&e.message)),
     }
 }
+
+// ─── Coercion bridge (apply-engine UpdateProp) ───────────────────────────────
+//
+// `TreeOp.UpdateProp` carries a structured `JVal` payload; the apply engine
+// pours it into a typed spec field. These helpers run the matching per-type
+// decoder over the payload; failures surface a plain message string the apply
+// engine reframes into a `KindMismatch` ApplyError. Mirrors the reference
+// hosts' coercion bridge.
+
+pub(crate) mod coerce {
+    use super::*;
+
+    type C<T> = Result<T, String>;
+
+    fn via<T>(v: &JVal, dec: impl Fn(&str, &JVal) -> DResult<T>) -> C<T> {
+        dec("$value", v).map_err(|e| e.message)
+    }
+
+    pub fn int(v: &JVal) -> C<i64> {
+        match v {
+            JVal::Num(n) => Ok(n.trunc() as i64),
+            _ => Err("expected a JSON number (integer)".to_string()),
+        }
+    }
+
+    pub fn float(v: &JVal) -> C<f64> {
+        match v {
+            JVal::Num(n) => Ok(*n),
+            _ => Err("expected a JSON number".to_string()),
+        }
+    }
+
+    pub fn boolean(v: &JVal) -> C<bool> {
+        match v {
+            JVal::Bool(b) => Ok(*b),
+            _ => Err("expected a JSON boolean".to_string()),
+        }
+    }
+
+    pub fn string(v: &JVal) -> C<String> {
+        match v {
+            JVal::Str(s) => Ok(s.clone()),
+            _ => Err("expected a JSON string".to_string()),
+        }
+    }
+
+    pub fn text_source(v: &JVal) -> C<TextSource> {
+        via(v, decode_text_source)
+    }
+
+    pub fn binding(v: &JVal) -> C<Binding> {
+        via(v, decode_binding)
+    }
+
+    pub fn cell_format(v: &JVal) -> C<CellFormat> {
+        via(v, decode_cell_format)
+    }
+
+    pub fn column_width(v: &JVal) -> C<ColumnWidth> {
+        via(v, decode_column_width)
+    }
+
+    pub fn orientation(v: &JVal) -> C<Orientation> {
+        via(v, decode_orientation)
+    }
+
+    pub fn tone(v: &JVal) -> C<ToneVariant> {
+        via(v, decode_tone)
+    }
+
+    pub fn weight(v: &JVal) -> C<StyleWeight> {
+        via(v, decode_weight)
+    }
+
+    pub fn emphasis(v: &JVal) -> C<Emphasis> {
+        via(v, decode_emphasis)
+    }
+
+    pub fn heading_variant(v: &JVal) -> C<HeadingVariant> {
+        via(v, decode_heading_variant)
+    }
+
+    pub fn badge_variant(v: &JVal) -> C<BadgeVariant> {
+        via(v, decode_badge_variant)
+    }
+
+    /// An icon rides the wire as its raw string name.
+    pub fn icon_source(v: &JVal) -> C<String> {
+        string(v)
+    }
+}

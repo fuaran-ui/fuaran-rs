@@ -15,6 +15,7 @@
 //! families). The apply engine, validator, and emission tiers are roadmap work.
 
 pub mod canonical;
+pub mod ops;
 pub mod wire;
 
 /// The pre-release version of the `fuaran-rs` host.
