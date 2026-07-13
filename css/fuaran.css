@@ -1,0 +1,2054 @@
+/* ============================================================================
+   Fuaran UI — reference stylesheet (canonical, packaged with Fuaran.UI.Renderer)
+
+   Licence: Apache 2.0 — Copyright (c) Diametrical Ltd.
+   Forked / extended versions retain this header and remain Apache 2.0 per the
+   §4l down-shift portability promise: a consumer retiring the typed
+   Fuaran.UI.Renderer library can keep using the class vocabulary indefinitely.
+
+   This is the contract `Fuaran.UI.Renderer/Render.fs` styles against. Consumers
+   who want to override either:
+     (a) re-bind the `--fuaran-*` variables below at their app shell layer
+         (preferred — see docs/THEME-BRIDGE-GUIDE.md for worked examples), or
+     (b) replace this file wholesale and re-implement against the class hooks
+         enumerated in HOST-STYLING-CHECKLIST.md.
+
+   Every `var(--X)` reference uses the `var(--X, fallback)` form so an
+   unstyled-mode renderer (no consumer stylesheet, no reference stylesheet
+   bound) still shows recognisable defaults — fail-soft, not silently empty.
+
+   Token vocabulary (full enumeration: HOST-STYLING-CHECKLIST.md §1):
+     --fuaran-tone-{default|subdued|brand|success|warning|critical|info}-{bg|fg|border}
+     --fuaran-tone-{tone}-{hover|focus|active|disabled}-{bg|fg|border}   (Phase 12.N)
+     --fuaran-focus-ring-{color|width|offset|style}                       (Phase 12.N)
+     --fuaran-space-{xs|sm|md|lg|xl}
+     --fuaran-text-{xs|sm|base|lg|xl|2xl|3xl}
+     --fuaran-font-weight-{regular|medium|semibold|bold}
+     --fuaran-line-height-{tight|normal|relaxed}
+     --fuaran-button-pad-{y|x}
+     --fuaran-radius-{sm|md|lg|full}
+     --fuaran-border-width
+     --fuaran-segmented-{bg|active-bg|active-fg|divider-color}              (Phase 66)
+   ============================================================================ */
+
+:root {
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+
+  /* ── tone palette (7 × 3) ─────────────────────────────────────── */
+  --fuaran-tone-default-bg: #ffffff;
+  --fuaran-tone-default-fg: #1f2937;
+  --fuaran-tone-default-border: #e5e7eb;
+
+  --fuaran-tone-subdued-bg: #f3f4f6;
+  --fuaran-tone-subdued-fg: #6b7280;
+  --fuaran-tone-subdued-border: #d1d5db;
+
+  --fuaran-tone-brand-bg: #eff6ff;
+  --fuaran-tone-brand-fg: #1d4ed8;
+  --fuaran-tone-brand-border: #93c5fd;
+
+  --fuaran-tone-success-bg: #ecfdf5;
+  --fuaran-tone-success-fg: #047857;
+  --fuaran-tone-success-border: #6ee7b7;
+
+  --fuaran-tone-warning-bg: #fffbeb;
+  --fuaran-tone-warning-fg: #b45309;
+  --fuaran-tone-warning-border: #fcd34d;
+
+  --fuaran-tone-critical-bg: #fef2f2;
+  --fuaran-tone-critical-fg: #b91c1c;
+  --fuaran-tone-critical-border: #fca5a5;
+
+  --fuaran-tone-info-bg: #eff6ff;
+  --fuaran-tone-info-fg: #1e40af;
+  --fuaran-tone-info-border: #93c5fd;
+
+  /* ── spacing scale ────────────────────────────────────────────── */
+  --fuaran-space-xs: 4px;
+  --fuaran-space-sm: 8px;
+  --fuaran-space-md: 12px;
+  --fuaran-space-lg: 16px;
+  --fuaran-space-xl: 24px;
+
+  /* ── typography scale ─────────────────────────────────────────── */
+  --fuaran-text-xs: 12px;
+  --fuaran-text-sm: 13px;
+  --fuaran-text-base: 14px;
+  --fuaran-text-lg: 16px;
+  --fuaran-text-xl: 20px;
+  --fuaran-text-2xl: 24px;
+  --fuaran-text-3xl: 28px;
+  --fuaran-font-weight-regular: 400;
+  --fuaran-font-weight-medium: 500;
+  --fuaran-font-weight-semibold: 600;
+  --fuaran-font-weight-bold: 700;
+  --fuaran-line-height-tight: 1.25;
+  --fuaran-line-height-normal: 1.5;
+  --fuaran-line-height-relaxed: 1.75;
+
+  /* ── component dimensions ─────────────────────────────────────── */
+  --fuaran-button-pad-y: var(--fuaran-space-sm, 8px);
+  --fuaran-button-pad-x: var(--fuaran-space-md, 12px);
+  --fuaran-radius-sm: 4px;
+  --fuaran-radius-md: 6px;
+  --fuaran-radius-lg: 8px;
+  --fuaran-radius-full: 9999px;
+  --fuaran-border-width: 1px;
+
+  /* ── interaction state matrix (Phase 12.N) ────────────────────────
+     7 tones × 4 states × 3 slots = 84 vars, plus 4 focus-ring globals.
+     Static colour values (no color-mix()) so the cascade is consistent
+     across browsers (sRGB vs OKLCH drift was the anti-pattern flagged
+     by the phase body). Consumers re-bind any of these at the app
+     shell to theme interactive surfaces without monkey-patching the
+     per-component rules. */
+
+  /* hover — darker shift on each slot (Tailwind next-stop-down) */
+  --fuaran-tone-default-hover-bg: #f9fafb;
+  --fuaran-tone-default-hover-fg: #111827;
+  --fuaran-tone-default-hover-border: #d1d5db;
+  --fuaran-tone-subdued-hover-bg: #e5e7eb;
+  --fuaran-tone-subdued-hover-fg: #4b5563;
+  --fuaran-tone-subdued-hover-border: #9ca3af;
+  --fuaran-tone-brand-hover-bg: #dbeafe;
+  --fuaran-tone-brand-hover-fg: #1e40af;
+  --fuaran-tone-brand-hover-border: #60a5fa;
+  --fuaran-tone-success-hover-bg: #d1fae5;
+  --fuaran-tone-success-hover-fg: #065f46;
+  --fuaran-tone-success-hover-border: #34d399;
+  --fuaran-tone-warning-hover-bg: #fef3c7;
+  --fuaran-tone-warning-hover-fg: #92400e;
+  --fuaran-tone-warning-hover-border: #fbbf24;
+  --fuaran-tone-critical-hover-bg: #fee2e2;
+  --fuaran-tone-critical-hover-fg: #991b1b;
+  --fuaran-tone-critical-hover-border: #f87171;
+  --fuaran-tone-info-hover-bg: #dbeafe;
+  --fuaran-tone-info-hover-fg: #1e3a8a;
+  --fuaran-tone-info-hover-border: #60a5fa;
+
+  /* focus — bg/fg unchanged (primary affordance is the outline ring);
+     border defaults to brand-border so a focused edge tints to brand */
+  --fuaran-tone-default-focus-bg: #ffffff;
+  --fuaran-tone-default-focus-fg: #1f2937;
+  --fuaran-tone-default-focus-border: #93c5fd;
+  --fuaran-tone-subdued-focus-bg: #f3f4f6;
+  --fuaran-tone-subdued-focus-fg: #6b7280;
+  --fuaran-tone-subdued-focus-border: #93c5fd;
+  --fuaran-tone-brand-focus-bg: #eff6ff;
+  --fuaran-tone-brand-focus-fg: #1d4ed8;
+  --fuaran-tone-brand-focus-border: #93c5fd;
+  --fuaran-tone-success-focus-bg: #ecfdf5;
+  --fuaran-tone-success-focus-fg: #047857;
+  --fuaran-tone-success-focus-border: #93c5fd;
+  --fuaran-tone-warning-focus-bg: #fffbeb;
+  --fuaran-tone-warning-focus-fg: #b45309;
+  --fuaran-tone-warning-focus-border: #93c5fd;
+  --fuaran-tone-critical-focus-bg: #fef2f2;
+  --fuaran-tone-critical-focus-fg: #b91c1c;
+  --fuaran-tone-critical-focus-border: #93c5fd;
+  --fuaran-tone-info-focus-bg: #eff6ff;
+  --fuaran-tone-info-focus-fg: #1e40af;
+  --fuaran-tone-info-focus-border: #93c5fd;
+
+  /* active — darker-than-hover shift on each slot */
+  --fuaran-tone-default-active-bg: #f3f4f6;
+  --fuaran-tone-default-active-fg: #111827;
+  --fuaran-tone-default-active-border: #9ca3af;
+  --fuaran-tone-subdued-active-bg: #d1d5db;
+  --fuaran-tone-subdued-active-fg: #374151;
+  --fuaran-tone-subdued-active-border: #6b7280;
+  --fuaran-tone-brand-active-bg: #bfdbfe;
+  --fuaran-tone-brand-active-fg: #1e3a8a;
+  --fuaran-tone-brand-active-border: #3b82f6;
+  --fuaran-tone-success-active-bg: #a7f3d0;
+  --fuaran-tone-success-active-fg: #064e3b;
+  --fuaran-tone-success-active-border: #10b981;
+  --fuaran-tone-warning-active-bg: #fde68a;
+  --fuaran-tone-warning-active-fg: #78350f;
+  --fuaran-tone-warning-active-border: #f59e0b;
+  --fuaran-tone-critical-active-bg: #fecaca;
+  --fuaran-tone-critical-active-fg: #7f1d1d;
+  --fuaran-tone-critical-active-border: #ef4444;
+  --fuaran-tone-info-active-bg: #bfdbfe;
+  --fuaran-tone-info-active-fg: #172554;
+  --fuaran-tone-info-active-border: #3b82f6;
+
+  /* disabled — every tone collapses to subdued's slots ("drained colour") */
+  --fuaran-tone-default-disabled-bg: #f3f4f6;
+  --fuaran-tone-default-disabled-fg: #6b7280;
+  --fuaran-tone-default-disabled-border: #d1d5db;
+  --fuaran-tone-subdued-disabled-bg: #f3f4f6;
+  --fuaran-tone-subdued-disabled-fg: #6b7280;
+  --fuaran-tone-subdued-disabled-border: #d1d5db;
+  --fuaran-tone-brand-disabled-bg: #f3f4f6;
+  --fuaran-tone-brand-disabled-fg: #6b7280;
+  --fuaran-tone-brand-disabled-border: #d1d5db;
+  --fuaran-tone-success-disabled-bg: #f3f4f6;
+  --fuaran-tone-success-disabled-fg: #6b7280;
+  --fuaran-tone-success-disabled-border: #d1d5db;
+  --fuaran-tone-warning-disabled-bg: #f3f4f6;
+  --fuaran-tone-warning-disabled-fg: #6b7280;
+  --fuaran-tone-warning-disabled-border: #d1d5db;
+  --fuaran-tone-critical-disabled-bg: #f3f4f6;
+  --fuaran-tone-critical-disabled-fg: #6b7280;
+  --fuaran-tone-critical-disabled-border: #d1d5db;
+  --fuaran-tone-info-disabled-bg: #f3f4f6;
+  --fuaran-tone-info-disabled-fg: #6b7280;
+  --fuaran-tone-info-disabled-border: #d1d5db;
+
+  /* focus-ring shape — `:focus-visible` outline (4 globals) */
+  --fuaran-focus-ring-color: #93c5fd;
+  --fuaran-focus-ring-width: 2px;
+  --fuaran-focus-ring-offset: 2px;
+  --fuaran-focus-ring-style: solid;
+
+  /* Phase 69 (2026-05-29): tab-bar shape — visual parity with SDK
+     `Layout.Tabs.tabGroup`. Indicator is the bottom-border accent; tab
+     text colours follow the tone-brand scale by default but the surface
+     is overridable per-theme. */
+  --fuaran-tab-padding-y: 8px;
+  --fuaran-tab-padding-x: 24px;
+  --fuaran-tab-indicator-color: var(--fuaran-tone-brand-fg, #1d4ed8);
+  --fuaran-tab-indicator-height: 2px;
+  --fuaran-tab-text-color: var(--fuaran-tone-subdued-fg, #6b7280);
+  --fuaran-tab-text-active-color: var(--fuaran-tone-brand-fg, #1d4ed8);
+  --fuaran-tab-text-hover-color: var(--fuaran-tone-brand-hover-fg, #1e40af);
+
+  /* Phase 66 (2026-05-30): segmented-control / radio-group surface.
+     Background is the rest-state tray colour; active-bg / active-fg are
+     the selected segment's pill; divider-color is the inter-segment
+     hairline (Horizontal only). Defaults route through the tone palette
+     so brand-stop overrides propagate automatically. */
+  --fuaran-segmented-bg: var(--fuaran-tone-subdued-bg, #f3f4f6);
+  --fuaran-segmented-active-bg: var(--fuaran-tone-default-bg, #ffffff);
+  --fuaran-segmented-active-fg: var(--fuaran-tone-brand-fg, #1d4ed8);
+  --fuaran-segmented-divider-color: var(--fuaran-tone-default-border, #e5e7eb);
+
+  /* Phase 58 (2026-07-11): responsive breakpoint thresholds — the min-width
+     boundaries the `@media` rules at the foot of this file collapse layout
+     at. Exposed as tokens so consumer JS / container queries can read the
+     same thresholds; the `@media` conditions below repeat these px values
+     literally because a media condition cannot reference a custom property.
+     Keep the two in sync — see docs/migrations/phase-58-mobile-responsive.md. */
+  --fuaran-breakpoint-sm: 640px;
+  --fuaran-breakpoint-md: 768px;
+  --fuaran-breakpoint-lg: 1024px;
+}
+
+body {
+  margin: 0;
+  background: #f9fafb;
+  color: var(--fuaran-tone-default-fg, #1f2937);
+  font-size: var(--fuaran-text-base, 14px);
+  line-height: var(--fuaran-line-height-normal, 1.5);
+}
+
+#fuaran-demo-root {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: var(--fuaran-space-xl, 24px) calc(var(--fuaran-space-xl, 24px) + var(--fuaran-space-sm, 8px));
+}
+
+/* ── per-NodeKind base hooks ──────────────────────────────────── */
+.fuaran-node {
+  margin-bottom: var(--fuaran-space-sm, 8px);
+}
+
+.fuaran-layout-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-lg, 16px);
+}
+
+.fuaran-layout-stack {
+  display: flex;
+  gap: var(--fuaran-space-md, 12px);
+}
+
+.fuaran-stack-vertical {
+  flex-direction: column;
+}
+
+.fuaran-stack-horizontal {
+  flex-direction: row;
+}
+
+/* Phase 12.P Feliz-parity additive (2026-05-26): `StackSpec.Wrap = true`
+   adds this class so a horizontal stack wraps its children at narrow
+   viewports instead of overflowing. CSS-only — pre-12.P stacks unaffected. */
+.fuaran-stack-wrap {
+  flex-wrap: wrap;
+}
+
+.fuaran-layout-card {
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-lg, 8px);
+  padding: var(--fuaran-space-lg, 16px);
+}
+
+.fuaran-card-heading {
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+  font-size: var(--fuaran-text-lg, 16px);
+  margin-bottom: var(--fuaran-space-md, 12px);
+  color: var(--fuaran-tone-default-fg, #1f2937);
+}
+
+.fuaran-layout-grid {
+  display: grid;
+  gap: var(--fuaran-space-md, 12px);
+}
+
+.fuaran-layout-split-panel {
+  display: flex;
+  gap: var(--fuaran-space-md, 12px);
+}
+
+.fuaran-split-pane {
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-lg, 8px);
+  padding: var(--fuaran-space-md, 12px);
+  min-width: 0;
+}
+
+.fuaran-layout-tabs {
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-lg, 8px);
+}
+
+.fuaran-tabs-bar {
+  display: flex;
+  border-bottom: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  padding: 0 var(--fuaran-space-md, 12px);
+}
+
+/* Vertical tab orientation — Phase 69 (2026-05-29). The
+   aria-orientation="vertical" attribute switches the keyboard nav
+   between Arrow Left/Right and Arrow Up/Down; the visual layout follows
+   here. */
+.fuaran-tabs-vertical .fuaran-tabs-bar {
+  flex-direction: column;
+  border-bottom: none;
+  border-right: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  padding: var(--fuaran-space-md, 12px) 0;
+}
+
+.fuaran-tabs-vertical {
+  display: flex;
+}
+
+.fuaran-tab {
+  background: transparent;
+  border: none;
+  /* Phase 69 (2026-05-29): tab tokens replace the prior space-sm/lg pair so
+     consumers override the tab-bar shape independent of the wider spacing
+     scale. */
+  padding: var(--fuaran-tab-padding-y, 8px) var(--fuaran-tab-padding-x, 24px);
+  cursor: pointer;
+  color: var(--fuaran-tab-text-color, #6b7280);
+  position: relative;
+  /* Indicator lives on ::after — see below; the button itself carries no
+     border so the indicator's height + offset are token-driven. */
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-tab::after {
+  /* Phase 69 (2026-05-29): bottom-border indicator. Hidden by default;
+     `.fuaran-tab-active::after` shows the brand-coloured bar. The
+     ::after pseudo-element gives the indicator independent height/colour
+     controls without forcing a fixed border on the button itself. */
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--fuaran-tab-indicator-height, 2px);
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.fuaran-tab:hover {
+  color: var(--fuaran-tab-text-hover-color, #1e40af);
+}
+
+.fuaran-tab:hover::after {
+  background: var(--fuaran-tone-brand-hover-border, #60a5fa);
+}
+
+.fuaran-tab:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: 0;
+}
+
+.fuaran-tab-active {
+  color: var(--fuaran-tab-text-active-color, #1d4ed8);
+}
+
+.fuaran-tab-active::after {
+  background: var(--fuaran-tab-indicator-color, #1d4ed8);
+}
+
+/* Phase 69 (2026-05-29): disabled tab — greyed text + no pointer + the
+   ::after indicator stays hidden. Matches the SDK disabled-tab posture. */
+.fuaran-tab-disabled {
+  color: var(--fuaran-tone-default-disabled-fg, #9ca3af);
+  cursor: not-allowed;
+}
+
+.fuaran-tab-disabled:hover {
+  color: var(--fuaran-tone-default-disabled-fg, #9ca3af);
+}
+
+.fuaran-tab-disabled:hover::after {
+  background: transparent;
+}
+
+/* Phase 69 (2026-05-29): per-tab icon span + label span. The renderer
+   emits these whenever the header carries an `Icon`. Authors who only
+   set `Label` see no visual change (no icon span emitted). */
+.fuaran-tab-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.fuaran-tab-label {
+  display: inline-block;
+}
+
+.fuaran-tabs-panels {
+  padding: var(--fuaran-space-lg, 16px);
+}
+
+/* Phase 69 (2026-05-29): the active tab body now renders inside a typed
+   `role="tabpanel"` wrapper so screen-readers + keyboard nav have a
+   stable focus target. */
+.fuaran-tabs-panel:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: 0;
+}
+
+.fuaran-layout-stepper {
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-lg, 8px);
+  padding: var(--fuaran-space-lg, 16px);
+}
+
+.fuaran-stepper-numbers {
+  display: flex;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--fuaran-space-lg, 16px) 0;
+  gap: var(--fuaran-space-sm, 8px);
+}
+
+.fuaran-stepper-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--fuaran-tone-subdued-bg, #f3f4f6);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  font-weight: var(--fuaran-font-weight-medium, 500);
+}
+
+.fuaran-stepper-step:hover {
+  background: var(--fuaran-tone-subdued-hover-bg, #e5e7eb);
+  color: var(--fuaran-tone-subdued-hover-fg, #4b5563);
+}
+
+.fuaran-stepper-step-active {
+  background: var(--fuaran-tone-brand-bg, #eff6ff);
+  color: var(--fuaran-tone-brand-fg, #1d4ed8);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-brand-border, #93c5fd);
+}
+
+/* ── stat list (Phase 12.P) ───────────────────────────────────── */
+/* Single-card-of-rows shape — typically wraps LabelValueRow children.
+   Distinct from `.fuaran-layout-card`: no per-child padding around the
+   body, divider rules between children. The body's divider rules use
+   `:not(:last-child)` so the final row sits flush against the bottom
+   border of the section. */
+.fuaran-layout-summary-list {
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-lg, 8px);
+  overflow: hidden;
+}
+
+.fuaran-summary-list-heading {
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+  font-size: var(--fuaran-text-lg, 16px);
+  color: var(--fuaran-tone-default-fg, #1f2937);
+  padding: var(--fuaran-space-md, 12px) var(--fuaran-space-lg, 16px);
+  border-bottom: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+}
+
+.fuaran-summary-list-body {
+  padding: 0 var(--fuaran-space-lg, 16px);
+}
+
+.fuaran-summary-list-body > .fuaran-node:not(:last-child) {
+  border-bottom: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+}
+
+/* ── disclosure (Phase 65, 2026-05-28) ──────────────────────────── */
+/* HTML-native `<details>` / `<summary>` accordion. Visual shape mirrors
+   `.fuaran-layout-card`: same border / radius / surface tone so disclosure
+   sections integrate with the existing visual contract. The summary picks
+   up the same padding as a card heading; the body matches a card body's
+   padding. `--fuaran-disclosure-summary-padding` overrides only the
+   summary block, letting hosts tighten the click target without disturbing
+   the body's padding. */
+.fuaran-layout-disclosure {
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-lg, 8px);
+  overflow: hidden;
+}
+
+.fuaran-disclosure-summary {
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+  font-size: var(--fuaran-text-lg, 16px);
+  color: var(--fuaran-tone-default-fg, #1f2937);
+  padding: var(--fuaran-disclosure-summary-padding, var(--fuaran-space-md, 12px) var(--fuaran-space-lg, 16px));
+  cursor: pointer;
+  list-style: none;
+}
+
+/* Hide the default WebKit/Blink disclosure marker; we draw our own
+   chevron via the `::after` pseudo so the summary can keep its flex
+   layout without the browser's marker interfering. */
+.fuaran-disclosure-summary::-webkit-details-marker {
+  display: none;
+}
+
+.fuaran-disclosure-summary::after {
+  content: "▸";
+  float: right;
+  transition: transform 0.15s ease-in-out;
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-layout-disclosure[open] > .fuaran-disclosure-summary {
+  border-bottom: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+}
+
+.fuaran-layout-disclosure[open] > .fuaran-disclosure-summary::after {
+  transform: rotate(90deg);
+}
+
+.fuaran-disclosure-summary:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: calc(-1 * var(--fuaran-focus-ring-width, 2px));
+}
+
+.fuaran-disclosure-body {
+  padding: var(--fuaran-space-lg, 16px);
+}
+
+/* ── label/value row (Phase 12.P) ─────────────────────────────── */
+/* Baseline-aligned label-left / value-right row. The label-block holds
+   the primary label + an optional small-print help line stacked
+   vertically; the value sits flush right. */
+.fuaran-label-value-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--fuaran-space-md, 12px);
+  padding: var(--fuaran-space-sm, 8px) 0;
+}
+
+.fuaran-label-value-row-label-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fuaran-label-value-row-label {
+  font-size: var(--fuaran-text-sm, 13px);
+  color: var(--fuaran-tone-default-fg, #1f2937);
+}
+
+.fuaran-label-value-row-help {
+  font-size: var(--fuaran-text-xs, 12px);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-label-value-row-value {
+  font-size: var(--fuaran-text-sm, 13px);
+  font-variant-numeric: tabular-nums;
+  color: var(--fuaran-tone-default-fg, #1f2937);
+  text-align: right;
+}
+
+.fuaran-label-value-row-emphasis {
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+}
+
+.fuaran-label-value-row-emphasis .fuaran-label-value-row-label,
+.fuaran-label-value-row-emphasis .fuaran-label-value-row-value {
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+}
+
+/* ── heading variants (Phase 12.P) ────────────────────────────── */
+/* Variants compose on top of `.fuaran-heading`; the underlying `<h{Level}>`
+   tag is preserved across variants for screen-reader semantics. */
+.fuaran-heading-eyebrow {
+  font-size: var(--fuaran-text-xs, 12px);
+  font-weight: var(--fuaran-font-weight-medium, 500);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fuaran-tone-brand-fg, #1d4ed8);
+  margin-bottom: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-heading-caption {
+  font-size: var(--fuaran-text-xs, 12px);
+  font-style: italic;
+  font-weight: var(--fuaran-font-weight-regular, 400);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-heading-lead {
+  font-size: var(--fuaran-text-xl, 20px);
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+}
+
+/* ── semantic content roles + font voice (Phase 147) ──────────────── */
+/* `StyleRole` (`.fuaran-role-{role}`) and `FontVoice` (`.fuaran-voice-{voice}`)
+   compose on ANY node — the renderer appends them to the node className only
+   when non-default, so a tree that sets neither renders byte-identically.
+   These are reference defaults the host CSS overrides; class-name-only, the
+   host owns the pixels. On a `<Heading>`, prefer the `.fuaran-heading-*`
+   variants above; `.fuaran-role-*` tags the role of non-heading content. */
+.fuaran-role-eyebrow {
+  font-size: var(--fuaran-text-xs, 12px);
+  font-weight: var(--fuaran-font-weight-medium, 500);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fuaran-tone-brand-fg, #1d4ed8);
+}
+
+.fuaran-role-data {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.fuaran-role-lede {
+  font-size: var(--fuaran-text-lg, 18px);
+  font-weight: var(--fuaran-font-weight-regular, 400);
+  line-height: var(--fuaran-line-height-relaxed, 1.6);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-role-caption {
+  font-size: var(--fuaran-text-xs, 12px);
+  font-style: italic;
+  font-weight: var(--fuaran-font-weight-regular, 400);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-voice-display {
+  font-weight: var(--fuaran-font-weight-bold, 700);
+  line-height: var(--fuaran-line-height-tight, 1.1);
+  letter-spacing: -0.01em;
+}
+
+.fuaran-voice-structural {
+  line-height: var(--fuaran-line-height-normal, 1.4);
+}
+
+/* ── Metric ───────────────────────────────────────────────────────── */
+.fuaran-metric {
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-lg, 8px);
+  padding: var(--fuaran-space-lg, 16px);
+}
+
+/* Per-tone Metric rules — Phase 12.H propagated `MetricSpec.Tone` through
+   `renderMetric` so each tone emits its own class suffix; the older outer-
+   scoped `.fuaran-tone-brand .fuaran-metric` shape no longer applies (the new
+   direct rules below are the canonical form, consistent with callout /
+   progress / pill). */
+.fuaran-metric-default {
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border-color: var(--fuaran-tone-default-border, #e5e7eb);
+}
+
+.fuaran-metric-subdued {
+  background: var(--fuaran-tone-subdued-bg, #f3f4f6);
+  border-color: var(--fuaran-tone-subdued-border, #d1d5db);
+}
+
+.fuaran-metric-brand {
+  background: var(--fuaran-tone-brand-bg, #eff6ff);
+  border-color: var(--fuaran-tone-brand-border, #93c5fd);
+}
+
+.fuaran-metric-brand .fuaran-metric-value {
+  color: var(--fuaran-tone-brand-fg, #1d4ed8);
+}
+
+.fuaran-metric-success {
+  background: var(--fuaran-tone-success-bg, #ecfdf5);
+  border-color: var(--fuaran-tone-success-border, #6ee7b7);
+}
+
+.fuaran-metric-success .fuaran-metric-value {
+  color: var(--fuaran-tone-success-fg, #047857);
+}
+
+.fuaran-metric-warning {
+  background: var(--fuaran-tone-warning-bg, #fffbeb);
+  border-color: var(--fuaran-tone-warning-border, #fcd34d);
+}
+
+.fuaran-metric-warning .fuaran-metric-value {
+  color: var(--fuaran-tone-warning-fg, #b45309);
+}
+
+.fuaran-metric-critical {
+  background: var(--fuaran-tone-critical-bg, #fef2f2);
+  border-color: var(--fuaran-tone-critical-border, #fca5a5);
+}
+
+.fuaran-metric-critical .fuaran-metric-value {
+  color: var(--fuaran-tone-critical-fg, #b91c1c);
+}
+
+.fuaran-metric-info {
+  background: var(--fuaran-tone-info-bg, #eff6ff);
+  border-color: var(--fuaran-tone-info-border, #93c5fd);
+}
+
+.fuaran-metric-info .fuaran-metric-value {
+  color: var(--fuaran-tone-info-fg, #1e40af);
+}
+
+.fuaran-metric-label {
+  font-size: var(--fuaran-text-sm, 13px);
+  font-weight: var(--fuaran-font-weight-medium, 500);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.fuaran-metric-value {
+  font-size: var(--fuaran-text-3xl, 28px);
+  font-weight: var(--fuaran-font-weight-bold, 700);
+  margin-top: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-metric-trend {
+  font-size: var(--fuaran-text-sm, 13px);
+  color: var(--fuaran-tone-success-fg, #047857);
+  margin-top: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-metric-subtext {
+  font-size: var(--fuaran-text-xs, 12px);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  margin-top: 6px;
+}
+
+/* ── markdown / heading / spacer ──────────────────────────────── */
+.fuaran-markdown {
+  color: var(--fuaran-tone-default-fg, #1f2937);
+}
+
+.fuaran-markdown p {
+  margin: 0 0 var(--fuaran-space-sm, 8px) 0;
+}
+
+.fuaran-heading {
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+  margin: 0 0 var(--fuaran-space-sm, 8px) 0;
+}
+
+.fuaran-spacer-small {
+  height: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-spacer-medium {
+  height: var(--fuaran-space-md, 12px);
+}
+
+.fuaran-spacer-large {
+  height: var(--fuaran-space-xl, 24px);
+}
+
+/* ── badge ────────────────────────────────────────────────────── */
+.fuaran-badge {
+  display: inline-block;
+  padding: 2px var(--fuaran-space-sm, 8px);
+  border-radius: var(--fuaran-radius-full, 9999px);
+  font-size: var(--fuaran-text-xs, 12px);
+  font-weight: var(--fuaran-font-weight-medium, 500);
+  background: var(--fuaran-tone-subdued-bg, #f3f4f6);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+/* `BadgeVariant.Neutral` maps to the subdued tone (see
+   HOST-STYLING-CHECKLIST.md §4.4 for the vocabulary fork). */
+.fuaran-badge-neutral {
+  background: var(--fuaran-tone-subdued-bg, #f3f4f6);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-badge-brand {
+  background: var(--fuaran-tone-brand-bg, #eff6ff);
+  color: var(--fuaran-tone-brand-fg, #1d4ed8);
+}
+
+.fuaran-badge-success {
+  background: var(--fuaran-tone-success-bg, #ecfdf5);
+  color: var(--fuaran-tone-success-fg, #047857);
+}
+
+.fuaran-badge-warning {
+  background: var(--fuaran-tone-warning-bg, #fffbeb);
+  color: var(--fuaran-tone-warning-fg, #b45309);
+}
+
+.fuaran-badge-critical {
+  background: var(--fuaran-tone-critical-bg, #fef2f2);
+  color: var(--fuaran-tone-critical-fg, #b91c1c);
+}
+
+.fuaran-badge-info {
+  background: var(--fuaran-tone-info-bg, #eff6ff);
+  color: var(--fuaran-tone-info-fg, #1e40af);
+}
+
+/* ── callout ──────────────────────────────────────────────────── */
+.fuaran-callout {
+  border-left: 4px solid var(--fuaran-tone-info-border, #93c5fd);
+  background: var(--fuaran-tone-info-bg, #eff6ff);
+  color: var(--fuaran-tone-info-fg, #1e40af);
+  padding: var(--fuaran-space-md, 12px) var(--fuaran-space-lg, 16px);
+  border-radius: var(--fuaran-radius-sm, 4px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+/* Complete 7×N tone matrix — Phase 12.H added default/subdued/brand/info;
+   warning/critical/success were already present. */
+.fuaran-callout-default {
+  border-left-color: var(--fuaran-tone-default-border, #e5e7eb);
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  color: var(--fuaran-tone-default-fg, #1f2937);
+}
+
+.fuaran-callout-subdued {
+  border-left-color: var(--fuaran-tone-subdued-border, #d1d5db);
+  background: var(--fuaran-tone-subdued-bg, #f3f4f6);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-callout-brand {
+  border-left-color: var(--fuaran-tone-brand-border, #93c5fd);
+  background: var(--fuaran-tone-brand-bg, #eff6ff);
+  color: var(--fuaran-tone-brand-fg, #1d4ed8);
+}
+
+.fuaran-callout-warning {
+  border-left-color: var(--fuaran-tone-warning-border, #fcd34d);
+  background: var(--fuaran-tone-warning-bg, #fffbeb);
+  color: var(--fuaran-tone-warning-fg, #b45309);
+}
+
+.fuaran-callout-critical {
+  border-left-color: var(--fuaran-tone-critical-border, #fca5a5);
+  background: var(--fuaran-tone-critical-bg, #fef2f2);
+  color: var(--fuaran-tone-critical-fg, #b91c1c);
+}
+
+.fuaran-callout-success {
+  border-left-color: var(--fuaran-tone-success-border, #6ee7b7);
+  background: var(--fuaran-tone-success-bg, #ecfdf5);
+  color: var(--fuaran-tone-success-fg, #047857);
+}
+
+.fuaran-callout-info {
+  border-left-color: var(--fuaran-tone-info-border, #93c5fd);
+  background: var(--fuaran-tone-info-bg, #eff6ff);
+  color: var(--fuaran-tone-info-fg, #1e40af);
+}
+
+.fuaran-callout-heading {
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+}
+
+.fuaran-callout-dismiss {
+  align-self: flex-end;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: var(--fuaran-text-xl, 20px);
+  color: inherit;
+}
+
+.fuaran-callout-dismiss:hover {
+  opacity: 0.7;
+}
+
+.fuaran-callout-dismiss:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: 0;
+}
+
+/* ── progress ─────────────────────────────────────────────────── */
+.fuaran-progress-bar {
+  height: var(--fuaran-space-sm, 8px);
+  background: var(--fuaran-tone-subdued-bg, #f3f4f6);
+  border-radius: var(--fuaran-radius-sm, 4px);
+  overflow: hidden;
+}
+
+.fuaran-progress-fill {
+  height: 100%;
+  background: var(--fuaran-tone-brand-fg, #1d4ed8);
+  transition: width 0.2s ease;
+}
+
+/* Per-tone progress fill — Phase 12.H completed the matrix.
+   Each `.fuaran-progress-{tone} .fuaran-progress-fill` overrides the
+   default brand fill. */
+.fuaran-progress-default .fuaran-progress-fill {
+  background: var(--fuaran-tone-default-fg, #1f2937);
+}
+
+.fuaran-progress-subdued .fuaran-progress-fill {
+  background: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-progress-brand .fuaran-progress-fill {
+  background: var(--fuaran-tone-brand-fg, #1d4ed8);
+}
+
+.fuaran-progress-success .fuaran-progress-fill {
+  background: var(--fuaran-tone-success-fg, #047857);
+}
+
+.fuaran-progress-warning .fuaran-progress-fill {
+  background: var(--fuaran-tone-warning-fg, #b45309);
+}
+
+.fuaran-progress-critical .fuaran-progress-fill {
+  background: var(--fuaran-tone-critical-fg, #b91c1c);
+}
+
+.fuaran-progress-info .fuaran-progress-fill {
+  background: var(--fuaran-tone-info-fg, #1e40af);
+}
+
+.fuaran-progress-indeterminate .fuaran-progress-fill {
+  width: 30% !important;
+  animation: fuaran-progress-slide 1.5s ease-in-out infinite;
+}
+
+@keyframes fuaran-progress-slide {
+  0% {
+    margin-left: 0%;
+  }
+  100% {
+    margin-left: 70%;
+  }
+}
+
+.fuaran-progress-label {
+  font-size: var(--fuaran-text-sm, 13px);
+  margin-bottom: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-progress-caveat {
+  font-size: 11px;
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  margin-top: var(--fuaran-space-xs, 4px);
+  font-style: italic;
+}
+
+/* ── skeleton ─────────────────────────────────────────────────── */
+.fuaran-skeleton {
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-lg, 8px);
+  padding: var(--fuaran-space-lg, 16px);
+}
+
+.fuaran-skeleton-row {
+  height: var(--fuaran-space-md, 12px);
+  background: linear-gradient(
+    90deg,
+    var(--fuaran-tone-subdued-bg, #f3f4f6),
+    var(--fuaran-tone-default-border, #e5e7eb),
+    var(--fuaran-tone-subdued-bg, #f3f4f6)
+  );
+  background-size: 200% 100%;
+  border-radius: var(--fuaran-radius-sm, 4px);
+  margin-bottom: var(--fuaran-space-sm, 8px);
+  animation: fuaran-skeleton-shimmer 1.5s linear infinite;
+}
+
+@keyframes fuaran-skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* ── sparkline ────────────────────────────────────────────────── */
+.fuaran-sparkline {
+  width: 100px;
+  height: 30px;
+  color: var(--fuaran-tone-brand-fg, #1d4ed8);
+}
+
+/* ── pill (grid-cell-tone-bearing) ────────────────────────────── */
+/* Phase 12.H — added the 7×N tone matrix for pill cells. The renderer
+   emits `fuaran-grid-cell-pill fuaran-pill-{tone}` from `Render.fs`'s
+   pill cell branch; pre-12.H no `.fuaran-pill-{tone}` rule existed and
+   every pill rendered the default styling regardless of `tone row`. */
+.fuaran-pill-default {
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  color: var(--fuaran-tone-default-fg, #1f2937);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+}
+
+.fuaran-pill-subdued {
+  background: var(--fuaran-tone-subdued-bg, #f3f4f6);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-pill-brand {
+  background: var(--fuaran-tone-brand-bg, #eff6ff);
+  color: var(--fuaran-tone-brand-fg, #1d4ed8);
+}
+
+.fuaran-pill-success {
+  background: var(--fuaran-tone-success-bg, #ecfdf5);
+  color: var(--fuaran-tone-success-fg, #047857);
+}
+
+.fuaran-pill-warning {
+  background: var(--fuaran-tone-warning-bg, #fffbeb);
+  color: var(--fuaran-tone-warning-fg, #b45309);
+}
+
+.fuaran-pill-critical {
+  background: var(--fuaran-tone-critical-bg, #fef2f2);
+  color: var(--fuaran-tone-critical-fg, #b91c1c);
+}
+
+.fuaran-pill-info {
+  background: var(--fuaran-tone-info-bg, #eff6ff);
+  color: var(--fuaran-tone-info-fg, #1e40af);
+}
+
+/* ── button / input / select / file upload ────────────────────── */
+.fuaran-button {
+  padding: var(--fuaran-button-pad-y, 8px) var(--fuaran-button-pad-x, 12px);
+  border-radius: var(--fuaran-radius-md, 6px);
+  border: var(--fuaran-border-width, 1px) solid transparent;
+  cursor: pointer;
+  font-weight: var(--fuaran-font-weight-medium, 500);
+  font-size: var(--fuaran-text-base, 14px);
+}
+
+.fuaran-button-primary {
+  background: var(--fuaran-tone-brand-fg, #1d4ed8);
+  color: white;
+  border-color: var(--fuaran-tone-brand-fg, #1d4ed8);
+}
+
+/* Phase 12.N — interaction states per button variant. The pre-12.N
+   `filter: brightness(0.92)` opinion is replaced by tone-state tokens
+   so consumers can theme hover / focus / active / disabled per the
+   `--fuaran-tone-{tone}-{state}-{slot}` surface (HOST-STYLING-CHECKLIST.md
+   §1.6). Primary / destructive buttons use the filled tone-fg slot as
+   their background, so their state tokens consume the `*-{state}-fg`
+   variants; secondary / tertiary route through `*-{state}-bg`. */
+
+.fuaran-button-primary:hover {
+  background: var(--fuaran-tone-brand-hover-fg, #1e40af);
+  border-color: var(--fuaran-tone-brand-hover-fg, #1e40af);
+}
+
+.fuaran-button-primary:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: var(--fuaran-focus-ring-offset, 2px);
+}
+
+.fuaran-button-primary:active {
+  background: var(--fuaran-tone-brand-active-fg, #1e3a8a);
+  border-color: var(--fuaran-tone-brand-active-fg, #1e3a8a);
+}
+
+.fuaran-button-primary:disabled {
+  background: var(--fuaran-tone-brand-disabled-fg, #6b7280);
+  border-color: var(--fuaran-tone-brand-disabled-fg, #6b7280);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.fuaran-button-secondary {
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  color: var(--fuaran-tone-default-fg, #1f2937);
+  border-color: var(--fuaran-tone-default-border, #e5e7eb);
+}
+
+.fuaran-button-secondary:hover {
+  background: var(--fuaran-tone-default-hover-bg, #f9fafb);
+  border-color: var(--fuaran-tone-default-hover-border, #d1d5db);
+}
+
+.fuaran-button-secondary:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: var(--fuaran-focus-ring-offset, 2px);
+}
+
+.fuaran-button-secondary:active {
+  background: var(--fuaran-tone-default-active-bg, #f3f4f6);
+  border-color: var(--fuaran-tone-default-active-border, #9ca3af);
+}
+
+.fuaran-button-secondary:disabled {
+  background: var(--fuaran-tone-default-disabled-bg, #f3f4f6);
+  color: var(--fuaran-tone-default-disabled-fg, #6b7280);
+  border-color: var(--fuaran-tone-default-disabled-border, #d1d5db);
+  cursor: not-allowed;
+}
+
+.fuaran-button-tertiary {
+  background: transparent;
+  color: var(--fuaran-tone-brand-fg, #1d4ed8);
+}
+
+.fuaran-button-tertiary:hover {
+  background: var(--fuaran-tone-brand-hover-bg, #dbeafe);
+}
+
+.fuaran-button-tertiary:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: var(--fuaran-focus-ring-offset, 2px);
+}
+
+.fuaran-button-tertiary:active {
+  background: var(--fuaran-tone-brand-active-bg, #bfdbfe);
+}
+
+.fuaran-button-tertiary:disabled {
+  color: var(--fuaran-tone-brand-disabled-fg, #6b7280);
+  cursor: not-allowed;
+}
+
+.fuaran-button-destructive {
+  background: var(--fuaran-tone-critical-fg, #b91c1c);
+  color: white;
+  border-color: var(--fuaran-tone-critical-fg, #b91c1c);
+}
+
+.fuaran-button-destructive:hover {
+  background: var(--fuaran-tone-critical-hover-fg, #991b1b);
+  border-color: var(--fuaran-tone-critical-hover-fg, #991b1b);
+}
+
+.fuaran-button-destructive:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: var(--fuaran-focus-ring-offset, 2px);
+}
+
+.fuaran-button-destructive:active {
+  background: var(--fuaran-tone-critical-active-fg, #7f1d1d);
+  border-color: var(--fuaran-tone-critical-active-fg, #7f1d1d);
+}
+
+.fuaran-button-destructive:disabled {
+  background: var(--fuaran-tone-critical-disabled-fg, #6b7280);
+  border-color: var(--fuaran-tone-critical-disabled-fg, #6b7280);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.fuaran-button-unwired {
+  outline: var(--fuaran-border-width, 1px) dashed var(--fuaran-tone-warning-border, #fcd34d);
+}
+
+.fuaran-select {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-select-label {
+  font-size: var(--fuaran-text-sm, 13px);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-select-control,
+.fuaran-form-input,
+.fuaran-form-select,
+.fuaran-form-textarea,
+.fuaran-filter-input,
+.fuaran-filter-select {
+  padding: 6px var(--fuaran-space-sm, 8px) 6px var(--fuaran-space-sm, 8px);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-sm, 4px);
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  font: inherit;
+  color: inherit;
+}
+
+/* Phase 12.N — focus-visible ring on every text-input-shaped surface.
+   The ring is the outline; the border slot picks up the per-tone focus
+   border colour so consumers can override either independently. */
+.fuaran-select-control:focus-visible,
+.fuaran-form-input:focus-visible,
+.fuaran-form-select:focus-visible,
+.fuaran-form-textarea:focus-visible,
+.fuaran-filter-input:focus-visible,
+.fuaran-filter-select:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: var(--fuaran-focus-ring-offset, 2px);
+  border-color: var(--fuaran-tone-default-focus-border, #93c5fd);
+}
+
+.fuaran-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-md, 12px);
+}
+
+/* Phase 130: optional <fieldset> wrapper emitted when a form binds the
+   `Disabled` slot. Reset the native fieldset chrome and carry the form's
+   own flex-column gap so a disabled-capable form lays out identically to a
+   plain one; `:disabled` cascades to every descendant control natively. */
+.fuaran-form-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-md, 12px);
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+
+.fuaran-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-form-label {
+  font-size: var(--fuaran-text-sm, 13px);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  font-weight: var(--fuaran-font-weight-medium, 500);
+}
+
+.fuaran-form-help {
+  font-size: 11px;
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-form-submit {
+  align-self: flex-start;
+  padding: var(--fuaran-button-pad-y, 8px) var(--fuaran-button-pad-x, 12px);
+  border-radius: var(--fuaran-radius-md, 6px);
+  background: var(--fuaran-tone-brand-fg, #1d4ed8);
+  color: white;
+  border: none;
+  cursor: pointer;
+}
+
+.fuaran-form-submit:hover {
+  background: var(--fuaran-tone-brand-hover-fg, #1e40af);
+}
+
+.fuaran-form-submit:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: var(--fuaran-focus-ring-offset, 2px);
+}
+
+.fuaran-form-submit:active {
+  background: var(--fuaran-tone-brand-active-fg, #1e3a8a);
+}
+
+.fuaran-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fuaran-space-md, 12px);
+  padding: var(--fuaran-space-md, 12px);
+  background: var(--fuaran-tone-subdued-bg, #f3f4f6);
+  border-radius: var(--fuaran-radius-lg, 8px);
+}
+
+.fuaran-filter {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-filter-label {
+  font-size: var(--fuaran-text-xs, 12px);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-filter-range {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-filter-range input {
+  width: 70px;
+  padding: var(--fuaran-space-xs, 4px) var(--fuaran-space-sm, 8px);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-sm, 4px);
+}
+
+.fuaran-file-upload {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+/* ── grid + table ─────────────────────────────────────────────── */
+.fuaran-grid,
+.fuaran-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-md, 6px);
+  overflow: hidden;
+}
+
+.fuaran-grid-header,
+.fuaran-table-header {
+  background: var(--fuaran-tone-subdued-bg, #f3f4f6);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  text-align: left;
+  padding: var(--fuaran-space-sm, 8px) var(--fuaran-space-md, 12px);
+  font-weight: var(--fuaran-font-weight-medium, 500);
+  font-size: var(--fuaran-text-xs, 12px);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.fuaran-grid-cell,
+.fuaran-table-cell {
+  padding: var(--fuaran-space-sm, 8px) var(--fuaran-space-md, 12px);
+  border-top: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+}
+
+.fuaran-grid-row:hover,
+.fuaran-table-row:hover {
+  background: var(--fuaran-tone-subdued-hover-bg, #e5e7eb);
+  cursor: pointer;
+}
+
+.fuaran-grid-cell-editable {
+  width: 100px;
+  padding: 2px var(--fuaran-space-xs, 4px);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: 3px;
+}
+
+.fuaran-grid-cell-editable:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: 0;
+  border-color: var(--fuaran-tone-default-focus-border, #93c5fd);
+}
+
+.fuaran-grid-cell-button,
+.fuaran-grid-cell-button-group .fuaran-grid-cell-button {
+  padding: 2px var(--fuaran-space-sm, 8px);
+  font-size: var(--fuaran-text-xs, 12px);
+  border-radius: var(--fuaran-radius-sm, 4px);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  cursor: pointer;
+}
+
+.fuaran-grid-cell-button:hover {
+  background: var(--fuaran-tone-default-hover-bg, #f9fafb);
+  border-color: var(--fuaran-tone-default-hover-border, #d1d5db);
+}
+
+.fuaran-grid-cell-button:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: 0;
+}
+
+.fuaran-grid-cell-pill {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--fuaran-radius-lg, 8px);
+  font-size: 11px;
+}
+
+.fuaran-grid-cell-progress {
+  width: 60px;
+  height: var(--fuaran-space-sm, 8px);
+  background: var(--fuaran-tone-subdued-bg, #f3f4f6);
+  border-radius: var(--fuaran-radius-sm, 4px);
+}
+
+.fuaran-grid-cell-progress-fill {
+  height: 100%;
+  background: var(--fuaran-tone-success-fg, #047857);
+  border-radius: var(--fuaran-radius-sm, 4px);
+}
+
+/* ── chart + map placeholders ─────────────────────────────────── */
+.fuaran-chart,
+.fuaran-map {
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border: var(--fuaran-border-width, 1px) dashed var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-lg, 8px);
+  padding: var(--fuaran-space-lg, 16px);
+}
+
+.fuaran-chart-title {
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+  margin-bottom: var(--fuaran-space-sm, 8px);
+}
+
+.fuaran-chart-placeholder,
+.fuaran-map-placeholder {
+  font-family: monospace;
+  font-size: var(--fuaran-text-xs, 12px);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  white-space: pre-wrap;
+}
+
+.fuaran-map-marker-list {
+  margin-top: var(--fuaran-space-sm, 8px);
+  padding-left: 20px;
+  font-size: var(--fuaran-text-xs, 12px);
+}
+
+/* ── custom placeholder ───────────────────────────────────────── */
+/* Phase 12.F: the placeholder body lives inside the outer
+   `data-fuaran-node-id`-bearing wrapper (so LayoutObserver / SnapshotRegistry
+   pick up Custom nodes the same way they pick up every other Kind), and
+   only the `fuaran-custom-placeholder` child gets the dashed-border styling
+   so consumers who register a renderer via `IFuaranRuntime.TryRenderCustom`
+   don't inherit the placeholder visuals. */
+.fuaran-custom-placeholder {
+  background: var(--fuaran-tone-subdued-bg, #f3f4f6);
+  border: var(--fuaran-border-width, 1px) dashed var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-md, 6px);
+  padding: var(--fuaran-space-sm, 8px) var(--fuaran-space-md, 12px);
+}
+
+.fuaran-custom-label {
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+  font-size: var(--fuaran-text-xs, 12px);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-custom-props {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+/* ── motion vocabulary (Phase 12.F) ───────────────────────────── */
+/* The 8-token vocabulary §4h declares as the typed escape valve for
+   AI-emittable animation. The renderer emits `fuaran-motion-{token}` on
+   the outer wrapper when `Node.Motion` is `Some token`; this stylesheet
+   ships keyframes for the four most common cases (pulse-during-load /
+   fade-in-on-mount / shake-on-error / slide-in-from-right) and leaves
+   the remaining four as no-op class hooks consumers can override. The
+   class name suffix mirrors `Theme.motionVar` (kebab-case). */
+
+@keyframes fuaran-motion-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes fuaran-motion-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fuaran-motion-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-4px);
+  }
+  40%,
+  80% {
+    transform: translateX(4px);
+  }
+}
+
+@keyframes fuaran-motion-slide-in-right {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.fuaran-motion-pulse-during-load {
+  animation: fuaran-motion-pulse 1.4s ease-in-out infinite;
+}
+
+.fuaran-motion-fade-in-on-mount {
+  animation: fuaran-motion-fade-in 200ms ease-out both;
+}
+
+.fuaran-motion-shake-on-error {
+  animation: fuaran-motion-shake 320ms ease-in-out;
+}
+
+.fuaran-motion-slide-in-from-right {
+  animation: fuaran-motion-slide-in-right 220ms ease-out both;
+}
+
+/* No-op hooks — class declared so consumers can author CSS overrides;
+   no animation applied by the reference stylesheet. */
+.fuaran-motion-none {
+}
+.fuaran-motion-slide-in-from-below {
+}
+.fuaran-motion-rotate-on-refresh {
+}
+.fuaran-motion-expand-collapse {
+}
+
+/* Respect the user's reduced-motion preference — `Motion` is a typed
+   intent token, not a hard motion mandate. */
+@media (prefers-reduced-motion: reduce) {
+  .fuaran-motion-pulse-during-load,
+  .fuaran-motion-fade-in-on-mount,
+  .fuaran-motion-shake-on-error,
+  .fuaran-motion-slide-in-from-right {
+    animation: none;
+  }
+}
+
+/* ============================================================================
+   Phase 66 (2026-05-30): Segmented control / radio-group surface.
+
+   Horizontal: an inline "pill tray" of buttons with `role="radio"` — the
+   selected segment gets `aria-checked="true"` + a contrasting pill. Inter-
+   segment dividers are hairlines via `--fuaran-segmented-divider-color`.
+
+   Vertical: a stacked `<fieldset>` with `<input type="radio">` + `<label>`
+   pairs, one per row. The fieldset's `<legend>` is visually-hidden but read
+   by screen readers.
+   ========================================================================== */
+
+.fuaran-segmented-horizontal {
+  display: inline-flex;
+  background: var(--fuaran-segmented-bg, #f3f4f6);
+  border-radius: var(--fuaran-radius-md, 6px);
+  padding: 2px;
+  gap: 0;
+}
+
+.fuaran-segmented-horizontal .fuaran-segmented-option {
+  background: transparent;
+  border: none;
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  padding: var(--fuaran-space-sm, 8px) var(--fuaran-space-md, 12px);
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--fuaran-radius-sm, 4px);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fuaran-segmented-horizontal .fuaran-segmented-option + .fuaran-segmented-option::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 20%;
+  bottom: 20%;
+  width: 1px;
+  background: var(--fuaran-segmented-divider-color, #e5e7eb);
+}
+
+.fuaran-segmented-horizontal .fuaran-segmented-option[aria-checked="true"] {
+  background: var(--fuaran-segmented-active-bg, #ffffff);
+  color: var(--fuaran-segmented-active-fg, #1d4ed8);
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+}
+
+.fuaran-segmented-horizontal .fuaran-segmented-option[aria-checked="true"]::before,
+.fuaran-segmented-horizontal .fuaran-segmented-option[aria-checked="true"] + .fuaran-segmented-option::before {
+  /* The active pill suppresses the dividers immediately adjacent to it so
+     the contrasting background isn't cut by hairlines. */
+  background: transparent;
+}
+
+.fuaran-segmented-horizontal .fuaran-segmented-option:hover:not([aria-checked="true"]) {
+  color: var(--fuaran-tone-default-fg, #1f2937);
+}
+
+.fuaran-segmented-horizontal .fuaran-segmented-option:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: var(--fuaran-focus-ring-offset, 2px);
+}
+
+.fuaran-segmented-vertical {
+  display: flex;
+  flex-direction: column;
+  border: none;
+  padding: 0;
+  margin: 0;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-segmented-vertical .fuaran-segmented-legend {
+  /* Visually-hidden; preserved for assistive tech. The form-field label
+     above already names the group; the legend duplicates it for the
+     fieldset's ARIA contract. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.fuaran-segmented-vertical .fuaran-segmented-row {
+  display: flex;
+  align-items: center;
+  gap: var(--fuaran-space-sm, 8px);
+}
+
+.fuaran-segmented-vertical .fuaran-segmented-row input[type="radio"] {
+  margin: 0;
+}
+
+.fuaran-segmented-vertical .fuaran-segmented-row label {
+  cursor: pointer;
+}
+
+.fuaran-segmented-vertical .fuaran-segmented-row input[type="radio"]:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: var(--fuaran-focus-ring-offset, 2px);
+}
+
+/* ── Server-driven UX quick wins (Phase 158) ────────────────────────────────
+   Affordances the generic server-driven shim (fuaran-live-patch.js) toggles via
+   reserved attributes. All opt-in / shim-driven; a non-server-driven render
+   never sets these, so they cost nothing there. */
+
+/* QW1 — an interaction is in flight (cleared when its patch frame lands). */
+[data-fuaran-pending] {
+  opacity: 0.6;
+  cursor: progress;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+/* QW4 — optimistic local echo: an immediate active-state before the round-trip
+   confirms; the server patch reconciles. */
+[data-fuaran-optimistic-active] {
+  filter: brightness(0.96);
+}
+
+/* QW2 — connection-state affordance: a non-scary "reconnecting…" banner while
+   the live stream is down. Driven by `<html data-fuaran-disconnected>`. */
+html[data-fuaran-disconnected]::before {
+  content: "Reconnecting…";
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 2147483647;
+  padding: var(--fuaran-space-sm, 8px) var(--fuaran-space-md, 12px);
+  text-align: center;
+  font-weight: var(--fuaran-font-weight-medium, 500);
+  background: var(--fuaran-tone-warning-bg, #fffbeb);
+  color: var(--fuaran-tone-warning-fg, #b45309);
+  border-bottom: 1px solid var(--fuaran-tone-warning-border, #fcd34d);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Wave 43 — component-vocabulary completion (Phases 287–289).
+   Image / List / Divider (Display); Modal / Toast / ScrollArea (overlays +
+   overflow). The overlay classes carry the SSR↔CSR render-fidelity contract:
+   overlays render INLINE (no portal), positioned + z-indexed purely by CSS,
+   so the server and client emit byte-identical structure (no hydration
+   mismatch). Closed overlays use the native `[hidden]` attribute.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Image (Phase 287) ─────────────────────────────────────────── */
+.fuaran-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--fuaran-radius-md, 6px);
+}
+
+.fuaran-image-avatar {
+  width: var(--fuaran-avatar-size, 40px);
+  height: var(--fuaran-avatar-size, 40px);
+  border-radius: var(--fuaran-radius-full, 9999px);
+  object-fit: cover;
+}
+
+.fuaran-image-rounded {
+  border-radius: var(--fuaran-radius-lg, 8px);
+}
+
+/* ── List (Phase 287) ──────────────────────────────────────────── */
+.fuaran-list {
+  margin: 0;
+  padding-left: var(--fuaran-space-xl, 20px);
+  color: var(--fuaran-tone-default-fg, #1f2937);
+}
+
+.fuaran-list-item {
+  margin: var(--fuaran-space-xs, 4px) 0;
+}
+
+/* ── Divider (Phase 287) ───────────────────────────────────────── */
+.fuaran-divider-horizontal {
+  border: none;
+  border-top: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  margin: var(--fuaran-space-md, 12px) 0;
+}
+
+.fuaran-divider-vertical {
+  display: inline-block;
+  width: var(--fuaran-border-width, 1px);
+  align-self: stretch;
+  background: var(--fuaran-tone-default-border, #e5e7eb);
+  margin: 0 var(--fuaran-space-md, 12px);
+}
+
+.fuaran-divider-labelled {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  font-size: var(--fuaran-text-sm, 13px);
+  margin: var(--fuaran-space-md, 12px) 0;
+}
+
+.fuaran-divider-labelled::before,
+.fuaran-divider-labelled::after {
+  content: "";
+  flex: 1;
+  border-top: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+}
+
+.fuaran-divider-label {
+  padding: 0 var(--fuaran-space-md, 12px);
+}
+
+/* ── ScrollArea (Phase 289) ────────────────────────────────────── */
+.fuaran-scrollarea {
+  position: relative;
+}
+
+.fuaran-scrollarea-vertical {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.fuaran-scrollarea-horizontal {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.fuaran-scrollarea-both {
+  overflow: auto;
+}
+
+/* ── Toast (Phase 289 — overlay render-fidelity contract) ──────── */
+/* Inline (no portal); CSS owns position + stacking so SSR and CSR agree. */
+.fuaran-toast {
+  position: fixed;
+  bottom: var(--fuaran-space-lg, 16px);
+  right: var(--fuaran-space-lg, 16px);
+  z-index: var(--fuaran-z-toast, 1100);
+  display: flex;
+  align-items: center;
+  gap: var(--fuaran-space-md, 12px);
+  max-width: var(--fuaran-toast-max-width, 360px);
+  padding: var(--fuaran-space-md, 12px) var(--fuaran-space-lg, 16px);
+  border-radius: var(--fuaran-radius-md, 6px);
+  box-shadow: var(--fuaran-shadow-lg, 0 10px 15px -3px rgba(0, 0, 0, 0.1));
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  color: var(--fuaran-tone-default-fg, #1f2937);
+}
+
+.fuaran-toast[hidden] {
+  display: none;
+}
+
+.fuaran-toast-info {
+  border-color: var(--fuaran-tone-info-border, #93c5fd);
+}
+.fuaran-toast-success {
+  border-color: var(--fuaran-tone-success-border, #86efac);
+}
+.fuaran-toast-warning {
+  border-color: var(--fuaran-tone-warning-border, #fcd34d);
+}
+.fuaran-toast-critical {
+  border-color: var(--fuaran-tone-critical-border, #fca5a5);
+}
+
+.fuaran-toast-message {
+  flex: 1;
+}
+
+.fuaran-toast-dismiss,
+.fuaran-modal-dismiss {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fuaran-text-lg, 16px);
+  line-height: 1;
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  padding: var(--fuaran-space-xs, 4px);
+}
+
+/* ── Modal (Phase 289 — overlay render-fidelity contract) ──────── */
+/* Inline (no portal); the overlay is ALWAYS in the DOM, closed via [hidden].
+   CSS owns the fixed-position backdrop + centring + z-index so the server and
+   client emit identical structure. Focus-trap is a client-only enhancement
+   that does not alter the hydrated DOM. */
+.fuaran-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--fuaran-z-modal, 1000);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--fuaran-space-lg, 16px);
+  background: var(--fuaran-modal-backdrop, rgba(0, 0, 0, 0.5));
+}
+
+.fuaran-modal-overlay[hidden] {
+  display: none;
+}
+
+.fuaran-modal-dialog {
+  position: relative;
+  max-width: var(--fuaran-modal-max-width, 560px);
+  width: 100%;
+  max-height: calc(100% - var(--fuaran-space-xl, 20px));
+  overflow-y: auto;
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border-radius: var(--fuaran-radius-lg, 8px);
+  box-shadow: var(--fuaran-shadow-xl, 0 20px 25px -5px rgba(0, 0, 0, 0.1));
+  padding: var(--fuaran-space-xl, 20px);
+}
+
+.fuaran-modal-heading {
+  margin: 0 0 var(--fuaran-space-md, 12px) 0;
+  font-size: var(--fuaran-text-xl, 18px);
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+}
+
+.fuaran-modal-dismiss {
+  position: absolute;
+  top: var(--fuaran-space-md, 12px);
+  right: var(--fuaran-space-md, 12px);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Wave 43 — CodeBlock (Phase 290) + Math (Phase 293).
+   Both carry a deterministic-render contract: the parity-checked output is the
+   bare escaped structure (CodeBlock: <pre><code>; Math: the raw source). Syntax
+   highlighting (CodeBlock) and KaTeX (Math) are client-only post-hydration
+   enhancements applied OUTSIDE the cross-host / SSR↔CSR byte-diff.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── CodeBlock (Phase 290) ─────────────────────────────────────── */
+.fuaran-codeblock {
+  position: relative;
+  margin: var(--fuaran-space-md, 12px) 0;
+  border-radius: var(--fuaran-radius-md, 6px);
+  background: var(--fuaran-code-bg, #1e1e2e);
+  color: var(--fuaran-code-fg, #cdd6f4);
+  overflow: hidden;
+}
+
+.fuaran-codeblock-pre {
+  margin: 0;
+  padding: var(--fuaran-space-md, 12px) var(--fuaran-space-lg, 16px);
+  overflow-x: auto;
+  font-family: var(--fuaran-font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  font-size: var(--fuaran-text-sm, 13px);
+  line-height: 1.5;
+}
+
+.fuaran-codeblock-code {
+  display: block;
+  white-space: pre;
+}
+
+/* Line-number gutter — a deterministic CSS counter (no JS). The renderer adds
+   `fuaran-codeblock-numbered` on the container; a post-hydration highlighter
+   may replace this with per-line markup, but the bare structure stands alone. */
+.fuaran-codeblock-numbered .fuaran-codeblock-code {
+  counter-reset: fuaran-code-line;
+}
+
+.fuaran-codeblock-copy {
+  position: absolute;
+  top: var(--fuaran-space-sm, 8px);
+  right: var(--fuaran-space-sm, 8px);
+  padding: var(--fuaran-space-xs, 4px) var(--fuaran-space-sm, 8px);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-code-copy-border, #45475a);
+  border-radius: var(--fuaran-radius-sm, 4px);
+  background: var(--fuaran-code-copy-bg, #313244);
+  color: inherit;
+  font-size: var(--fuaran-text-xs, 11px);
+  cursor: pointer;
+}
+
+/* ── Math (Phase 293) ──────────────────────────────────────────── */
+.fuaran-math-block {
+  display: block;
+  margin: var(--fuaran-space-md, 12px) 0;
+  text-align: center;
+  overflow-x: auto;
+}
+
+.fuaran-math-inline {
+  display: inline;
+}
+
+/* The deterministic fallback: the raw LaTeX source, monospace, until KaTeX
+   replaces it client-side. KaTeX (when present) hides this and inserts its own
+   rendered output — the no-JS reader keeps the source. */
+.fuaran-math-source {
+  font-family: var(--fuaran-font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+/* ============================================================================
+   Responsive / mobile layout collapse — Phase 58 (2026-07-11)
+
+   The `@media` thresholds below repeat the `--fuaran-breakpoint-{sm|md|lg}`
+   token px values LITERALLY: a media-query condition cannot reference a
+   custom property (`@media (max-width: var(--x))` is invalid CSS). The
+   typed `Theme.Breakpoints` record (mirrored into the `:root` tokens above)
+   is the source of truth these rules are kept in sync with — change both
+   together. See docs/migrations/phase-58-mobile-responsive.md.
+
+   Rules are appended at the end of the file so they win by source order at
+   equal specificity over the desktop base rules above.
+
+   `grid-template-columns` is emitted as an INLINE style by the renderer
+   (Render.fs — column count rides inline so hosts needn't safelist every
+   N), so the grid-collapse rules require `!important` to override it. This
+   is the one sanctioned `!important` in the reference stylesheet, scoped to
+   the narrow-viewport media query.
+   ============================================================================ */
+
+/* ── tablet (≤ md / 768px): halve dense grids ──────────────────── */
+@media (max-width: 768px) {
+  .fuaran-layout-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}
+
+/* ── phone (≤ sm / 640px): single-column + scrollable overflow ─── */
+@media (max-width: 640px) {
+  /* Stack + split-panel collapse to a single vertical column. Class-driven
+     (not inline), so no `!important` needed. */
+  .fuaran-stack-horizontal {
+    flex-direction: column;
+  }
+
+  .fuaran-layout-split-panel {
+    flex-direction: column;
+  }
+
+  /* Grid collapses to one column (overrides the inline template — see note). */
+  .fuaran-layout-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Tab bar becomes a horizontal scroller instead of overflowing / clipping
+     tabs off-screen — the "scrollable fallback" for narrow viewports. */
+  .fuaran-tabs-bar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .fuaran-tab {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  /* Wide tabular data scrolls horizontally within its node wrapper rather
+     than forcing the whole page to scroll. The `fuaran-kind-{grid|table}`
+     hook is the outer node wrapper (the `<table>` is its child). */
+  .fuaran-kind-grid,
+  .fuaran-kind-table {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Touch-target floor (WCAG 2.5.5): interactive leaves reach at least
+     44px of tappable height at phone widths. */
+  .fuaran-button,
+  .fuaran-form-input,
+  .fuaran-select-control,
+  .fuaran-file-upload,
+  .fuaran-tab {
+    min-height: 44px;
+  }
+}

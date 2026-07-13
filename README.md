@@ -37,7 +37,7 @@ Delivery modes a Rust host fits especially well:
 - **Server-driven** — hold the tree + state in native Rust, stream tree-op diffs to
   a thin generic client, and round-trip interactions.
 
-## Status — codec floor shipped
+## Status — codec floor + apply + validator + server renderer shipped
 
 Shipped:
 
@@ -48,14 +48,27 @@ Shipped:
 - **`wire`** — the typed wire model (every closed wire DU as a native `enum`)
   plus the working codec: `decode_node` / `encode_node` / `decode_op` /
   `encode_op`, with the six-code `DecodeError` envelope and `$`-rooted paths.
-- **conformance** (`tests/conformance.rs`) — certification against the shared
-  `wire-format-fixtures` corpus: every node + op round-trip fixture re-encodes
-  **byte-identically**, and every reject fixture surfaces the canonical error
-  code + path prefix. Skips cleanly when the repo is checked out alone.
+  Corpus-certified: every node + op round-trip fixture re-encodes
+  **byte-identically**, every reject fixture surfaces the canonical code + path.
+- **`ops`** — the tree-op apply engine: `apply(tree, op)` over the full `TreeOp`
+  algebra (structural ops, `UpdateProp` with the nested-path grammar,
+  `ReplaceBinding`), total (structured `ApplyError`s, never a panic), atomic
+  `Batch`, and the `can_apply` dry-run obeying the apply-envelope law.
+- **`validator`** — the pre-emit structural validator surfacing the canonical
+  `FUARAN###` defect codes over a decoded tree (node identity, bounded
+  primitives, shape coherence, write-back / wire-survivability lints).
+- **`render`** — the emission tier: the pure-string server-HTML renderer
+  (parity-locked `fuaran-*` class vocabulary, inert interactivity, crawlable
+  links, sanitiser posture), the deterministic cross-host markdown renderer
+  (corpus-certified byte-for-byte), hydration-ready whole-tree emission, and
+  **islands partial hydration** (`render_with_islands`: per-island
+  `data-fuaran-island` boundary + scoped wire-JSON payload; zero islands ⇒
+  byte-identical to a plain render). The reference stylesheet ships as a
+  byte-copy at `css/fuaran.css` (parity-tested against the reference artefact).
 
-The tree-op apply engine, pre-emit validator, lenient-profile / envelope /
-elicitation conformance families, and server-HTML / WASM-client emission are
-roadmap work beyond the floor.
+Beyond this tier: the lenient-profile / envelope / elicitation conformance
+families, dataframe (`Binding.Transform`) evaluation, a host-locale seam for
+`Binding.Format`, and the `wasm32` client build.
 
 ## Layout
 
@@ -65,17 +78,18 @@ fuaran-rs/
 ├── src/
 │   ├── lib.rs           # crate doc + VERSION
 │   ├── canonical/       # canonical-JSON layer — number form, parser, canonical renderer
-│   │   ├── mod.rs
-│   │   ├── float.rs
-│   │   └── json.rs
-│   └── wire/            # typed wire model + Node / TreeOp codec + DecodeError envelope
-│       ├── mod.rs
-│       ├── model.rs
-│       ├── decode.rs
-│       ├── encode.rs
-│       └── result.rs
+│   ├── wire/            # typed wire model + Node / TreeOp codec + DecodeError envelope
+│   ├── ops/             # tree-op apply engine + ApplyError envelope + dry-run
+│   ├── validator/       # pre-emit structural validator (FUARAN### codes)
+│   └── render/          # server-HTML renderer + islands + markdown + sanitise floor
+├── css/
+│   └── fuaran.css       # byte-copy of the reference stylesheet (parity-tested)
 ├── tests/
-│   └── conformance.rs   # shared-corpus certification (round-trip + reject legs)
+│   ├── conformance.rs   # shared-corpus certification (round-trip + reject legs)
+│   ├── apply.rs         # apply-engine behaviour + the apply-envelope law
+│   ├── validator.rs     # per-rule fire / stay-silent pairs
+│   ├── markdown.rs      # markdown corpus certification (byte-for-byte)
+│   └── render.rs        # renderer behaviour + islands laws + CSS byte-parity
 ├── run.ps1              # cargo fmt --check -> clippy -> build -> test
 ├── LICENSE              # Apache-2.0
 ├── README.md

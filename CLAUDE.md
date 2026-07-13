@@ -6,9 +6,13 @@ to the F# (`Fuaran.UI`), TypeScript (`@fuaran-ui/*`), Python (`fuaran_py`), and 
 backend / edge / embedded host *and* a **browser-native `wasm32` client** — the
 canonical-JSON codec, a tree-op apply engine, a pre-emit validator, and both
 server-side and WASM-client emission, all conformant to the shared wire format. What
-ships **today** is the codec floor — the canonical-JSON layer (number form, parser,
-byte-exact renderer) and the typed node/op codec, corpus-certified on the round-trip
-and reject families; the apply engine, validator, and emission are roadmap work.
+ships **today**: the codec floor (corpus-certified round-trip + reject), the tree-op
+apply engine (+ `can_apply` dry-run), the pre-emit validator (canonical `FUARAN###`
+codes), and the server-side emission tier — the parity-locked server-HTML renderer,
+the corpus-certified deterministic markdown renderer, hydration-ready emission, and
+islands partial hydration. The `wasm32` client build, the remaining conformance
+families (lenient / envelope / elicitation), and dataframe evaluation are roadmap
+work.
 
 **Framing — load-bearing, do not regress.** The emission surface is the **canonical
 JSON wire format, for every host**. The language tiers are **human-developer
@@ -61,7 +65,12 @@ fuaran-rs/
 ├── src/lib.rs           # crate doc + VERSION
 ├── src/canonical/       # canonical-JSON layer — float.rs (number form) + json.rs (parser + canonical renderer)
 ├── src/wire/            # model.rs (typed tree, native enums) + decode.rs / encode.rs + the DecodeError envelope
-├── tests/conformance.rs # shared-corpus certification (round-trip + reject legs live)
+├── src/ops/             # tree-op apply engine — total reducer + ApplyError envelope + can_apply dry-run
+├── src/validator/       # pre-emit structural validator — canonical FUARAN### defect codes
+├── src/render/          # emission tier — server.rs (HTML walk + islands) + markdown.rs (corpus-certified)
+│                        #   + sanitize.rs (injection floor) + bindings.rs / class_names.rs / html.rs
+├── css/fuaran.css       # byte-copy of the reference stylesheet (parity-tested against the reference artefact)
+├── tests/               # conformance.rs + apply.rs + validator.rs + markdown.rs + render.rs
 ├── Cargo.toml
 ├── run.ps1              # Stage-0 entry point — cargo fmt --check + clippy + build + test
 ├── LICENSE              # Apache 2.0 + Diametrical Ltd copyright
