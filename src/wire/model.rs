@@ -62,6 +62,7 @@ bare_enum!(HeadingVariant { Standard => "Standard", Eyebrow => "Eyebrow", Captio
 bare_enum!(ToneVariant { Default => "Default", Subdued => "Subdued", Brand => "Brand", Success => "Success", Warning => "Warning", Critical => "Critical", Info => "Info" });
 bare_enum!(StyleWeight { Compact => "Compact", Standard => "Standard", Spacious => "Spacious" });
 bare_enum!(Emphasis { Quiet => "Quiet", Normal => "Normal", Loud => "Loud" });
+bare_enum!(TextAnchor { Start => "Start", Middle => "Middle", End => "End" });
 bare_enum!(StyleRole { None => "None", Eyebrow => "Eyebrow", Data => "Data", Lede => "Lede", Caption => "Caption" });
 bare_enum!(FontVoice { Default => "Default", Display => "Display", Structural => "Structural" });
 bare_enum!(ChartKind { Line => "Line", Bar => "Bar", Area => "Area", Pie => "Pie", Scatter => "Scatter", Heatmap => "Heatmap" });
@@ -991,6 +992,124 @@ pub struct MountSpec {
     // `onBubble` is an always-emitted closure — no field.
 }
 
+// ─── Drawing (Phase 524) — bounded, typed vector graphics ────────────────────
+
+/// A point in `Drawing` coordinate space.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrawPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// The SVG-style view box of a `Drawing`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewBox {
+    pub min_x: f64,
+    pub min_y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Presentation style shared by every `Shape`; every field is optional (an
+/// all-`None` style emits `{}`). The text-only fields (`text_anchor` /
+/// `font_size` / `emphasis` / `font_family`, Phase 528.1) apply only to `Label`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DrawStyle {
+    pub fill: Option<Binding>,
+    pub stroke: Option<Binding>,
+    pub stroke_width: Option<Binding>,
+    pub opacity: Option<Binding>,
+    pub text_anchor: Option<TextAnchor>,
+    pub font_size: Option<f64>,
+    pub emphasis: Option<Emphasis>,
+    pub font_family: Option<String>,
+}
+
+/// A single SVG path command inside a `Shape::Curve`. Closed + typed — an
+/// unrecognised `$type` is `UNKNOWN_DU_CASE` at decode.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CurveCommand {
+    MoveTo(DrawPoint),
+    LineTo(DrawPoint),
+    CubicTo {
+        control1: DrawPoint,
+        control2: DrawPoint,
+        to: DrawPoint,
+    },
+    QuadraticTo {
+        control: DrawPoint,
+        to: DrawPoint,
+    },
+    Close,
+}
+
+/// The closed, typed vector-graphics vocabulary (no raw-SVG / attribute-bag
+/// escape hatch). An unrecognised `$type` is `UNKNOWN_DU_CASE` at decode.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Shape {
+    Group {
+        children: Vec<Shape>,
+        style: DrawStyle,
+    },
+    Rectangle {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        corner_radius: Option<f64>,
+        style: DrawStyle,
+    },
+    Line {
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        style: DrawStyle,
+    },
+    Polyline {
+        points: Vec<DrawPoint>,
+        style: DrawStyle,
+    },
+    Polygon {
+        points: Vec<DrawPoint>,
+        style: DrawStyle,
+    },
+    Curve {
+        commands: Vec<CurveCommand>,
+        style: DrawStyle,
+    },
+    Circle {
+        cx: f64,
+        cy: f64,
+        r: f64,
+        style: DrawStyle,
+    },
+    Ellipse {
+        cx: f64,
+        cy: f64,
+        rx: f64,
+        ry: f64,
+        style: DrawStyle,
+    },
+    Label {
+        x: f64,
+        y: f64,
+        text: TextSource,
+        style: DrawStyle,
+    },
+}
+
+/// A bounded, typed vector-graphics primitive (`DisplayKind.Drawing`). Geometry
+/// is static numbers — a resolved artefact; only `DrawStyle` carries `Binding`s.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrawingSpec {
+    pub view_box: ViewBox,
+    pub shapes: Vec<Shape>,
+    pub style: DrawStyle,
+    pub title: Option<TextSource>,
+    pub description: Option<TextSource>,
+}
+
 // ─── NodeKind — the flat wire vocabulary (§3.2) ──────────────────────────────
 
 /// The node's primitive kind: the closed, flat `kind.$type` vocabulary. The
@@ -1023,6 +1142,7 @@ pub enum NodeKind {
     Toast(ToastSpec),
     CodeBlock(CodeBlockSpec),
     Math(MathSpec),
+    Drawing(DrawingSpec),
     // Input
     Form(FormSpec),
     Filters(Vec<FilterSpec>),
@@ -1082,6 +1202,7 @@ impl NodeKind {
             NodeKind::Toast(_) => "Toast",
             NodeKind::CodeBlock(_) => "CodeBlock",
             NodeKind::Math(_) => "Math",
+            NodeKind::Drawing(_) => "Drawing",
             NodeKind::Form(_) => "Form",
             NodeKind::Filters(_) => "Filters",
             NodeKind::Button(_) => "Button",
@@ -1124,7 +1245,8 @@ impl NodeKind {
             | NodeKind::List(_)
             | NodeKind::Toast(_)
             | NodeKind::CodeBlock(_)
-            | NodeKind::Math(_) => NodeCategory::Display,
+            | NodeKind::Math(_)
+            | NodeKind::Drawing(_) => NodeCategory::Display,
             NodeKind::Form(_)
             | NodeKind::Filters(_)
             | NodeKind::Button(_)

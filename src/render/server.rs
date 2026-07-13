@@ -46,7 +46,7 @@ use super::bindings::{
     resolve_rows, try_bool, try_number, try_string,
 };
 use super::class_names::{node_class_name, tone_var};
-use super::html::{Attr, AttrVal, el, text_el, void_el};
+use super::html::{Attr, AttrVal, el, escape_attr, escape_text, text_el, void_el};
 use super::markdown::to_html as markdown_to_html;
 use super::sanitize::sanitize_url_or_blank;
 
@@ -116,6 +116,7 @@ fn collect_fragments<'a>(acc: &mut HashMap<String, &'a Node>, node: &'a Node) {
         | NodeKind::Map(_)
         | NodeKind::Custom(_)
         | NodeKind::FragmentRef(_)
+        | NodeKind::Drawing(_)
         | NodeKind::Mount(_) => {}
     }
 }
@@ -496,6 +497,7 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node) -> String {
             )
         }
         NodeKind::Sparkline(spec) => render_sparkline(ctx, spec),
+        NodeKind::Drawing(spec) => render_drawing(ctx, spec),
         NodeKind::LabelValueRow(spec) => {
             let resolution = resolve_number(ctx.sources, &spec.source);
             if matches!(resolution, NumberResolution::NotResolved)
@@ -1205,6 +1207,242 @@ fn render_sparkline(ctx: &Ctx<'_>, spec: &crate::wire::SparklineSpec) -> String 
         ],
         &polyline,
     )
+}
+
+// ─── Drawing (Phase 525) — inline SVG for the server-HTML tier ────────────────
+//
+// A byte-faithful port of the canonical F# `Renderer.Core.DrawingSvg` builder
+// (mirrored by the TS / Python / Go hosts): static geometry lowered to inline
+// `<svg>` — same path `d`, coordinate/number form, XML escaping, open-shape
+// `fill="none"` defaults, `role="img"` + optional `<title>`/`<desc>` (a11y),
+// and the parity-locked `fuaran-drawing*` class vocabulary. Only `DrawStyle`
+// carries `Binding`s (resolved Static; the headless baseline omits the rest).
+
+fn draw_num(n: f64) -> String {
+    if !n.is_finite() {
+        return "0".to_string();
+    }
+    if n == n.floor() && n.abs() < 1e15 {
+        (n as i64).to_string()
+    } else {
+        format!("{n}")
+    }
+}
+
+fn draw_static_string(b: &crate::wire::Binding) -> Option<String> {
+    match b {
+        crate::wire::Binding::Static {
+            value: crate::wire::StaticValue::Ast(crate::canonical::JVal::Str(v)),
+        } => Some(v.clone()),
+        _ => None,
+    }
+}
+
+fn draw_static_number(b: &crate::wire::Binding) -> Option<f64> {
+    match b {
+        crate::wire::Binding::Static {
+            value: crate::wire::StaticValue::Ast(crate::canonical::JVal::Num(n)),
+        } => Some(*n),
+        _ => None,
+    }
+}
+
+fn draw_style_attrs(style: &crate::wire::DrawStyle, default_fill_none: bool) -> String {
+    let mut out = String::new();
+    match &style.fill {
+        Some(b) => {
+            if let Some(v) = draw_static_string(b) {
+                out.push_str(&format!(" fill=\"{}\"", escape_attr(&v)));
+            }
+        }
+        None => {
+            if default_fill_none {
+                out.push_str(" fill=\"none\"");
+            }
+        }
+    }
+    if let Some(v) = style.opacity.as_ref().and_then(draw_static_number) {
+        out.push_str(&format!(" opacity=\"{}\"", draw_num(v)));
+    }
+    if let Some(v) = style.stroke.as_ref().and_then(draw_static_string) {
+        out.push_str(&format!(" stroke=\"{}\"", escape_attr(&v)));
+    }
+    if let Some(v) = style.stroke_width.as_ref().and_then(draw_static_number) {
+        out.push_str(&format!(" stroke-width=\"{}\"", draw_num(v)));
+    }
+    if let Some(ta) = &style.text_anchor {
+        let anchor = match ta {
+            crate::wire::TextAnchor::Start => "start",
+            crate::wire::TextAnchor::Middle => "middle",
+            crate::wire::TextAnchor::End => "end",
+        };
+        out.push_str(&format!(" text-anchor=\"{anchor}\""));
+    }
+    if let Some(ff) = &style.font_family {
+        out.push_str(&format!(" font-family=\"{}\"", escape_attr(ff)));
+    }
+    if let Some(fs) = style.font_size {
+        out.push_str(&format!(" font-size=\"{}px\"", draw_num(fs)));
+    }
+    if let Some(em) = &style.emphasis {
+        let weight = match em {
+            crate::wire::Emphasis::Quiet => "300",
+            crate::wire::Emphasis::Normal => "400",
+            crate::wire::Emphasis::Loud => "700",
+        };
+        out.push_str(&format!(" font-weight=\"{weight}\""));
+    }
+    out
+}
+
+fn draw_points(points: &[crate::wire::DrawPoint]) -> String {
+    points
+        .iter()
+        .map(|p| format!("{},{}", draw_num(p.x), draw_num(p.y)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn draw_path_d(commands: &[crate::wire::CurveCommand]) -> String {
+    use crate::wire::CurveCommand as C;
+    let pt = |p: &crate::wire::DrawPoint| format!("{} {}", draw_num(p.x), draw_num(p.y));
+    commands
+        .iter()
+        .map(|c| match c {
+            C::MoveTo(to) => format!("M{}", pt(to)),
+            C::LineTo(to) => format!("L{}", pt(to)),
+            C::CubicTo {
+                control1,
+                control2,
+                to,
+            } => format!("C{} {} {}", pt(control1), pt(control2), pt(to)),
+            C::QuadraticTo { control, to } => format!("Q{} {}", pt(control), pt(to)),
+            C::Close => "Z".to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn render_shape(ctx: &Ctx<'_>, sh: &crate::wire::Shape) -> String {
+    use crate::wire::Shape as S;
+    match sh {
+        S::Group { children, style } => {
+            let inner: String = children.iter().map(|c| render_shape(ctx, c)).collect();
+            format!(
+                "<g class=\"fuaran-drawing-group\"{}>{inner}</g>",
+                draw_style_attrs(style, false)
+            )
+        }
+        S::Rectangle {
+            x,
+            y,
+            width,
+            height,
+            corner_radius,
+            style,
+        } => {
+            let rx = corner_radius
+                .map(|cr| format!(" rx=\"{}\"", draw_num(cr)))
+                .unwrap_or_default();
+            format!(
+                "<rect class=\"fuaran-drawing-rect\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{rx}{}/>",
+                draw_num(*x),
+                draw_num(*y),
+                draw_num(*width),
+                draw_num(*height),
+                draw_style_attrs(style, false)
+            )
+        }
+        S::Line {
+            x1,
+            y1,
+            x2,
+            y2,
+            style,
+        } => format!(
+            "<line class=\"fuaran-drawing-line\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"{}/>",
+            draw_num(*x1),
+            draw_num(*y1),
+            draw_num(*x2),
+            draw_num(*y2),
+            draw_style_attrs(style, false)
+        ),
+        S::Polyline { points, style } => format!(
+            "<polyline class=\"fuaran-drawing-polyline\" points=\"{}\"{}/>",
+            draw_points(points),
+            draw_style_attrs(style, true)
+        ),
+        S::Polygon { points, style } => format!(
+            "<polygon class=\"fuaran-drawing-polygon\" points=\"{}\"{}/>",
+            draw_points(points),
+            draw_style_attrs(style, false)
+        ),
+        S::Curve { commands, style } => format!(
+            "<path class=\"fuaran-drawing-curve\" d=\"{}\"{}/>",
+            draw_path_d(commands),
+            draw_style_attrs(style, true)
+        ),
+        S::Circle { cx, cy, r, style } => format!(
+            "<circle class=\"fuaran-drawing-circle\" cx=\"{}\" cy=\"{}\" r=\"{}\"{}/>",
+            draw_num(*cx),
+            draw_num(*cy),
+            draw_num(*r),
+            draw_style_attrs(style, false)
+        ),
+        S::Ellipse {
+            cx,
+            cy,
+            rx,
+            ry,
+            style,
+        } => format!(
+            "<ellipse class=\"fuaran-drawing-ellipse\" cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{}/>",
+            draw_num(*cx),
+            draw_num(*cy),
+            draw_num(*rx),
+            draw_num(*ry),
+            draw_style_attrs(style, false)
+        ),
+        S::Label { x, y, text, style } => format!(
+            "<text class=\"fuaran-drawing-label\" x=\"{}\" y=\"{}\"{}>{}</text>",
+            draw_num(*x),
+            draw_num(*y),
+            draw_style_attrs(style, false),
+            escape_text(&render_text(ctx.sources, text))
+        ),
+    }
+}
+
+fn render_drawing(ctx: &Ctx<'_>, spec: &crate::wire::DrawingSpec) -> String {
+    let vb = &spec.view_box;
+    let view_box = format!(
+        "{} {} {} {}",
+        draw_num(vb.min_x),
+        draw_num(vb.min_y),
+        draw_num(vb.width),
+        draw_num(vb.height)
+    );
+    let title = spec
+        .title
+        .as_ref()
+        .map(|t| {
+            format!(
+                "<title>{}</title>",
+                escape_text(&render_text(ctx.sources, t))
+            )
+        })
+        .unwrap_or_default();
+    let desc = spec
+        .description
+        .as_ref()
+        .map(|d| format!("<desc>{}</desc>", escape_text(&render_text(ctx.sources, d))))
+        .unwrap_or_default();
+    let body: String = spec.shapes.iter().map(|s| render_shape(ctx, s)).collect();
+    let root_style = draw_style_attrs(&spec.style, false);
+    let svg = format!(
+        "<svg class=\"fuaran-drawing\" role=\"img\" viewBox=\"{view_box}\"{root_style}>{title}{desc}{body}</svg>"
+    );
+    format!("<div>{svg}</div>")
 }
 
 // ─── Inputs (inert) ──────────────────────────────────────────────────────────

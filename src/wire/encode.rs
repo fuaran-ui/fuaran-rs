@@ -792,6 +792,199 @@ fn progress_spec(spec: &ProgressSpec) -> String {
     obj(fields)
 }
 
+// ─── Drawing specs (Phase 524) ───────────────────────────────────────────────
+
+fn view_box(vb: &ViewBox) -> String {
+    obj(vec![
+        field("height", num(vb.height)),
+        field("minX", num(vb.min_x)),
+        field("minY", num(vb.min_y)),
+        field("width", num(vb.width)),
+    ])
+}
+
+fn draw_point(p: &DrawPoint) -> String {
+    obj(vec![field("x", num(p.x)), field("y", num(p.y))])
+}
+
+fn draw_style(style: &DrawStyle) -> String {
+    // Every field optional; `obj` sorts keys, so push order is immaterial.
+    let mut fields = Vec::new();
+    if let Some(fill) = &style.fill {
+        fields.push(field("fill", binding(fill)));
+    }
+    if let Some(stroke) = &style.stroke {
+        fields.push(field("stroke", binding(stroke)));
+    }
+    if let Some(sw) = &style.stroke_width {
+        fields.push(field("strokeWidth", binding(sw)));
+    }
+    if let Some(op) = &style.opacity {
+        fields.push(field("opacity", binding(op)));
+    }
+    if let Some(ta) = &style.text_anchor {
+        fields.push(field("textAnchor", s(ta.as_str())));
+    }
+    if let Some(fs) = &style.font_size {
+        fields.push(field("fontSize", num(*fs)));
+    }
+    if let Some(em) = &style.emphasis {
+        fields.push(field("emphasis", s(em.as_str())));
+    }
+    if let Some(ff) = &style.font_family {
+        fields.push(field("fontFamily", s(ff)));
+    }
+    obj(fields)
+}
+
+fn curve_command(c: &CurveCommand) -> String {
+    match c {
+        CurveCommand::MoveTo(to) => case_obj("MoveTo", vec![field("to", draw_point(to))]),
+        CurveCommand::LineTo(to) => case_obj("LineTo", vec![field("to", draw_point(to))]),
+        CurveCommand::CubicTo {
+            control1,
+            control2,
+            to,
+        } => case_obj(
+            "CubicTo",
+            vec![
+                field("control1", draw_point(control1)),
+                field("control2", draw_point(control2)),
+                field("to", draw_point(to)),
+            ],
+        ),
+        CurveCommand::QuadraticTo { control, to } => case_obj(
+            "QuadraticTo",
+            vec![
+                field("control", draw_point(control)),
+                field("to", draw_point(to)),
+            ],
+        ),
+        CurveCommand::Close => case_obj("Close", vec![]),
+    }
+}
+
+fn shape(sh: &Shape) -> String {
+    match sh {
+        Shape::Group { children, style } => case_obj(
+            "Group",
+            vec![
+                field("children", arr(children.iter().map(shape).collect())),
+                field("style", draw_style(style)),
+            ],
+        ),
+        Shape::Rectangle {
+            x,
+            y,
+            width,
+            height,
+            corner_radius,
+            style,
+        } => {
+            let mut fields = vec![
+                field("height", num(*height)),
+                field("style", draw_style(style)),
+                field("width", num(*width)),
+                field("x", num(*x)),
+                field("y", num(*y)),
+            ];
+            if let Some(cr) = corner_radius {
+                fields.push(field("cornerRadius", num(*cr)));
+            }
+            case_obj("Rectangle", fields)
+        }
+        Shape::Line {
+            x1,
+            y1,
+            x2,
+            y2,
+            style,
+        } => case_obj(
+            "Line",
+            vec![
+                field("style", draw_style(style)),
+                field("x1", num(*x1)),
+                field("x2", num(*x2)),
+                field("y1", num(*y1)),
+                field("y2", num(*y2)),
+            ],
+        ),
+        Shape::Polyline { points, style } => case_obj(
+            "Polyline",
+            vec![
+                field("points", arr(points.iter().map(draw_point).collect())),
+                field("style", draw_style(style)),
+            ],
+        ),
+        Shape::Polygon { points, style } => case_obj(
+            "Polygon",
+            vec![
+                field("points", arr(points.iter().map(draw_point).collect())),
+                field("style", draw_style(style)),
+            ],
+        ),
+        Shape::Curve { commands, style } => case_obj(
+            "Curve",
+            vec![
+                field(
+                    "commands",
+                    arr(commands.iter().map(curve_command).collect()),
+                ),
+                field("style", draw_style(style)),
+            ],
+        ),
+        Shape::Circle { cx, cy, r, style } => case_obj(
+            "Circle",
+            vec![
+                field("cx", num(*cx)),
+                field("cy", num(*cy)),
+                field("r", num(*r)),
+                field("style", draw_style(style)),
+            ],
+        ),
+        Shape::Ellipse {
+            cx,
+            cy,
+            rx,
+            ry,
+            style,
+        } => case_obj(
+            "Ellipse",
+            vec![
+                field("cx", num(*cx)),
+                field("cy", num(*cy)),
+                field("rx", num(*rx)),
+                field("ry", num(*ry)),
+                field("style", draw_style(style)),
+            ],
+        ),
+        Shape::Label { x, y, text, style } => case_obj(
+            "Label",
+            vec![
+                field("style", draw_style(style)),
+                field("text", text_source(text)),
+                field("x", num(*x)),
+                field("y", num(*y)),
+            ],
+        ),
+    }
+}
+
+fn drawing_spec(spec: &DrawingSpec) -> String {
+    let mut fields = vec![
+        field("shapes", arr(spec.shapes.iter().map(shape).collect())),
+        field("style", draw_style(&spec.style)),
+        field("viewBox", view_box(&spec.view_box)),
+    ];
+    if let Some(title) = &spec.title {
+        fields.push(field("title", text_source(title)));
+    }
+    if let Some(desc) = &spec.description {
+        fields.push(field("description", text_source(desc)));
+    }
+    obj(fields)
+}
+
 // ─── Input specs ─────────────────────────────────────────────────────────────
 
 fn handler_field(name: &str, present: &Option<Closure>) -> Vec<Field> {
@@ -1452,6 +1645,7 @@ fn node_kind(k: &NodeKind) -> String {
         NodeKind::Toast(spec) => case_obj_hoisted("Toast", toast_spec(spec)),
         NodeKind::CodeBlock(spec) => case_obj_hoisted("CodeBlock", code_block_spec(spec)),
         NodeKind::Math(spec) => case_obj_hoisted("Math", math_spec(spec)),
+        NodeKind::Drawing(spec) => case_obj_hoisted("Drawing", drawing_spec(spec)),
         // Input
         NodeKind::Form(spec) => case_obj_hoisted("Form", form_spec(spec)),
         NodeKind::Filters(specs) => case_obj(

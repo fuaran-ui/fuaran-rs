@@ -225,6 +225,7 @@ decode_bare_enum!(decode_heading_variant, HeadingVariant, "HeadingVariant");
 decode_bare_enum!(decode_tone, ToneVariant, "ToneVariant");
 decode_bare_enum!(decode_weight, StyleWeight, "StyleWeight");
 decode_bare_enum!(decode_emphasis, Emphasis, "Emphasis");
+decode_bare_enum!(decode_text_anchor, TextAnchor, "TextAnchor");
 decode_bare_enum!(decode_style_role, StyleRole, "StyleRole");
 decode_bare_enum!(decode_font_voice, FontVoice, "FontVoice");
 decode_bare_enum!(decode_chart_kind, ChartKind, "ChartKind");
@@ -1852,6 +1853,193 @@ fn decode_map_spec(path: &str, j: &JVal) -> DResult<MapSpec> {
     })
 }
 
+// ─── Drawing (Phase 524) — closed Shape / CurveCommand DUs ───────────────────
+//
+// Geometry is static numbers (a Drawing is a resolved artefact); only DrawStyle
+// carries Bindings. An unrecognised Shape / CurveCommand $type is UNKNOWN_DU_CASE
+// at $.kind.shapes[i].$type / $.kind.shapes[i].commands[j].$type (the closed-set
+// default-deny). Missing style defaults to the all-inherited empty style.
+
+fn decode_view_box(path: &str, j: &JVal) -> DResult<ViewBox> {
+    let fields = as_obj(path, j)?;
+    Ok(ViewBox {
+        height: req_float(path, fields, "height", "height number")?,
+        min_x: req_float(path, fields, "minX", "minX number")?,
+        min_y: req_float(path, fields, "minY", "minY number")?,
+        width: req_float(path, fields, "width", "width number")?,
+    })
+}
+
+fn decode_draw_point(path: &str, j: &JVal) -> DResult<DrawPoint> {
+    let fields = as_obj(path, j)?;
+    Ok(DrawPoint {
+        x: req_float(path, fields, "x", "x number")?,
+        y: req_float(path, fields, "y", "y number")?,
+    })
+}
+
+fn decode_req_point(path: &str, fields: &Fields, key: &str) -> DResult<DrawPoint> {
+    let v = req(path, fields, key, "DrawPoint")?;
+    decode_draw_point(&format!("{path}.{key}"), v)
+}
+
+fn decode_point_list(path: &str, fields: &Fields) -> DResult<Vec<DrawPoint>> {
+    let points_j = req(path, fields, "points", "DrawPoint list")?;
+    let arr = as_arr(&format!("{path}.points"), points_j)?;
+    let mut points = Vec::with_capacity(arr.len());
+    for (i, item) in arr.iter().enumerate() {
+        points.push(decode_draw_point(&format!("{path}.points[{i}]"), item)?);
+    }
+    Ok(points)
+}
+
+fn decode_draw_style(path: &str, j: &JVal) -> DResult<DrawStyle> {
+    let fields = as_obj(path, j)?;
+    let text_anchor = match get(fields, "textAnchor") {
+        None => None,
+        Some(v) => Some(decode_text_anchor(&format!("{path}.textAnchor"), v)?),
+    };
+    let emphasis = match get(fields, "emphasis") {
+        None => None,
+        Some(v) => Some(decode_emphasis(&format!("{path}.emphasis"), v)?),
+    };
+    Ok(DrawStyle {
+        fill: opt_binding(path, fields, "fill")?,
+        stroke: opt_binding(path, fields, "stroke")?,
+        stroke_width: opt_binding(path, fields, "strokeWidth")?,
+        opacity: opt_binding(path, fields, "opacity")?,
+        text_anchor,
+        font_size: opt_float(path, fields, "fontSize")?,
+        emphasis,
+        font_family: opt_string(path, fields, "fontFamily")?,
+    })
+}
+
+fn decode_style_or_default(path: &str, fields: &Fields) -> DResult<DrawStyle> {
+    match get(fields, "style") {
+        None => Ok(DrawStyle::default()),
+        Some(v) => decode_draw_style(&format!("{path}.style"), v),
+    }
+}
+
+fn decode_curve_command(path: &str, j: &JVal) -> DResult<CurveCommand> {
+    let fields = as_obj(path, j)?;
+    match disc(path, fields)? {
+        "MoveTo" => Ok(CurveCommand::MoveTo(decode_req_point(path, fields, "to")?)),
+        "LineTo" => Ok(CurveCommand::LineTo(decode_req_point(path, fields, "to")?)),
+        "CubicTo" => Ok(CurveCommand::CubicTo {
+            control1: decode_req_point(path, fields, "control1")?,
+            control2: decode_req_point(path, fields, "control2")?,
+            to: decode_req_point(path, fields, "to")?,
+        }),
+        "QuadraticTo" => Ok(CurveCommand::QuadraticTo {
+            control: decode_req_point(path, fields, "control")?,
+            to: decode_req_point(path, fields, "to")?,
+        }),
+        "Close" => Ok(CurveCommand::Close),
+        other => Err(unknown_du_case(
+            path,
+            other,
+            "MoveTo | LineTo | CubicTo | QuadraticTo | Close",
+        )),
+    }
+}
+
+fn decode_shape(path: &str, j: &JVal) -> DResult<Shape> {
+    let fields = as_obj(path, j)?;
+    let tag = disc(path, fields)?;
+    let style = decode_style_or_default(path, fields)?;
+    match tag {
+        "Group" => {
+            let children_j = req(path, fields, "children", "Shape list")?;
+            let arr = as_arr(&format!("{path}.children"), children_j)?;
+            let mut children = Vec::with_capacity(arr.len());
+            for (i, item) in arr.iter().enumerate() {
+                children.push(decode_shape(&format!("{path}.children[{i}]"), item)?);
+            }
+            Ok(Shape::Group { children, style })
+        }
+        "Rectangle" => Ok(Shape::Rectangle {
+            x: req_float(path, fields, "x", "x number")?,
+            y: req_float(path, fields, "y", "y number")?,
+            width: req_float(path, fields, "width", "width number")?,
+            height: req_float(path, fields, "height", "height number")?,
+            corner_radius: opt_float(path, fields, "cornerRadius")?,
+            style,
+        }),
+        "Line" => Ok(Shape::Line {
+            x1: req_float(path, fields, "x1", "x1 number")?,
+            y1: req_float(path, fields, "y1", "y1 number")?,
+            x2: req_float(path, fields, "x2", "x2 number")?,
+            y2: req_float(path, fields, "y2", "y2 number")?,
+            style,
+        }),
+        "Polyline" => Ok(Shape::Polyline {
+            points: decode_point_list(path, fields)?,
+            style,
+        }),
+        "Polygon" => Ok(Shape::Polygon {
+            points: decode_point_list(path, fields)?,
+            style,
+        }),
+        "Curve" => {
+            let commands_j = req(path, fields, "commands", "CurveCommand list")?;
+            let arr = as_arr(&format!("{path}.commands"), commands_j)?;
+            let mut commands = Vec::with_capacity(arr.len());
+            for (i, item) in arr.iter().enumerate() {
+                commands.push(decode_curve_command(
+                    &format!("{path}.commands[{i}]"),
+                    item,
+                )?);
+            }
+            Ok(Shape::Curve { commands, style })
+        }
+        "Circle" => Ok(Shape::Circle {
+            cx: req_float(path, fields, "cx", "cx number")?,
+            cy: req_float(path, fields, "cy", "cy number")?,
+            r: req_float(path, fields, "r", "r number")?,
+            style,
+        }),
+        "Ellipse" => Ok(Shape::Ellipse {
+            cx: req_float(path, fields, "cx", "cx number")?,
+            cy: req_float(path, fields, "cy", "cy number")?,
+            rx: req_float(path, fields, "rx", "rx number")?,
+            ry: req_float(path, fields, "ry", "ry number")?,
+            style,
+        }),
+        "Label" => Ok(Shape::Label {
+            x: req_float(path, fields, "x", "x number")?,
+            y: req_float(path, fields, "y", "y number")?,
+            text: req_text_source(path, fields, "text", "TextSource")?,
+            style,
+        }),
+        other => Err(unknown_du_case(
+            path,
+            other,
+            "Group | Rectangle | Line | Polyline | Polygon | Curve | Circle | Ellipse | Label",
+        )),
+    }
+}
+
+fn decode_drawing_spec(path: &str, j: &JVal) -> DResult<DrawingSpec> {
+    let fields = as_obj(path, j)?;
+    let shapes_j = req(path, fields, "shapes", "Shape list")?;
+    let arr = as_arr(&format!("{path}.shapes"), shapes_j)?;
+    let mut shapes = Vec::with_capacity(arr.len());
+    for (i, item) in arr.iter().enumerate() {
+        shapes.push(decode_shape(&format!("{path}.shapes[{i}]"), item)?);
+    }
+    let view_box_j = req(path, fields, "viewBox", "ViewBox")?;
+    let view_box = decode_view_box(&format!("{path}.viewBox"), view_box_j)?;
+    Ok(DrawingSpec {
+        view_box,
+        shapes,
+        style: decode_style_or_default(path, fields)?,
+        title: opt_text_source(path, fields, "title")?,
+        description: opt_text_source(path, fields, "description")?,
+    })
+}
+
 // ─── Layout specs ────────────────────────────────────────────────────────────
 
 fn decode_children(path: &str, fields: &Fields) -> DResult<Vec<Node>> {
@@ -2279,7 +2467,7 @@ fn decode_fragment_args(path: &str, j: &JVal) -> DResult<Vec<(String, FragmentAr
 
 // ─── NodeKind ────────────────────────────────────────────────────────────────
 
-const WRONG_NODE_KIND_HINT: &str = "a Layout primitive (Box | Dashboard | Stack | GridLayout | SplitPanel | Tabs | Card | Stepper | SummaryList | Disclosure | Modal | ScrollArea), a Display primitive (Heading | Markdown | Metric | Badge | Sparkline | Callout | Progress | Skeleton | LabelValueRow | Link | Image | List | Toast | CodeBlock | Math), an Input primitive (Form | Filters | Button | FileUpload | Select), a Visualisation primitive (DataGrid | Chart | Table | Map), or Custom | ErrorBoundary | Switch | FragmentDecl | FragmentRef | Mount";
+const WRONG_NODE_KIND_HINT: &str = "a Layout primitive (Box | Dashboard | Stack | GridLayout | SplitPanel | Tabs | Card | Stepper | SummaryList | Disclosure | Modal | ScrollArea), a Display primitive (Heading | Markdown | Metric | Badge | Sparkline | Callout | Progress | Skeleton | LabelValueRow | Link | Image | List | Toast | CodeBlock | Math | Drawing), an Input primitive (Form | Filters | Button | FileUpload | Select), a Visualisation primitive (DataGrid | Chart | Table | Map), or Custom | ErrorBoundary | Switch | FragmentDecl | FragmentRef | Mount";
 
 fn decode_node_kind(path: &str, j: &JVal) -> DResult<NodeKind> {
     let fields = as_obj(path, j)?;
@@ -2315,6 +2503,7 @@ fn decode_node_kind(path: &str, j: &JVal) -> DResult<NodeKind> {
         "Toast" => Ok(NodeKind::Toast(decode_toast_spec(path, j)?)),
         "CodeBlock" => Ok(NodeKind::CodeBlock(decode_code_block_spec(path, j)?)),
         "Math" => Ok(NodeKind::Math(decode_math_spec(path, j)?)),
+        "Drawing" => Ok(NodeKind::Drawing(decode_drawing_spec(path, j)?)),
         // Input.
         "Form" => Ok(NodeKind::Form(decode_form_spec(path, j)?)),
         "Filters" => {

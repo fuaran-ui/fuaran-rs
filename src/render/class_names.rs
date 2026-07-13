@@ -133,6 +133,7 @@ pub fn kind_class(kind: &NodeKind) -> String {
         NodeKind::Toast(_) => "fuaran-kind-toast".to_string(),
         NodeKind::CodeBlock(_) => "fuaran-kind-code-block".to_string(),
         NodeKind::Math(_) => "fuaran-kind-math".to_string(),
+        NodeKind::Drawing(_) => "fuaran-kind-drawing".to_string(),
         NodeKind::Form(_) => "fuaran-kind-form".to_string(),
         NodeKind::Filters(_) => "fuaran-kind-filters".to_string(),
         NodeKind::Button(_) => "fuaran-kind-button".to_string(),

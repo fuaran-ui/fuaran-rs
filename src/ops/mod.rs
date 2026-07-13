@@ -141,6 +141,7 @@ fn layout_children(n: &Node) -> Option<&Vec<Node>> {
         | NodeKind::Switch(_)
         | NodeKind::FragmentDecl(_)
         | NodeKind::FragmentRef(_)
+        | NodeKind::Drawing(_)
         | NodeKind::Mount(_) => None,
     }
 }
@@ -217,6 +218,7 @@ fn child_nodes(n: &Node) -> Vec<&Node> {
         | NodeKind::Map(_)
         | NodeKind::Custom(_)
         | NodeKind::FragmentRef(_)
+        | NodeKind::Drawing(_)
         | NodeKind::Mount(_) => {}
     }
     if let Some(b) = &n.state.on_loading {
@@ -818,6 +820,7 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
         | NodeKind::Custom(_)
         | NodeKind::ErrorBoundary(_)
         | NodeKind::Switch(_)
+        | NodeKind::Drawing(_)
         | NodeKind::Mount(_) => NotSupported,
     }
 }

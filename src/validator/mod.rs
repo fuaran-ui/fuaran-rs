@@ -348,6 +348,7 @@ impl Walker {
             | NodeKind::ErrorBoundary(_)
             | NodeKind::FragmentDecl(_)
             | NodeKind::FragmentRef(_)
+            | NodeKind::Drawing(_)
             | NodeKind::Mount(_) => {}
         }
     }
@@ -562,6 +563,7 @@ fn child_nodes(n: &Node) -> Vec<&Node> {
         | NodeKind::Map(_)
         | NodeKind::Custom(_)
         | NodeKind::FragmentRef(_)
+        | NodeKind::Drawing(_)
         | NodeKind::Mount(_) => {}
     }
     if let Some(b) = &n.state.on_loading {
