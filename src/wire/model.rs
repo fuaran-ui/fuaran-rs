@@ -1265,6 +1265,61 @@ impl NodeKind {
     }
 }
 
+/// The emittable NodeKind vocabulary — one entry per [`NodeKind`] variant's wire
+/// `$type` name (the values [`NodeKind::type_name`] returns). Pinned against the
+/// generated `wire-format-fixtures` manifest `kinds` enumeration by
+/// `tests/conformance.rs` (Phase 548 cross-host kind-set attestation): a new
+/// variant added without an entry here fails that pin with the kind named. Rust
+/// has no enum-variant reflection, so this list is maintained in lockstep with the
+/// `type_name` match under the §11 forward-coupling discipline (adding a NodeKind
+/// already touches `type_name` + `category` + every exhaustive `match`; this is
+/// one more).
+pub const CANONICAL_NODE_KINDS: &[&str] = &[
+    // Layout
+    "Box",
+    "SplitPanel",
+    "Tabs",
+    "Stepper",
+    "SummaryList",
+    "Disclosure",
+    "Modal",
+    "ScrollArea",
+    // Display
+    "Heading",
+    "Markdown",
+    "Metric",
+    "Badge",
+    "Sparkline",
+    "Callout",
+    "Progress",
+    "Skeleton",
+    "LabelValueRow",
+    "Link",
+    "Image",
+    "List",
+    "Toast",
+    "CodeBlock",
+    "Math",
+    "Drawing",
+    // Input
+    "Form",
+    "Filters",
+    "Button",
+    "FileUpload",
+    "Select",
+    // Visualisation
+    "DataGrid",
+    "Chart",
+    "Map",
+    // Structural
+    "Custom",
+    "ErrorBoundary",
+    "Switch",
+    "FragmentDecl",
+    "FragmentRef",
+    "Mount",
+];
+
 // ─── Node envelope (§3.1) ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Default)]

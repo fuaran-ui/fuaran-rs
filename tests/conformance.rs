@@ -74,6 +74,50 @@ fn read_fixture(corpus: &Path, rel: &str) -> String {
         .unwrap_or_else(|e| panic!("reading fixture file '{rel}': {e}"))
 }
 
+/// Phase 548 kind-set attestation: the emittable NodeKind vocabulary
+/// (`CANONICAL_NODE_KINDS`) must equal the generated manifest `kinds` enumeration.
+/// A vocabulary commit that skips this host fails here with a *named* missing kind
+/// ("rust decoder lacks Drawing"), so the drift class dies at the host's next test
+/// run rather than at a later audit.
+#[test]
+fn node_kind_set_matches_manifest() {
+    let Some(corpus) = find_corpus() else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+    let raw = std::fs::read_to_string(corpus.join("manifest.json")).expect("reading manifest");
+    let manifest = parse(&raw).expect("manifest.json parses with the host's own JSON layer");
+    let Some(JVal::Arr(entries)) = manifest.field("kinds") else {
+        panic!(
+            "manifest.json declares no 'kinds' array — regenerate the corpus with --emit-corpus"
+        );
+    };
+
+    let manifest_kinds: std::collections::BTreeSet<String> = entries
+        .iter()
+        .filter_map(|e| match e {
+            JVal::Str(s) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    let decoder_kinds: std::collections::BTreeSet<String> = fuaran_rs::wire::CANONICAL_NODE_KINDS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+
+    let missing: Vec<&String> = manifest_kinds.difference(&decoder_kinds).collect();
+    let extra: Vec<&String> = decoder_kinds.difference(&manifest_kinds).collect();
+
+    assert!(
+        missing.is_empty(),
+        "manifest kinds the rust decoder lacks (add the NodeKind variant + CANONICAL_NODE_KINDS entry): {missing:?}"
+    );
+    assert!(
+        extra.is_empty(),
+        "rust decoder kinds the manifest omits (regenerate the corpus with --emit-corpus): {extra:?}"
+    );
+}
+
 /// The round-trip legs: every node + op fixture must re-encode byte-identically.
 #[test]
 fn corpus_round_trips_byte_identical() {
