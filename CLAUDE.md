@@ -8,11 +8,12 @@ canonical-JSON codec, a tree-op apply engine, a pre-emit validator, and both
 server-side and WASM-client emission, all conformant to the shared wire format. What
 ships **today**: the codec floor (corpus-certified round-trip + reject), the tree-op
 apply engine (+ `can_apply` dry-run), the pre-emit validator (canonical `FUARAN###`
-codes), and the server-side emission tier — the parity-locked server-HTML renderer,
-the corpus-certified deterministic markdown renderer, hydration-ready emission, and
-islands partial hydration. The `wasm32` client build, the remaining conformance
-families (lenient / envelope / elicitation), and dataframe evaluation are roadmap
-work.
+codes), the server-side emission tier (parity-locked server-HTML renderer,
+corpus-certified deterministic markdown renderer, hydration-ready emission, islands
+partial hydration), and the **browser-native `wasm32` client** — a `ClientSession`
+(decode → render → drive) over a minimal C-ABI shim + a thin hand-written JS loader,
+no `wasm-bindgen`. The remaining conformance families (lenient / envelope /
+elicitation) and dataframe evaluation are roadmap work.
 
 **Framing — load-bearing, do not regress.** The emission surface is the **canonical
 JSON wire format, for every host**. The language tiers are **human-developer
@@ -69,10 +70,12 @@ fuaran-rs/
 ├── src/validator/       # pre-emit structural validator — canonical FUARAN### defect codes
 ├── src/render/          # emission tier — server.rs (HTML walk + islands) + markdown.rs (corpus-certified)
 │                        #   + sanitize.rs (injection floor) + bindings.rs / class_names.rs / html.rs
+├── src/client/          # wasm32 client — mod.rs (ClientSession, target-agnostic) + wasm.rs (C-ABI shim, cfg wasm32)
 ├── css/fuaran.css       # byte-copy of the reference stylesheet (parity-tested against the reference artefact)
-├── tests/               # conformance.rs + apply.rs + validator.rs + markdown.rs + render.rs
-├── Cargo.toml
-├── run.ps1              # Stage-0 entry point — cargo fmt --check + clippy + build + test
+├── js/                  # thin hand-written WASM loader (fuaran-loader.js) + client-loop demo (index.html)
+├── tests/               # conformance.rs + apply.rs + validator.rs + markdown.rs + render.rs + client.rs
+├── Cargo.toml           # lib + cdylib crate types; release profile tuned for a small wasm artefact
+├── run.ps1              # Stage-0 entry point — cargo fmt --check + clippy + build + test + wasm32 build
 ├── LICENSE              # Apache 2.0 + Diametrical Ltd copyright
 ├── README.md
 └── CLAUDE.md
@@ -122,18 +125,34 @@ tiers, counted and skipped explicitly by the harness.
 
 Unlike a purely-headless backend host, a Rust host is not confined to the server.
 Compiled to `wasm32` it decodes, applies tree-ops, and drives a tree **in the
-browser**; three delivery modes fit:
+browser** — **shipped** as `src/client/`: a `ClientSession` (decode → render → apply
+op / write store → re-render) with a dependency-free C-ABI shim over WASM linear
+memory (`src/client/wasm.rs`, `cfg(target_arch = "wasm32")`) driven by a thin
+hand-written loader (`js/fuaran-loader.js`), no `wasm-bindgen`. The session core is
+pure target-agnostic Rust (native-tested by `tests/client.rs`); the WASM layer is a
+marshalling shim. Three delivery modes build on it:
 
-- **WASM client** — the codec + apply engine ship as a `wasm32` module; a thin
-  generic loader mounts the rendered tree, interactions run client-side.
-- **Static + partial hydration** — a mostly-static server-rendered page hydrates only
-  its interactive regions with a small WASM bundle.
+- **WASM client** — the codec + renderer + apply engine ship as the `wasm32` module;
+  the loader mounts the render and drives the session client-side (`js/index.html`
+  demonstrates the loop). **Shipped.**
+- **Static + partial hydration** — a mostly-static server-rendered page (the islands
+  emission, `render::server::render_with_islands`) hydrates only its interactive
+  regions with the WASM module. The server + islands halves ship; the client-side
+  `hydrateIslands` glue that mounts per-island is a follow-on.
 - **Server-driven** — native Rust holds the tree + state, streams frame diffs to a
-  thin client, and applies tree-ops in response to events.
+  thin client. Built on the shipped apply engine; the streaming transport is a
+  follow-on.
 
-All are beyond the stage-0 floor (they need the codec + apply engine + an emitter / a
-`wasm32` build target) but are the headline reason a Rust host earns its place — see
-`README.md`.
+**Interaction model — load-bearing.** The renderer emits **inert** HTML (closures
+never ride the wire, §4). A client drives interactivity by writing the reactive
+stores (`ClientSession::set_state` / `set_filter`) and re-rendering — the wire's
+*write-back default* (an omitted handler over a writable `Binding.State` /
+`Binding.Filter` slot writes the change to that slot). Structural edits arrive as
+`TreeOp`s through the same total apply engine the headless host uses. The parity-
+locked render carries no per-control slot attribute, so **event → store auto-wiring
+is app-specific** — the loader stays generic and leaves that mapping to the app.
+Adding a `data-*` slot hint to auto-wire would be a renderer-vocabulary change and
+therefore a cross-host parity change — do not add one unilaterally.
 
 ## Cross-repo dependencies
 

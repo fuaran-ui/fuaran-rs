@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>fuaran-rs — WASM client demo</title>
+    <!--
+      The reference stylesheet the WASM render's fuaran-* class vocabulary is
+      styled by (a byte-copy of the reference artefact; ../css/fuaran.css).
+    -->
+    <link rel="stylesheet" href="../css/fuaran.css" />
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 60rem; }
+      .driver { margin: 1rem 0; padding: 1rem; border: 1px solid #ccc; border-radius: 8px; }
+      .driver label { display: inline-block; min-width: 8rem; }
+      #status { color: #a00; font-family: monospace; white-space: pre-wrap; }
+      #mount { margin-top: 1rem; padding: 1rem; border: 1px dashed #aaa; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>fuaran-rs — browser-native (<code>wasm32</code>) client</h1>
+    <p>
+      The Rust host decodes, renders, and drives a Fuaran UI wire tree
+      <strong>entirely client-side</strong>: the codec + server-parity renderer + apply
+      engine compiled to <code>wasm32</code>, mounted by a thin hand-written loader
+      (no framework, no wasm-bindgen). The controls below drive the session
+      (state write-back + a tree-op), and the mount re-renders from the WASM module.
+    </p>
+
+    <div class="driver">
+      <div>
+        <label for="revenue">Revenue (state)</label>
+        <input id="revenue" type="range" min="0" max="1000" value="420" />
+        <span id="revenue-out">420</span>
+      </div>
+      <div>
+        <label for="heading">Heading text (op)</label>
+        <input id="heading" type="text" value="Live dashboard" />
+        <button id="apply-heading" type="button">Apply EditNode</button>
+      </div>
+      <div id="status"></div>
+    </div>
+
+    <div id="mount"></div>
+
+    <script type="module">
+      import { loadFuaran, createSession, FuaranClientError } from './fuaran-loader.js';
+
+      // A small tree: a heading + a metric bound to the reactive `$state.revenue`
+      // slot. The demo writes that slot (the write-back a decoded control does)
+      // and swaps the heading text via a structural EditNode op.
+      const tree = {
+        id: 'root',
+        kind: {
+          $type: 'Box',
+          children: [
+            {
+              id: 'title',
+              kind: { $type: 'Heading', level: 1, text: { $type: 'Literal', text: 'Live dashboard' }, variant: 'Standard' },
+            },
+            {
+              id: 'metric',
+              kind: {
+                $type: 'Metric',
+                emphasis: 'Loud',
+                format: { $type: 'Currency', code: 'GBP' },
+                label: { $type: 'Literal', text: 'Revenue' },
+                source: { $type: 'State', defaultValue: 0, key: 'revenue' },
+                tone: 'Brand',
+                weight: 'Standard',
+              },
+            },
+          ],
+          layout: { $type: 'Flex', direction: 'Vertical', wrap: false },
+          role: 'Group',
+        },
+      };
+
+      const status = document.getElementById('status');
+      const mountEl = document.getElementById('mount');
+
+      // The .wasm lives under the cargo target dir; copy or symlink it beside
+      // this page, or adjust the URL. See the README "WASM client" section.
+      const exports = await loadFuaran('./fuaran_rs.wasm');
+      const session = createSession(exports, tree);
+
+      // Seed the initial state, then mount the WASM render.
+      session.setState('revenue', 420);
+      session.mount(mountEl);
+
+      const revenue = document.getElementById('revenue');
+      const revenueOut = document.getElementById('revenue-out');
+      revenue.addEventListener('input', () => {
+        revenueOut.textContent = revenue.value;
+        try {
+          // The write-back: an omitted handler over a writable State slot writes
+          // the change back to that slot; the client re-renders.
+          session.setState('revenue', Number(revenue.value));
+          session.mount(mountEl);
+          status.textContent = '';
+        } catch (e) {
+          status.textContent = e instanceof FuaranClientError ? JSON.stringify(e.envelope, null, 2) : String(e);
+        }
+      });
+
+      document.getElementById('apply-heading').addEventListener('click', () => {
+        const text = document.getElementById('heading').value;
+        try {
+          session.applyOp({
+            $type: 'EditNode',
+            target: 'title',
+            newKind: { $type: 'Heading', level: 1, text: { $type: 'Literal', text }, variant: 'Standard' },
+          });
+          session.mount(mountEl);
+          status.textContent = '';
+        } catch (e) {
+          status.textContent = e instanceof FuaranClientError ? JSON.stringify(e.envelope, null, 2) : String(e);
+        }
+      });
+    </script>
+  </body>
+</html>

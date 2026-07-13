@@ -1,6 +1,10 @@
 # Rust build artifacts
 /target/
 
+# The built wasm32 client module (a target/ artefact); if copied beside the
+# demo page for local serving, keep it out of the repo.
+*.wasm
+
 # Cargo.lock is not committed for a library crate (this host is a library).
 Cargo.lock
 

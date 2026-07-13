@@ -37,7 +37,7 @@ Delivery modes a Rust host fits especially well:
 - **Server-driven** — hold the tree + state in native Rust, stream tree-op diffs to
   a thin generic client, and round-trip interactions.
 
-## Status — codec floor + apply + validator + server renderer shipped
+## Status — codec floor + apply + validator + server renderer + WASM client shipped
 
 Shipped:
 
@@ -65,10 +65,46 @@ Shipped:
   `data-fuaran-island` boundary + scoped wire-JSON payload; zero islands ⇒
   byte-identical to a plain render). The reference stylesheet ships as a
   byte-copy at `css/fuaran.css` (parity-tested against the reference artefact).
+- **`client`** — the browser-native (`wasm32`) client host: a `ClientSession`
+  decodes a wire tree, renders it (the server-parity renderer, so client and
+  server produce byte-identical HTML for the same tree), applies `TreeOp`s that
+  mutate the held tree, and writes the reactive stores (state / filter / query)
+  — the decode → render → drive loop, in the browser. The session core is pure
+  target-agnostic Rust (native-tested); a minimal C-ABI shim
+  (`src/client/wasm.rs`) exposes it over WASM linear memory, driven by a thin
+  hand-written loader (`js/`) — **no `wasm-bindgen`, no framework**.
 
 Beyond this tier: the lenient-profile / envelope / elicitation conformance
-families, dataframe (`Binding.Transform`) evaluation, a host-locale seam for
-`Binding.Format`, and the `wasm32` client build.
+families, dataframe (`Binding.Transform`) evaluation, and a host-locale seam
+for `Binding.Format`.
+
+## WASM client
+
+The client module compiles to a dependency-free `.wasm`:
+
+```powershell
+cargo build --target wasm32-unknown-unknown --release
+# → target/wasm32-unknown-unknown/release/fuaran_rs.wasm  (~0.7 MB)
+```
+
+The `run.ps1` gate builds it automatically when the `wasm32-unknown-unknown`
+target is installed (`rustup target add wasm32-unknown-unknown`). To try the
+demo, copy the built `.wasm` beside `js/index.html` and serve `js/` over HTTP
+(ES modules + WASM need a real origin, not `file://`):
+
+```powershell
+cp target/wasm32-unknown-unknown/release/fuaran_rs.wasm js/fuaran_rs.wasm
+# then serve the js/ directory with any static file server
+```
+
+`js/fuaran-loader.js` is a generic, hand-written loader: `loadFuaran(url)`
+instantiates the module, `createSession(exports, tree)` opens a session over a
+wire tree, and the `FuaranSession` methods (`render` / `applyOp` / `setState` /
+`setFilter` / `setQuery` / `mount`) drive it. The module renders **inert** HTML
+(closures never ride the wire, §4); interactivity is driven by writing the
+reactive stores and re-rendering — exactly the wire's *write-back default*. The
+three delivery modes (WASM client, static + partial hydration, server-driven)
+all build on this session; `js/index.html` demonstrates the client loop.
 
 ## Layout
 
@@ -81,16 +117,21 @@ fuaran-rs/
 │   ├── wire/            # typed wire model + Node / TreeOp codec + DecodeError envelope
 │   ├── ops/             # tree-op apply engine + ApplyError envelope + dry-run
 │   ├── validator/       # pre-emit structural validator (FUARAN### codes)
-│   └── render/          # server-HTML renderer + islands + markdown + sanitise floor
+│   ├── render/          # server-HTML renderer + islands + markdown + sanitise floor
+│   └── client/          # wasm32 client — ClientSession (mod.rs) + C-ABI shim (wasm.rs)
 ├── css/
 │   └── fuaran.css       # byte-copy of the reference stylesheet (parity-tested)
+├── js/
+│   ├── fuaran-loader.js # thin hand-written WASM loader (no wasm-bindgen)
+│   └── index.html       # client-loop demo
 ├── tests/
 │   ├── conformance.rs   # shared-corpus certification (round-trip + reject legs)
 │   ├── apply.rs         # apply-engine behaviour + the apply-envelope law
 │   ├── validator.rs     # per-rule fire / stay-silent pairs
 │   ├── markdown.rs      # markdown corpus certification (byte-for-byte)
-│   └── render.rs        # renderer behaviour + islands laws + CSS byte-parity
-├── run.ps1              # cargo fmt --check -> clippy -> build -> test
+│   ├── render.rs        # renderer behaviour + islands laws + CSS byte-parity
+│   └── client.rs        # client-session decode → render → drive loop
+├── run.ps1              # cargo fmt --check -> clippy -> build -> test -> wasm build
 ├── LICENSE              # Apache-2.0
 ├── README.md
 └── CLAUDE.md

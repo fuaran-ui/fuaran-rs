@@ -15,6 +15,7 @@
 //! families). The apply engine, validator, and emission tiers are roadmap work.
 
 pub mod canonical;
+pub mod client;
 pub mod ops;
 pub mod render;
 pub mod validator;

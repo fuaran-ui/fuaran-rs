@@ -1,12 +1,14 @@
 #Requires -Version 7.0
 # fuaran-rs — Stage-0 entry point (workspace CLAUDE.md "Every new sibling ships a run.ps1").
-# Full happy path: cargo fmt --check -> cargo clippy -> cargo build -> cargo test.
-# Switches: -SkipFormat / -SkipBuild / -SkipTests for fast iteration.
+# Full happy path: cargo fmt --check -> cargo clippy -> cargo build -> cargo test,
+# plus a wasm32 client-module build when the target is installed.
+# Switches: -SkipFormat / -SkipBuild / -SkipTests / -SkipWasm for fast iteration.
 [CmdletBinding()]
 param(
     [switch]$SkipFormat,
     [switch]$SkipBuild,
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [switch]$SkipWasm
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,6 +46,22 @@ if (-not $SkipTests) {
     Write-Host "==> cargo test" -ForegroundColor Cyan
     & $cargo test
     if ($LASTEXITCODE -ne 0) { throw "cargo test failed." }
+}
+
+if (-not $SkipWasm) {
+    # The browser-native client module. Build it only when the wasm32 target is
+    # installed, so a machine without it is not hard-blocked (install with
+    # `rustup target add wasm32-unknown-unknown` to enable this leg). The C-ABI
+    # surface (src/client/wasm.rs) has no native codegen, so this is the only
+    # gate that compiles it.
+    $targets = & rustup target list --installed 2>$null
+    if ($targets -match "wasm32-unknown-unknown") {
+        Write-Host "==> cargo build --target wasm32-unknown-unknown --release (client module)" -ForegroundColor Cyan
+        & $cargo build --target wasm32-unknown-unknown --release
+        if ($LASTEXITCODE -ne 0) { throw "wasm32 client-module build failed." }
+    } else {
+        Write-Host "==> wasm32 target not installed; skipping the client-module build (rustup target add wasm32-unknown-unknown to enable)." -ForegroundColor Yellow
+    }
 }
 
 Write-Host "fuaran-rs: run.ps1 complete." -ForegroundColor Green

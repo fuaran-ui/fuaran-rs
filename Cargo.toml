@@ -12,6 +12,18 @@ publish = false
 [lib]
 name = "fuaran_rs"
 path = "src/lib.rs"
+# `lib` (rlib) for native consumers + tests; `cdylib` for the `wasm32` client
+# module (`cargo build --target wasm32-unknown-unknown --release` → a `.wasm`
+# the thin JS loader instantiates). The two coexist — native tests use the rlib.
+crate-type = ["lib", "cdylib"]
+
+# A small, deterministic `wasm32` artefact: optimise for size, abort on panic
+# (no unwinding tables in the browser module), strip debug symbols.
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+strip = true
 
 [dependencies]
 # The runtime host uses the Rust standard library only — no third-party crates.
