@@ -29,9 +29,10 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 | `transform-eval` (Binding.Transform dataframe pipeline) | ✅ | `transform/` | pinned cross-host semantics (null/coercion/round-half-away/div-by-zero/stability) + canonical round-trip |
 | `theme-contrast` (theme resolve + WCAG contrast) | ✅ | `theme/` | WCAG reference constants (black/white = 21.0, #767676 grey = AA boundary, alpha compositing) |
 | `teleport` (FT1 deflate+base64url+SHA-256 envelope, §17) | ✅ | `teleport/` | byte-exact string round-trip + digest-tamper/version/oversize rejects; hand-written RFC 1951 DEFLATE (self round-trip + stored/fixed/dynamic inflate) |
-| `action-gate` (default-deny dispatch/decode gate) | 🟡 | `wire/` + `validator/` | decode-reject IS the structural gate; a dispatch allowlist is the remaining piece |
-| `email-safe render` (Send Me digest projection) | ⬜ | — | (planned) |
-| `versioning-envelope` (§15 profile/Unknown tolerance) | ⬜ | — | `envelope/` (planned) |
+| `action-gate` (default-deny dispatch/decode gate) | ✅ | `gate/` + `wire/` + `validator/` | decode-reject is the structural gate; `gate/` adds the default-deny capability allowlist (per-mount + per-Invoke) |
+| `tree-diff` (before→after op-script) | ✅ | `diff/` | `apply(diff(a,b), a) == b` over changed-leaf / heading / root-swap / child add+remove |
+| `email-safe render` (Send Me digest projection) | ✅ | `render/email.rs` | plain-text digest of content nodes; interactive/structural omitted; no HTML surface |
+| `versioning-envelope` (§15 profile/Unknown tolerance) | ⬜ | — | `envelope/` (planned; not required by any of the 21 demos) |
 
 ## Demo → capabilities → status
 
@@ -40,15 +41,15 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 | Rosetta | Wire | codec, cross-host hash | ✅ (codec byte-identical; SHA-256 shipped) |
 | Degradation | Wire | render, codec | ✅ (server render = the no-JS tier) |
 | Pandas | Wire | codec, apply, render, transform-eval | ✅ (host decodes+applies the wire; the dataframe pipeline evaluates as data) |
-| Send Me | Wire | render, codec | 🟡 (crawlable + live shipped; email-digest render ⬜) |
+| Send Me | Wire | render, codec, email-safe render | ✅ (crawlable + live + email-safe plain-text digest) |
 | Bouncer | Machine | action-gate, codec, validator | ✅ (decode-reject bounces hostile payloads with typed codes) |
 | Notarised | Value | opstream-hashchain, apply, codec | ✅ |
 | Relay | Wire | opstream-hashchain, apply, codec, cross-host hash | ✅ |
 | Time Machine | Value | apply, codec, opstream (light) | ✅ (fold apply over an op prefix; chain provenance) |
-| Bazaar | Value | codec, mount-isolation, action-gate | 🟡 (Mount kind decodes+renders; capability-gate enforcement ⬜) |
+| Bazaar | Value | codec, mount-isolation, action-gate | ✅ (Mount decodes+renders; default-deny capability gate enforces per-mount grants) |
 | Git for Interfaces | Value | merge-dag, apply | ✅ |
 | Counterfactual | Value | merge-dag, apply | ✅ |
-| What-If | Value | apply, tree-diff | 🟡 (apply shipped; a tree-diff op-script generator ⬜) |
+| What-If | Value | apply, tree-diff | ✅ (before→after tree-diff generates a replayable op-script) |
 | Living Sheet | Wire | transform-eval | ✅ (dataframe pipeline evaluated as data) |
 | Pattern Bank | Machine | search-pattern, transform-eval | ✅ (structural search + computed-metric transform-eval) |
 | Grep Apps | Value | search-pattern, render | ✅ |
@@ -67,20 +68,22 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 4. **theme-contrast** ✅ — Infinite Skins, Kintsugi (the contrast sense).
 5. **transform-eval** ✅ — Living Sheet, Pattern Bank (the computed metric), Pandas.
 6. **teleport** ✅ — Teleport (hand-written RFC 1951 DEFLATE + base64url + FT1 envelope).
-7. **email-safe render** — Send Me.
-8. **tree-diff op-script** — What-If (+ Pandas re-run patch).
+7. **email-safe render** ✅ — Send Me (plain-text digest projection).
+8. **capability-gate** ✅ — Bazaar (default-deny per-mount capability allowlist).
+9. **tree-diff op-script** ✅ — What-If (before→after replayable op-script).
 
 ## Where parity stands
 
-The spine (`codec` + `apply` + `render` + `validator` + `client` + `opstream` +
-`dag/merge` + `introspect` + `theme` + `transform` + `teleport`) now runs the
-mechanic of **19 of 21 demos** — Rosetta, Degradation, Pandas, Bouncer,
-Notarised, Relay, Time Machine, Git for Interfaces, Counterfactual, Grep Apps,
-Every Screen, Blind Surveyor, Unit Test, Kintsugi, Infinite Skins, Living Sheet,
-Pattern Bank, Teleport, plus the crawlable/live tiers of Send Me. **Every
-net-new capability is now shipped;** what remains is three small enrichments on
-already-partial demos: Send Me (an email-safe digest projection), Bazaar (an
-explicit capability-gate allowlist on top of the decode-reject gate), and What-If
-(a tree-diff → op-script generator over the shipped apply engine). None is a
-new substrate — each is a bounded projection/generator over capabilities the
-host already has.
+**Demo parity is reached: the host runs the mechanic of all 21 demos.** The spine
+(`codec` + `apply` + `render` + `validator` + `client` + `opstream` +
+`dag/merge` + `introspect` + `theme` + `transform` + `teleport` + `gate` +
+`diff` + `render/email`) covers every demo on the site — a Rust service, edge
+worker, or in-browser `wasm32` client can decode, apply, render, verify, merge,
+evaluate a transform, introspect, contrast-audit, teleport, capability-gate, and
+diff any Fuaran UI wire tree.
+
+The one capability still marked ⬜ (`versioning-envelope`, §15 profile/Unknown
+tolerance) is **not required by any of the 21 demos** — it is a codec-robustness
+tier for forward-compatible envelopes, tracked for completeness, not parity. The
+remaining roadmap work is depth (the lenient-accept / envelope / elicitation
+conformance families) rather than demo coverage.

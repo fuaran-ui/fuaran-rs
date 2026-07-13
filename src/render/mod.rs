@@ -7,6 +7,7 @@
 
 pub mod bindings;
 pub mod class_names;
+pub mod email;
 pub mod html;
 pub mod markdown;
 pub mod sanitize;

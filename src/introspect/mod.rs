@@ -151,6 +151,16 @@ pub fn all_facts(tree: &Node) -> Vec<NodeFacts> {
     out
 }
 
+/// Every node in the tree in document (pre-order) order, references into the
+/// tree — the structural walk other capabilities (gate, digest, diff) key off.
+pub fn all_nodes(tree: &Node) -> Vec<&Node> {
+    let mut out = vec![tree];
+    for child in child_nodes(tree) {
+        out.extend(all_nodes(child));
+    }
+    out
+}
+
 // ─── Structural query ────────────────────────────────────────────────────────
 
 /// A structural predicate over a node's facts — the compiled form of a "query
