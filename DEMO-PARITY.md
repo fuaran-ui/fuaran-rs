@@ -27,7 +27,7 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 | `search-pattern` (structural search over trees) | ✅ | `introspect/` | behaviour suite (structural query → matched ids) |
 | `layout-observe` (structural overflow/reflow flags) | ✅ | `introspect/layout.rs` | `LayoutObserver.Flags.derive` port + behaviour suite |
 | `transform-eval` (Binding.Transform dataframe pipeline) | ⬜ | — | behavioural (planned) |
-| `theme-contrast` (theme resolve + WCAG contrast) | ⬜ | — | (planned) |
+| `theme-contrast` (theme resolve + WCAG contrast) | ✅ | `theme/` | WCAG reference constants (black/white = 21.0, #767676 grey = AA boundary, alpha compositing) |
 | `teleport` (FT1 deflate+base64url+SHA-256 envelope, §17) | ⬜ | — | (planned) |
 | `action-gate` (default-deny dispatch/decode gate) | 🟡 | `wire/` + `validator/` | decode-reject IS the structural gate; a dispatch allowlist is the remaining piece |
 | `email-safe render` (Send Me digest projection) | ⬜ | — | (planned) |
@@ -52,8 +52,8 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 | Living Sheet | Wire | transform-eval | ⬜ (needs dataframe evaluation) |
 | Pattern Bank | Machine | search-pattern, transform-eval | 🟡 (structural search ✅; the computed-metric transform-eval ⬜) |
 | Grep Apps | Value | search-pattern, render | ✅ |
-| Kintsugi | Machine | introspection, theme-contrast, layout-observe, apply | 🟡 (introspection + layout-observe + apply ✅; the contrast sense ⬜) |
-| Infinite Skins | Intent | theme-contrast, render | 🟡 (render shipped; contrast auditor ⬜) |
+| Kintsugi | Machine | introspection, theme-contrast, layout-observe, apply | ✅ (introspection + layout-observe + apply + the contrast sense all ✅) |
+| Infinite Skins | Intent | theme-contrast, render | ✅ (render + WCAG contrast auditor shipped) |
 | Every Screen | Intent | render, responsive-layout | ✅ (reference-CSS breakpoints fold the grid — no host code) |
 | Blind Surveyor | Machine | layout-observe | ✅ |
 | Unit Test | Machine | introspection, layout-observe | ✅ |
@@ -64,8 +64,8 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 1. **opstream-hashchain** ✅ — Notarised, Relay, Time Machine.
 2. **dag-record + merge-dag** ✅ — Git for Interfaces, Counterfactual (corpus-certified).
 3. **introspection + search-pattern + layout-observe** ✅ — Unit Test, Grep Apps, Blind Surveyor, + partial Kintsugi / Pattern Bank.
-4. **transform-eval** — Living Sheet, Pattern Bank (the computed metric).
-5. **theme-contrast** — Infinite Skins, Kintsugi (the contrast sense).
+4. **theme-contrast** ✅ — Infinite Skins, Kintsugi (the contrast sense).
+5. **transform-eval** — Living Sheet, Pattern Bank (the computed metric).
 6. **teleport (+ versioning-envelope)** — Teleport.
 7. **email-safe render** — Send Me.
 8. **tree-diff op-script** — What-If (+ Pandas re-run patch).
@@ -73,11 +73,11 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 ## Where parity stands
 
 The spine (`codec` + `apply` + `render` + `validator` + `client` + `opstream` +
-`dag/merge` + `introspect`) now runs the mechanic of **most of the site**. Fully
-covered: Rosetta, Degradation, Pandas, Bouncer, Notarised, Relay, Time Machine,
-Git for Interfaces, Counterfactual, Grep Apps, Every Screen, Blind Surveyor,
-Unit Test. Partial (a named sub-capability remaining): Send Me (email digest),
-Bazaar (capability-gate enforcement), What-If (tree-diff), Pattern Bank &
-Kintsugi & Infinite Skins (transform-eval / contrast). Remaining net-new
-capabilities: **transform-eval**, **theme-contrast**, **teleport**, and the
-small **email-digest render** + **tree-diff** + **capability-gate** pieces.
+`dag/merge` + `introspect` + `theme`) now runs the mechanic of **most of the
+site**. Fully covered: Rosetta, Degradation, Pandas, Bouncer, Notarised, Relay,
+Time Machine, Git for Interfaces, Counterfactual, Grep Apps, Every Screen, Blind
+Surveyor, Unit Test, Kintsugi, Infinite Skins. Partial (a named sub-capability
+remaining): Send Me (email digest), Bazaar (capability-gate enforcement), What-If
+(tree-diff), Pattern Bank & Living Sheet (transform-eval). Remaining net-new
+capabilities: **transform-eval**, **teleport**, and the small **email-digest
+render** + **tree-diff** + **capability-gate** pieces.

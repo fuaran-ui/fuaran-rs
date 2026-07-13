@@ -21,6 +21,7 @@ pub mod introspect;
 pub mod ops;
 pub mod opstream;
 pub mod render;
+pub mod theme;
 pub mod validator;
 pub mod wire;
 
