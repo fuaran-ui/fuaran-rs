@@ -18,6 +18,11 @@ pub mod canonical;
 pub mod client;
 pub mod dag;
 pub mod diff;
+/// The target-neutral C-ABI export surface (Phase 537) — `extern "C"`
+/// `fuaran_*` functions over an opaque [`client::ClientSession`], compiled for
+/// the `wasm32` browser client *and* native staticlib / cdylib consumers (the
+/// Swift / Kotlin native surfaces). See `include/fuaran.h`.
+pub mod ffi;
 pub mod gate;
 pub mod introspect;
 pub mod ops;

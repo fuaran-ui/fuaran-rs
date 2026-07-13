@@ -16,3 +16,8 @@ Thumbs.db
 
 # Synced corpus snapshot (follow-up: offline snapshot + drift guard)
 tests/corpus/
+
+# Phase 537 native-mobile packaging outputs (assembled by run.ps1 -Package from
+# the cross-target build legs; regenerated, not source). The Swift/Kotlin scaffold
+# source lands in later phases and will be re-included explicitly.
+/packaging/

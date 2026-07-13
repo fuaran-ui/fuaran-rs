@@ -14,8 +14,12 @@ name = "fuaran_rs"
 path = "src/lib.rs"
 # `lib` (rlib) for native consumers + tests; `cdylib` for the `wasm32` client
 # module (`cargo build --target wasm32-unknown-unknown --release` → a `.wasm`
-# the thin JS loader instantiates). The two coexist — native tests use the rlib.
-crate-type = ["lib", "cdylib"]
+# the thin JS loader instantiates) and native dynamic consumers; `staticlib`
+# (Phase 537) for the native C-ABI surface the Swift XCFramework and Kotlin
+# cargo-ndk `.so` packaging tiers link (`libfuaran_rs.a` / `.lib`). All three
+# coexist — native tests use the rlib, and the `src/ffi/` C-ABI symbols are
+# emitted into the cdylib + staticlib on every target.
+crate-type = ["lib", "cdylib", "staticlib"]
 
 # A small, deterministic `wasm32` artefact: optimise for size, abort on panic
 # (no unwinding tables in the browser module), strip debug symbols.

@@ -70,12 +70,14 @@ fuaran-rs/
 ├── src/validator/       # pre-emit structural validator — canonical FUARAN### defect codes
 ├── src/render/          # emission tier — server.rs (HTML walk + islands) + markdown.rs (corpus-certified)
 │                        #   + sanitize.rs (injection floor) + bindings.rs / class_names.rs / html.rs
-├── src/client/          # wasm32 client — mod.rs (ClientSession, target-agnostic) + wasm.rs (C-ABI shim, cfg wasm32)
+├── src/ffi/             # target-neutral C-ABI (Phase 537) — fuaran_* over an opaque ClientSession, all targets
+├── src/client/          # mod.rs (ClientSession, target-agnostic) + wasm.rs (wasm32 re-export of src/ffi/)
+├── include/fuaran.h     # hand-written C header for src/ffi/ — the native binding surface + ownership/threading contract
 ├── css/fuaran.css       # byte-copy of the reference stylesheet (parity-tested against the reference artefact)
 ├── js/                  # thin hand-written WASM loader (fuaran-loader.js) + client-loop demo (index.html)
-├── tests/               # conformance.rs + apply.rs + validator.rs + markdown.rs + render.rs + client.rs
-├── Cargo.toml           # lib + cdylib crate types; release profile tuned for a small wasm artefact
-├── run.ps1              # Stage-0 entry point — cargo fmt --check + clippy + build + test + wasm32 build
+├── tests/               # conformance.rs + apply.rs + validator.rs + markdown.rs + render.rs + client.rs + ffi.rs
+├── Cargo.toml           # lib + cdylib + staticlib crate types; release profile tuned for a small wasm artefact
+├── run.ps1              # Stage-0 entry point — fmt/clippy/build/test/wasm; -CrossTargets/-Package for native mobile
 ├── LICENSE              # Apache 2.0 + Diametrical Ltd copyright
 ├── README.md
 └── CLAUDE.md
@@ -153,6 +155,65 @@ locked render carries no per-control slot attribute, so **event → store auto-w
 is app-specific** — the loader stays generic and leaves that mapping to the app.
 Adding a `data-*` slot hint to auto-wire would be a renderer-vocabulary change and
 therefore a cross-host parity change — do not add one unilaterally.
+
+## Native C-ABI surface (`src/ffi/` + `include/fuaran.h`)
+
+The C-ABI export surface — `fuaran_alloc` / `fuaran_dealloc`, `fuaran_session_new` /
+`_free` / `_render` / `_tree_json` / `_apply_op` / `_set_state` / `_set_filter` /
+`_set_query`, and `fuaran_last_error` — lives in **`src/ffi/`** and is **target-
+neutral**: it compiles into the `wasm32` browser module *and* the native `staticlib`
+/ `cdylib` (`crate-type = ["lib", "cdylib", "staticlib"]`). Nothing in it is
+`wasm32`-specific; `src/client/wasm.rs` is now just the browser build's re-export of
+`crate::ffi` at the shim's historical path (the JS loader links the same symbol
+names, unchanged). The hand-written **`include/fuaran.h`** is the C declaration of
+that surface — `cbindgen` may run as a dev-tooling *check* but is never a build
+dependency (stdlib-only mandate). Native staticlib / dynamic consumers (the Swift and
+Kotlin binding tiers) link these symbols; a native FFI smoke test (`tests/ffi.rs`)
+drives a session through the raw surface to certify the ABI end-to-end.
+
+**Buffer-return ABI is pointer-width dependent — load-bearing.** Every text-returning
+function hands back a Rust-owned `(ptr, len)` pair the caller frees with
+`fuaran_dealloc(ptr, len)`. On `wasm32` (32-bit pointers) the pair is a **packed
+`u64`** (`ptr` high 32, `len` low 32) — the exact form the JS loader has always read,
+so the browser ABI is byte-for-byte unchanged. On native 64-bit targets a full
+pointer cannot share a `u64` with a length without truncation, so the pair is a
+`#[repr(C)]` two-word struct `FuaranBuf { ptr, len }` returned by value. The
+`FuaranBuf` type in `src/ffi/` is `cfg`-aliased to the right representation per
+target; do not "unify" it back to a bare `u64` — that silently corrupts native
+pointers.
+
+**Ownership + threading contract (also in `include/fuaran.h`).**
+
+- **Buffers.** *Input* buffers (`fuaran_alloc`) are caller-owned — Rust borrows for
+  one call; the caller frees after. *Output* buffers (inside a returned `FuaranBuf`)
+  are Rust-owned — the caller reads `len` bytes (there is **no** trailing NUL; always
+  honour `len`, never `strlen`) then frees with `fuaran_dealloc`. Every buffer is
+  freed exactly once; a session handle exactly once via `fuaran_session_free`.
+- **Threading.** A `ClientSession` handle is **single-owner**: confine it (and every
+  call taking it) to **one thread / executor** for its whole lifetime — no `Send` /
+  `Sync` guarantee crosses the boundary. A Swift `actor` wrapper or a Kotlin
+  single-threaded dispatcher is the intended confinement. `fuaran_last_error` reads a
+  **per-thread** slot, so read it on the same thread that made the failing
+  `fuaran_session_new`. (On the single-threaded `wasm32` host the per-thread slot is
+  effectively one global.)
+
+**v0 native surface decision (Phase 537).** v0 is exactly the session surface above —
+the adopted architecture drives all native rendering through a session
+(`session_apply_op` → read back `session_tree_json`), so no extra entry points are
+needed. Stateless candidates (`fuaran_validate`, `fuaran_encode_canonical`,
+`fuaran_apply`) are listed **reserved** in the header, not implemented — add them only
+on demand.
+
+**Cross-target build legs + packaging.** `run.ps1 -CrossTargets` builds the six mobile
+release legs (`aarch64-apple-ios{,-sim}`, `aarch64-apple-darwin`,
+`aarch64-linux-android`, `armv7-linux-androideabi`, `x86_64-linux-android`); each
+**skips cleanly** with a named-toolchain message when its Rust target or native
+toolchain (Xcode / NDK / cargo-ndk) is absent, so the Windows dev box stays green. The
+Android `.so` legs link with **16KB page-size alignment**
+(`-C link-arg=-Wl,-z,max-page-size=16384`, required on modern Android). `run.ps1
+-Package` assembles the Apple XCFramework (macOS + `xcodebuild` only) and the Android
+`jniLibs/<abi>/` layout from the built legs into `packaging/` (gitignored — regenerated
+output, not source).
 
 ## Cross-repo dependencies
 
