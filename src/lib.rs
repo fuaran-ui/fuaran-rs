@@ -16,6 +16,7 @@
 
 pub mod canonical;
 pub mod ops;
+pub mod render;
 pub mod validator;
 pub mod wire;
 
