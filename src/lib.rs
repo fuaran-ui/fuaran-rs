@@ -16,6 +16,7 @@
 
 pub mod canonical;
 pub mod ops;
+pub mod validator;
 pub mod wire;
 
 /// The pre-release version of the `fuaran-rs` host.
