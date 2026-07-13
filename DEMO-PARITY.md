@@ -21,13 +21,13 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 | `validator` (pre-emit structural defects) | ✅ | `validator/` | per-rule fire/stay-silent |
 | `client` (wasm32 decode→render→drive) | ✅ | `client/` | native session suite + in-browser ABI verify |
 | `opstream-hashchain` (SHA-256 chain, verify, tamper) | ✅ | `opstream/` | `chain/chain-corpus.json` golden (byte-identical) + NIST SHA-256 vectors |
-| `merge-dag` (3-way tree merge) | ⬜ | — | `merge-conformance/` (planned) |
-| `dag-record` (DAG record wire form) | ⬜ | — | `dag/` (planned) |
+| `merge-dag` (3-way tree merge) | ✅ | `dag/merge.rs` | `merge-conformance/` (byte-identical tree + outcome hash) |
+| `dag-record` (DAG record wire form) | ✅ | `dag/record.rs` | `dag/` round-trip byte-identical |
+| `introspection` (getNodeState / assertions over the tree) | ✅ | `introspect/` | behaviour suite (facts, restyle-proof assertions) |
+| `search-pattern` (structural search over trees) | ✅ | `introspect/` | behaviour suite (structural query → matched ids) |
+| `layout-observe` (structural overflow/reflow flags) | ✅ | `introspect/layout.rs` | `LayoutObserver.Flags.derive` port + behaviour suite |
 | `transform-eval` (Binding.Transform dataframe pipeline) | ⬜ | — | behavioural (planned) |
-| `layout-observe` (structural overflow/reflow flags) | ⬜ | — | (planned) |
-| `introspection` (getNodeState / assertions over the tree) | ⬜ | — | (planned) |
 | `theme-contrast` (theme resolve + WCAG contrast) | ⬜ | — | (planned) |
-| `search-pattern` (structural search over trees) | ⬜ | — | (planned) |
 | `teleport` (FT1 deflate+base64url+SHA-256 envelope, §17) | ⬜ | — | (planned) |
 | `action-gate` (default-deny dispatch/decode gate) | 🟡 | `wire/` + `validator/` | decode-reject IS the structural gate; a dispatch allowlist is the remaining piece |
 | `email-safe render` (Send Me digest projection) | ⬜ | — | (planned) |
@@ -46,30 +46,38 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 | Relay | Wire | opstream-hashchain, apply, codec, cross-host hash | ✅ |
 | Time Machine | Value | apply, codec, opstream (light) | ✅ (fold apply over an op prefix; chain provenance) |
 | Bazaar | Value | codec, mount-isolation, action-gate | 🟡 (Mount kind decodes+renders; capability-gate enforcement ⬜) |
-| Git for Interfaces | Value | merge-dag, apply | ⬜ (needs 3-way merge) |
-| Counterfactual | Value | merge-dag, apply | ⬜ (needs 3-way merge) |
+| Git for Interfaces | Value | merge-dag, apply | ✅ |
+| Counterfactual | Value | merge-dag, apply | ✅ |
 | What-If | Value | apply, tree-diff | 🟡 (apply shipped; a tree-diff op-script generator ⬜) |
 | Living Sheet | Wire | transform-eval | ⬜ (needs dataframe evaluation) |
-| Pattern Bank | Machine | search-pattern, transform-eval | ⬜ |
-| Grep Apps | Value | search-pattern, render | ⬜ (needs structural search) |
-| Kintsugi | Machine | introspection, theme-contrast, layout-observe, apply | ⬜ (needs the observers) |
+| Pattern Bank | Machine | search-pattern, transform-eval | 🟡 (structural search ✅; the computed-metric transform-eval ⬜) |
+| Grep Apps | Value | search-pattern, render | ✅ |
+| Kintsugi | Machine | introspection, theme-contrast, layout-observe, apply | 🟡 (introspection + layout-observe + apply ✅; the contrast sense ⬜) |
 | Infinite Skins | Intent | theme-contrast, render | 🟡 (render shipped; contrast auditor ⬜) |
 | Every Screen | Intent | render, responsive-layout | ✅ (reference-CSS breakpoints fold the grid — no host code) |
-| Blind Surveyor | Machine | layout-observe | ⬜ |
-| Unit Test | Machine | introspection, layout-observe | ⬜ |
+| Blind Surveyor | Machine | layout-observe | ✅ |
+| Unit Test | Machine | introspection, layout-observe | ✅ |
 | Teleport | Value | teleport, codec, validator, versioning-envelope | ⬜ |
 
 ## Build order (leverage-first)
 
 1. **opstream-hashchain** ✅ — Notarised, Relay, Time Machine.
-2. **dag-record + merge-dag** — Git for Interfaces, Counterfactual (corpus-certified).
-3. **transform-eval** — Living Sheet, Pattern Bank.
-4. **layout-observe** — Kintsugi, Blind Surveyor, Unit Test (3 demos).
-5. **introspection** — Unit Test, Kintsugi.
-6. **theme-contrast** — Infinite Skins, Kintsugi.
-7. **search-pattern** — Grep Apps, Pattern Bank.
-8. **teleport (+ versioning-envelope)** — Teleport.
-9. **email-safe render** — Send Me.
+2. **dag-record + merge-dag** ✅ — Git for Interfaces, Counterfactual (corpus-certified).
+3. **introspection + search-pattern + layout-observe** ✅ — Unit Test, Grep Apps, Blind Surveyor, + partial Kintsugi / Pattern Bank.
+4. **transform-eval** — Living Sheet, Pattern Bank (the computed metric).
+5. **theme-contrast** — Infinite Skins, Kintsugi (the contrast sense).
+6. **teleport (+ versioning-envelope)** — Teleport.
+7. **email-safe render** — Send Me.
+8. **tree-diff op-script** — What-If (+ Pandas re-run patch).
 
-The spine (`codec` + `apply` + `render` + `validator`) already runs ~15 of the
-21 demos; the remaining work is the finite observer/integrity/compute set above.
+## Where parity stands
+
+The spine (`codec` + `apply` + `render` + `validator` + `client` + `opstream` +
+`dag/merge` + `introspect`) now runs the mechanic of **most of the site**. Fully
+covered: Rosetta, Degradation, Pandas, Bouncer, Notarised, Relay, Time Machine,
+Git for Interfaces, Counterfactual, Grep Apps, Every Screen, Blind Surveyor,
+Unit Test. Partial (a named sub-capability remaining): Send Me (email digest),
+Bazaar (capability-gate enforcement), What-If (tree-diff), Pattern Bank &
+Kintsugi & Infinite Skins (transform-eval / contrast). Remaining net-new
+capabilities: **transform-eval**, **theme-contrast**, **teleport**, and the
+small **email-digest render** + **tree-diff** + **capability-gate** pieces.

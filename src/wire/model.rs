@@ -1054,6 +1054,51 @@ pub enum NodeCategory {
 }
 
 impl NodeKind {
+    /// The wire `$type` discriminator name of this kind (e.g. `"Metric"`,
+    /// `"DataGrid"`, `"Box"`) — the stable structural name introspection and
+    /// structural search key off.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            NodeKind::Box(_) => "Box",
+            NodeKind::SplitPanel(_) => "SplitPanel",
+            NodeKind::Tabs(_) => "Tabs",
+            NodeKind::Stepper(_) => "Stepper",
+            NodeKind::SummaryList(_) => "SummaryList",
+            NodeKind::Disclosure(_) => "Disclosure",
+            NodeKind::Modal(_) => "Modal",
+            NodeKind::ScrollArea(_) => "ScrollArea",
+            NodeKind::Heading(_) => "Heading",
+            NodeKind::Markdown(_) => "Markdown",
+            NodeKind::Metric(_) => "Metric",
+            NodeKind::Badge(_) => "Badge",
+            NodeKind::Sparkline(_) => "Sparkline",
+            NodeKind::Callout(_) => "Callout",
+            NodeKind::Progress(_) => "Progress",
+            NodeKind::Skeleton(_) => "Skeleton",
+            NodeKind::LabelValueRow(_) => "LabelValueRow",
+            NodeKind::Link(_) => "Link",
+            NodeKind::Image(_) => "Image",
+            NodeKind::List(_) => "List",
+            NodeKind::Toast(_) => "Toast",
+            NodeKind::CodeBlock(_) => "CodeBlock",
+            NodeKind::Math(_) => "Math",
+            NodeKind::Form(_) => "Form",
+            NodeKind::Filters(_) => "Filters",
+            NodeKind::Button(_) => "Button",
+            NodeKind::FileUpload(_) => "FileUpload",
+            NodeKind::Select(_) => "Select",
+            NodeKind::DataGrid(_) => "DataGrid",
+            NodeKind::Chart(_) => "Chart",
+            NodeKind::Map(_) => "Map",
+            NodeKind::Custom(_) => "Custom",
+            NodeKind::ErrorBoundary(_) => "ErrorBoundary",
+            NodeKind::Switch(_) => "Switch",
+            NodeKind::FragmentDecl(_) => "FragmentDecl",
+            NodeKind::FragmentRef(_) => "FragmentRef",
+            NodeKind::Mount(_) => "Mount",
+        }
+    }
+
     /// The host-side behavioural classification of this primitive (§3.2).
     pub fn category(&self) -> NodeCategory {
         match self {

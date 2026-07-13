@@ -17,6 +17,7 @@
 pub mod canonical;
 pub mod client;
 pub mod dag;
+pub mod introspect;
 pub mod ops;
 pub mod opstream;
 pub mod render;
