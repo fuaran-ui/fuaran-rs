@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::opstream::{
-    Actor, OpRecord, OpResult, OpStream, VerificationError, compute_hash, genesis_previous_hash,
-    verify_chain,
+    Actor, FileSink, InMemorySink, OpRecord, OpResult, OpStream, OpStreamSink, SinkError,
+    VerificationError, compute_hash, genesis_previous_hash, replay, replay_stream, verify_chain,
 };
-use fuaran_rs::wire::{TreeOp, decode_op};
+use fuaran_rs::wire::{Node, TreeOp, decode_node, decode_op};
 
 fn find_corpus() -> Option<PathBuf> {
     let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
@@ -223,4 +223,104 @@ fn a_reordered_or_relinked_record_is_caught() {
         Err(VerificationError::PreviousHashMismatch { sequence, .. }) => assert_eq!(sequence, 2),
         other => panic!("expected a PreviousHashMismatch at record 2, got {other:?}"),
     }
+}
+
+// ─── Replay + persist sink (Phase 560) ───────────────────────────────────────
+
+/// A base tree + a sequence of ops that all apply cleanly against it.
+fn base_tree() -> Node {
+    decode_node(
+        r#"{"id":"root","kind":{"$type":"Box","children":[{"id":"c1","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"a"}}},{"id":"c2","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"b"}}}],"layout":{"$type":"Auto"},"role":"Group"}}"#,
+    )
+    .expect("base tree decodes")
+}
+
+fn scenario_stream() -> OpStream {
+    let ops = [
+        r#"{"$type":"RemoveNode","target":"c2"}"#,
+        r#"{"$type":"UpdateStyle","style":{"emphasis":"Loud","tone":"Brand","weight":"Standard"},"target":"root"}"#,
+        r#"{"$type":"InsertChild","child":{"id":"c3","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"c"}}},"parentId":"root","position":1}"#,
+    ];
+    let mut stream = OpStream::new();
+    for (i, op) in ops.iter().enumerate() {
+        stream.append(
+            decode_op(op).expect("op decodes"),
+            1_700_000_000 + i as i64,
+            Actor::Human { id: "u".into() },
+            None,
+            OpResult::Success,
+        );
+    }
+    stream
+}
+
+#[test]
+fn replay_folds_a_stream_into_a_tree() {
+    let base = base_tree();
+    let stream = scenario_stream();
+    let folded = replay(&base, stream.records()).expect("replay applies cleanly");
+    // c2 removed, c3 inserted → children are c1, c3.
+    let ids = fuaran_rs::ops::all_node_ids(&folded);
+    assert!(ids.contains(&"c1".to_string()));
+    assert!(ids.contains(&"c3".to_string()));
+    assert!(!ids.contains(&"c2".to_string()));
+}
+
+#[test]
+fn in_memory_sink_rejects_a_duplicate_sequence_and_replays_by_range() {
+    let stream = scenario_stream();
+    let mut sink = InMemorySink::new();
+    for r in stream.records() {
+        sink.append(r).expect("append");
+    }
+    assert_eq!(sink.latest_sequence(), 3);
+    // A duplicate sequence is a structural defect.
+    assert_eq!(
+        sink.append(&stream.records()[0]),
+        Err(SinkError::DuplicateSequence(1))
+    );
+    // replay_stream (to = 0 → latest) folds the whole stream.
+    let base = base_tree();
+    let via_stream = replay_stream(&sink, &base, 1, 0).expect("replay_stream");
+    let direct = replay(&base, stream.records()).expect("replay");
+    assert_eq!(via_stream, direct);
+}
+
+/// The Phase 560 property: persist → reopen → verify → fold gives the same tree.
+#[test]
+fn persist_reopen_verify_fold_round_trips() {
+    let base = base_tree();
+    let stream = scenario_stream();
+    let expected = replay(&base, stream.records()).expect("replay");
+
+    let path = std::env::temp_dir().join(format!(
+        "fuaran-rs-opstream-{}-{}.jsonl",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_file(&path);
+
+    // Persist each chain-linked record.
+    {
+        let mut sink = FileSink::open(&path).expect("open sink");
+        for r in stream.records() {
+            sink.append(r).expect("append to file sink");
+        }
+    } // drop → file flushed/closed.
+
+    // Reopen in a fresh sink (a "later process"): the records survive.
+    let reopened = FileSink::open(&path).expect("reopen sink");
+    assert_eq!(reopened.records().len(), stream.len());
+    assert_eq!(reopened.records(), stream.records());
+
+    // The persisted chain still verifies from genesis...
+    assert_eq!(verify_chain(reopened.records()), Ok(()));
+    // ...and folds to the byte-identical tree.
+    let folded = replay(&base, reopened.records()).expect("replay reopened");
+    assert_eq!(folded, expected);
+
+    let _ = std::fs::remove_file(&path);
 }
