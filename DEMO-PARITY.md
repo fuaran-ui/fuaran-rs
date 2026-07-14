@@ -32,7 +32,8 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 | `action-gate` (default-deny dispatch/decode gate) | ✅ | `gate/` + `wire/` + `validator/` | decode-reject is the structural gate; `gate/` adds the default-deny capability allowlist (per-mount + per-Invoke) |
 | `tree-diff` (before→after op-script) | ✅ | `diff/` | `apply(diff(a,b), a) == b` over changed-leaf / heading / root-swap / child add+remove |
 | `email-safe render` (Send Me digest projection) | ✅ | `render/email.rs` | plain-text digest of content nodes; interactive/structural omitted; no HTML surface |
-| `versioning-envelope` (§15 profile/Unknown tolerance) | ⬜ | — | `envelope/` (planned; not required by any of the 21 demos) |
+| `versioning-envelope` (§15 profile/Unknown tolerance) | ✅ | `envelope.rs` | negotiation (Current/Behind/Foreign) + degrade-and-preserve — Phase 553; byte-exact |
+| `elicitation` (§18 question-as-UI + typed answer contract + outcome codes) | ✅ | `elicitation.rs` | shared `elicitation/` corpus family — Phase 553; answer accept/reject + outcome round-trip |
 
 ## Demo → capabilities → status
 
@@ -60,6 +61,22 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 | Unit Test | Machine | introspection, layout-observe | ✅ |
 | Teleport | Value | teleport, codec, validator, versioning-envelope | ✅ (FT1 bundle: serialise running app → string → resume, digest-verified) |
 
+## Agent-engagement surface (Phases 465–466)
+
+Beyond the four-pillar demos, the combined demo/live surface stages the
+**agent-engagement** mechanics — an agent asks and expresses through live Fuaran UI,
+not prose. The Rust host carries both:
+
+| Feature | Required | Status |
+|---|---|---|
+| **Elicitation** *(question-as-UI + typed answer, Ph 465)* | `elicitation` (§18 envelope + answer contract), `codec`, `apply`, `action-gate` | ✅ (elicitation envelope + closed outcome set decode/encode byte-exact; the answer resolves through the session's write-back + apply, gated default-deny) |
+| **Agent expression turns** *(live emitted panels, Ph 466)* | `codec`, `apply` (streamed tree-ops), `opstream` (per-panel scope), `client`/`render` (live), interaction | ✅ (a streamed tree + subsequent ops render and stay drivable through the shipped client session; each panel is an op-stream scope — all mechanics ✅) |
+
+Both are **compositions of shipped mechanics** — 466 adds no new wire vocabulary
+(no `NodeKind`/`Action`/`Binding`), and 465 wraps a tree in a typed envelope rather
+than extending the tree. The Phase 548 cross-host kind-set attestation guard would
+fail if either had introduced an unpropagated kind; it is green.
+
 ## Build order (leverage-first)
 
 1. **opstream-hashchain** ✅ — Notarised, Relay, Time Machine.
@@ -82,8 +99,13 @@ worker, or in-browser `wasm32` client can decode, apply, render, verify, merge,
 evaluate a transform, introspect, contrast-audit, teleport, capability-gate, and
 diff any Fuaran UI wire tree.
 
-The one capability still marked ⬜ (`versioning-envelope`, §15 profile/Unknown
-tolerance) is **not required by any of the 21 demos** — it is a codec-robustness
-tier for forward-compatible envelopes, tracked for completeness, not parity. The
-remaining roadmap work is depth (the lenient-accept / envelope / elicitation
-conformance families) rather than demo coverage.
+The `versioning-envelope` (§15) and `elicitation` (§18) families — previously the
+open depth items — **shipped in Phase 553**, so every capability in the matrix is now
+✅. Beyond the four-pillar demos, the host also carries the **agent-engagement**
+mechanics (Ph 465 elicitation + Ph 466 agent expression turns; see the section above)
+as compositions of those shipped capabilities. The remaining conformance-family depth
+is the `lenient-accept` (§16 shorthand normalisation) family only — a codec-tolerance
+tier, not demo coverage.
+
+_Updated 2026-07-14: `versioning-envelope` + `elicitation` flipped to ✅ (Phase 553,
+`envelope.rs` / `elicitation.rs`); agent-engagement section added for Phases 465/466._
