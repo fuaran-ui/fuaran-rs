@@ -8,13 +8,21 @@
 //! - `reject` — decode `inputFile`; assert the error's code equals
 //!   `expectedErrorCode` and its path starts with `expectedPath`.
 //!
-//! The remaining families (lenient-accept, envelope, elicitation) are later
-//! tiers — counted and skipped explicitly so a silent gap cannot read as
-//! coverage. When the corpus is absent (standalone checkout) every leg skips.
+//! The versioning-envelope (§15) and elicitation (§18) families are certified
+//! here too (Phase 553): `envelope-round-trip` / `envelope-reject`,
+//! `elicitation-round-trip` / `elicitation-reject`, and
+//! `elicitation-answer-accept` / `elicitation-answer-reject`. The one remaining
+//! family (lenient-accept) is a later tier — counted and skipped explicitly so
+//! a silent gap cannot read as coverage. When the corpus is absent (standalone
+//! checkout) every leg skips.
 
 use std::path::{Path, PathBuf};
 
 use fuaran_rs::canonical::{JVal, parse};
+use fuaran_rs::elicitation::{
+    decode_answer_doc, decode_elicitation, decode_outcome, encode_elicitation, encode_outcome,
+};
+use fuaran_rs::envelope::{decode_envelope, encode_envelope};
 use fuaran_rs::wire::{decode_node, decode_op, encode_node, encode_op};
 
 /// Walks up from the crate directory looking for the shared corpus (a sibling
@@ -242,20 +250,288 @@ fn corpus_rejects_surface_canonical_code_and_path() {
     eprintln!("reject leg: {ran} fixtures surface the canonical code + path");
 }
 
+/// The §15 versioning-envelope round-trip leg: every `envelope-round-trip`
+/// fixture negotiates + decodes + re-encodes byte-identically (Current decodes
+/// fully; Behind preserves an unknown kind verbatim).
+#[test]
+fn corpus_envelope_round_trips_byte_identical() {
+    let Some(corpus) = find_corpus() else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+    let mut failures: Vec<String> = vec![];
+    let mut ran = 0;
+    for fixture in load_manifest(&corpus) {
+        if fixture.kind != "envelope-round-trip" {
+            continue;
+        }
+        ran += 1;
+        let input = read_fixture(&corpus, &fixture.input_file);
+        let expected = read_fixture(
+            &corpus,
+            fixture
+                .expected_file
+                .as_deref()
+                .unwrap_or(&fixture.input_file),
+        );
+        match decode_envelope(&input) {
+            Err(e) => failures.push(format!(
+                "{}: decode failed: {} at {}: {}",
+                fixture.id,
+                e.code.as_str(),
+                e.path,
+                e.message
+            )),
+            Ok(env) => {
+                let actual = encode_envelope(&env);
+                if actual != expected {
+                    failures.push(format!(
+                        "{}: re-encode diverges —\n  expected {expected}\n  actual   {actual}",
+                        fixture.id
+                    ));
+                }
+            }
+        }
+    }
+    assert!(ran > 0, "corpus declared no envelope-round-trip fixtures");
+    assert!(
+        failures.is_empty(),
+        "{} of {} envelope round-trip fixtures failed:\n{}",
+        failures.len(),
+        ran,
+        failures.join("\n")
+    );
+    eprintln!("envelope round-trip leg: {ran} fixtures byte-identical");
+}
+
+/// The §15 envelope reject leg: a Foreign profile is refused with
+/// `FOREIGN_PROFILE` at `$.$profile`.
+#[test]
+fn corpus_envelope_rejects_surface_canonical_code_and_path() {
+    let Some(corpus) = find_corpus() else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+    let mut failures: Vec<String> = vec![];
+    let mut ran = 0;
+    for fixture in load_manifest(&corpus) {
+        if fixture.kind != "envelope-reject" {
+            continue;
+        }
+        ran += 1;
+        let input = read_fixture(&corpus, &fixture.input_file);
+        let expected_code = fixture.expected_error_code.as_deref().unwrap_or("");
+        let expected_path = fixture.expected_path.as_deref().unwrap_or("");
+        match decode_envelope(&input) {
+            Ok(_) => failures.push(format!(
+                "{}: decode ACCEPTED a malformed envelope (expected {expected_code} at {expected_path})",
+                fixture.id
+            )),
+            Err(e) => {
+                if e.code.as_str() != expected_code {
+                    failures.push(format!(
+                        "{}: wrong code — expected {expected_code}, got {} at {}",
+                        fixture.id,
+                        e.code.as_str(),
+                        e.path
+                    ));
+                } else if !e.path.starts_with(expected_path) {
+                    failures.push(format!(
+                        "{}: wrong path — expected prefix {expected_path}, got {}",
+                        fixture.id, e.path
+                    ));
+                }
+            }
+        }
+    }
+    assert!(ran > 0, "corpus declared no envelope-reject fixtures");
+    assert!(
+        failures.is_empty(),
+        "{} of {} envelope reject fixtures failed:\n{}",
+        failures.len(),
+        ran,
+        failures.join("\n")
+    );
+    eprintln!("envelope reject leg: {ran} fixtures surface the canonical code + path");
+}
+
+/// Re-encode an elicitation fixture through the decoder named by the fixture
+/// (`elicitation` → the envelope codec; `elicitation-outcome` → the outcome
+/// codec), returning either the re-encoded bytes or a `(code, path, message)`.
+fn elicitation_round_trip(decoder: &str, input: &str) -> Result<String, (String, String, String)> {
+    match decoder {
+        "elicitation" => decode_elicitation(input)
+            .map(|e| encode_elicitation(&e))
+            .map_err(|e| (e.code.as_str().to_string(), e.path, e.message)),
+        "elicitation-outcome" => decode_outcome(input)
+            .map(|o| encode_outcome(&o))
+            .map_err(|e| (e.code.as_str().to_string(), e.path, e.message)),
+        other => Err((
+            "UNKNOWN_DECODER".to_string(),
+            other.to_string(),
+            String::new(),
+        )),
+    }
+}
+
+/// The §18 elicitation round-trip leg: every `elicitation-round-trip` fixture
+/// (envelope + outcome decoders) re-encodes byte-identically.
+#[test]
+fn corpus_elicitation_round_trips_byte_identical() {
+    let Some(corpus) = find_corpus() else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+    let mut failures: Vec<String> = vec![];
+    let mut ran = 0;
+    for fixture in load_manifest(&corpus) {
+        if fixture.kind != "elicitation-round-trip" {
+            continue;
+        }
+        ran += 1;
+        let input = read_fixture(&corpus, &fixture.input_file);
+        let expected = read_fixture(
+            &corpus,
+            fixture
+                .expected_file
+                .as_deref()
+                .unwrap_or(&fixture.input_file),
+        );
+        match elicitation_round_trip(&fixture.decoder, &input) {
+            Err((code, path, message)) => failures.push(format!(
+                "{}: decode failed: {code} at {path}: {message}",
+                fixture.id
+            )),
+            Ok(actual) if actual != expected => failures.push(format!(
+                "{}: re-encode diverges —\n  expected {expected}\n  actual   {actual}",
+                fixture.id
+            )),
+            Ok(_) => {}
+        }
+    }
+    assert!(
+        ran > 0,
+        "corpus declared no elicitation-round-trip fixtures"
+    );
+    assert!(
+        failures.is_empty(),
+        "{} of {} elicitation round-trip fixtures failed:\n{}",
+        failures.len(),
+        ran,
+        failures.join("\n")
+    );
+    eprintln!("elicitation round-trip leg: {ran} fixtures byte-identical");
+}
+
+/// Decode an elicitation reject fixture through its named decoder, returning the
+/// structured error (or `None` if it wrongly accepted).
+fn elicitation_reject(decoder: &str, input: &str) -> Option<(String, String)> {
+    match decoder {
+        "elicitation" => decode_elicitation(input)
+            .err()
+            .map(|e| (e.code.as_str().to_string(), e.path)),
+        "elicitation-outcome" => decode_outcome(input)
+            .err()
+            .map(|e| (e.code.as_str().to_string(), e.path)),
+        "elicitation-answer" => decode_answer_doc(input)
+            .err()
+            .map(|e| (e.code.as_str().to_string(), e.path)),
+        _ => Some(("UNKNOWN_DECODER".to_string(), decoder.to_string())),
+    }
+}
+
+/// The §18 elicitation reject + answer-accept/reject legs: reject fixtures
+/// surface the expected code + `$`-rooted path prefix; answer-accept fixtures
+/// validate clean.
+#[test]
+fn corpus_elicitation_rejects_and_answers_conform() {
+    let Some(corpus) = find_corpus() else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+    let mut failures: Vec<String> = vec![];
+    let mut ran = 0;
+    for fixture in load_manifest(&corpus) {
+        match fixture.kind.as_str() {
+            "elicitation-reject" | "elicitation-answer-reject" => {
+                ran += 1;
+                let input = read_fixture(&corpus, &fixture.input_file);
+                let expected_code = fixture.expected_error_code.as_deref().unwrap_or("");
+                let expected_path = fixture.expected_path.as_deref().unwrap_or("");
+                match elicitation_reject(&fixture.decoder, &input) {
+                    None => failures.push(format!(
+                        "{}: decode ACCEPTED a malformed input (expected {expected_code} at {expected_path})",
+                        fixture.id
+                    )),
+                    Some((code, path)) => {
+                        if code != expected_code {
+                            failures.push(format!(
+                                "{}: wrong code — expected {expected_code}, got {code} at {path}",
+                                fixture.id
+                            ));
+                        } else if !path.starts_with(expected_path) {
+                            failures.push(format!(
+                                "{}: wrong path — expected prefix {expected_path}, got {path}",
+                                fixture.id
+                            ));
+                        }
+                    }
+                }
+            }
+            "elicitation-answer-accept" => {
+                ran += 1;
+                let input = read_fixture(&corpus, &fixture.input_file);
+                if let Err(e) = decode_answer_doc(&input) {
+                    failures.push(format!(
+                        "{}: answer-accept fixture was REJECTED: {} at {}: {}",
+                        fixture.id,
+                        e.code.as_str(),
+                        e.path,
+                        e.message
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        ran > 0,
+        "corpus declared no elicitation reject/answer fixtures"
+    );
+    assert!(
+        failures.is_empty(),
+        "{} of {} elicitation reject/answer fixtures failed:\n{}",
+        failures.len(),
+        ran,
+        failures.join("\n")
+    );
+    eprintln!("elicitation reject + answer legs: {ran} fixtures conform");
+}
+
 /// Names the corpus families this host does not yet run, so the skip is
-/// explicit rather than silent (lenient-accept / envelope / elicitation are
-/// later tiers than the codec floor).
+/// explicit rather than silent (lenient-accept is a later tier than the codec
+/// floor; §15/§18 are covered above as of Phase 553).
 #[test]
 fn corpus_families_beyond_the_floor_are_explicitly_skipped() {
     let Some(corpus) = find_corpus() else {
         eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
         return;
     };
+    let covered = [
+        "node-round-trip",
+        "op-round-trip",
+        "reject",
+        "envelope-round-trip",
+        "envelope-reject",
+        "elicitation-round-trip",
+        "elicitation-reject",
+        "elicitation-answer-accept",
+        "elicitation-answer-reject",
+    ];
     let mut skipped: std::collections::BTreeMap<String, usize> = Default::default();
     for fixture in load_manifest(&corpus) {
-        match fixture.kind.as_str() {
-            "node-round-trip" | "op-round-trip" | "reject" => {}
-            other => *skipped.entry(other.to_string()).or_insert(0) += 1,
+        if !covered.contains(&fixture.kind.as_str()) {
+            *skipped.entry(fixture.kind.clone()).or_insert(0) += 1;
         }
     }
     for (kind, count) in &skipped {

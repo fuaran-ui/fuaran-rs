@@ -18,6 +18,8 @@ pub mod canonical;
 pub mod client;
 pub mod dag;
 pub mod diff;
+pub mod elicitation;
+pub mod envelope;
 /// The target-neutral C-ABI export surface (Phase 537) — `extern "C"`
 /// `fuaran_*` functions over an opaque [`client::ClientSession`], compiled for
 /// the `wasm32` browser client *and* native staticlib / cdylib consumers (the
