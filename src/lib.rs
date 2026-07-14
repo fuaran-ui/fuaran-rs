@@ -25,6 +25,10 @@ pub mod envelope;
 /// the `wasm32` browser client *and* native staticlib / cdylib consumers (the
 /// Swift / Kotlin native surfaces). See `include/fuaran.h`.
 pub mod ffi;
+/// The signature-searchable function registry (Phase 558) — `findBySignature`
+/// (EXACT/SUBSUMES) + deterministic compose-path resolution, the Rust twin of
+/// the F# `Fuaran.Core.FunctionRegistry` reference.
+pub mod function;
 pub mod gate;
 pub mod introspect;
 pub mod ops;
