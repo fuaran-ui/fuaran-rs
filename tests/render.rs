@@ -124,6 +124,41 @@ fn static_grid_renders_the_semantic_table_leg() {
 }
 
 #[test]
+fn chart_lowers_in_host_to_inline_svg() {
+    // Phase 551 — fuaran-rs LOWER-IN-HOST posture: a raw Chart at the render
+    // boundary is lowered to a canonical Drawing and rendered as first-party inline
+    // SVG (so the WASM client reaches Chart-as-data parity through this renderer),
+    // never a placeholder and never a silent empty region.
+    let tree = node(
+        r#"{"id":"c","kind":{"$type":"Chart","kind":"Bar","source":{"$type":"Query","accessor":"<closure>","name":"rows"},"stacked":false,"title":{"$type":"Literal","text":"Revenue by quarter"},"xField":"quarter","yFields":["revenue"]}}"#,
+    );
+    let rows = parse(
+        r#"[{"quarter":"Q1","revenue":120},{"quarter":"Q2","revenue":150},{"quarter":"Q3","revenue":90},{"quarter":"Q4","revenue":175}]"#,
+    )
+    .unwrap();
+    let sources = BindingSources {
+        query_results: HashMap::from([("rows".to_string(), rows)]),
+        ..Default::default()
+    };
+    let html = render_to_html(&tree, &sources);
+    // Lowered to inline SVG through the shared Drawing renderer.
+    assert!(
+        html.contains("<svg class=\"fuaran-drawing\""),
+        "chart did not lower to inline SVG:\n{html}"
+    );
+    assert!(html.contains("class=\"fuaran-chart\""));
+    // The lowered geometry is present (bar rects + the visible title label).
+    assert!(html.contains("fuaran-drawing-rect"));
+    assert!(html.contains("Revenue by quarter"));
+    // NOT the old placeholder passthrough (that is the headless fuaran-go posture).
+    assert!(
+        !html.contains("fuaran-chart-placeholder"),
+        "must not emit the require-pre-lowered placeholder:\n{html}"
+    );
+    assert!(!html.contains("Wire a chart adapter"));
+}
+
+#[test]
 fn data_grid_projects_declarative_fields() {
     let tree = node(
         r#"{"id":"g","kind":{"$type":"DataGrid","columns":[

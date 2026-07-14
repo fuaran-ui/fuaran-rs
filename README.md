@@ -106,6 +106,30 @@ reactive stores and re-rendering — exactly the wire's *write-back default*. Th
 three delivery modes (WASM client, static + partial hydration, server-driven)
 all build on this session; `js/index.html` demonstrates the client loop.
 
+## Chart-lowering posture — lower-in-host
+
+A resolved `Drawing` node renders as first-party inline SVG on every host. A raw
+`Chart` node is a *semantic* wire kind that must be *lowered* to a `Drawing`
+before it can paint. `fuaran-rs` takes the **lower-in-host** posture: a `Chart`
+reaching the renderer is lowered deterministically to a canonical `Drawing`
+(`render::chart_lowering::lower_chart`) and rendered as inline SVG through the
+shared Drawing renderer.
+
+This is the posture the dual-role host's *client* leg earns: the browser-native
+`wasm32` client renders through the **same** server renderer, so lowering here
+brings the WASM client to parity with the "Chart-as-data" demo — a raw `Chart`
+becomes a real rendered chart in the browser, not a placeholder. (The headless
+`fuaran-go` host, which paints nothing itself, takes the cheaper
+require-pre-lowered posture instead.)
+
+The lowering is a byte-identical port of the F# reference (`Fuaran.UI.Charts.lower`):
+a fixed pixel `viewBox`, a `{1,2,5}·10ⁿ` nice-tick rule, and round-half-up-to-2dp
+coordinate rounding make it deterministic (`R2`). It is **certified byte-for-byte**
+against the shared `wire-format-fixtures/chart-lowering/*` goldens by
+`tests/chart_lowering.rs`, and the render-path lowering is pinned by
+`tests/render.rs`. `Bar` and `Line` lower today; another `ChartKind` yields an
+empty (but titled) drawing region, never a silent blank.
+
 ## Layout
 
 ```

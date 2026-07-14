@@ -2111,45 +2111,49 @@ fn render_static_table(ctx: &Ctx<'_>, spec: &StaticRows) -> String {
     )
 }
 
+// Chart-lowering posture (Phase 551): fuaran-rs is LOWER-IN-HOST. A raw Chart is
+// lowered deterministically to a canonical Drawing (`super::chart_lowering::lower_chart`,
+// a byte-identical port of the F# reference, pinned by tests/chart_lowering.rs) and
+// rendered as first-party inline SVG through the shared Drawing renderer. Because
+// the WASM browser client renders through THIS renderer, lowering here brings the
+// client to parity with the Chart-as-data demo — the reason this dual-role host
+// lowers where the headless fuaran-go host takes the require-pre-lowered posture.
+// Only Bar / Line lower today; an un-lowered kind yields an empty (but titled)
+// drawing region, never a silent blank. When the source binding has not yet
+// resolved to rows, the on-loading placeholder (or an empty drawing) shows — the
+// same not-resolved discipline every data-bound kind follows.
 fn render_chart(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &ChartSpec) -> String {
-    let row_count = match resolve_rows(ctx.sources, &spec.source) {
+    let rows = match resolve_rows(ctx.sources, &spec.source) {
         ResolvedRows::NotResolved => {
             if let Some(loading) = &state.on_loading {
                 return render_node(ctx, loading);
             }
-            0
+            &[][..]
         }
-        ResolvedRows::Rows(rows) => rows.len(),
+        ResolvedRows::Rows(rows) => rows,
     };
-    let title = spec
-        .title
-        .as_ref()
-        .map(|t| {
-            text_el(
-                "div",
-                &[("class", s("fuaran-chart-title"))],
-                &render_text(ctx.sources, t),
-            )
-        })
-        .unwrap_or_default();
-    let stacked_note = if spec.stacked { " (stacked)" } else { "" };
-    let placeholder = text_el(
-        "div",
-        &[
-            ("class", s("fuaran-chart-placeholder")),
-            ("data-stacked", AttrVal::Flag(spec.stacked)),
-        ],
-        &format!(
-            "[Chart placeholder: {}{stacked_note} — {row_count} rows × {{{}}} → {{{}}}. Wire a chart adapter for live rendering.]",
-            spec.kind.as_str(),
-            spec.x_field,
-            spec.y_fields.join(", ")
-        ),
+    if rows.is_empty()
+        && let Some(empty) = &state.on_empty
+    {
+        return render_node(ctx, empty);
+    }
+    let lowered_rows: Vec<super::chart_lowering::LowerRow> = rows
+        .iter()
+        .map(|row| super::chart_lowering::project_row(row, &spec.x_field, &spec.y_fields))
+        .collect();
+    let drawing = super::chart_lowering::lower_chart(
+        spec.kind,
+        &spec.x_field,
+        &spec.y_fields,
+        spec.title.as_ref(),
+        &lowered_rows,
     );
+    // Render the lowered Drawing through the shared Drawing renderer (inline SVG),
+    // wrapped in the chart class so host CSS + the demo target it consistently.
     el(
         "div",
         &[("class", s("fuaran-chart"))],
-        &format!("{title}{placeholder}"),
+        &render_drawing(ctx, &drawing),
     )
 }
 

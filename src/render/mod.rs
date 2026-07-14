@@ -6,6 +6,7 @@
 //! `css/fuaran.css`; the host serves it alongside the emitted body fragment.
 
 pub mod bindings;
+pub mod chart_lowering;
 pub mod class_names;
 pub mod email;
 pub mod html;
