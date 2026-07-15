@@ -23,11 +23,8 @@ without a JS frontend), and native compilation gives systems / edge / embedded h
 — plus the tightest structural fit for the typed tree (native `enum`s + exhaustive
 `match`).
 
-This repo sits under the Fuaran-UI sub-estate at `../`, alongside the `fuaran`,
-`fuaran-ts`, `fuaran-py`, and `fuaran-go` tiers. Cross-repo conventions (port
-allocation, Sync All, the formatting mandate, the language-baseline pinning, the OSS
-publication boundary) live in the workspace `CLAUDE.md` (`../../../CLAUDE.md`) and the
-Fuaran-UI sub-estate `CLAUDE.md` (`../CLAUDE.md`). Read those first.
+This repo sits alongside the `fuaran`, `fuaran-ts`, `fuaran-py`, and `fuaran-go` tiers as a
+co-equal conformant host. Cross-repo development conventions (port allocation, formatting, language-baseline pinning) live at the maintainers' workspace level and are not shipped here.
 
 ## Posture
 

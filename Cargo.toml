@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.85"
 description = "Rust host of the Fuaran UI wire format — a dependency-light, idiomatic-Rust reference implementation of the canonical-JSON contract a Rust service, WASM client, or embedded host reads, writes, and drives."
 license = "Apache-2.0"
+authors = ["Andrew J. Willshire <andrew@diametrical.co.uk>"]
 repository = "https://github.com/fuaran-ui/fuaran-rs"
 # Stage-0 bootstrap: not a published crate yet.
 publish = false
