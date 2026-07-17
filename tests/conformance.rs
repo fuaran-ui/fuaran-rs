@@ -11,9 +11,11 @@
 //! The versioning-envelope (§15) and elicitation (§18) families are certified
 //! here too (Phase 553): `envelope-round-trip` / `envelope-reject`,
 //! `elicitation-round-trip` / `elicitation-reject`, and
-//! `elicitation-answer-accept` / `elicitation-answer-reject`. The one remaining
-//! family (lenient-accept) is a later tier — counted and skipped explicitly so
-//! a silent gap cannot read as coverage. When the corpus is absent (standalone
+//! `elicitation-answer-accept` / `elicitation-answer-reject`. The lenient-accept
+//! family (§3.6 — bare-text shorthands, null/opaque statics, legacy upgrades,
+//! the Phase 460 omit-when-default fields, and the enum/field-name aliases) is
+//! certified via `lenient-accept` decode-then-canonical-re-encode. Every
+//! declared family is now covered; when the corpus is absent (standalone
 //! checkout) every leg skips.
 
 use std::path::{Path, PathBuf};
@@ -508,9 +510,80 @@ fn corpus_elicitation_rejects_and_answers_conform() {
     eprintln!("elicitation reject + answer legs: {ran} fixtures conform");
 }
 
+/// The lenient-accept leg (WIRE_FORMAT.md §3.6): every `lenient-accept` fixture
+/// decodes its `inputFile` with the named decoder, re-encodes, and asserts
+/// byte-equality against `expectedFile`. The inputs carry the decode-only
+/// lenient forms — bare-text shorthands, null/opaque statics, legacy container
+/// upgrades, the Phase 460 omit-when-default / explicit-default stylistic
+/// fields, and the enum-value / field-name aliases — and the expected files are
+/// the canonical normalisation (aliases never survive a re-encode).
+#[test]
+fn corpus_lenient_accept_round_trips_byte_identical() {
+    let Some(corpus) = find_corpus() else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+    let mut failures: Vec<String> = vec![];
+    let mut ran = 0;
+    for fixture in load_manifest(&corpus) {
+        if fixture.kind != "lenient-accept" {
+            continue;
+        }
+        ran += 1;
+        let input = read_fixture(&corpus, &fixture.input_file);
+        let expected_rel = fixture
+            .expected_file
+            .as_deref()
+            .unwrap_or(&fixture.input_file);
+        let expected = read_fixture(&corpus, expected_rel);
+        let re_encoded = match fixture.decoder.as_str() {
+            "node" => decode_node(&input).map(|n| encode_node(&n)),
+            "op" => decode_op(&input).map(|op| encode_op(&op)),
+            other => {
+                failures.push(format!("{}: unknown decoder '{other}'", fixture.id));
+                continue;
+            }
+        };
+        match re_encoded {
+            Err(e) => failures.push(format!(
+                "{}: decode failed: {} at {}: {}",
+                fixture.id,
+                e.code.as_str(),
+                e.path,
+                e.message
+            )),
+            Ok(actual) if actual != expected => {
+                let diff_at = actual
+                    .bytes()
+                    .zip(expected.bytes())
+                    .position(|(a, b)| a != b)
+                    .unwrap_or_else(|| actual.len().min(expected.len()));
+                let lo = diff_at.saturating_sub(40);
+                failures.push(format!(
+                    "{}: re-encode diverges at byte {} —\n  expected …{}…\n  actual   …{}…",
+                    fixture.id,
+                    diff_at,
+                    &expected[lo..(diff_at + 40).min(expected.len())],
+                    &actual[lo..(diff_at + 40).min(actual.len())],
+                ));
+            }
+            Ok(_) => {}
+        }
+    }
+    assert!(ran > 0, "corpus declared no lenient-accept fixtures");
+    assert!(
+        failures.is_empty(),
+        "{} of {} lenient-accept fixtures failed:\n{}",
+        failures.len(),
+        ran,
+        failures.join("\n")
+    );
+    eprintln!("lenient-accept leg: {ran} fixtures normalise byte-identical");
+}
+
 /// Names the corpus families this host does not yet run, so the skip is
-/// explicit rather than silent (lenient-accept is a later tier than the codec
-/// floor; §15/§18 are covered above as of Phase 553).
+/// explicit rather than silent (§15/§18 covered as of Phase 553;
+/// lenient-accept covered above).
 #[test]
 fn corpus_families_beyond_the_floor_are_explicitly_skipped() {
     let Some(corpus) = find_corpus() else {
@@ -527,6 +600,7 @@ fn corpus_families_beyond_the_floor_are_explicitly_skipped() {
         "elicitation-reject",
         "elicitation-answer-accept",
         "elicitation-answer-reject",
+        "lenient-accept",
     ];
     let mut skipped: std::collections::BTreeMap<String, usize> = Default::default();
     for fixture in load_manifest(&corpus) {

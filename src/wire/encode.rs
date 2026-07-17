@@ -640,14 +640,24 @@ fn column_width(w: &ColumnWidth) -> String {
 // ─── Display specs ───────────────────────────────────────────────────────────
 
 fn metric_spec(spec: &MetricSpec) -> String {
+    // Phase 460 — the stylistic fields are omitted-when-default on the wire
+    // (WIRE_FORMAT.md §3.6); a default-styled Metric round-trips minimal.
     let mut fields = vec![
-        field("emphasis", s(spec.emphasis.as_str())),
-        field("format", cell_format(&spec.format)),
         field("label", text_source(&spec.label)),
         field("source", binding(&spec.source)),
-        field("tone", s(spec.tone.as_str())),
-        field("weight", s(spec.weight.as_str())),
     ];
+    if spec.format != CellFormat::None {
+        fields.push(field("format", cell_format(&spec.format)));
+    }
+    if spec.tone != ToneVariant::Default {
+        fields.push(field("tone", s(spec.tone.as_str())));
+    }
+    if spec.weight != StyleWeight::Standard {
+        fields.push(field("weight", s(spec.weight.as_str())));
+    }
+    if spec.emphasis != Emphasis::Normal {
+        fields.push(field("emphasis", s(spec.emphasis.as_str())));
+    }
     if let Some(trend) = &spec.trend {
         fields.push(field("trend", binding(trend)));
     }
@@ -672,12 +682,16 @@ fn heading_spec(spec: &HeadingSpec) -> String {
 }
 
 fn label_value_row_spec(spec: &LabelValueRowSpec) -> String {
+    // Phase 460 — `format` omitted-when-default; `emphasis` is a behavioural
+    // bool (not the style DU) and is always emitted.
     let mut fields = vec![
         field("emphasis", boolean(spec.emphasis)),
-        field("format", cell_format(&spec.format)),
         field("label", text_source(&spec.label)),
         field("source", binding(&spec.source)),
     ];
+    if spec.format != CellFormat::None {
+        fields.push(field("format", cell_format(&spec.format)));
+    }
     if let Some(help) = &spec.help {
         fields.push(field("help", text_source(help)));
     }
@@ -726,12 +740,16 @@ fn list_spec(spec: &ListSpec) -> String {
 }
 
 fn toast_spec(spec: &ToastSpec) -> String {
-    obj(vec![
+    // Phase 460 — `tone` omitted-when-default.
+    let mut fields = vec![
         field("dismissable", boolean(spec.dismissable)),
         field("message", text_source(&spec.message)),
         field("open", binding(&spec.open)),
-        field("tone", s(spec.tone.as_str())),
-    ])
+    ];
+    if spec.tone != ToneVariant::Default {
+        fields.push(field("tone", s(spec.tone.as_str())));
+    }
+    obj(fields)
 }
 
 fn code_block_spec(spec: &CodeBlockSpec) -> String {
@@ -766,8 +784,10 @@ fn callout_spec(spec: &CalloutSpec) -> String {
     let mut fields = vec![
         field("body", text_source(&spec.body)),
         field("dismissable", boolean(spec.dismissable)),
-        field("tone", s(spec.tone.as_str())),
     ];
+    if spec.tone != ToneVariant::Default {
+        fields.push(field("tone", s(spec.tone.as_str())));
+    }
     if let Some(heading) = &spec.heading {
         fields.push(field("heading", text_source(heading)));
     }
@@ -781,8 +801,10 @@ fn progress_spec(spec: &ProgressSpec) -> String {
     let mut fields = vec![
         field("fraction", binding(&spec.fraction)),
         field("indeterminate", boolean(spec.indeterminate)),
-        field("tone", s(spec.tone.as_str())),
     ];
+    if spec.tone != ToneVariant::Default {
+        fields.push(field("tone", s(spec.tone.as_str())));
+    }
     if let Some(label) = &spec.label {
         fields.push(field("label", text_source(label)));
     }
@@ -1286,12 +1308,17 @@ fn cell_kind_erased(k: &CellKindErased) -> String {
 }
 
 fn column_erased(c: &ColumnErased) -> String {
+    // Phase 460 — `format` / `width` omitted-when-default.
     let mut fields = vec![
-        field("format", cell_format(&c.format)),
         field("kind", cell_kind_erased(&c.kind)),
         field("label", s(&c.label)),
-        field("width", column_width(&c.width)),
     ];
+    if c.format != CellFormat::None {
+        fields.push(field("format", cell_format(&c.format)));
+    }
+    if c.width != ColumnWidth::Auto {
+        fields.push(field("width", column_width(&c.width)));
+    }
     if c.value.is_some() {
         fields.push(field("value", CLOSURE.to_string()));
     }
@@ -1799,11 +1826,17 @@ fn state_behaviour(state: &StateBehaviour) -> String {
 }
 
 fn semantic_style(style: &SemanticStyle) -> String {
-    let mut fields = vec![
-        field("emphasis", s(style.emphasis.as_str())),
-        field("tone", s(style.tone.as_str())),
-        field("weight", s(style.weight.as_str())),
-    ];
+    // Phase 460 — tone/weight/emphasis omitted-when-default (as role/voice).
+    let mut fields = vec![];
+    if style.tone != ToneVariant::Default {
+        fields.push(field("tone", s(style.tone.as_str())));
+    }
+    if style.weight != StyleWeight::Standard {
+        fields.push(field("weight", s(style.weight.as_str())));
+    }
+    if style.emphasis != Emphasis::Normal {
+        fields.push(field("emphasis", s(style.emphasis.as_str())));
+    }
     if style.role != StyleRole::None {
         fields.push(field("role", s(style.role.as_str())));
     }

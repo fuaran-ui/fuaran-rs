@@ -199,6 +199,130 @@ fn opt_closure(fields: &Fields, key: &str) -> Option<Closure> {
     get(fields, key).map(|_| Closure)
 }
 
+// ─── Lenient-ingest field-name aliases (decode-only; WIRE_FORMAT.md §3.6) ─────
+//
+// A curated set of foreign field names decode to the canonical slot when they
+// denote the same concept at the same semantics (a model wrote `href` for a
+// Navigate `route`, etc.). The canonical name always WINS when both are present;
+// a re-encode always normalises back to the canonical name (aliases never
+// appear in the schema or the conformance corpus). Mirrors the F# reference's
+// `requireFieldAliased` / `optFieldAliased`.
+
+/// Resolve a canonical field, falling back to the first present alias.
+fn get_aliased<'a>(fields: &'a Fields, canonical: &str, aliases: &[&str]) -> Option<&'a JVal> {
+    get(fields, canonical).or_else(|| aliases.iter().find_map(|a| get(fields, a)))
+}
+
+/// Require a canonical field or one of its aliases; the nested path always uses
+/// the canonical name (matching the F# reference).
+fn req_aliased<'a>(
+    path: &str,
+    fields: &'a Fields,
+    canonical: &str,
+    aliases: &[&str],
+    expected: &str,
+) -> DResult<&'a JVal> {
+    get_aliased(fields, canonical, aliases).ok_or_else(|| missing_field(path, canonical, expected))
+}
+
+fn req_string_aliased(
+    path: &str,
+    fields: &Fields,
+    canonical: &str,
+    aliases: &[&str],
+    expected: &str,
+) -> DResult<String> {
+    let v = req_aliased(path, fields, canonical, aliases, expected)?;
+    Ok(as_str(&format!("{path}.{canonical}"), v)?.to_string())
+}
+
+fn req_binding_aliased(
+    path: &str,
+    fields: &Fields,
+    canonical: &str,
+    aliases: &[&str],
+    expected: &str,
+) -> DResult<Binding> {
+    let v = req_aliased(path, fields, canonical, aliases, expected)?;
+    decode_binding(&format!("{path}.{canonical}"), v)
+}
+
+fn req_binding_slot_aliased(
+    path: &str,
+    fields: &Fields,
+    canonical: &str,
+    aliases: &[&str],
+    expected: &str,
+    slot: StaticSlot,
+) -> DResult<Binding> {
+    let v = req_aliased(path, fields, canonical, aliases, expected)?;
+    decode_binding_slot(&format!("{path}.{canonical}"), v, slot)
+}
+
+fn req_text_source_aliased(
+    path: &str,
+    fields: &Fields,
+    canonical: &str,
+    aliases: &[&str],
+    expected: &str,
+) -> DResult<TextSource> {
+    let v = req_aliased(path, fields, canonical, aliases, expected)?;
+    decode_text_source(&format!("{path}.{canonical}"), v)
+}
+
+fn opt_text_source_aliased(
+    path: &str,
+    fields: &Fields,
+    canonical: &str,
+    aliases: &[&str],
+) -> DResult<Option<TextSource>> {
+    match get_aliased(fields, canonical, aliases) {
+        None => Ok(None),
+        Some(v) => Ok(Some(decode_text_source(&format!("{path}.{canonical}"), v)?)),
+    }
+}
+
+// ─── Phase 460 — stylistic fields omitted-when-default on decode (§3.6) ───────
+//
+// These stylistic slots restore an identity default when ABSENT; a present
+// explicit-default value keeps decoding (read-compat). The canonical encoder
+// still emits them (fixtures byte-unchanged), so a re-encode is always full.
+
+fn opt_cell_format_default(path: &str, fields: &Fields, key: &str) -> DResult<CellFormat> {
+    match get(fields, key) {
+        None => Ok(CellFormat::None),
+        Some(v) => decode_cell_format(&format!("{path}.{key}"), v),
+    }
+}
+
+fn opt_tone_default(path: &str, fields: &Fields, key: &str) -> DResult<ToneVariant> {
+    match get(fields, key) {
+        None => Ok(ToneVariant::Default),
+        Some(v) => decode_tone(&format!("{path}.{key}"), v),
+    }
+}
+
+fn opt_weight_default(path: &str, fields: &Fields, key: &str) -> DResult<StyleWeight> {
+    match get(fields, key) {
+        None => Ok(StyleWeight::Standard),
+        Some(v) => decode_weight(&format!("{path}.{key}"), v),
+    }
+}
+
+fn opt_emphasis_default(path: &str, fields: &Fields, key: &str) -> DResult<Emphasis> {
+    match get(fields, key) {
+        None => Ok(Emphasis::Normal),
+        Some(v) => decode_emphasis(&format!("{path}.{key}"), v),
+    }
+}
+
+fn opt_column_width_default(path: &str, fields: &Fields, key: &str) -> DResult<ColumnWidth> {
+    match get(fields, key) {
+        None => Ok(ColumnWidth::Auto),
+        Some(v) => decode_column_width(&format!("{path}.{key}"), v),
+    }
+}
+
 // ─── Bare-string enum decode ─────────────────────────────────────────────────
 
 macro_rules! decode_bare_enum {
@@ -211,20 +335,63 @@ macro_rules! decode_bare_enum {
             $ty::from_wire(s).ok_or_else(|| unknown_du_case(path, s, &$ty::WIRE_NAMES.join(" | ")))
         }
     };
+    // Lenient-ingest alias arm (decode-only; WIRE_FORMAT.md §3.6). Canonical wire
+    // spellings decode via `from_wire`; a curated set of same-concept synonyms
+    // maps to a canonical case. A re-encode always normalises to the canonical
+    // name (aliases never appear in the schema or the conformance corpus). Any
+    // other unknown case still fails `UNKNOWN_DU_CASE` with the canonical list.
+    ($fn_name:ident, $ty:ident, $label:literal, aliases: { $($alias:literal => $case:ident),+ $(,)? }) => {
+        fn $fn_name(path: &str, j: &JVal) -> DResult<$ty> {
+            let s = match j {
+                JVal::Str(s) => s,
+                _ => return Err(wrong_type(path, concat!("JSON string (", $label, ")"))),
+            };
+            if let Some(v) = $ty::from_wire(s) {
+                return Ok(v);
+            }
+            match s.as_str() {
+                $($alias => Ok($ty::$case),)+
+                _ => Err(unknown_du_case(path, s, &$ty::WIRE_NAMES.join(" | "))),
+            }
+        }
+    };
 }
 
-decode_bare_enum!(decode_orientation, Orientation, "Orientation");
+// The CSS flex-direction prior: a row lays out horizontally, a column vertically.
+decode_bare_enum!(decode_orientation, Orientation, "Orientation", aliases: {
+    "Row" => Horizontal, "row" => Horizontal,
+    "Column" => Vertical, "column" => Vertical,
+});
 decode_bare_enum!(
     decode_scroll_orientation,
     ScrollOrientation,
     "ScrollOrientation"
 );
-decode_bare_enum!(decode_badge_variant, BadgeVariant, "BadgeVariant");
-decode_bare_enum!(decode_button_variant, ButtonVariant, "ButtonVariant");
-decode_bare_enum!(decode_heading_variant, HeadingVariant, "HeadingVariant");
-decode_bare_enum!(decode_tone, ToneVariant, "ToneVariant");
+// `Default` is the universal no-special-variant prior (BadgeVariant's identity
+// case is Neutral); `Danger` is the Bootstrap prior for Critical.
+decode_bare_enum!(decode_badge_variant, BadgeVariant, "BadgeVariant", aliases: {
+    "Default" => Neutral, "Danger" => Critical,
+});
+// Bootstrap's `Danger` names the same concept as Destructive (the red button).
+decode_bare_enum!(decode_button_variant, ButtonVariant, "ButtonVariant", aliases: {
+    "Danger" => Destructive,
+});
+// `Default` → the identity case. Other guesses (Title/Page/Section) stay rejects.
+decode_bare_enum!(decode_heading_variant, HeadingVariant, "HeadingVariant", aliases: {
+    "Default" => Standard,
+});
+// Faithful semantic mappings only: Positive→Success, Danger/Negative→Critical,
+// Neutral→Default.
+decode_bare_enum!(decode_tone, ToneVariant, "ToneVariant", aliases: {
+    "Positive" => Success, "Danger" => Critical, "Negative" => Critical, "Neutral" => Default,
+});
+// `StyleWeight` is deliberately NOT aliased — Bold/Heavy is font-weight intent,
+// but the language means layout density (Compact|Standard|Spacious).
 decode_bare_enum!(decode_weight, StyleWeight, "StyleWeight");
-decode_bare_enum!(decode_emphasis, Emphasis, "Emphasis");
+// Prominence intent survives: Strong/Bold→Loud, Subtle/Muted→Quiet.
+decode_bare_enum!(decode_emphasis, Emphasis, "Emphasis", aliases: {
+    "Strong" => Loud, "Bold" => Loud, "Subtle" => Quiet, "Muted" => Quiet,
+});
 decode_bare_enum!(decode_text_anchor, TextAnchor, "TextAnchor");
 decode_bare_enum!(decode_style_role, StyleRole, "StyleRole");
 decode_bare_enum!(decode_font_voice, FontVoice, "FontVoice");
@@ -906,7 +1073,8 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
         }
         "Query" => {
             let name = req_string(path, fields, "name", "query name string")?;
-            let depends_on = match get(fields, "dependsOn") {
+            // Field aliases: deps / dependencies → dependsOn.
+            let depends_on = match get_aliased(fields, "dependsOn", &["deps", "dependencies"]) {
                 None => None,
                 Some(v) => {
                     let items = as_arr(&format!("{path}.dependsOn"), v)?;
@@ -927,12 +1095,14 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
         }),
         "State" => {
             let key = req_string(path, fields, "key", "state key string")?;
-            let default_value = match get(fields, "defaultValue") {
-                None => slot.placeholder(),
-                Some(v) => slot
-                    .parse(&format!("{path}.defaultValue"), v)
-                    .unwrap_or_else(|_| slot.placeholder()),
-            };
+            // Field aliases: initialValue / default → defaultValue.
+            let default_value =
+                match get_aliased(fields, "defaultValue", &["initialValue", "default"]) {
+                    None => slot.placeholder(),
+                    Some(v) => slot
+                        .parse(&format!("{path}.defaultValue"), v)
+                        .unwrap_or_else(|_| slot.placeholder()),
+                };
             Ok(Binding::State { key, default_value })
         }
         "Computed" => Ok(Binding::Computed),
@@ -1110,7 +1280,9 @@ fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
     match disc(path, fields)? {
         "Dispatch" => Ok(Action::Dispatch),
         "Call" => {
-            let endpoint = req_string(path, fields, "endpoint", "ApiEndpoint string")?;
+            // Field alias: url → endpoint.
+            let endpoint =
+                req_string_aliased(path, fields, "endpoint", &["url"], "ApiEndpoint string")?;
             let into = match get(fields, "into") {
                 None => None,
                 Some(v) => {
@@ -1142,7 +1314,14 @@ fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
             Ok(Action::Notify { channel, payload })
         }
         "Navigate" => Ok(Action::Navigate {
-            route: req_string(path, fields, "route", "route string")?,
+            // Field aliases: href (the dominant web name) / url / to → route.
+            route: req_string_aliased(
+                path,
+                fields,
+                "route",
+                &["href", "url", "to"],
+                "route string",
+            )?,
         }),
         "SetState" => {
             let key = req_string(path, fields, "key", "state key string")?;
@@ -1204,15 +1383,19 @@ fn req_action(path: &str, fields: &Fields, key: &str, expected: &str) -> DResult
 fn decode_metric_spec(path: &str, j: &JVal) -> DResult<MetricSpec> {
     let fields = as_obj(path, j)?;
     let label = req_text_source(path, fields, "label", "Metric label TextSource")?;
-    let source = req_binding(path, fields, "source", "Metric Source binding")?;
-    let format_j = req(path, fields, "format", "CellFormat")?;
-    let format = decode_cell_format(&format!("{path}.format"), format_j)?;
-    let tone_j = req(path, fields, "tone", "ToneVariant")?;
-    let tone = decode_tone(&format!("{path}.tone"), tone_j)?;
-    let weight_j = req(path, fields, "weight", "StyleWeight")?;
-    let weight = decode_weight(&format!("{path}.weight"), weight_j)?;
-    let emphasis_j = req(path, fields, "emphasis", "Emphasis")?;
-    let emphasis = decode_emphasis(&format!("{path}.emphasis"), emphasis_j)?;
+    // Field aliases: value (the universal KPI-card prior) / data → source.
+    let source = req_binding_aliased(
+        path,
+        fields,
+        "source",
+        &["value", "data"],
+        "Metric Source binding",
+    )?;
+    // Phase 460 — the stylistic fields are omitted-when-default on the wire.
+    let format = opt_cell_format_default(path, fields, "format")?;
+    let tone = opt_tone_default(path, fields, "tone")?;
+    let weight = opt_weight_default(path, fields, "weight")?;
+    let emphasis = opt_emphasis_default(path, fields, "emphasis")?;
     let trend = opt_binding(path, fields, "trend")?;
     let trend_format = match get(fields, "trendFormat") {
         None => None,
@@ -1250,9 +1433,16 @@ fn decode_heading_spec(path: &str, j: &JVal) -> DResult<HeadingSpec> {
 fn decode_label_value_row_spec(path: &str, j: &JVal) -> DResult<LabelValueRowSpec> {
     let fields = as_obj(path, j)?;
     let label = req_text_source(path, fields, "label", "row TextSource label")?;
-    let source = req_binding(path, fields, "source", "row Binding<float> Source")?;
-    let format_j = req(path, fields, "format", "CellFormat")?;
-    let format = decode_cell_format(&format!("{path}.format"), format_j)?;
+    let source = req_binding_aliased(
+        path,
+        fields,
+        "source",
+        &["value", "data"],
+        "row Binding<float> Source",
+    )?;
+    // Phase 460 — `format` omitted-when-default. The `emphasis` here is a
+    // behavioural bool (not the `Emphasis` style DU) and stays required.
+    let format = opt_cell_format_default(path, fields, "format")?;
     let emphasis = req_bool(path, fields, "emphasis", "emphasis bool")?;
     let help = opt_text_source(path, fields, "help")?;
     Ok(LabelValueRowSpec {
@@ -1318,8 +1508,7 @@ fn decode_list_spec(path: &str, j: &JVal) -> DResult<ListSpec> {
 fn decode_toast_spec(path: &str, j: &JVal) -> DResult<ToastSpec> {
     let fields = as_obj(path, j)?;
     let message = req_text_source(path, fields, "message", "Toast message TextSource")?;
-    let tone_j = req(path, fields, "tone", "ToneVariant")?;
-    let tone = decode_tone(&format!("{path}.tone"), tone_j)?;
+    let tone = opt_tone_default(path, fields, "tone")?;
     let open = req_binding(path, fields, "open", "Toast open binding")?;
     let dismissable = req_bool(path, fields, "dismissable", "dismissable bool")?;
     Ok(ToastSpec {
@@ -1361,10 +1550,12 @@ fn decode_math_spec(path: &str, j: &JVal) -> DResult<MathSpec> {
 
 fn decode_sparkline_spec(path: &str, j: &JVal) -> DResult<SparklineSpec> {
     let fields = as_obj(path, j)?;
-    let source = req_binding_slot(
+    // Field alias: data → source.
+    let source = req_binding_slot_aliased(
         path,
         fields,
         "source",
+        &["data"],
         "Sparkline Source binding",
         StaticSlot::FloatSeq,
     )?;
@@ -1381,9 +1572,9 @@ fn decode_callout_spec(path: &str, j: &JVal) -> DResult<CalloutSpec> {
     let fields = as_obj(path, j)?;
     let body = req_text_source(path, fields, "body", "Callout body TextSource")?;
     let dismissable = req_bool(path, fields, "dismissable", "dismissable bool")?;
-    let tone_j = req(path, fields, "tone", "ToneVariant")?;
-    let tone = decode_tone(&format!("{path}.tone"), tone_j)?;
-    let heading = opt_text_source(path, fields, "heading")?;
+    let tone = opt_tone_default(path, fields, "tone")?;
+    // Field alias: title → heading (Callout is in the scoped title→heading set).
+    let heading = opt_text_source_aliased(path, fields, "heading", &["title"])?;
     let icon = opt_string(path, fields, "icon")?;
     Ok(CalloutSpec {
         body,
@@ -1398,8 +1589,7 @@ fn decode_progress_spec(path: &str, j: &JVal) -> DResult<ProgressSpec> {
     let fields = as_obj(path, j)?;
     let fraction = req_binding(path, fields, "fraction", "Progress fraction binding")?;
     let indeterminate = req_bool(path, fields, "indeterminate", "indeterminate bool")?;
-    let tone_j = req(path, fields, "tone", "ToneVariant")?;
-    let tone = decode_tone(&format!("{path}.tone"), tone_j)?;
+    let tone = opt_tone_default(path, fields, "tone")?;
     let label = opt_text_source(path, fields, "label")?;
     let caveat = opt_text_source(path, fields, "caveat")?;
     Ok(ProgressSpec {
@@ -1506,7 +1696,8 @@ fn decode_form_field_kind(path: &str, j: &JVal) -> DResult<FormFieldKind> {
 
 fn decode_form_field(path: &str, j: &JVal) -> DResult<FormField> {
     let fields = as_obj(path, j)?;
-    let id = req_string(path, fields, "id", "form field id string")?;
+    // Field alias: name → id.
+    let id = req_string_aliased(path, fields, "id", &["name"], "form field id string")?;
     let kind_j = req(path, fields, "kind", "FormFieldKind")?;
     let kind = decode_form_field_kind(&format!("{path}.kind"), kind_j)?;
     let label = req_text_source(path, fields, "label", "field label TextSource")?;
@@ -1644,10 +1835,12 @@ fn decode_button_spec(path: &str, j: &JVal) -> DResult<ButtonSpec> {
 fn decode_select_spec(path: &str, j: &JVal) -> DResult<SelectSpec> {
     let fields = as_obj(path, j)?;
     let label = req_text_source(path, fields, "label", "Select label TextSource")?;
-    let source = req_binding_slot(
+    // Field aliases: options / data → source.
+    let source = req_binding_slot_aliased(
         path,
         fields,
         "source",
+        &["options", "data"],
         "Select source binding",
         StaticSlot::Options,
     )?;
@@ -1739,13 +1932,19 @@ fn decode_cell_kind_erased(path: &str, j: &JVal) -> DResult<CellKindErased> {
 
 fn decode_column_erased(path: &str, j: &JVal) -> DResult<ColumnErased> {
     let fields = as_obj(path, j)?;
-    let format_j = req(path, fields, "format", "CellFormat")?;
-    let format = decode_cell_format(&format!("{path}.format"), format_j)?;
-    let kind_j = req(path, fields, "kind", "CellKindErased")?;
+    // Phase 460 — format/width omitted-when-default. Field aliases: type → kind,
+    // header/title → label.
+    let format = opt_cell_format_default(path, fields, "format")?;
+    let kind_j = req_aliased(path, fields, "kind", &["type"], "CellKindErased")?;
     let kind = decode_cell_kind_erased(&format!("{path}.kind"), kind_j)?;
-    let label = req_string(path, fields, "label", "column label string")?;
-    let width_j = req(path, fields, "width", "ColumnWidth")?;
-    let width = decode_column_width(&format!("{path}.width"), width_j)?;
+    let label = req_string_aliased(
+        path,
+        fields,
+        "label",
+        &["header", "title"],
+        "column label string",
+    )?;
+    let width = opt_column_width_default(path, fields, "width")?;
     let field = opt_string(path, fields, "field")?;
     Ok(ColumnErased {
         format,
@@ -1788,7 +1987,14 @@ fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
         columns.push(decode_column_erased(&format!("{path}.columns[{i}]"), item)?);
     }
     let editable = req_bool(path, fields, "editable", "editable bool")?;
-    let source = req_binding(path, fields, "source", "Grid source binding")?;
+    // Field aliases: data / rows → source.
+    let source = req_binding_aliased(
+        path,
+        fields,
+        "source",
+        &["data", "rows"],
+        "Grid source binding",
+    )?;
     let row_key_field = opt_string(path, fields, "rowKeyField")?;
     let static_rows = match get(fields, "staticRows") {
         None => None,
@@ -1809,7 +2015,8 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
     let fields = as_obj(path, j)?;
     let kind_j = req(path, fields, "kind", "ChartKind")?;
     let kind = decode_chart_kind(&format!("{path}.kind"), kind_j)?;
-    let source = req_binding(path, fields, "source", "Chart source binding")?;
+    // Field alias: data → source.
+    let source = req_binding_aliased(path, fields, "source", &["data"], "Chart source binding")?;
     let x_field = req_string(path, fields, "xField", "xField string")?;
     let y_fields_j = req(path, fields, "yFields", "yFields string list")?;
     let arr = as_arr(&format!("{path}.yFields"), y_fields_j)?;
@@ -1836,10 +2043,12 @@ fn decode_map_spec(path: &str, j: &JVal) -> DResult<MapSpec> {
     let fields = as_obj(path, j)?;
     let centre_latitude = req_float(path, fields, "centreLatitude", "centre latitude float")?;
     let centre_longitude = req_float(path, fields, "centreLongitude", "centre longitude float")?;
-    let source = req_binding_slot(
+    // Field aliases: data / markers → source.
+    let source = req_binding_slot_aliased(
         path,
         fields,
         "source",
+        &["data", "markers"],
         "Map source binding",
         StaticSlot::Markers,
     )?;
@@ -2066,11 +2275,15 @@ fn decode_box_layout(path: &str, j: &JVal) -> DResult<BoxLayout> {
                 wrap,
             })
         }
-        "Grid" => Ok(BoxLayout::Grid {
-            cols: req_int(path, fields, "cols", "cols integer")?,
-            gap: opt_int(path, fields, "gap")?,
-            template_columns: opt_string(path, fields, "templateColumns")?,
-        }),
+        "Grid" => {
+            // Field alias: columns → cols.
+            let cols_j = req_aliased(path, fields, "cols", &["columns"], "cols integer")?;
+            Ok(BoxLayout::Grid {
+                cols: as_int(&format!("{path}.cols"), cols_j)?,
+                gap: opt_int(path, fields, "gap")?,
+                template_columns: opt_string(path, fields, "templateColumns")?,
+            })
+        }
         "Auto" => Ok(BoxLayout::Auto),
         other => Err(unknown_du_case(path, other, "Flex | Grid | Auto")),
     }
@@ -2085,7 +2298,8 @@ fn decode_box_role(path: &str, j: &JVal) -> DResult<BoxRole> {
 fn decode_box_spec(path: &str, j: &JVal) -> DResult<BoxSpec> {
     let fields = as_obj(path, j)?;
     let children = decode_children(path, fields)?;
-    let heading = opt_text_source(path, fields, "heading")?;
+    // Field alias: title → heading (Box is in the scoped title→heading set).
+    let heading = opt_text_source_aliased(path, fields, "heading", &["title"])?;
     let layout_j = req(path, fields, "layout", "layout object")?;
     let layout = decode_box_layout(&format!("{path}.layout"), layout_j)?;
     let role_j = req(path, fields, "role", "role string")?;
@@ -2242,7 +2456,8 @@ fn decode_stepper_spec(path: &str, j: &JVal) -> DResult<StepperSpec> {
 fn decode_summary_list_spec(path: &str, j: &JVal) -> DResult<SummaryListSpec> {
     let fields = as_obj(path, j)?;
     let children = decode_children(path, fields)?;
-    let heading = opt_text_source(path, fields, "heading")?;
+    // Field alias: title → heading.
+    let heading = opt_text_source_aliased(path, fields, "heading", &["title"])?;
     Ok(SummaryListSpec { children, heading })
 }
 
@@ -2250,7 +2465,14 @@ fn decode_disclosure_spec(path: &str, j: &JVal) -> DResult<DisclosureSpec> {
     let fields = as_obj(path, j)?;
     let children = decode_children(path, fields)?;
     let default_open = req_bool(path, fields, "defaultOpen", "defaultOpen bool")?;
-    let heading = req_text_source(path, fields, "heading", "Disclosure heading TextSource")?;
+    // Field alias: title → heading.
+    let heading = req_text_source_aliased(
+        path,
+        fields,
+        "heading",
+        &["title"],
+        "Disclosure heading TextSource",
+    )?;
     let open = req_binding(path, fields, "open", "open binding")?;
     Ok(DisclosureSpec {
         children,
@@ -2270,7 +2492,8 @@ fn decode_modal_spec(path: &str, j: &JVal) -> DResult<ModalSpec> {
         Some(v) => Some(decode_action(&format!("{path}.onDismiss"), v)?),
     };
     let open = req_binding(path, fields, "open", "open binding")?;
-    let heading = opt_text_source(path, fields, "heading")?;
+    // Field alias: title → heading.
+    let heading = opt_text_source_aliased(path, fields, "heading", &["title"])?;
     Ok(ModalSpec {
         children,
         dismissable,
@@ -2703,12 +2926,10 @@ fn decode_state_behaviour(path: &str, j: &JVal) -> DResult<StateBehaviour> {
 
 fn decode_semantic_style(path: &str, j: &JVal) -> DResult<SemanticStyle> {
     let fields = as_obj(path, j)?;
-    let tone_j = req(path, fields, "tone", "ToneVariant")?;
-    let tone = decode_tone(&format!("{path}.tone"), tone_j)?;
-    let weight_j = req(path, fields, "weight", "StyleWeight")?;
-    let weight = decode_weight(&format!("{path}.weight"), weight_j)?;
-    let emphasis_j = req(path, fields, "emphasis", "Emphasis")?;
-    let emphasis = decode_emphasis(&format!("{path}.emphasis"), emphasis_j)?;
+    // Phase 460 — tone/weight/emphasis omitted-when-default (as role/voice below).
+    let tone = opt_tone_default(path, fields, "tone")?;
+    let weight = opt_weight_default(path, fields, "weight")?;
+    let emphasis = opt_emphasis_default(path, fields, "emphasis")?;
     // `role` / `voice` are optional on the wire — omitted at their defaults.
     let role = match get(fields, "role") {
         None => StyleRole::None,
