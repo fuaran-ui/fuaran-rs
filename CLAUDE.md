@@ -6,14 +6,15 @@ to the F# (`Fuaran.UI`), TypeScript (`@fuaran-ui/*`), Python (`fuaran_py`), and 
 backend / edge / embedded host *and* a **browser-native `wasm32` client** — the
 canonical-JSON codec, a tree-op apply engine, a pre-emit validator, and both
 server-side and WASM-client emission, all conformant to the shared wire format. What
-ships **today**: the codec floor (corpus-certified round-trip + reject), the tree-op
-apply engine (+ `can_apply` dry-run), the pre-emit validator (canonical `FUARAN###`
-codes), the server-side emission tier (parity-locked server-HTML renderer,
-corpus-certified deterministic markdown renderer, hydration-ready emission, islands
-partial hydration), and the **browser-native `wasm32` client** — a `ClientSession`
-(decode → render → drive) over a minimal C-ABI shim + a thin hand-written JS loader,
-no `wasm-bindgen`. The remaining conformance families (lenient / envelope /
-elicitation) and dataframe evaluation are roadmap work.
+ships **today**: the codec floor (corpus-certified across every family — node/op
+round-trip, reject, lenient-accept, envelope, elicitation — on the 0.2.x canonical
+bytes), the tree-op apply engine (+ `can_apply` dry-run), the pre-emit validator
+(canonical `FUARAN###` codes), dataframe evaluation (`Binding.Transform`), the
+server-side emission tier (parity-locked server-HTML renderer, corpus-certified
+deterministic markdown renderer, hydration-ready emission, islands partial
+hydration, golden-certified chart lowering), and the **browser-native `wasm32`
+client** — a `ClientSession` (decode → render → drive) over a minimal C-ABI shim +
+a thin hand-written JS loader, no `wasm-bindgen`.
 
 **Framing — load-bearing, do not regress.** The emission surface is the **canonical
 JSON wire format, for every host**. The language tiers are **human-developer
@@ -117,8 +118,8 @@ certifies against the shared corpus: every **node-round-trip** and **op-round-tr
 fixture re-encodes byte-identically, and every **reject** fixture surfaces the
 canonical error code + `$`-rooted path prefix (the harness locates
 `../wire-format-fixtures/` via `manifest.json` — the authoritative enumeration — and
-skips when absent). The lenient-accept, envelope, and elicitation families are later
-tiers, counted and skipped explicitly by the harness.
+skips when absent). The **lenient-accept**, **envelope**, and **elicitation**
+families certify the same way — the full corpus enumeration runs, none skipped.
 
 ## Interactivity — a client-side host, not only a headless one
 

@@ -126,9 +126,13 @@ The lowering is a byte-identical port of the F# reference (`Fuaran.UI.Charts.low
 a fixed pixel `viewBox`, a `{1,2,5}·10ⁿ` nice-tick rule, and round-half-up-to-2dp
 coordinate rounding make it deterministic (`R2`). It is **certified byte-for-byte**
 against the shared `wire-format-fixtures/chart-lowering/*` goldens by
-`tests/chart_lowering.rs`, and the render-path lowering is pinned by
-`tests/render.rs`. `Bar` and `Line` lower today; another `ChartKind` yields an
-empty (but titled) drawing region, never a silent blank.
+`tests/chart_lowering.rs` (every committed input/golden pair, discovered from
+the corpus), and the render-path lowering is pinned by `tests/render.rs`.
+Lowered arms: `Bar` (grouped + stacked), `Line`, `Area` (overlaid + stacked),
+`Scatter` (linear numeric x-scale, point marks), and `Pie` (polar,
+cubic-approximated wedges); every data-bearing shape carries a derivation-based
+`markId` (emitted as `data-fuaran-mark` in the SVG) for object constancy.
+`Heatmap` yields an empty (but titled) drawing region, never a silent blank.
 
 ## Layout
 
