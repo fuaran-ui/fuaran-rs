@@ -4,9 +4,11 @@
 //! by the language-neutral `wire-format-fixtures/chart-lowering/*` fixture family:
 //! each case ships an `<name>.input.json` (the ChartSpec + data rows, the neutral
 //! cross-host contract) and an `<name>.expected.json` (the canonical Drawing wire
-//! JSON the lowering must produce). This suite asserts the Rust lowering
-//! reproduces each F# golden byte-for-byte — the same R2-determinism discipline
-//! the F#, TypeScript, and Python hosts certify against.
+//! JSON the lowering must produce). This suite discovers and certifies EVERY
+//! committed pair — a golden added to the corpus without a matching arm here
+//! fails loudly, never silently narrows coverage — asserting the Rust lowering
+//! reproduces each F# golden byte-for-byte (the same R2-determinism discipline
+//! the F#, TypeScript, and Python hosts certify against).
 //!
 //! The corpus is a sibling checkout; the suite skips (never fails) when it is
 //! absent, keeping the crate standalone-testable.
@@ -50,6 +52,31 @@ fn str_field<'a>(obj: &'a JVal, key: &str) -> &'a str {
     }
 }
 
+/// Every committed `<name>.input.json` / `<name>.expected.json` pair, sorted.
+/// A dangling half (an input with no golden, or vice versa) is a panic — the
+/// corpus is the authoritative enumeration and must be self-consistent.
+fn discover_cases(dir: &std::path::Path) -> Vec<String> {
+    let mut inputs: Vec<String> = Vec::new();
+    let mut expected: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(dir).expect("chart-lowering dir readable") {
+        let name = entry.expect("dir entry").file_name();
+        let name = name.to_string_lossy().to_string();
+        if let Some(stem) = name.strip_suffix(".input.json") {
+            inputs.push(stem.to_string());
+        } else if let Some(stem) = name.strip_suffix(".expected.json") {
+            expected.push(stem.to_string());
+        }
+    }
+    inputs.sort();
+    expected.sort();
+    assert_eq!(
+        inputs, expected,
+        "chart-lowering corpus has a dangling input/golden half"
+    );
+    assert!(!inputs.is_empty(), "chart-lowering corpus is empty");
+    inputs
+}
+
 /// Lower one fixture input to the canonical Drawing-node wire JSON, mirroring the
 /// reference harness: lower → wrap in a Drawing node id `chart-<name>` → encode.
 fn lowered_json(name: &str, input: &str) -> String {
@@ -66,6 +93,7 @@ fn lowered_json(name: &str, input: &str) -> String {
             .collect(),
         _ => panic!("fixture missing yFields array"),
     };
+    let stacked = matches!(spec.field("stacked"), Some(JVal::Bool(true)));
     let title: Option<TextSource> = match spec.field("title") {
         Some(JVal::Str(t)) => Some(TextSource::Literal(t.clone())),
         _ => None,
@@ -78,7 +106,7 @@ fn lowered_json(name: &str, input: &str) -> String {
         _ => panic!("fixture missing data array"),
     };
 
-    let drawing = lower_chart(kind, &x_field, &y_fields, title.as_ref(), &rows);
+    let drawing = lower_chart(kind, stacked, &x_field, &y_fields, title.as_ref(), &rows);
     let node = Node {
         id: format!("chart-{name}"),
         kind: NodeKind::Drawing(drawing),
@@ -89,8 +117,6 @@ fn lowered_json(name: &str, input: &str) -> String {
     fuaran_rs::wire::encode_node(&node)
 }
 
-const CASES: [&str; 4] = ["bar-single", "bar-multi", "line-single", "line-multi"];
-
 #[test]
 fn every_case_lowers_byte_identically_to_its_committed_golden() {
     let Some(corpus) = find_corpus() else {
@@ -98,12 +124,12 @@ fn every_case_lowers_byte_identically_to_its_committed_golden() {
         return;
     };
     let dir = corpus.join("chart-lowering");
-    for name in CASES {
+    for name in discover_cases(&dir) {
         let input = std::fs::read_to_string(dir.join(format!("{name}.input.json")))
             .unwrap_or_else(|e| panic!("{name}: input missing: {e}"));
         let expected = std::fs::read_to_string(dir.join(format!("{name}.expected.json")))
             .unwrap_or_else(|e| panic!("{name}: golden missing: {e}"));
-        let produced = lowered_json(name, input.trim());
+        let produced = lowered_json(&name, input.trim());
         assert_eq!(
             produced,
             expected.trim(),
@@ -118,12 +144,12 @@ fn lowering_is_deterministic() {
         return;
     };
     let dir = corpus.join("chart-lowering");
-    for name in CASES {
+    for name in discover_cases(&dir) {
         let Ok(input) = std::fs::read_to_string(dir.join(format!("{name}.input.json"))) else {
             continue;
         };
-        let a = lowered_json(name, input.trim());
-        let b = lowered_json(name, input.trim());
+        let a = lowered_json(&name, input.trim());
+        let b = lowered_json(&name, input.trim());
         assert_eq!(a, b, "{name}: non-deterministic");
     }
 }

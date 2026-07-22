@@ -102,6 +102,12 @@ fn static_value(v: &StaticValue) -> String {
         StaticValue::StringList(items) => arr(items.iter().map(|x| s(x)).collect()),
         StaticValue::FloatSeq(items) => arr(items.iter().map(|&x| num(x)).collect()),
         StaticValue::Markers(items) => arr(items.iter().map(map_marker).collect()),
+        // The Range pair rides as the bare `{max, min}` object (Phase 423
+        // shape, kept at 0.2.0) — the `Static` envelope is stripped at the
+        // Range value position itself (see `form_field_kind`).
+        StaticValue::FloatPair(min, max) => {
+            obj(vec![field("max", num(*max)), field("min", num(*min))])
+        }
     }
 }
 
@@ -249,6 +255,18 @@ fn col_expr(e: &ColExpr) -> String {
                 field("args", arr(args.iter().map(col_expr).collect())),
             ],
         ),
+        ColExpr::InList { subject, items } => case_obj(
+            "in",
+            vec![
+                field("expr", col_expr(subject)),
+                field("items", arr(items.iter().map(col_expr).collect())),
+            ],
+        ),
+        ColExpr::InParam { subject, name } => case_obj(
+            "in",
+            vec![field("expr", col_expr(subject)), field("param", s(name))],
+        ),
+        ColExpr::IsNull { expr } => case_obj("isNull", vec![field("expr", col_expr(expr))]),
     }
 }
 
@@ -379,11 +397,11 @@ fn flush_trigger(t: &LocalFlushTrigger) -> String {
 fn binding(b: &Binding) -> String {
     match b {
         Binding::Static { value } => case_obj("Static", vec![field("value", static_value(value))]),
+        // 0.2.0 — the no-information `accessor` closure sentinel is OFF the
+        // wire (no decoder ever read it); a decoded Query synthesises the
+        // identity projection.
         Binding::Query { name, depends_on } => {
-            let mut fields = vec![
-                field("accessor", CLOSURE.to_string()),
-                field("name", s(name)),
-            ];
+            let mut fields = vec![field("name", s(name))];
             if let Some(deps) = depends_on
                 && !deps.is_empty()
             {
@@ -391,14 +409,38 @@ fn binding(b: &Binding) -> String {
             }
             case_obj("Query", fields)
         }
-        Binding::Filter { name } => case_obj("Filter", vec![field("name", s(name))]),
-        Binding::Selection { node_id } => case_obj(
-            "Selection",
-            vec![
-                field("accessor", CLOSURE.to_string()),
-                field("nodeId", s(node_id)),
-            ],
-        ),
+        Binding::Filter {
+            name,
+            default_value,
+        } => {
+            // 0.2.0 — `defaultValue` rides the wire when present (typed via
+            // the slot's static encoding); omitted when None so the minimal
+            // form stays byte-identical.
+            let mut fields = vec![];
+            if let Some(d) = default_value {
+                fields.push(field("defaultValue", static_value(d)));
+            }
+            fields.push(field("name", s(name)));
+            case_obj("Filter", fields)
+        }
+        Binding::Selection {
+            node_id,
+            default_value,
+            field: sel_field,
+        } => {
+            // 0.2.9 — `defaultValue` (the Filter.defaultValue convention);
+            // 0.2.10 — `field` (the declarative row-field projection). The
+            // accessor closure is off the wire (0.2.0 strand 5).
+            let mut fields = vec![];
+            if let Some(d) = default_value {
+                fields.push(field("defaultValue", static_value(d)));
+            }
+            if let Some(f) = sel_field {
+                fields.push(field("field", s(f)));
+            }
+            fields.push(field("nodeId", s(node_id)));
+            case_obj("Selection", fields)
+        }
         Binding::State { key, default_value } => case_obj(
             "State",
             vec![
@@ -487,7 +529,8 @@ fn binding(b: &Binding) -> String {
 
 fn action(a: &Action) -> String {
     match a {
-        Action::Dispatch => case_obj("Dispatch", vec![field("msg", CLOSURE.to_string())]),
+        // 0.2.0 — the `msg` sentinel is OFF the wire (pure token weight).
+        Action::Dispatch => case_obj("Dispatch", vec![]),
         Action::Call {
             endpoint,
             into,
@@ -562,7 +605,10 @@ fn action(a: &Action) -> String {
 
 fn text_source(t: &TextSource) -> String {
     match t {
-        TextSource::Literal(text) => case_obj("Literal", vec![field("text", s(text))]),
+        // 0.2.0 direction-flip: the bare JSON string IS the canonical Literal
+        // form; the `{"$type":"Literal","text":…}` envelope is decode-accepted
+        // and normalises down (§16).
+        TextSource::Literal(text) => s(text),
         TextSource::Bound(b) => case_obj("Bound", vec![field("binding", binding(b))]),
         TextSource::I18n { key, args } => case_obj(
             "I18n",
@@ -644,7 +690,7 @@ fn metric_spec(spec: &MetricSpec) -> String {
     // (WIRE_FORMAT.md §3.6); a default-styled Metric round-trips minimal.
     let mut fields = vec![
         field("label", text_source(&spec.label)),
-        field("source", binding(&spec.source)),
+        field("value", binding(&spec.value)),
     ];
     if spec.format != CellFormat::None {
         fields.push(field("format", cell_format(&spec.format)));
@@ -682,18 +728,42 @@ fn heading_spec(spec: &HeadingSpec) -> String {
 }
 
 fn label_value_row_spec(spec: &LabelValueRowSpec) -> String {
-    // Phase 460 — `format` omitted-when-default; `emphasis` is a behavioural
-    // bool (not the style DU) and is always emitted.
+    // Phase 460 — `format` omitted-when-default; the behavioural `emphasis`
+    // bool is omitted-when-false (0.2.2, aligning with Fact's identical flag).
     let mut fields = vec![
-        field("emphasis", boolean(spec.emphasis)),
         field("label", text_source(&spec.label)),
-        field("source", binding(&spec.source)),
+        field("value", binding(&spec.value)),
     ];
+    if spec.emphasis {
+        fields.push(field("emphasis", boolean(true)));
+    }
     if spec.format != CellFormat::None {
         fields.push(field("format", cell_format(&spec.format)));
     }
     if let Some(help) = &spec.help {
         fields.push(field("help", text_source(help)));
+    }
+    obj(fields)
+}
+
+fn fact_spec(spec: &FactSpec) -> String {
+    // The labeled TEXT fact. `emphasis` is the behavioural bool
+    // (omit-when-false); `tone` omit-when-default; `help` / `icon` optional.
+    let mut fields = vec![
+        field("label", text_source(&spec.label)),
+        field("value", text_source(&spec.value)),
+    ];
+    if spec.emphasis {
+        fields.push(field("emphasis", boolean(true)));
+    }
+    if spec.tone != ToneVariant::Default {
+        fields.push(field("tone", s(spec.tone.as_str())));
+    }
+    if let Some(help) = &spec.help {
+        fields.push(field("help", text_source(help)));
+    }
+    if let Some(icon) = &spec.icon {
+        fields.push(field("icon", s(icon)));
     }
     obj(fields)
 }
@@ -740,12 +810,15 @@ fn list_spec(spec: &ListSpec) -> String {
 }
 
 fn toast_spec(spec: &ToastSpec) -> String {
-    // Phase 460 — `tone` omitted-when-default.
+    // Phase 460 — `tone` omitted-when-default. 0.2.0 — `dismissable` is
+    // omitted-when-TRUE (the one inverted default in §3.6's table).
     let mut fields = vec![
-        field("dismissable", boolean(spec.dismissable)),
         field("message", text_source(&spec.message)),
         field("open", binding(&spec.open)),
     ];
+    if !spec.dismissable {
+        fields.push(field("dismissable", boolean(false)));
+    }
     if spec.tone != ToneVariant::Default {
         fields.push(field("tone", s(spec.tone.as_str())));
     }
@@ -781,10 +854,11 @@ fn skeleton_spec(spec: &SkeletonSpec) -> String {
 }
 
 fn callout_spec(spec: &CalloutSpec) -> String {
-    let mut fields = vec![
-        field("body", text_source(&spec.body)),
-        field("dismissable", boolean(spec.dismissable)),
-    ];
+    // 0.2.0 — `dismissable` omitted-when-default (false).
+    let mut fields = vec![field("body", text_source(&spec.body))];
+    if spec.dismissable {
+        fields.push(field("dismissable", boolean(true)));
+    }
     if spec.tone != ToneVariant::Default {
         fields.push(field("tone", s(spec.tone.as_str())));
     }
@@ -798,10 +872,11 @@ fn callout_spec(spec: &CalloutSpec) -> String {
 }
 
 fn progress_spec(spec: &ProgressSpec) -> String {
-    let mut fields = vec![
-        field("fraction", binding(&spec.fraction)),
-        field("indeterminate", boolean(spec.indeterminate)),
-    ];
+    // 0.2.0 — `indeterminate` omitted-when-default (false).
+    let mut fields = vec![field("fraction", binding(&spec.fraction))];
+    if spec.indeterminate {
+        fields.push(field("indeterminate", boolean(true)));
+    }
     if spec.tone != ToneVariant::Default {
         fields.push(field("tone", s(spec.tone.as_str())));
     }
@@ -855,6 +930,10 @@ fn draw_style(style: &DrawStyle) -> String {
     }
     if let Some(ff) = &style.font_family {
         fields.push(field("fontFamily", s(ff)));
+    }
+    // Phase 642 — keyed mark identity; omitted-when-None (rule 4).
+    if let Some(m) = &style.mark_id {
+        fields.push(field("markId", s(m)));
     }
     obj(fields)
 }
@@ -1017,21 +1096,96 @@ fn handler_field(name: &str, present: &Option<Closure>) -> Vec<Field> {
     }
 }
 
-fn form_field_kind(k: &FormFieldKind) -> String {
+/// Phase 596 — the auto-bind context for a control's `value` slot, mirroring
+/// the decoder's synthesis exactly. A `value` that is the context's exact
+/// auto-binding is OMITTED — `Filter(name, None)` on a chip (0.2.0),
+/// `State(field id, typed placeholder)` on a form field (0.2.1) — so the
+/// canonical minimal control carries no `value` key at all.
+#[derive(Clone, Copy)]
+enum ControlAutoBind<'a> {
+    FilterChip(&'a str),
+    FormFieldId(&'a str),
+}
+
+/// The typed auto-bind placeholders — must stay byte-identical to the decode
+/// side's `control_value_defaults`.
+mod control_value_defaults {
+    use super::*;
+
+    pub fn text() -> StaticValue {
+        StaticValue::Ast(JVal::Str(String::new()))
+    }
+    pub fn number() -> StaticValue {
+        StaticValue::Ast(JVal::Num(0.0))
+    }
+    pub fn checkbox() -> StaticValue {
+        StaticValue::Ast(JVal::Bool(false))
+    }
+    pub fn choice() -> StaticValue {
+        StaticValue::StringOpt(None)
+    }
+    pub fn range() -> StaticValue {
+        StaticValue::FloatPair(0.0, 0.0)
+    }
+    pub fn date() -> StaticValue {
+        StaticValue::Ast(JVal::Str(String::new()))
+    }
+}
+
+/// The `value` field for a control slot: omitted when it is exactly the
+/// context's auto-binding; any other binding emits.
+fn control_value_field(
+    auto_bind: ControlAutoBind<'_>,
+    placeholder: StaticValue,
+    value: &Binding,
+) -> Vec<Field> {
+    let is_auto = match (auto_bind, value) {
+        (
+            ControlAutoBind::FilterChip(n),
+            Binding::Filter {
+                name,
+                default_value: None,
+            },
+        ) => name == n,
+        (ControlAutoBind::FormFieldId(id), Binding::State { key, default_value }) => {
+            key == id && *default_value == placeholder
+        }
+        _ => false,
+    };
+    if is_auto {
+        vec![]
+    } else {
+        vec![field("value", binding(value))]
+    }
+}
+
+fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String {
     match k {
         FormFieldKind::Text { value, on_change } => {
             let mut fields = handler_field("onChange", on_change);
-            fields.push(field("value", binding(value)));
+            fields.extend(control_value_field(
+                auto_bind,
+                control_value_defaults::text(),
+                value,
+            ));
             case_obj("Text", fields)
         }
         FormFieldKind::Number { value, on_change } => {
             let mut fields = handler_field("onChange", on_change);
-            fields.push(field("value", binding(value)));
+            fields.extend(control_value_field(
+                auto_bind,
+                control_value_defaults::number(),
+                value,
+            ));
             case_obj("Number", fields)
         }
         FormFieldKind::Checkbox { value, on_toggle } => {
             let mut fields = handler_field("onToggle", on_toggle);
-            fields.push(field("value", binding(value)));
+            fields.extend(control_value_field(
+                auto_bind,
+                control_value_defaults::checkbox(),
+                value,
+            ));
             case_obj("Checkbox", fields)
         }
         FormFieldKind::Choice {
@@ -1041,8 +1195,55 @@ fn form_field_kind(k: &FormFieldKind) -> String {
         } => {
             let mut fields = handler_field("onChange", on_change);
             fields.push(field("options", binding(options)));
-            fields.push(field("value", binding(value)));
+            fields.extend(control_value_field(
+                auto_bind,
+                control_value_defaults::choice(),
+                value,
+            ));
             case_obj("Choice", fields)
+        }
+        // 0.2.0 — the dual-thumb range (absorbed FilterKind.RangeFilter). The
+        // Static pair rides as the bare `{max, min}` object — no envelope.
+        FormFieldKind::Range {
+            value,
+            min,
+            max,
+            step,
+            on_change,
+        } => {
+            let mut fields = handler_field("onChange", on_change);
+            let is_auto = match (auto_bind, value) {
+                (
+                    ControlAutoBind::FilterChip(n),
+                    Binding::Filter {
+                        name,
+                        default_value: None,
+                    },
+                ) => name == n,
+                (ControlAutoBind::FormFieldId(id), Binding::State { key, default_value }) => {
+                    key == id && *default_value == control_value_defaults::range()
+                }
+                _ => false,
+            };
+            if !is_auto {
+                let rendered = match value {
+                    Binding::Static {
+                        value: StaticValue::FloatPair(a, b),
+                    } => obj(vec![field("max", num(*b)), field("min", num(*a))]),
+                    other => binding(other),
+                };
+                fields.push(field("value", rendered));
+            }
+            if let Some(min) = min {
+                fields.push(field("min", num(*min)));
+            }
+            if let Some(max) = max {
+                fields.push(field("max", num(*max)));
+            }
+            if let Some(step) = step {
+                fields.push(field("step", num(*step)));
+            }
+            case_obj("Range", fields)
         }
         FormFieldKind::RangedNumber {
             value,
@@ -1052,7 +1253,11 @@ fn form_field_kind(k: &FormFieldKind) -> String {
             on_change,
         } => {
             let mut fields = handler_field("onChange", on_change);
-            fields.push(field("value", binding(value)));
+            fields.extend(control_value_field(
+                auto_bind,
+                control_value_defaults::number(),
+                value,
+            ));
             if let Some(min) = min {
                 fields.push(field("min", num(*min)));
             }
@@ -1073,7 +1278,11 @@ fn form_field_kind(k: &FormFieldKind) -> String {
             let mut fields = handler_field("onChange", on_change);
             fields.push(field("options", binding(options)));
             fields.push(field("orientation", s(orientation.as_str())));
-            fields.push(field("value", binding(value)));
+            fields.extend(control_value_field(
+                auto_bind,
+                control_value_defaults::choice(),
+                value,
+            ));
             case_obj("SegmentedChoice", fields)
         }
         FormFieldKind::TextArea {
@@ -1083,7 +1292,11 @@ fn form_field_kind(k: &FormFieldKind) -> String {
         } => {
             let mut fields = handler_field("onChange", on_change);
             fields.push(field("rows", num(*rows as f64)));
-            fields.push(field("value", binding(value)));
+            fields.extend(control_value_field(
+                auto_bind,
+                control_value_defaults::text(),
+                value,
+            ));
             case_obj("TextArea", fields)
         }
         FormFieldKind::Date {
@@ -1095,7 +1308,11 @@ fn form_field_kind(k: &FormFieldKind) -> String {
             on_change,
         } => {
             let mut fields = handler_field("onChange", on_change);
-            fields.push(field("value", binding(value)));
+            fields.extend(control_value_field(
+                auto_bind,
+                control_value_defaults::date(),
+                value,
+            ));
             fields.push(field("variant", s(variant.as_str())));
             if let Some(min) = min {
                 fields.push(field("min", s(min)));
@@ -1114,7 +1331,10 @@ fn form_field_kind(k: &FormFieldKind) -> String {
 fn form_field(f: &FormField) -> String {
     let mut fields = vec![
         field("id", s(&f.id)),
-        field("kind", form_field_kind(&f.kind)),
+        field(
+            "kind",
+            form_field_kind(ControlAutoBind::FormFieldId(&f.id), &f.kind),
+        ),
         field("label", text_source(&f.label)),
         field("required", boolean(f.required)),
     ];
@@ -1136,53 +1356,15 @@ fn form_spec(spec: &FormSpec) -> String {
     obj(fields)
 }
 
-fn filter_kind(k: &FilterKind) -> String {
-    match k {
-        FilterKind::TextFilter { value, on_change } => {
-            let mut fields = handler_field("onChange", on_change);
-            fields.push(field("value", binding(value)));
-            case_obj("TextFilter", fields)
-        }
-        FilterKind::ChoiceFilter {
-            options,
-            value,
-            on_change,
-        } => {
-            let mut fields = handler_field("onChange", on_change);
-            fields.push(field("options", binding(options)));
-            fields.push(field("value", binding(value)));
-            case_obj("ChoiceFilter", fields)
-        }
-        FilterKind::RangeFilter {
-            min,
-            max,
-            on_change,
-        } => {
-            let mut fields = handler_field("onChange", on_change);
-            fields.push(field(
-                "value",
-                obj(vec![field("max", num(*max)), field("min", num(*min))]),
-            ));
-            case_obj("RangeFilter", fields)
-        }
-        FilterKind::SegmentedFilter {
-            options,
-            orientation,
-            value,
-            on_change,
-        } => {
-            let mut fields = handler_field("onChange", on_change);
-            fields.push(field("options", binding(options)));
-            fields.push(field("orientation", s(orientation.as_str())));
-            fields.push(field("value", binding(value)));
-            case_obj("SegmentedFilter", fields)
-        }
-    }
-}
-
 fn filter_spec(spec: &FilterSpec) -> String {
+    // 0.2.0 filters-unification: the chip's control is an ordinary
+    // FormFieldKind; a `value` that is exactly the chip's auto binding
+    // (`Filter(name)`) is omitted.
     obj(vec![
-        field("kind", filter_kind(&spec.kind)),
+        field(
+            "kind",
+            form_field_kind(ControlAutoBind::FilterChip(&spec.name), &spec.kind),
+        ),
         field("label", text_source(&spec.label)),
         field("name", s(&spec.name)),
     ])
@@ -1346,14 +1528,17 @@ fn static_rows(rows: &StaticRows) -> String {
 }
 
 fn grid_spec(spec: &GridSpec) -> String {
+    // 0.2.0 — `editable` omitted-when-default (false).
     let mut fields = vec![
         field(
             "columns",
             arr(spec.columns.iter().map(column_erased).collect()),
         ),
-        field("editable", boolean(spec.editable)),
         field("source", binding(&spec.source)),
     ];
+    if spec.editable {
+        fields.push(field("editable", boolean(true)));
+    }
     if spec.on_row_click.is_some() {
         fields.push(field("onRowClick", CLOSURE.to_string()));
     }
@@ -1465,11 +1650,15 @@ fn tab_header(h: &TabHeader) -> String {
 }
 
 fn tabs_spec(spec: &TabsSpec) -> String {
+    // 0.2.0 — `orientation` omitted-when-default (Horizontal),
+    // encoder-symmetric (unlike SegmentedChoice, which always emits it).
     let mut fields = vec![
         field("children", arr(spec.children.iter().map(node).collect())),
-        field("orientation", s(spec.orientation.as_str())),
         field("activeIndex", binding(&spec.active_index)),
     ];
+    if spec.orientation != Orientation::Horizontal {
+        fields.push(field("orientation", s(spec.orientation.as_str())));
+    }
     if spec.on_select.is_some() {
         fields.push(field("onSelect", CLOSURE.to_string()));
     }
@@ -1663,6 +1852,7 @@ fn node_kind(k: &NodeKind) -> String {
         NodeKind::Callout(spec) => case_obj_hoisted("Callout", callout_spec(spec)),
         NodeKind::Progress(spec) => case_obj_hoisted("Progress", progress_spec(spec)),
         NodeKind::Skeleton(spec) => case_obj_hoisted("Skeleton", skeleton_spec(spec)),
+        NodeKind::Fact(spec) => case_obj_hoisted("Fact", fact_spec(spec)),
         NodeKind::LabelValueRow(spec) => {
             case_obj_hoisted("LabelValueRow", label_value_row_spec(spec))
         }

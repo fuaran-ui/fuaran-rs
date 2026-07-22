@@ -34,16 +34,16 @@ use std::collections::{HashMap, HashSet};
 use crate::canonical::JVal;
 use crate::wire::{
     Action, Binding, BoxLayout, BoxRole, BoxSpec, CellFormat, CellKindErased, ChartSpec,
-    ColumnErased, DisclosureSpec, FilterKind, FilterSpec, FormField, FormFieldKind, FormSpec,
-    GridSpec, HeadingVariant, ImageVariant, MapSpec, MathDisplay, ModalSpec, Node, NodeKind,
-    Orientation, ScrollAreaSpec, ScrollOrientation, SelectOption, SelectSpec, StateBehaviour,
-    StaticRows, StaticValue, TabsSpec, TextSource, encode_node,
+    ColumnErased, DisclosureSpec, FilterSpec, FormField, FormFieldKind, FormSpec, GridSpec,
+    HeadingVariant, ImageVariant, MapSpec, MathDisplay, ModalSpec, Node, NodeKind, Orientation,
+    ScrollAreaSpec, ScrollOrientation, SelectOption, SelectSpec, StateBehaviour, StaticRows,
+    StaticValue, TabsSpec, TextSource, encode_node,
 };
 
 use super::bindings::{
     BindingSources, EM_DASH, NumberResolution, ResolvedRows, accessibility_attributes,
-    display_number, format_number, render_text, resolve_float_seq, resolve_number, resolve_options,
-    resolve_rows, try_bool, try_number, try_string,
+    display_number, format_number, render_text, resolve_float_pair, resolve_float_seq,
+    resolve_number, resolve_options, resolve_rows, try_bool, try_number, try_string,
 };
 use super::class_names::{node_class_name, tone_var};
 use super::html::{Attr, AttrVal, el, escape_attr, escape_text, text_el, void_el};
@@ -100,6 +100,7 @@ fn collect_fragments<'a>(acc: &mut HashMap<String, &'a Node>, node: &'a Node) {
         | NodeKind::Progress(_)
         | NodeKind::Skeleton(_)
         | NodeKind::LabelValueRow(_)
+        | NodeKind::Fact(_)
         | NodeKind::Link(_)
         | NodeKind::Image(_)
         | NodeKind::List(_)
@@ -327,7 +328,7 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node) -> String {
             &markdown_to_html(&render_text(ctx.sources, &spec.text)),
         ),
         NodeKind::Metric(spec) => {
-            let resolution = resolve_number(ctx.sources, &spec.source);
+            let resolution = resolve_number(ctx.sources, &spec.value);
             if matches!(resolution, NumberResolution::NotResolved)
                 && let Some(loading) = &node.state.on_loading
             {
@@ -496,10 +497,61 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node) -> String {
                 &format!("{label}{bar}{caveat}"),
             )
         }
+        NodeKind::Fact(spec) => {
+            // Server-side Fact mirrors the reference client tile (label /
+            // value+icon / help), toned + emphasised via class hooks.
+            let emphasis_suffix = if spec.emphasis {
+                " fuaran-fact-emphasis"
+            } else {
+                ""
+            };
+            let icon = spec
+                .icon
+                .as_ref()
+                .map(|i| text_el("span", &[("class", s("fuaran-fact-icon"))], i))
+                .unwrap_or_default();
+            let value = el(
+                "div",
+                &[("class", s("fuaran-fact-value"))],
+                &format!(
+                    "{icon}{}",
+                    text_el("span", &[], &render_text(ctx.sources, &spec.value))
+                ),
+            );
+            let help = spec
+                .help
+                .as_ref()
+                .map(|h| {
+                    text_el(
+                        "div",
+                        &[("class", s("fuaran-fact-help"))],
+                        &render_text(ctx.sources, h),
+                    )
+                })
+                .unwrap_or_default();
+            el(
+                "div",
+                &[(
+                    "class",
+                    s(format!(
+                        "fuaran-fact fuaran-fact-{}{emphasis_suffix}",
+                        tone_var(spec.tone)
+                    )),
+                )],
+                &format!(
+                    "{}{value}{help}",
+                    text_el(
+                        "div",
+                        &[("class", s("fuaran-fact-label"))],
+                        &render_text(ctx.sources, &spec.label),
+                    )
+                ),
+            )
+        }
         NodeKind::Sparkline(spec) => render_sparkline(ctx, spec),
         NodeKind::Drawing(spec) => render_drawing(ctx, spec),
         NodeKind::LabelValueRow(spec) => {
-            let resolution = resolve_number(ctx.sources, &spec.source);
+            let resolution = resolve_number(ctx.sources, &spec.value);
             if matches!(resolution, NumberResolution::NotResolved)
                 && let Some(loading) = &node.state.on_loading
             {
@@ -1292,6 +1344,13 @@ fn draw_style_attrs(style: &crate::wire::DrawStyle, default_fill_none: bool) -> 
         };
         out.push_str(&format!(" font-weight=\"{weight}\""));
     }
+    // Phase 642 — keyed mark identity: a data-bearing shape's derivation-based
+    // id rides into the emitted SVG so marks are addressable (object
+    // constancy) — last in the fixed attribute order, matching the reference
+    // renderer.
+    if let Some(m) = &style.mark_id {
+        out.push_str(&format!(" data-fuaran-mark=\"{}\"", escape_attr(m)));
+    }
     out
 }
 
@@ -1593,6 +1652,40 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
                 ],
             )
         }
+        FormFieldKind::Range {
+            value, min, max, ..
+        } => {
+            // 0.2.0 dual-thumb range: two bounded number inputs over the
+            // resolved (min, max) pair.
+            let (lo, hi) = resolve_float_pair(ctx.sources, value).unwrap_or((0.0, 0.0));
+            let bound_attrs = |v: f64, class: &'static str| {
+                let mut attrs: Vec<Attr> = vec![
+                    ("type", s("number")),
+                    ("class", s(class)),
+                    ("value", s(display_number(v))),
+                ];
+                if let Some(min) = min {
+                    attrs.push(("min", s(display_number(*min))));
+                }
+                if let Some(max) = max {
+                    attrs.push(("max", s(display_number(*max))));
+                }
+                attrs
+            };
+            el(
+                "span",
+                &[
+                    ("class", s("fuaran-form-range")),
+                    ("id", s(field.id.clone())),
+                ],
+                &format!(
+                    "{}{}{}",
+                    void_el("input", &bound_attrs(lo, "fuaran-form-range-min")),
+                    text_el("span", &[("class", s("fuaran-form-range-sep"))], "–"),
+                    void_el("input", &bound_attrs(hi, "fuaran-form-range-max"))
+                ),
+            )
+        }
         FormFieldKind::RangedNumber {
             value,
             min,
@@ -1820,9 +1913,13 @@ fn render_filters(ctx: &Ctx<'_>, specs: &[FilterSpec]) -> String {
 }
 
 fn render_filter(ctx: &Ctx<'_>, spec: &FilterSpec) -> String {
+    // 0.2.0 filters-unification: the chip's control is an ordinary
+    // FormFieldKind. The four legacy chip shapes keep their `fuaran-filter-*`
+    // class hooks; any other control renders through the shared form-control
+    // path keyed by the chip name.
     let label_text = render_text(ctx.sources, &spec.label);
     let control = match &spec.kind {
-        FilterKind::TextFilter { value, .. } => {
+        FormFieldKind::Text { value, .. } => {
             let current = try_string(ctx.sources, value).unwrap_or_default();
             void_el(
                 "input",
@@ -1834,7 +1931,7 @@ fn render_filter(ctx: &Ctx<'_>, spec: &FilterSpec) -> String {
                 ],
             )
         }
-        FilterKind::ChoiceFilter { options, .. } => {
+        FormFieldKind::Choice { options, .. } => {
             let opts = resolve_options(ctx.sources, options);
             let options_html = format!(
                 "{}{}",
@@ -1854,36 +1951,49 @@ fn render_filter(ctx: &Ctx<'_>, spec: &FilterSpec) -> String {
                 &options_html,
             )
         }
-        FilterKind::RangeFilter { min, max, .. } => el(
-            "span",
-            &[("class", s("fuaran-filter-range"))],
-            &format!(
-                "{}{}{}",
-                void_el(
-                    "input",
-                    &[
-                        ("type", s("number")),
-                        ("class", s("fuaran-filter-range-min")),
-                        ("value", s(display_number(*min))),
-                    ],
+        FormFieldKind::Range { value, .. } => {
+            let (min, max) = resolve_float_pair(ctx.sources, value).unwrap_or((0.0, 0.0));
+            el(
+                "span",
+                &[("class", s("fuaran-filter-range"))],
+                &format!(
+                    "{}{}{}",
+                    void_el(
+                        "input",
+                        &[
+                            ("type", s("number")),
+                            ("class", s("fuaran-filter-range-min")),
+                            ("value", s(display_number(min))),
+                        ],
+                    ),
+                    text_el("span", &[("class", s("fuaran-filter-range-sep"))], "–"),
+                    void_el(
+                        "input",
+                        &[
+                            ("type", s("number")),
+                            ("class", s("fuaran-filter-range-max")),
+                            ("value", s(display_number(max))),
+                        ],
+                    )
                 ),
-                text_el("span", &[("class", s("fuaran-filter-range-sep"))], "–"),
-                void_el(
-                    "input",
-                    &[
-                        ("type", s("number")),
-                        ("class", s("fuaran-filter-range-max")),
-                        ("value", s(display_number(*max))),
-                    ],
-                )
-            ),
-        ),
-        FilterKind::SegmentedFilter {
+            )
+        }
+        FormFieldKind::SegmentedChoice {
             options,
             orientation,
             value,
             ..
         } => render_segmented_choice(ctx, &spec.name, options, value, *orientation),
+        other => {
+            let synthetic = FormField {
+                id: spec.name.clone(),
+                kind: other.clone(),
+                label: spec.label.clone(),
+                required: false,
+                help: None,
+            };
+            render_form_control(ctx, &synthetic)
+        }
     };
     el(
         "label",
@@ -2118,7 +2228,8 @@ fn render_static_table(ctx: &Ctx<'_>, spec: &StaticRows) -> String {
 // the WASM browser client renders through THIS renderer, lowering here brings the
 // client to parity with the Chart-as-data demo — the reason this dual-role host
 // lowers where the headless fuaran-go host takes the require-pre-lowered posture.
-// Only Bar / Line lower today; an un-lowered kind yields an empty (but titled)
+// Lowered arms: Bar (grouped + stacked), Line, Area (overlaid + stacked),
+// Scatter, Pie; an un-lowered kind (Heatmap) yields an empty (but titled)
 // drawing region, never a silent blank. When the source binding has not yet
 // resolved to rows, the on-loading placeholder (or an empty drawing) shows — the
 // same not-resolved discipline every data-bound kind follows.
@@ -2143,6 +2254,7 @@ fn render_chart(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &ChartSpec) -> Stri
         .collect();
     let drawing = super::chart_lowering::lower_chart(
         spec.kind,
+        spec.stacked,
         &spec.x_field,
         &spec.y_fields,
         spec.title.as_ref(),

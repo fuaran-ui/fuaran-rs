@@ -22,7 +22,7 @@ fn sample_tree() -> Node {
             {"id":"h1","kind":{"$type":"Heading","level":1,"text":{"$type":"Literal","text":"Title"},"variant":"Standard"}},
             {"id":"md","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"Body"}}},
             {"id":"inner","kind":{"$type":"Box","children":[
-                {"id":"m1","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"Revenue"},"source":{"$type":"Static","value":42},"tone":"Default","weight":"Standard"}}
+                {"id":"m1","kind":{"$type":"Metric","label":"Revenue","value":{"$type":"Static","value":42}}}
             ],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}
         ],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}"#,
     )
@@ -161,7 +161,7 @@ fn update_prop_closure_leaf_is_not_supported() {
 #[test]
 fn replace_binding_known_slot() {
     let rb = op(
-        r#"{"$type":"ReplaceBinding","binding":{"$type":"State","defaultValue":0,"key":"revenue"},"slot":"Source","target":"m1"}"#,
+        r#"{"$type":"ReplaceBinding","binding":{"$type":"State","defaultValue":0,"key":"revenue"},"slot":"Value","target":"m1"}"#,
     );
     let out = apply(&sample_tree(), &rb).expect("applies");
     assert!(encode_node(&out.new_tree).contains("\"key\":\"revenue\""));

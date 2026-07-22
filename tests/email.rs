@@ -7,7 +7,7 @@ use fuaran_rs::wire::decode_node;
 const REPORT: &str = r#"{"id":"report","kind":{"$type":"Box","children":[
     {"id":"h","kind":{"$type":"Heading","level":1,"text":{"$type":"Literal","text":"Weekly Report"},"variant":"Standard"}},
     {"id":"intro","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"Revenue is up."}}},
-    {"id":"rev","kind":{"$type":"Metric","emphasis":"Loud","format":{"$type":"Currency","code":"GBP"},"label":{"$type":"Literal","text":"Revenue"},"source":{"$type":"State","defaultValue":0,"key":"rev"},"tone":"Brand","weight":"Standard"}},
+    {"id":"rev","kind":{"$type":"Metric","emphasis":"Loud","format":{"$type":"Currency","code":"GBP"},"label":{"$type":"Literal","text":"Revenue"},"value":{"$type":"State","defaultValue":0,"key":"rev"},"tone":"Brand","weight":"Standard"}},
     {"id":"note","kind":{"$type":"Callout","body":{"$type":"Literal","text":"Ends Friday."},"dismissable":false,"heading":{"$type":"Literal","text":"Deadline"},"tone":"Warning"}},
     {"id":"todo","kind":{"$type":"List","items":[{"$type":"Literal","text":"Ship it"},{"$type":"Literal","text":"Tell the team"}],"ordered":false}},
     {"id":"cta","kind":{"$type":"Button","label":{"$type":"Literal","text":"Open dashboard"},"onClick":{"$type":"Dispatch","msg":"<closure>"},"variant":"Primary"}}

@@ -13,8 +13,8 @@ use fuaran_rs::wire::{NodeCategory, ToneVariant, decode_node};
 // State-bound, `margin` Success-toned + Static.
 const TREE: &str = r#"{"id":"dash","kind":{"$type":"Box","children":[
     {"id":"title","kind":{"$type":"Heading","level":1,"text":{"$type":"Literal","text":"Q3 Revenue"},"variant":"Standard"}},
-    {"id":"rev","kind":{"$type":"Metric","emphasis":"Loud","format":{"$type":"Currency","code":"GBP"},"label":{"$type":"Literal","text":"Revenue"},"source":{"$type":"State","defaultValue":0,"key":"revenue"},"tone":"Brand","weight":"Standard"},"style":{"emphasis":"Loud","tone":"Brand","weight":"Standard"}},
-    {"id":"margin","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"Margin"},"source":{"$type":"Static","value":0.3},"tone":"Success","weight":"Standard"},"style":{"emphasis":"Normal","tone":"Success","weight":"Standard"}}
+    {"id":"rev","kind":{"$type":"Metric","emphasis":"Loud","format":{"$type":"Currency","code":"GBP"},"label":{"$type":"Literal","text":"Revenue"},"value":{"$type":"State","defaultValue":0,"key":"revenue"},"tone":"Brand","weight":"Standard"},"style":{"emphasis":"Loud","tone":"Brand","weight":"Standard"}},
+    {"id":"margin","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"Margin"},"value":{"$type":"Static","value":0.3},"tone":"Success","weight":"Standard"},"style":{"emphasis":"Normal","tone":"Success","weight":"Standard"}}
 ],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}"#;
 
 fn tree() -> fuaran_rs::wire::Node {

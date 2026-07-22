@@ -19,13 +19,26 @@
 //! so the output depends only on the `ChartSpec` + data — never on enumeration
 //! order or platform float printing. The F# output is the golden; the shared
 //! `wire-format-fixtures/chart-lowering/*` corpus pins this port byte-identical
-//! to it (see `tests/chart_lowering.rs`). Only `Bar` and `Line` lower; any other
-//! `ChartKind` produces an empty drawing (its rule lands with its own tier).
+//! to it (see `tests/chart_lowering.rs`).
+//!
+//! **Lowered arms:** `Bar` (grouped + stacked), `Line`, `Area` (overlaid +
+//! stacked), `Scatter` (linear numeric x-scale, point marks), `Pie` (polar,
+//! cubic-approximated wedges — the donut variant is deferred with the
+//! reference). `Heatmap` produces an empty drawing (its rule lands with its
+//! own tier). `stacked` on a kind where stacking is meaningless (`Line` /
+//! `Scatter` / `Pie`) is ignored — the flag only changes `Bar` / `Area`
+//! geometry.
+//!
+//! **Keyed mark identity (Phase 642).** Every data-bearing shape's style is
+//! stamped with a derivation-based `markId` — `series-field|category-key` on a
+//! per-datum mark, the series field alone on a series-level mark (Line/Area) —
+//! stable under row reorder and data refresh (object constancy). Chrome (axes,
+//! gridlines, labels, legend) deliberately stays unstamped.
 
 use crate::canonical::format_number;
 use crate::wire::{
-    Binding, ChartKind, DrawPoint, DrawStyle, DrawingSpec, Emphasis, Shape, StaticValue,
-    TextAnchor, TextSource, ViewBox,
+    Binding, ChartKind, CurveCommand, DrawPoint, DrawStyle, DrawingSpec, Emphasis, Shape,
+    StaticValue, TextAnchor, TextSource, ViewBox,
 };
 
 // ─── Layout constants (the fixed canonical drawing space) ────────────────────
@@ -63,6 +76,11 @@ const INK: &str = "currentColor";
 const AXIS_OPACITY: f64 = 0.8;
 const GRID_OPACITY: f64 = 0.12;
 const LABEL_OPACITY: f64 = 0.66;
+
+/// A translucent categorical fill (Phase 637 — area bands). The gridlines stay
+/// legible through the band; the series' full-strength Polyline edge on top
+/// carries the categorical colour at full contrast.
+const AREA_FILL_OPACITY: f64 = 0.35;
 
 /// The chart's own font stack — carried in the wire, so a lowered chart is
 /// self-contained + legible on every host without host CSS.
@@ -167,6 +185,14 @@ fn style_stroke(stroke: &str, width: f64) -> DrawStyle {
     }
 }
 
+fn style_fill_opacity(fill: &str, opacity: f64) -> DrawStyle {
+    DrawStyle {
+        fill: Some(static_str(fill)),
+        opacity: Some(static_num(opacity)),
+        ..DrawStyle::default()
+    }
+}
+
 /// A surface-relative structural stroke: `currentColor` at a per-role opacity,
 /// so axis + gridlines ink from the surface's own text colour.
 fn style_stroke_ink(opacity: f64, width: f64) -> DrawStyle {
@@ -175,6 +201,25 @@ fn style_stroke_ink(opacity: f64, width: f64) -> DrawStyle {
         stroke_width: Some(static_num(width)),
         opacity: Some(static_num(opacity)),
         ..DrawStyle::default()
+    }
+}
+
+/// Phase 642 — stamp a derivation-based mark identity onto a data-bearing
+/// shape's style: `series-field|category-key`, stable under row reorder and
+/// data refresh (object constancy).
+fn with_mark(series_field: &str, category_key: &str, style: DrawStyle) -> DrawStyle {
+    DrawStyle {
+        mark_id: Some(format!("{series_field}|{category_key}")),
+        ..style
+    }
+}
+
+/// A series-level mark (one shape carries the whole series — Line/Area): the
+/// identity is the series field alone.
+fn with_series_mark(series_field: &str, style: DrawStyle) -> DrawStyle {
+    DrawStyle {
+        mark_id: Some(series_field.to_string()),
+        ..style
     }
 }
 
@@ -196,17 +241,21 @@ fn text_style(
         font_family: Some(CHART_FONT.to_string()),
         stroke: None,
         stroke_width: None,
+        mark_id: None,
     }
 }
 
 // ─── The lowering ─────────────────────────────────────────────────────────────
 
-/// One resolved data row: the x-axis category label + one numeric value per
+/// One resolved data row: the x-axis category label, the x value read
+/// NUMERICALLY (the Scatter arm's linear x-scale), and one numeric value per
 /// `y_fields` series (in `y_fields` order). The caller projects the resolved
-/// rows into this shape (a numeric slot missing / non-numeric reads `0.0`, the
-/// reference `numericOf` behaviour).
+/// rows into this shape (a numeric slot missing / non-numeric / non-finite
+/// reads `0.0`, the reference `numericOf` behaviour with the Phase 640
+/// non-finite guard).
 pub struct LowerRow {
     pub category: String,
+    pub x_value: f64,
     pub values: Vec<f64>,
 }
 
@@ -218,10 +267,14 @@ fn capitalise(sr: &str) -> String {
     }
 }
 
-/// Lower a resolved chart to a canonical [`DrawingSpec`]. Only `Bar` and `Line`
-/// are lowered; any other `kind` produces an empty drawing.
+/// Lower a resolved chart to a canonical [`DrawingSpec`]. Lowered arms: `Bar`
+/// (grouped + stacked), `Line`, `Area` (overlaid + stacked), `Scatter`, `Pie`;
+/// `Heatmap` produces an empty drawing. `stacked` is honoured on `Bar` /
+/// `Area` only.
+#[allow(clippy::too_many_lines)]
 pub fn lower_chart(
     kind: ChartKind,
+    stacked: bool,
     x_field: &str,
     y_fields: &[String],
     title: Option<&TextSource>,
@@ -239,7 +292,29 @@ pub fn lower_chart(
         })
         .collect();
 
-    let all_values: Vec<f64> = series.iter().flatten().copied().collect();
+    // Stacking applies to Bar + Area only (Phase 637). Values stack as-is by
+    // plain cumulative sum per category — deterministic and total; a negative
+    // value simply lowers the running sum.
+    let stacked = stacked && matches!(kind, ChartKind::Bar | ChartKind::Area);
+
+    // Per-category running sums across the series, INCLUDING the leading 0
+    // baseline: `cums_for(i)` has length m+1.
+    let cums_for = |i: usize| -> Vec<f64> {
+        let mut acc = 0.0;
+        let mut out = Vec::with_capacity(m + 1);
+        out.push(0.0);
+        for s in &series {
+            acc += s[i];
+            out.push(acc);
+        }
+        out
+    };
+
+    let all_values: Vec<f64> = if stacked {
+        (0..n).flat_map(&cums_for).collect()
+    } else {
+        series.iter().flatten().copied().collect()
+    };
     let all_values = if all_values.is_empty() {
         vec![0.0]
     } else {
@@ -247,7 +322,9 @@ pub fn lower_chart(
     };
     let data_min = all_values.iter().copied().fold(f64::INFINITY, f64::min);
     let data_max = all_values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    // Bars + lines share a zero-anchored domain — deterministic + honest for bars.
+    // Bars + lines share a zero-anchored domain — deterministic + honest for
+    // bars. Stacked domains come from the cumulative partial sums, so the axis
+    // covers the stack totals, never a single series' range.
     let (nice_lo, nice_hi, ticks) = nice_domain(data_min.min(0.0), data_max.max(0.0));
 
     let y_scale = |v: f64| -> f64 { r2(PLOT_Y1 - (v - nice_lo) / (nice_hi - nice_lo) * PLOT_H) };
@@ -255,7 +332,183 @@ pub fn lower_chart(
     let band_w = if n > 0 { PLOT_W / n as f64 } else { PLOT_W };
     let centre_x = |i: usize| -> f64 { r2(PLOT_X0 + band_w * (i as f64 + 0.5)) };
 
+    // ── Linear x-scale (Phase 636 — the Scatter arm's numeric x axis) ──
+    // Scatter reads the x-field NUMERICALLY and plots on a linear x-domain (the
+    // first non-band x-scale arm). The domain is NOT zero-anchored — a
+    // scatter's x range carries no baseline semantics (the y domain stays
+    // zero-anchored with the other arms, deliberately: one shared y-domain
+    // rule).
+    let is_scatter = matches!(kind, ChartKind::Scatter);
+    let x_values: Vec<f64> = if is_scatter {
+        rows.iter().map(|r| r.x_value).collect()
+    } else {
+        vec![]
+    };
+    let (x_nice_lo, x_nice_hi, x_ticks) = if is_scatter {
+        if x_values.is_empty() {
+            nice_domain(0.0, 1.0)
+        } else {
+            let lo = x_values.iter().copied().fold(f64::INFINITY, f64::min);
+            let hi = x_values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            nice_domain(lo, hi)
+        }
+    } else {
+        (0.0, 1.0, vec![])
+    };
+    let x_scale =
+        |v: f64| -> f64 { r2(PLOT_X0 + (v - x_nice_lo) / (x_nice_hi - x_nice_lo) * PLOT_W) };
+
+    let tick_size = 13.0;
+    let title_size = 16.0;
+
     let mut shapes: Vec<Shape> = Vec::new();
+
+    // ── Visible title (a Label — bigger + emphasised) ──
+    let push_title = |shapes: &mut Vec<Shape>| {
+        if let Some(t) = title {
+            shapes.push(Shape::Label {
+                x: r2(PLOT_X0),
+                y: 22.0,
+                text: t.clone(),
+                style: text_style(None, TextAnchor::Start, title_size, Emphasis::Loud),
+            });
+        }
+    };
+
+    // ── Pie (Phase 638) — the polar arm: no cartesian chrome ──
+    //
+    // Bounded v1: exactly ONE series (multi-series pie is a grounded-validation
+    // refusal upstream, never a silent first-series truncation) and
+    // non-negative values (any negative refuses the geometry — a mixed-sign
+    // pie has no honest reading). Zero-value categories draw no wedge but keep
+    // their legend row. Wedges start at 12 o'clock and sweep clockwise; arcs
+    // are the standard <=90-degree-segment cubic-Bezier approximation (the
+    // closed `CurveCommand` vocabulary has no arc case, deliberately). A lone
+    // 100% category degenerates to a `Circle`. Category share reads in the
+    // legend ("name (NN%)") — outside labels with leader lines are a later
+    // variant.
+    if matches!(kind, ChartKind::Pie) {
+        let values: &[f64] = if m == 1 { &series[0] } else { &[] };
+        let refused = m != 1 || values.iter().any(|&v| v < 0.0);
+        let total: f64 = values.iter().sum();
+        if !refused && total > 0.0 {
+            let cx = r2((PLOT_X0 + PLOT_X1) / 2.0);
+            let cy = r2((PLOT_Y0 + PLOT_Y1) / 2.0);
+            let radius = 130.0;
+
+            let pt = |a: f64| -> DrawPoint {
+                DrawPoint {
+                    x: r2(cx + radius * a.cos()),
+                    y: r2(cy + radius * a.sin()),
+                }
+            };
+
+            let arc_cubics = |a0: f64, a1: f64| -> Vec<CurveCommand> {
+                let segments =
+                    (((a1 - a0) / (std::f64::consts::PI / 2.0) - 1e-9).ceil() as i64).max(1);
+                (0..segments)
+                    .map(|s| {
+                        let t0 = a0 + (a1 - a0) * s as f64 / segments as f64;
+                        let t1 = a0 + (a1 - a0) * (s + 1) as f64 / segments as f64;
+                        let k = 4.0 / 3.0 * ((t1 - t0) / 4.0).tan();
+                        let c1 = DrawPoint {
+                            x: r2(cx + radius * (t0.cos() - k * t0.sin())),
+                            y: r2(cy + radius * (t0.sin() + k * t0.cos())),
+                        };
+                        let c2 = DrawPoint {
+                            x: r2(cx + radius * (t1.cos() + k * t1.sin())),
+                            y: r2(cy + radius * (t1.sin() - k * t1.cos())),
+                        };
+                        CurveCommand::CubicTo {
+                            control1: c1,
+                            control2: c2,
+                            to: pt(t1),
+                        }
+                    })
+                    .collect()
+            };
+
+            let fractions: Vec<f64> = values.iter().map(|v| v / total).collect();
+            let starts: Vec<f64> = {
+                let mut acc = 0.0;
+                let mut out = Vec::with_capacity(fractions.len() + 1);
+                out.push(0.0);
+                for f in &fractions {
+                    acc += f;
+                    out.push(acc);
+                }
+                out
+            };
+            let top = -std::f64::consts::PI / 2.0;
+
+            let yf = &y_fields[0];
+            for (i, &f) in fractions.iter().enumerate() {
+                if f > 0.0 {
+                    let mark_style = with_mark(yf, categories[i], style_fill(colour_for(i)));
+                    if f >= 1.0 - 1e-9 {
+                        shapes.push(Shape::Circle {
+                            cx,
+                            cy,
+                            r: radius,
+                            style: mark_style,
+                        });
+                    } else {
+                        let a0 = top + 2.0 * std::f64::consts::PI * starts[i];
+                        let a1 = top + 2.0 * std::f64::consts::PI * starts[i + 1];
+                        let mut cmds = vec![
+                            CurveCommand::MoveTo(DrawPoint { x: cx, y: cy }),
+                            CurveCommand::LineTo(pt(a0)),
+                        ];
+                        cmds.extend(arc_cubics(a0, a1));
+                        cmds.push(CurveCommand::Close);
+                        shapes.push(Shape::Curve {
+                            commands: cmds,
+                            style: mark_style,
+                        });
+                    }
+                }
+            }
+
+            // Vertical category legend on the right — categories take the
+            // palette roles a cartesian chart gives its series.
+            for i in 0..n {
+                let ly = 70.0 + 20.0 * i as f64;
+                shapes.push(Shape::Rectangle {
+                    x: r2(W - 168.0),
+                    y: r2(ly),
+                    width: 10.0,
+                    height: 10.0,
+                    corner_radius: Some(2.0),
+                    style: style_fill(colour_for(i)),
+                });
+                let pct = format_num((fractions[i] * 100.0 + 0.5).floor());
+                shapes.push(Shape::Label {
+                    x: r2(W - 153.0),
+                    y: r2(ly + 9.0),
+                    text: TextSource::Literal(format!("{} ({pct}%)", categories[i])),
+                    style: text_style(
+                        Some(LABEL_OPACITY),
+                        TextAnchor::Start,
+                        tick_size,
+                        Emphasis::Normal,
+                    ),
+                });
+            }
+        }
+        push_title(&mut shapes);
+        return DrawingSpec {
+            view_box: ViewBox {
+                min_x: 0.0,
+                min_y: 0.0,
+                width: W,
+                height: H,
+            },
+            shapes,
+            style: DrawStyle::default(),
+            title: title.cloned(),
+            description: None,
+        };
+    }
 
     // ── Gridlines (painter's order: first) ──
     for &t in &ticks {
@@ -285,9 +538,6 @@ pub fn lower_chart(
         style: style_stroke_ink(AXIS_OPACITY, 1.0),
     });
 
-    let tick_size = 13.0;
-    let title_size = 16.0;
-
     // ── y-axis tick labels — right-anchored (End) ──
     for &t in &ticks {
         shapes.push(Shape::Label {
@@ -303,19 +553,36 @@ pub fn lower_chart(
         });
     }
 
-    // ── x-axis category labels — centred (Middle) ──
-    for (i, c) in categories.iter().enumerate() {
-        shapes.push(Shape::Label {
-            x: centre_x(i),
-            y: r2(PLOT_Y1 + 20.0),
-            text: TextSource::Literal((*c).to_string()),
-            style: text_style(
-                Some(LABEL_OPACITY),
-                TextAnchor::Middle,
-                tick_size,
-                Emphasis::Normal,
-            ),
-        });
+    // ── x-axis labels — band arms label each category under its band centre;
+    // Scatter labels its numeric x-ticks along the linear axis (Phase 636) ──
+    if is_scatter {
+        for &t in &x_ticks {
+            shapes.push(Shape::Label {
+                x: x_scale(t),
+                y: r2(PLOT_Y1 + 20.0),
+                text: TextSource::Literal(tick_label(t)),
+                style: text_style(
+                    Some(LABEL_OPACITY),
+                    TextAnchor::Middle,
+                    tick_size,
+                    Emphasis::Normal,
+                ),
+            });
+        }
+    } else {
+        for (i, c) in categories.iter().enumerate() {
+            shapes.push(Shape::Label {
+                x: centre_x(i),
+                y: r2(PLOT_Y1 + 20.0),
+                text: TextSource::Literal((*c).to_string()),
+                style: text_style(
+                    Some(LABEL_OPACITY),
+                    TextAnchor::Middle,
+                    tick_size,
+                    Emphasis::Normal,
+                ),
+            });
+        }
     }
 
     // ── Axis titles (a name on both axes) ──
@@ -334,6 +601,31 @@ pub fn lower_chart(
 
     // ── Series geometry ──
     match kind {
+        ChartKind::Bar if stacked => {
+            // One full group-width bar per category; series stack as segments
+            // between consecutive cumulative sums (Phase 637). Category-major
+            // emit order (i outer), matching the reference.
+            let group_w = band_w * 0.7;
+            for (i, category) in categories.iter().enumerate() {
+                let bx = r2(PLOT_X0 + band_w * i as f64 + (band_w - group_w) / 2.0);
+                let bw = r2(group_w * 0.9);
+                let cums = cums_for(i);
+                for j in 0..m {
+                    let y0 = y_scale(cums[j]);
+                    let y1 = y_scale(cums[j + 1]);
+                    let top = y0.min(y1);
+                    let hgt = r2((y1 - y0).abs());
+                    shapes.push(Shape::Rectangle {
+                        x: bx,
+                        y: top,
+                        width: bw,
+                        height: hgt,
+                        corner_radius: None,
+                        style: with_mark(&y_fields[j], category, style_fill(colour_for(j))),
+                    });
+                }
+            }
+        }
         ChartKind::Bar => {
             let group_w = band_w * 0.7;
             let sub_w = if m > 0 { group_w / m as f64 } else { group_w };
@@ -355,7 +647,77 @@ pub fn lower_chart(
                         width: bw,
                         height: hgt,
                         corner_radius: None,
-                        style: style_fill(colour),
+                        style: with_mark(&y_fields[j], categories[i], style_fill(colour)),
+                    });
+                }
+            }
+        }
+        ChartKind::Area if stacked => {
+            // Cumulative bands, bottom band first (painter's order): band j
+            // fills between boundary j (below) and boundary j+1 (above); its
+            // upper boundary carries the full-strength series edge (Phase 637).
+            if n > 0 {
+                let cums: Vec<Vec<f64>> = (0..n).map(&cums_for).collect();
+                for j in 0..m {
+                    let colour = colour_for(j);
+                    let yf = &y_fields[j];
+                    let upper: Vec<DrawPoint> = (0..n)
+                        .map(|i| DrawPoint {
+                            x: centre_x(i),
+                            y: y_scale(cums[i][j + 1]),
+                        })
+                        .collect();
+                    let lower = (0..n).rev().map(|i| DrawPoint {
+                        x: centre_x(i),
+                        y: y_scale(cums[i][j]),
+                    });
+                    let mut band = upper.clone();
+                    band.extend(lower);
+                    shapes.push(Shape::Polygon {
+                        points: band,
+                        style: with_series_mark(yf, style_fill_opacity(colour, AREA_FILL_OPACITY)),
+                    });
+                    shapes.push(Shape::Polyline {
+                        points: upper,
+                        style: with_series_mark(yf, style_stroke(colour, 2.0)),
+                    });
+                }
+            }
+        }
+        ChartKind::Area => {
+            // Overlaid baseline-closed bands in palette order (painter's
+            // order: later series draw over earlier); the translucent fill
+            // keeps the overlap legible, the Polyline edge keeps each series
+            // distinct.
+            if n > 0 {
+                let base_y = y_scale(0.0);
+                for (j, values) in series.iter().enumerate() {
+                    let colour = colour_for(j);
+                    let yf = &y_fields[j];
+                    let points: Vec<DrawPoint> = values
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &v)| DrawPoint {
+                            x: centre_x(i),
+                            y: y_scale(v),
+                        })
+                        .collect();
+                    let mut band = vec![DrawPoint {
+                        x: centre_x(0),
+                        y: base_y,
+                    }];
+                    band.extend(points.iter().cloned());
+                    band.push(DrawPoint {
+                        x: centre_x(n - 1),
+                        y: base_y,
+                    });
+                    shapes.push(Shape::Polygon {
+                        points: band,
+                        style: with_series_mark(yf, style_fill_opacity(colour, AREA_FILL_OPACITY)),
+                    });
+                    shapes.push(Shape::Polyline {
+                        points,
+                        style: with_series_mark(yf, style_stroke(colour, 2.0)),
                     });
                 }
             }
@@ -373,11 +735,29 @@ pub fn lower_chart(
                     .collect();
                 shapes.push(Shape::Polyline {
                     points,
-                    style: style_stroke(colour, 2.0),
+                    style: with_series_mark(&y_fields[j], style_stroke(colour, 2.0)),
                 });
             }
         }
-        _ => {}
+        ChartKind::Scatter => {
+            // Fixed-radius point marks per datum (Phase 636). A non-numeric
+            // x/y cell reads 0.0 (`numericOf`'s posture, shared with the
+            // other arms) — grounded validation makes that loud upstream,
+            // not here.
+            for (j, values) in series.iter().enumerate() {
+                let colour = colour_for(j);
+                let yf = &y_fields[j];
+                for (i, &v) in values.iter().enumerate() {
+                    shapes.push(Shape::Circle {
+                        cx: x_scale(x_values[i]),
+                        cy: y_scale(v),
+                        r: 4.0,
+                        style: with_mark(yf, &format_num(x_values[i]), style_fill(colour)),
+                    });
+                }
+            }
+        }
+        ChartKind::Pie | ChartKind::Heatmap => {}
     }
 
     // ── Legend (only when >1 series) — a swatch + series name per series ──
@@ -407,15 +787,7 @@ pub fn lower_chart(
         }
     }
 
-    // ── Visible title (a Label — bigger + emphasised) + the a11y Title ──
-    if let Some(t) = title {
-        shapes.push(Shape::Label {
-            x: r2(PLOT_X0),
-            y: 22.0,
-            text: t.clone(),
-            style: text_style(None, TextAnchor::Start, title_size, Emphasis::Loud),
-        });
-    }
+    push_title(&mut shapes);
 
     DrawingSpec {
         view_box: ViewBox {
@@ -432,24 +804,31 @@ pub fn lower_chart(
 }
 
 /// Project a resolved data row (`JVal::Obj`) into a [`LowerRow`]: the `x_field`
-/// as a category string, each `y_fields` slot as a number (missing / non-numeric
-/// reads `0.0`, the reference `numericOf`). The category mirrors the reference
-/// `projectRowFieldString` (string as-is, number canonicalised, else empty).
+/// as a category string, the x value numerically (the Scatter arm), each
+/// `y_fields` slot as a number (missing / non-numeric / non-finite reads
+/// `0.0`, the reference `numericOf` with the Phase 640 non-finite guard). The
+/// category mirrors the reference `projectRowFieldString` (string as-is,
+/// number canonicalised, else empty).
 pub fn project_row(row: &crate::canonical::JVal, x_field: &str, y_fields: &[String]) -> LowerRow {
     use crate::canonical::JVal;
+    let numeric_of = |field: &str| -> f64 {
+        match row.field(field) {
+            Some(JVal::Num(v)) if v.is_finite() => *v,
+            Some(JVal::Bool(true)) => 1.0,
+            _ => 0.0,
+        }
+    };
     let category = match row.field(x_field) {
         Some(JVal::Str(v)) => v.clone(),
         Some(JVal::Num(v)) => format_num(*v),
         Some(JVal::Bool(v)) => v.to_string(),
         _ => String::new(),
     };
-    let values = y_fields
-        .iter()
-        .map(|yf| match row.field(yf) {
-            Some(JVal::Num(v)) => *v,
-            Some(JVal::Bool(true)) => 1.0,
-            _ => 0.0,
-        })
-        .collect();
-    LowerRow { category, values }
+    let x_value = numeric_of(x_field);
+    let values = y_fields.iter().map(|yf| numeric_of(yf)).collect();
+    LowerRow {
+        category,
+        x_value,
+        values,
+    }
 }

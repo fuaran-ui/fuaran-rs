@@ -208,8 +208,8 @@ fn is_reactive(b: &Binding) -> bool {
 fn has_reactive_binding(n: &Node) -> bool {
     let check = |b: &Binding| is_reactive(b);
     match &n.kind {
-        NodeKind::Metric(s) => check(&s.source) || s.trend.as_ref().is_some_and(check),
-        NodeKind::LabelValueRow(s) => check(&s.source),
+        NodeKind::Metric(s) => check(&s.value) || s.trend.as_ref().is_some_and(check),
+        NodeKind::LabelValueRow(s) => check(&s.value),
         NodeKind::Sparkline(s) => check(&s.source),
         NodeKind::Progress(s) => check(&s.fraction),
         NodeKind::DataGrid(s) => check(&s.source),

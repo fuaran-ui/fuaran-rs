@@ -76,7 +76,7 @@ fn base64url_round_trips_and_is_ascii() {
 fn app() -> fuaran_rs::wire::Node {
     let json = r#"{"id":"root","kind":{"$type":"Box","children":[
         {"id":"h","kind":{"$type":"Heading","level":1,"text":{"$type":"Literal","text":"Wizard"},"variant":"Standard"}},
-        {"id":"step","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"Step"},"source":{"$type":"State","defaultValue":0,"key":"step"},"tone":"Default","weight":"Standard"}}
+        {"id":"step","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"Step"},"value":{"$type":"State","defaultValue":0,"key":"step"},"tone":"Default","weight":"Standard"}}
     ],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Card"}}"#;
     decode_node(json).expect("app decodes")
 }

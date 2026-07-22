@@ -25,12 +25,14 @@
 //! | `FUARAN069` | Warning | inert control: omitted handler over a non-writable value binding (write-back default cannot arm; `Local` exempt) |
 //! | `FUARAN073` | Warning | fire-and-forget `Action.Call` (no `into`, no `onResult`) |
 //! | `FUARAN082` | Warning | duplicate `Switch` case match values (first-match-wins shadows the rest) |
+//! | `FUARAN086` | Error | chart field reference absent from the statically-known data schema (Phase 640) |
+//! | `FUARAN087` | Error | grounded chart value field of a non-numeric column type (silently flat series; Phase 640) |
+//! | `FUARAN088` | Error | Pie with other than exactly one `yFields` series (the lowering refuses; Phase 638/640) |
+//! | `FUARAN089` | Warning | `stacked` on a kind where stacking is meaningless (Line/Scatter/Pie; Phase 637/640) |
 //! | `FUARAN084` | Warning / Error | `Binding.Computed` — host-only, erases on the wire (Error in orchestrated runs) |
 
 use crate::canonical::JVal;
-use crate::wire::{
-    Action, Binding, FilterKind, FormFieldKind, Node, NodeKind, StaticValue, TreeOp,
-};
+use crate::wire::{Action, Binding, FormFieldKind, Node, NodeKind, StaticValue, TreeOp};
 
 /// Finding severity, matching the sibling validators' two-level surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,21 +212,12 @@ impl Walker {
                 }
             }
             NodeKind::Filters(specs) => {
-                // Filter chips write the filter store themselves when the
-                // handler is omitted — never inert; only walk their bindings.
+                // 0.2.0 filters-unification: a chip's control is an ordinary
+                // FormFieldKind; its auto/explicit Filter binding writes the
+                // filter store itself when the handler is omitted, so the
+                // same control walk applies.
                 for spec in specs {
-                    match &spec.kind {
-                        FilterKind::TextFilter { value, .. } => self.check_binding(id, value),
-                        FilterKind::ChoiceFilter { options, value, .. } => {
-                            self.check_binding(id, options);
-                            self.check_binding(id, value);
-                        }
-                        FilterKind::RangeFilter { .. } => {}
-                        FilterKind::SegmentedFilter { options, value, .. } => {
-                            self.check_binding(id, options);
-                            self.check_binding(id, value);
-                        }
-                    }
+                    self.check_form_field(id, &spec.kind);
                 }
             }
             NodeKind::Select(s) => {
@@ -277,7 +270,7 @@ impl Walker {
                 }
             }
             NodeKind::Metric(s) => {
-                self.check_binding(id, &s.source);
+                self.check_binding(id, &s.value);
                 self.check_text(id, &s.label);
                 if let Some(trend) = &s.trend {
                     self.check_binding(id, trend);
@@ -288,8 +281,15 @@ impl Walker {
             }
             NodeKind::Sparkline(s) => self.check_binding(id, &s.source),
             NodeKind::LabelValueRow(s) => {
-                self.check_binding(id, &s.source);
+                self.check_binding(id, &s.value);
                 self.check_text(id, &s.label);
+                if let Some(help) = &s.help {
+                    self.check_text(id, help);
+                }
+            }
+            NodeKind::Fact(s) => {
+                self.check_text(id, &s.label);
+                self.check_text(id, &s.value);
                 if let Some(help) = &s.help {
                     self.check_text(id, help);
                 }
@@ -303,7 +303,10 @@ impl Walker {
                 self.check_text(id, &s.message);
             }
             NodeKind::DataGrid(s) => self.check_binding(id, &s.source),
-            NodeKind::Chart(s) => self.check_binding(id, &s.source),
+            NodeKind::Chart(s) => {
+                self.check_binding(id, &s.source);
+                self.check_chart(id, s);
+            }
             NodeKind::Map(s) => self.check_binding(id, &s.source),
             NodeKind::Stepper(s) => self.check_binding(id, &s.active_step),
             NodeKind::FileUpload(s) => {
@@ -371,6 +374,14 @@ impl Walker {
                 }
                 self.check_binding(id, value);
             }
+            FormFieldKind::Range {
+                value, on_change, ..
+            } => {
+                if on_change.is_none() {
+                    self.check_writable(id, "value", value);
+                }
+                self.check_binding(id, value);
+            }
             FormFieldKind::Checkbox { value, on_toggle } => {
                 if on_toggle.is_none() {
                     self.check_writable(id, "value", value);
@@ -393,6 +404,111 @@ impl Walker {
                 }
                 self.check_binding(id, options);
                 self.check_binding(id, value);
+            }
+        }
+    }
+
+    /// FUARAN086–089 (Phase 640) — schema-grounded ChartSpec validation. An
+    /// ungrounded field reference is the language's defect to catch before
+    /// lowering — a wrong field name otherwise lowers to a silently
+    /// flat/empty chart. Grounding fires only where the schema is statically
+    /// known: a `Binding.Transform` over an `Embedded` table with an EMPTY
+    /// pipeline (a non-empty pipeline changes the column set; a `Ref` /
+    /// `Query` / host `Static` source is unknowable pre-emit and deliberately
+    /// passes ungrounded — only refuse what is PROVABLY wrong).
+    fn check_chart(&mut self, id: &str, s: &crate::wire::ChartSpec) {
+        use crate::wire::{ChartKind, ColumnType, DataSource};
+
+        // FUARAN088 — pie needs exactly one series (the lowering refuses
+        // multi-series geometry rather than truncating).
+        if matches!(s.kind, ChartKind::Pie) && s.y_fields.len() != 1 {
+            self.push(
+                Severity::Error,
+                "FUARAN088",
+                id,
+                format!(
+                    "pie chart '{id}' declares {} series — the pie lowering refuses anything but exactly one (no silent truncation; Phase 638/640)",
+                    s.y_fields.len()
+                ),
+            );
+        }
+
+        // FUARAN089 — Stacked is dead intent outside Bar/Area.
+        if s.stacked
+            && matches!(
+                s.kind,
+                ChartKind::Line | ChartKind::Scatter | ChartKind::Pie
+            )
+        {
+            self.push(
+                Severity::Warning,
+                "FUARAN089",
+                id,
+                format!(
+                    "chart '{id}' sets Stacked=true on kind {} — the lowering ignores it (dead intent; Phase 637/640)",
+                    s.kind.as_str()
+                ),
+            );
+        }
+
+        // FUARAN086/087 — grounding, only where the schema is statically known.
+        let Binding::Transform {
+            source: DataSource::Embedded { schema, .. },
+            pipeline,
+            ..
+        } = &s.source
+        else {
+            return;
+        };
+        if !pipeline.is_empty() {
+            return;
+        }
+        let col_type = |name: &str| -> Option<ColumnType> {
+            schema
+                .iter()
+                .find(|e| e.name == name)
+                .map(|e| e.column_type)
+        };
+        let numeric = |t: ColumnType| -> bool {
+            matches!(t, ColumnType::Int | ColumnType::Float | ColumnType::Bool)
+        };
+        let ungrounded = |v: &mut Self, field: &str| {
+            v.push(
+                Severity::Error,
+                "FUARAN086",
+                id,
+                format!(
+                    "chart '{id}' references field '{field}' absent from its statically-known data schema — it would lower silently flat/empty (Phase 640)"
+                ),
+            );
+        };
+        let mismatch = |v: &mut Self, field: &str, t: ColumnType| {
+            v.push(
+                Severity::Error,
+                "FUARAN087",
+                id,
+                format!(
+                    "chart '{id}' plots field '{field}' of type '{}' — the lowering reads non-numeric cells as 0.0, a silently flat series (Phase 640)",
+                    t.as_str()
+                ),
+            );
+        };
+        match col_type(&s.x_field) {
+            None => ungrounded(self, &s.x_field),
+            Some(t) => {
+                if matches!(s.kind, ChartKind::Scatter) && !numeric(t) {
+                    mismatch(self, &s.x_field, t);
+                }
+            }
+        }
+        for yf in &s.y_fields {
+            match col_type(yf) {
+                None => ungrounded(self, yf),
+                Some(t) => {
+                    if !numeric(t) {
+                        mismatch(self, yf, t);
+                    }
+                }
             }
         }
     }
@@ -547,6 +663,7 @@ fn child_nodes(n: &Node) -> Vec<&Node> {
         | NodeKind::Progress(_)
         | NodeKind::Skeleton(_)
         | NodeKind::LabelValueRow(_)
+        | NodeKind::Fact(_)
         | NodeKind::Link(_)
         | NodeKind::Image(_)
         | NodeKind::List(_)

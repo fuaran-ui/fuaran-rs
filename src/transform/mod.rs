@@ -553,6 +553,60 @@ fn apply_scalar(func: ScalarFn, args: &[Cell]) -> Result<Cell, EvalError> {
                 }),
             }
         }
+        ScalarFn::Concat => {
+            // Variadic; any null arg propagates (compose Coalesce for
+            // treat-as-empty). Non-string args stringify via the same
+            // rendering as `Cast string`.
+            if args.is_empty() {
+                return Err(EvalError::ArityError {
+                    func: "Concat".to_string(),
+                    expected: 1,
+                    got: 0,
+                });
+            }
+            if args.iter().any(is_null) {
+                return Ok(NULL);
+            }
+            Ok(Cell::Str(args.iter().map(cell_string).collect::<String>()))
+        }
+        ScalarFn::Trim => unary(&|c| match c {
+            // Pinned ASCII set — NOT the full Unicode whitespace class, which
+            // hosts disagree on.
+            Cell::Str(s) => Ok(Cell::Str(
+                s.trim_matches([' ', '\t', '\r', '\n']).to_string(),
+            )),
+            _ => Err(EvalError::TypeError {
+                detail: "trim of a non-string".to_string(),
+            }),
+        }),
+        ScalarFn::Replace => {
+            arity(3)?;
+            match (&args[0], &args[1], &args[2]) {
+                (Cell::Null, _, _) | (_, Cell::Null, _) | (_, _, Cell::Null) => Ok(NULL),
+                (Cell::Str(subj), Cell::Str(find), Cell::Str(repl)) => {
+                    // Pinned: empty `find` returns the subject unchanged.
+                    if find.is_empty() {
+                        Ok(Cell::Str(subj.clone()))
+                    } else {
+                        Ok(Cell::Str(subj.replace(find.as_str(), repl)))
+                    }
+                }
+                _ => Err(EvalError::TypeError {
+                    detail: "replace expects (string, string, string)".to_string(),
+                }),
+            }
+        }
+        ScalarFn::DateDiffDays => {
+            arity(2)?;
+            match (&args[0], &args[1]) {
+                (Cell::Null, _) | (_, Cell::Null) => Ok(NULL),
+                (a, b) => {
+                    let da = civil_days(a)?;
+                    let db = civil_days(b)?;
+                    Ok(Cell::Int(db - da))
+                }
+            }
+        }
     }
 }
 
@@ -568,6 +622,62 @@ fn is_comparison(op: BinOp) -> bool {
         op,
         BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
     )
+}
+
+fn is_string_pred(op: BinOp) -> bool {
+    matches!(op, BinOp::Contains | BinOp::StartsWith | BinOp::EndsWith)
+}
+
+/// Ordinal substring predicates (Core Phase 90). Null propagates (matching
+/// `comparison`); a non-string operand is a typed error. Byte-wise Ordinal is
+/// the cross-host pin.
+fn string_pred(op: BinOp, a: &Cell, b: &Cell) -> Result<Cell, EvalError> {
+    match (a, b) {
+        (Cell::Null, _) | (_, Cell::Null) => Ok(NULL),
+        (Cell::Str(s), Cell::Str(t)) => {
+            let r = match op {
+                BinOp::Contains => s.contains(t.as_str()),
+                BinOp::StartsWith => s.starts_with(t.as_str()),
+                BinOp::EndsWith => s.ends_with(t.as_str()),
+                _ => false,
+            };
+            Ok(Cell::Bool(r))
+        }
+        _ => Err(EvalError::TypeError {
+            detail: "string predicate on a non-string operand".to_string(),
+        }),
+    }
+}
+
+/// Days since the civil epoch (1970-01-01 = 0) for the first 10 chars
+/// (`YYYY-MM-DD`) of a date-like cell — pure integer math (Core Phase 90).
+fn civil_days(c: &Cell) -> Result<i64, EvalError> {
+    let s = match c {
+        Cell::Date(s) | Cell::Timestamp(s) | Cell::Str(s) => s,
+        _ => {
+            return Err(EvalError::TypeError {
+                detail: "dateDiffDays expects date/timestamp/string operands".to_string(),
+            });
+        }
+    };
+    let bad = || EvalError::TypeError {
+        detail: format!("dateDiffDays: '{s}' is not YYYY-MM-DD[...]"),
+    };
+    let bytes = s.as_bytes();
+    if bytes.len() < 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return Err(bad());
+    }
+    let part = |lo: usize, len: usize| -> Result<i64, EvalError> {
+        s[lo..lo + len].parse::<i64>().map_err(|_| bad())
+    };
+    let (y, m, d) = (part(0, 4)?, part(5, 2)?, part(8, 2)?);
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Ok(era * 146_097 + doe - 719_468)
 }
 
 /// Evaluate a `ColExpr` against one row, resolving params from `env`.
@@ -596,6 +706,8 @@ fn eval_expr(
                 arith(*op, &a, &b)
             } else if is_comparison(*op) {
                 comparison(*op, &a, &b)
+            } else if is_string_pred(*op) {
+                string_pred(*op, &a, &b)
             } else {
                 logical(*op, &a, &b)
             }
@@ -635,6 +747,43 @@ fn eval_expr(
                 vals.push(eval_expr(cols, row, a, env)?);
             }
             apply_scalar(*func, &vals)
+        }
+        ColExpr::InList { subject, items } => {
+            let sv = eval_expr(cols, row, subject, env)?;
+            if is_null(&sv) {
+                return Ok(NULL);
+            }
+            // SQL three-valued membership: any equal => true; no match after
+            // seeing a null => null.
+            let mut saw_null = false;
+            for it in items {
+                let iv = eval_expr(cols, row, it, env)?;
+                if is_null(&iv) {
+                    saw_null = true;
+                    continue;
+                }
+                match compare_cells(&sv, &iv) {
+                    Some(Ordering::Equal) => return Ok(Cell::Bool(true)),
+                    Some(_) => {}
+                    None => {
+                        return Err(EvalError::TypeError {
+                            detail: "in: comparison between incompatible types".to_string(),
+                        });
+                    }
+                }
+            }
+            Ok(if saw_null { NULL } else { Cell::Bool(false) })
+        }
+        // List params resolve by substitution BEFORE evaluation on the
+        // reference host; one that reaches the evaluator is unbound — the
+        // scalar-`Param` strictness.
+        ColExpr::InParam { name, .. } => Err(EvalError::UnboundParam {
+            name: name.clone(),
+            bound: env.keys().cloned().collect(),
+        }),
+        ColExpr::IsNull { expr } => {
+            let v = eval_expr(cols, row, expr, env)?;
+            Ok(Cell::Bool(is_null(&v)))
         }
     }
 }
@@ -1148,7 +1297,7 @@ fn eval_window(
                 o.push(NULL);
                 o
             }
-            WindowFn::CumSum => {
+            WindowFn::CumulSum => {
                 let mut acc = 0.0;
                 vals.iter()
                     .map(|v| {
@@ -1182,7 +1331,7 @@ fn eval_window(
 
     let ty = match func {
         WindowFn::RowNumber | WindowFn::Rank => ColumnType::Int,
-        WindowFn::CumSum | WindowFn::RollingMean => ColumnType::Float,
+        WindowFn::CumulSum | WindowFn::RollingMean => ColumnType::Float,
         WindowFn::Lag | WindowFn::Lead => col_type(&f.cols, of).unwrap_or(ColumnType::Str),
     };
 
@@ -1482,6 +1631,17 @@ fn col_expr_params(e: &ColExpr) -> Vec<String> {
             out
         }
         ColExpr::Apply { args, .. } => args.iter().flat_map(col_expr_params).collect(),
+        ColExpr::InList { subject, items } => {
+            let mut out = col_expr_params(subject);
+            out.extend(items.iter().flat_map(col_expr_params));
+            out
+        }
+        ColExpr::InParam { subject, name } => {
+            let mut out = col_expr_params(subject);
+            out.push(name.clone());
+            out
+        }
+        ColExpr::IsNull { expr } => col_expr_params(expr),
     }
 }
 

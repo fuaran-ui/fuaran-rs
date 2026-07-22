@@ -88,7 +88,7 @@ fn box_corners_render_their_retired_kind_hooks() {
 #[test]
 fn metric_resolves_state_binding_and_loading_slot() {
     let tree = node(
-        r#"{"id":"m","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"Revenue"},"source":{"$type":"Query","accessor":"<closure>","name":"revenue"},"tone":"Default","weight":"Standard"},"state":{"onLoading":{"id":"skel","kind":{"$type":"Skeleton","rows":1}}}}"#,
+        r#"{"id":"m","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"Revenue"},"value":{"$type":"Query","accessor":"<closure>","name":"revenue"},"tone":"Default","weight":"Standard"},"state":{"onLoading":{"id":"skel","kind":{"$type":"Skeleton","rows":1}}}}"#,
     );
     // No source registered → the loading slot renders.
     let loading = render_to_html(&tree, &BindingSources::default());

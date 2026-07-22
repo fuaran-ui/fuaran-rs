@@ -24,7 +24,7 @@ fn card(title: &str, metric_label: &str) -> String {
     format!(
         r#"{{"id":"card","kind":{{"$type":"Box","children":[
             {{"id":"h","kind":{{"$type":"Heading","level":1,"text":{{"$type":"Literal","text":{title:?}}},"variant":"Standard"}}}},
-            {{"id":"m","kind":{{"$type":"Metric","emphasis":"Normal","format":{{"$type":"None"}},"label":{{"$type":"Literal","text":{metric_label:?}}},"source":{{"$type":"Static","value":1}},"tone":"Default","weight":"Standard"}}}}
+            {{"id":"m","kind":{{"$type":"Metric","emphasis":"Normal","format":{{"$type":"None"}},"label":{{"$type":"Literal","text":{metric_label:?}}},"value":{{"$type":"Static","value":1}},"tone":"Default","weight":"Standard"}}}}
         ],"layout":{{"$type":"Flex","direction":"Vertical","wrap":false}},"role":"Card"}}}}"#
     )
 }
@@ -83,7 +83,7 @@ fn an_added_child_replays_exactly() {
     // `b` appends a badge after the metric.
     let b = n(r#"{"id":"card","kind":{"$type":"Box","children":[
             {"id":"h","kind":{"$type":"Heading","level":1,"text":{"$type":"Literal","text":"Sales"},"variant":"Standard"}},
-            {"id":"m","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"Revenue"},"source":{"$type":"Static","value":1},"tone":"Default","weight":"Standard"}},
+            {"id":"m","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"Revenue"},"value":{"$type":"Static","value":1},"tone":"Default","weight":"Standard"}},
             {"id":"tag","kind":{"$type":"Badge","label":{"$type":"Literal","text":"New"},"variant":"Brand"}}
         ],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Card"}}"#);
     let ops = diff(&a, &b);

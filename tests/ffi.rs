@@ -13,7 +13,7 @@ use fuaran_rs::ffi::{
 };
 
 const TREE: &str = r#"{"id":"root","kind":{"$type":"Box","children":[
-    {"id":"metric","kind":{"$type":"Metric","emphasis":"Loud","format":{"$type":"Currency","code":"GBP"},"label":{"$type":"Literal","text":"Revenue"},"source":{"$type":"State","defaultValue":0,"key":"revenue"},"tone":"Brand","weight":"Standard"}}
+    {"id":"metric","kind":{"$type":"Metric","emphasis":"Loud","format":{"$type":"Currency","code":"GBP"},"label":{"$type":"Literal","text":"Revenue"},"value":{"$type":"State","defaultValue":0,"key":"revenue"},"tone":"Brand","weight":"Standard"}}
 ],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}"#;
 
 /// Read a Rust-owned [`FuaranBuf`] into an owned `String`, then free it through

@@ -122,6 +122,7 @@ fn layout_children(n: &Node) -> Option<&Vec<Node>> {
         | NodeKind::Progress(_)
         | NodeKind::Skeleton(_)
         | NodeKind::LabelValueRow(_)
+        | NodeKind::Fact(_)
         | NodeKind::Link(_)
         | NodeKind::Image(_)
         | NodeKind::List(_)
@@ -202,6 +203,7 @@ fn child_nodes(n: &Node) -> Vec<&Node> {
         | NodeKind::Progress(_)
         | NodeKind::Skeleton(_)
         | NodeKind::LabelValueRow(_)
+        | NodeKind::Fact(_)
         | NodeKind::Link(_)
         | NodeKind::Image(_)
         | NodeKind::List(_)
@@ -409,9 +411,9 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
                     ..s.clone()
                 })
             }),
-            "Source" => patch(coerce::binding(value), |x| {
+            "Value" => patch(coerce::binding(value), |x| {
                 NodeKind::Metric(crate::wire::MetricSpec {
-                    source: x,
+                    value: x,
                     ..s.clone()
                 })
             }),
@@ -586,9 +588,9 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
                     ..s.clone()
                 })
             }),
-            "Source" => patch(coerce::binding(value), |x| {
+            "Value" => patch(coerce::binding(value), |x| {
                 NodeKind::LabelValueRow(crate::wire::LabelValueRowSpec {
-                    source: x,
+                    value: x,
                     ..s.clone()
                 })
             }),
@@ -607,6 +609,45 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
             "Help" => patch(coerce::text_source(value), |x| {
                 NodeKind::LabelValueRow(crate::wire::LabelValueRowSpec {
                     help: Some(x),
+                    ..s.clone()
+                })
+            }),
+            _ => UnknownField,
+        },
+        NodeKind::Fact(s) => match field {
+            "Label" => patch(coerce::text_source(value), |x| {
+                NodeKind::Fact(crate::wire::FactSpec {
+                    label: x,
+                    ..s.clone()
+                })
+            }),
+            "Value" => patch(coerce::text_source(value), |x| {
+                NodeKind::Fact(crate::wire::FactSpec {
+                    value: x,
+                    ..s.clone()
+                })
+            }),
+            "Tone" => patch(coerce::tone(value), |x| {
+                NodeKind::Fact(crate::wire::FactSpec {
+                    tone: x,
+                    ..s.clone()
+                })
+            }),
+            "Emphasis" => patch(coerce::emphasis_flag(value), |x| {
+                NodeKind::Fact(crate::wire::FactSpec {
+                    emphasis: x,
+                    ..s.clone()
+                })
+            }),
+            "Help" => patch(coerce::text_source(value), |x| {
+                NodeKind::Fact(crate::wire::FactSpec {
+                    help: Some(x),
+                    ..s.clone()
+                })
+            }),
+            "Icon" => patch(coerce::icon_source(value), |x| {
+                NodeKind::Fact(crate::wire::FactSpec {
+                    icon: Some(x),
                     ..s.clone()
                 })
             }),
@@ -1071,8 +1112,8 @@ fn update_nested(segs: &[PathSeg], value: &JVal, kind: &NodeKind) -> NestedOutco
 
 fn replace_binding(slot: &str, b: &Binding, kind: &NodeKind) -> Option<NodeKind> {
     match (kind, slot) {
-        (NodeKind::Metric(s), "Source") => Some(NodeKind::Metric(crate::wire::MetricSpec {
-            source: b.clone(),
+        (NodeKind::Metric(s), "Value") => Some(NodeKind::Metric(crate::wire::MetricSpec {
+            value: b.clone(),
             ..s.clone()
         })),
         (NodeKind::Metric(s), "Trend") => Some(NodeKind::Metric(crate::wire::MetricSpec {
@@ -1090,9 +1131,9 @@ fn replace_binding(slot: &str, b: &Binding, kind: &NodeKind) -> Option<NodeKind>
                 ..s.clone()
             }))
         }
-        (NodeKind::LabelValueRow(s), "Source") => {
+        (NodeKind::LabelValueRow(s), "Value") => {
             Some(NodeKind::LabelValueRow(crate::wire::LabelValueRowSpec {
-                source: b.clone(),
+                value: b.clone(),
                 ..s.clone()
             }))
         }

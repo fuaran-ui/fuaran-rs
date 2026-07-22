@@ -122,7 +122,7 @@ fn duplicate_switch_match_is_fuaran082() {
 
 #[test]
 fn computed_binding_is_fuaran084_and_hardens_when_orchestrated() {
-    let computed = r#"{"id":"m","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"x"},"source":{"$type":"Computed","fn":"<closure>"},"tone":"Default","weight":"Standard"}}"#;
+    let computed = r#"{"id":"m","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"x"},"value":{"$type":"Computed","fn":"<closure>"},"tone":"Default","weight":"Standard"}}"#;
     let tree = decode_node(computed).expect("decodes");
 
     let advisory = validate(&tree);
@@ -141,4 +141,43 @@ fn findings_anchor_to_the_offending_node() {
     ],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}"#;
     let found = findings_for(nested);
     assert_eq!(found, vec![("FUARAN050".to_string(), "deep".to_string())]);
+}
+
+#[test]
+fn chart_schema_grounding_family_fuaran086_089() {
+    // A helper: a Chart over an Embedded two-column table (dept: string,
+    // amount: int) with an empty pipeline — the statically-known schema case.
+    let chart = |kind: &str, extra: &str, x: &str, y: &str| {
+        format!(
+            r#"{{"id":"c","kind":{{"$type":"Chart","kind":"{kind}","source":{{"$type":"Transform","pipeline":[],"source":{{"columns":{{"amount":{{"validity":[true],"values":[1]}},"dept":{{"validity":[true],"values":["ops"]}}}},"schema":[{{"name":"amount","type":"int"}},{{"name":"dept","type":"string"}}]}}}},"stacked":{extra},"xField":"{x}","yFields":[{y}]}}}}"#
+        )
+    };
+
+    // Clean: a grounded bar chart passes.
+    assert!(codes(&chart("Bar", "false", "dept", "\"amount\"")).is_empty());
+
+    // FUARAN086 — an ungrounded field name (x and y).
+    let found = codes(&chart("Bar", "false", "ghost", "\"amount\""));
+    assert_eq!(found, vec!["FUARAN086"], "{found:?}");
+    let found = codes(&chart("Bar", "false", "dept", "\"ghost\""));
+    assert_eq!(found, vec!["FUARAN086"], "{found:?}");
+
+    // FUARAN087 — a grounded but non-numeric value field; and Scatter's
+    // numeric x requirement.
+    let found = codes(&chart("Bar", "false", "dept", "\"dept\""));
+    assert_eq!(found, vec!["FUARAN087"], "{found:?}");
+    let found = codes(&chart("Scatter", "false", "dept", "\"amount\""));
+    assert_eq!(found, vec!["FUARAN087"], "{found:?}");
+
+    // FUARAN088 — pie with other than exactly one series (Error).
+    let found = codes(&chart("Pie", "false", "dept", "\"amount\",\"amount\""));
+    assert!(found.contains(&"FUARAN088".to_string()), "{found:?}");
+
+    // FUARAN089 — stacked on a kind where stacking is meaningless (Warning).
+    let found = codes(&chart("Line", "true", "dept", "\"amount\""));
+    assert_eq!(found, vec!["FUARAN089"], "{found:?}");
+
+    // An unknowable source (a Query) deliberately passes ungrounded.
+    let query = r#"{"id":"c","kind":{"$type":"Chart","kind":"Bar","source":{"$type":"Query","name":"rows"},"stacked":false,"xField":"ghost","yFields":["also-ghost"]}}"#;
+    assert!(codes(query).is_empty());
 }

@@ -59,14 +59,37 @@ pub fn resolve<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Resolut
             Some(raw) => Resolution::Resolved(Value::Json(raw)),
             None => Resolution::NotResolved,
         },
-        Binding::Filter { name } => match sources.filters.get(name) {
+        Binding::Filter {
+            name,
+            default_value,
+        } => match sources.filters.get(name) {
             Some(raw) => Resolution::Resolved(Value::Json(raw)),
-            None => Resolution::NotResolved,
+            // 0.2.0 — the defaultValue is yielded until the filter is first
+            // written.
+            None => match default_value {
+                Some(d) => Resolution::Resolved(Value::Static(d)),
+                None => Resolution::NotResolved,
+            },
         },
-        Binding::Selection { node_id } => match sources.selections.get(node_id) {
-            // Identity projection (Phase 427).
-            Some(raw) => Resolution::Resolved(Value::Json(raw)),
-            None => Resolution::NotResolved,
+        Binding::Selection {
+            node_id,
+            default_value,
+            field,
+        } => match sources.selections.get(node_id) {
+            // Identity projection (Phase 427); 0.2.10 — a present `field`
+            // projects that field off the stored row.
+            Some(raw) => match field {
+                Some(f) => match raw.field(f) {
+                    Some(projected) => Resolution::Resolved(Value::Json(projected)),
+                    None => Resolution::NotResolved,
+                },
+                None => Resolution::Resolved(Value::Json(raw)),
+            },
+            // 0.2.9 — yielded until the user first selects a row.
+            None => match default_value {
+                Some(d) => Resolution::Resolved(Value::Static(d)),
+                None => Resolution::NotResolved,
+            },
         },
         Binding::State { key, default_value } => match sources.state.get(key) {
             Some(raw) => Resolution::Resolved(Value::Json(raw)),
@@ -219,6 +242,32 @@ pub fn resolve_rows<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Re
 pub enum ResolvedRows<'a> {
     Rows(&'a [JVal]),
     NotResolved,
+}
+
+/// The `(min, max)` pair of a `Range` control's value binding: the typed
+/// `Static` pair, a source-supplied `{min, max}` object, or a two-element
+/// array.
+pub fn resolve_float_pair(sources: &BindingSources, binding: &Binding) -> Option<(f64, f64)> {
+    match resolve(sources, binding) {
+        Resolution::Resolved(Value::Static(StaticValue::FloatPair(a, b))) => Some((*a, *b)),
+        Resolution::Resolved(Value::Json(j)) => match j {
+            JVal::Arr(items) if items.len() == 2 => {
+                match (jval_number(&items[0]), jval_number(&items[1])) {
+                    (Some(a), Some(b)) => Some((a, b)),
+                    _ => None,
+                }
+            }
+            JVal::Obj(_) => match (
+                j.field("min").and_then(jval_number),
+                j.field("max").and_then(jval_number),
+            ) {
+                (Some(a), Some(b)) => Some((a, b)),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The float series of a sparkline: typed `Static` payload or source array.

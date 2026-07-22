@@ -127,6 +127,7 @@ pub fn kind_class(kind: &NodeKind) -> String {
         NodeKind::Progress(_) => "fuaran-kind-progress".to_string(),
         NodeKind::Skeleton(_) => "fuaran-kind-skeleton".to_string(),
         NodeKind::LabelValueRow(_) => "fuaran-kind-label-value-row".to_string(),
+        NodeKind::Fact(_) => "fuaran-kind-fact".to_string(),
         NodeKind::Link(_) => "fuaran-kind-link".to_string(),
         NodeKind::Image(_) => "fuaran-kind-image".to_string(),
         NodeKind::List(_) => "fuaran-kind-list".to_string(),

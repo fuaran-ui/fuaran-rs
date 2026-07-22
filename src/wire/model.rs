@@ -113,6 +113,10 @@ pub enum StaticValue {
     FloatSeq(Vec<f64>),
     /// `MapMarker seq` slots (map sources).
     Markers(Vec<MapMarker>),
+    /// `float * float` slots (the 0.2.0 `FormFieldKind.Range` dual-thumb pair).
+    /// The canonical `Static` pair rides as the BARE `{"max":…,"min":…}` object
+    /// — no `Static` envelope (the Phase 423 range shape, kept at 0.2.0).
+    FloatPair(f64, f64),
 }
 
 /// A value binding (`§3.3`), one variant per wire `$type` case.
@@ -128,9 +132,20 @@ pub enum Binding {
     },
     Filter {
         name: String,
+        /// 0.2.0 — the value the resolver yields (and the renderer seeds the
+        /// store with) before the filter is first written. Typed via the
+        /// slot's static encoding; omitted when `None`.
+        default_value: Option<StaticValue>,
     },
     Selection {
         node_id: NodeId,
+        /// 0.2.9 (Phase 629) — the `Filter.defaultValue` convention: yielded
+        /// until the user first selects a row on `nodeId`. Omitted when `None`.
+        default_value: Option<StaticValue>,
+        /// 0.2.10 (Phase 632) — the declarative row-field projection: present
+        /// ⇒ the accessor projects that field off the clicked row. Omitted
+        /// when `None`.
+        field: Option<String>,
     },
     State {
         key: String,
@@ -296,11 +311,13 @@ pub enum ColumnWidth {
 // ─── Compute layer (Phases 282/284/424) ──────────────────────────────────────
 
 bare_enum!(ColumnType { Int => "int", Float => "float", Bool => "bool", Str => "string", Date => "date", Timestamp => "timestamp" });
-bare_enum!(BinOp { Add => "add", Sub => "sub", Mul => "mul", Div => "div", Mod => "mod", Eq => "eq", Ne => "ne", Lt => "lt", Le => "le", Gt => "gt", Ge => "ge", And => "and", Or => "or" });
-bare_enum!(ScalarFn { Abs => "abs", Round => "round", Floor => "floor", Ceil => "ceil", Length => "length", Lower => "lower", Upper => "upper", Substr => "substr", DatePart => "datePart" });
+bare_enum!(BinOp { Add => "add", Sub => "sub", Mul => "mul", Div => "div", Mod => "mod", Eq => "eq", Ne => "ne", Lt => "lt", Le => "le", Gt => "gt", Ge => "ge", And => "and", Or => "or", Contains => "contains", StartsWith => "startsWith", EndsWith => "endsWith" });
+bare_enum!(ScalarFn { Abs => "abs", Round => "round", Floor => "floor", Ceil => "ceil", Length => "length", Lower => "lower", Upper => "upper", Substr => "substr", DatePart => "datePart", Concat => "concat", Trim => "trim", Replace => "replace", DateDiffDays => "dateDiffDays" });
 bare_enum!(AggFn { Sum => "sum", Mean => "mean", Min => "min", Max => "max", Count => "count", Median => "median", Stddev => "stddev", First => "first", Last => "last" });
 bare_enum!(JoinKind { Inner => "inner", Left => "left", Right => "right", Outer => "outer" });
-bare_enum!(WindowFn { RowNumber => "rowNumber", Rank => "rank", Lag => "lag", Lead => "lead", CumSum => "cumSum", RollingMean => "rollingMean" });
+// `cumulSum` is the canonical tag (operator rename 2026-07-19); the legacy
+// `cumSum` spelling decodes as a lenient alias and normalises on re-encode.
+bare_enum!(WindowFn { RowNumber => "rowNumber", Rank => "rank", Lag => "lag", Lead => "lead", CumulSum => "cumulSum", RollingMean => "rollingMean" });
 bare_enum!(SortDir { Asc => "asc", Desc => "desc" });
 
 /// A typed dataframe cell.
@@ -374,6 +391,21 @@ pub enum ColExpr {
     Apply {
         func: ScalarFn,
         args: Vec<ColExpr>,
+    },
+    /// SQL three-valued membership over a literal list (Phase 91).
+    InList {
+        subject: Box<ColExpr>,
+        items: Vec<ColExpr>,
+    },
+    /// Membership over a bound multi-select list param — resolves by
+    /// substitution to `InList` before evaluation; one that reaches the
+    /// evaluator is unbound (the scalar-`Param` strictness).
+    InParam {
+        subject: Box<ColExpr>,
+        name: String,
+    },
+    IsNull {
+        expr: Box<ColExpr>,
     },
 }
 
@@ -471,7 +503,10 @@ pub struct MarkdownSpec {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetricSpec {
     pub label: TextSource,
-    pub source: Binding,
+    /// 0.2.0 rename law — a *scalar displayed value* is named `value` on the
+    /// wire (`source` is reserved for collection feeds). The retired
+    /// `Metric.source` spelling is a hard decode error, not an alias.
+    pub value: Binding,
     pub format: CellFormat,
     pub tone: ToneVariant,
     pub weight: StyleWeight,
@@ -519,10 +554,27 @@ pub struct SkeletonSpec {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LabelValueRowSpec {
     pub label: TextSource,
-    pub source: Binding,
+    /// 0.2.0 rename law — scalar displayed value ⇒ `value` (see [`MetricSpec`]).
+    pub value: Binding,
     pub format: CellFormat,
+    /// The behavioural bool (not the `Emphasis` style DU). 0.2.2 — omitted on
+    /// the wire when `false`, aligning with `Fact`'s identical flag.
     pub emphasis: bool,
     pub help: Option<TextSource>,
+}
+
+/// The labeled TEXT fact — `Metric`'s complementary type. `value` is a
+/// [`TextSource`] (the same vocabulary the labels use, so `Bound` / `I18n`
+/// values ride through); `emphasis` is the behavioural bool (omit-when-false),
+/// `tone` omit-when-default; `help` / `icon` optional.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FactSpec {
+    pub label: TextSource,
+    pub value: TextSource,
+    pub emphasis: bool,
+    pub tone: ToneVariant,
+    pub help: Option<TextSource>,
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -598,6 +650,16 @@ pub enum FormFieldKind {
         step: Option<f64>,
         on_change: Option<Closure>,
     },
+    /// 0.2.0 — the dual-thumb numeric range control (absorbed the retired
+    /// `FilterKind.RangeFilter`). A `Static` pair rides as the bare
+    /// `{"max":…,"min":…}` object; optional bounds omitted when absent.
+    Range {
+        value: Binding,
+        min: Option<f64>,
+        max: Option<f64>,
+        step: Option<f64>,
+        on_change: Option<Closure>,
+    },
     SegmentedChoice {
         options: Binding,
         orientation: Orientation,
@@ -636,35 +698,14 @@ pub struct FormSpec {
     pub disabled: Option<Binding>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum FilterKind {
-    TextFilter {
-        value: Binding,
-        on_change: Option<Closure>,
-    },
-    ChoiceFilter {
-        options: Binding,
-        value: Binding,
-        on_change: Option<Closure>,
-    },
-    /// The bounds ride as a typed `{min,max}` object (Phase 423) for the
-    /// `Static` binding every decoded chip carries.
-    RangeFilter {
-        min: f64,
-        max: f64,
-        on_change: Option<Closure>,
-    },
-    SegmentedFilter {
-        options: Binding,
-        orientation: Orientation,
-        value: Binding,
-        on_change: Option<Closure>,
-    },
-}
-
+/// 0.2.0 filters-unification: a filter chip's control is an ordinary
+/// [`FormFieldKind`] — the parallel `FilterKind` DU (`TextFilter` /
+/// `ChoiceFilter` / `RangeFilter` / `SegmentedFilter`) is retired, its
+/// discriminators a hard `UNKNOWN_DU_CASE`. A chip control with no `value`
+/// key decodes to the auto binding `Filter(<chip name>)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FilterSpec {
-    pub kind: FilterKind,
+    pub kind: FormFieldKind,
     pub label: TextSource,
     pub name: String,
 }
@@ -1023,6 +1064,12 @@ pub struct DrawStyle {
     pub font_size: Option<f64>,
     pub emphasis: Option<Emphasis>,
     pub font_family: Option<String>,
+    /// Phase 642 — keyed mark identity: a data-bearing shape's derivation-based
+    /// id (`series-field|category-key`), stable under row reorder and data
+    /// refresh (object constancy). Renderers emit it as `data-fuaran-mark`;
+    /// omitted-when-`None` (rule 4). Chrome (axes, gridlines, labels, legend)
+    /// deliberately stays unstamped.
+    pub mark_id: Option<String>,
 }
 
 /// A single SVG path command inside a `Shape::Curve`. Closed + typed — an
@@ -1136,6 +1183,7 @@ pub enum NodeKind {
     Progress(ProgressSpec),
     Skeleton(SkeletonSpec),
     LabelValueRow(LabelValueRowSpec),
+    Fact(FactSpec),
     Link(LinkSpec),
     Image(ImageSpec),
     List(ListSpec),
@@ -1196,6 +1244,7 @@ impl NodeKind {
             NodeKind::Progress(_) => "Progress",
             NodeKind::Skeleton(_) => "Skeleton",
             NodeKind::LabelValueRow(_) => "LabelValueRow",
+            NodeKind::Fact(_) => "Fact",
             NodeKind::Link(_) => "Link",
             NodeKind::Image(_) => "Image",
             NodeKind::List(_) => "List",
@@ -1240,6 +1289,7 @@ impl NodeKind {
             | NodeKind::Progress(_)
             | NodeKind::Skeleton(_)
             | NodeKind::LabelValueRow(_)
+            | NodeKind::Fact(_)
             | NodeKind::Link(_)
             | NodeKind::Image(_)
             | NodeKind::List(_)
@@ -1294,6 +1344,7 @@ pub const CANONICAL_NODE_KINDS: &[&str] = &[
     "Progress",
     "Skeleton",
     "LabelValueRow",
+    "Fact",
     "Link",
     "Image",
     "List",
