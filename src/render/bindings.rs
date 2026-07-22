@@ -4,16 +4,31 @@
 //! would: `Static` to its typed value, `Query` / `Filter` / `Selection` from
 //! host-supplied [`BindingSources`] (the decoded accessors are identity
 //! projections, so the raw source value flows through), `State` to the source
-//! value or its carried default. Host-only escapes resolve `NotResolved` on
-//! this decoded-tree host: `Computed` erases on the wire, and `Transform`
-//! awaits the dataframe-evaluation tier.
+//! value or its carried default. `Computed` resolves `NotResolved` on this
+//! decoded-tree host (it erases on the wire).
+//!
+//! `Transform` is render-time evaluated (Phase 649) through the host's own
+//! certified evaluator (`crate::transform`), but NOT inside [`resolve`]: an
+//! evaluated pipeline yields *owned* rows/cells, which cannot ride the
+//! borrow-based [`Resolution`]. Instead a single shared seam —
+//! [`eval_transform_frame`] — is consumed two ways: [`resolve_rows`] projects
+//! the result table to rows for the data-bearing kinds (row contexts), and the
+//! scalar-slot path ([`resolve_scalar_number`] / [`try_scalar_string`], the
+//! Phase 632 1×1 law) interprets it as one cell for `TextSource.Bound`,
+//! Metric value/trend, and LabelValueRow value. The server renderer and the
+//! `wasm32` client both render through this one module, so the two consumption
+//! legs resolve identically. Phase 629 `Selection.defaultValue` seeding is
+//! automatic: a `Transform` param whose `from` is a `Selection` resolves its
+//! declared default through [`resolve`] below.
 
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::canonical::{JVal, format_number as canonical_number};
+use crate::transform::{self, Table};
 use crate::wire::{
-    Accessibility, Binding, CellFormat, DateStyle, Format, LocaleSource, SelectOption, StaticValue,
-    TextSource,
+    Accessibility, AggFn, Binding, Cell, CellFormat, DataSource, DateStyle, Format, LocaleSource,
+    SelectOption, StaticValue, TextSource, TransformParam, TransformStep,
 };
 
 /// The em-dash placeholder an unresolved value renders as.
@@ -111,11 +126,13 @@ pub fn resolve<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Resolut
             NumberResolution::Resolved(v) => {
                 Resolution::Resolved(Value::Text(format_locale_value(locale, format, v)))
             }
-            NumberResolution::NotResolved => Resolution::NotResolved,
+            NumberResolution::NotResolved | NumberResolution::Errored(_) => Resolution::NotResolved,
             NumberResolution::I18nUnresolved(key) => Resolution::I18nUnresolved(key),
         },
-        // The dataframe-evaluation tier is beyond this floor — render the
-        // loading surface rather than a wrong value.
+        // A `Transform` yields *owned* rows/cells, which cannot ride the
+        // borrow-based `Resolution` — it is evaluated at the consumption seams
+        // instead: `resolve_rows` (row contexts) and the scalar-slot path
+        // (`resolve_scalar_number` / `try_scalar_string`). See the module doc.
         Binding::Transform { .. } => Resolution::NotResolved,
         // A capability invoker seam is not wired on this host yet — behaves as
         // pending, exactly as an absent invoker does on the sibling hosts.
@@ -129,6 +146,11 @@ pub enum NumberResolution {
     Resolved(f64),
     NotResolved,
     I18nUnresolved(String),
+    /// A scalar-slot `Transform` that could not yield a single numeric cell
+    /// (Phase 632 — loud ambiguity / a non-numeric or null result cell). Kept
+    /// distinct from `NotResolved` so the slot renders the didactic message
+    /// rather than silently falling to its loading surface.
+    Errored(String),
 }
 
 fn jval_number(v: &JVal) -> Option<f64> {
@@ -168,6 +190,271 @@ pub fn try_number(sources: &BindingSources, binding: &Binding) -> Option<f64> {
     match resolve_number(sources, binding) {
         NumberResolution::Resolved(n) => Some(n),
         _ => None,
+    }
+}
+
+// ─── Render-time Transform resolution (Phase 649) ────────────────────────────
+//
+// The single shared seam that wires the host's own certified dataframe
+// evaluator (`crate::transform`) into render-time binding resolution, mirroring
+// the F#/TS reference (Phases 629/632; fuaran-ts ea16811, fuaran 660182a). Two
+// consumers, one evaluation:
+//   • `resolve_rows` (row contexts — DataGrid / Chart) projects the result
+//     table to rows;
+//   • the scalar-slot path (`resolve_scalar_number` / `try_scalar_string`)
+//     interprets an exactly-1×1 result as one cell (the Phase 632 1×1 law).
+// The `wasm32` client renders through the very same module, so both legs
+// resolve identically.
+
+/// Coerce a resolved param value to an evaluator [`Cell`] (mirrors the TS
+/// `objToCell`): numbers → `Float` (int/float indistinguishable at the wire),
+/// strings → `Str`, bools → `Bool`, null → `Null`; a structured/opaque value
+/// has no scalar form (`None` ⇒ a param error).
+fn value_to_cell(value: &Value<'_>) -> Option<Cell> {
+    match value {
+        Value::Text(s) => Some(Cell::Str(s.clone())),
+        Value::Json(j) => jval_to_cell(j),
+        Value::Static(StaticValue::Ast(j)) => jval_to_cell(j),
+        Value::Static(StaticValue::StringOpt(Some(s))) => Some(Cell::Str(s.clone())),
+        Value::Static(StaticValue::StringOpt(None)) => Some(Cell::Null),
+        Value::Static(_) => None,
+    }
+}
+
+fn jval_to_cell(j: &JVal) -> Option<Cell> {
+    match j {
+        JVal::Null => Some(Cell::Null),
+        JVal::Str(s) => Some(Cell::Str(s.clone())),
+        JVal::Num(n) => Some(Cell::Float(*n)),
+        JVal::Bool(b) => Some(Cell::Bool(*b)),
+        JVal::Arr(_) | JVal::Obj(_) => None,
+    }
+}
+
+/// Evaluate a `Binding::Transform` to a concrete [`Table`] — the shared frame
+/// seam (mirrors the TS `evalTransformFrame`). Each param's scalar `from`
+/// binding resolves through [`resolve`] (so a `Selection.defaultValue` seeds
+/// the env — Phase 629); a param whose source is `NotResolved` (an unset
+/// choice filter) is *unbound*, and every `filter` step referencing an unbound
+/// param is PRUNED — the one lenient "unset filter ⇒ no constraint" rule (the
+/// evaluator itself stays strict, so a *non-filter* step over an unbound param
+/// still surfaces `UnboundParam` loudly). A non-scalar / i18n-unresolved param
+/// source, a missing `Ref`, and an evaluator error are all `Err`.
+pub fn eval_transform_frame(
+    sources: &BindingSources,
+    params: &Option<Vec<TransformParam>>,
+    pipeline: &[TransformStep],
+    source: &DataSource,
+) -> Result<Table, String> {
+    let params = params.as_deref().unwrap_or(&[]);
+    let mut env = transform::EvalEnv::new();
+    let mut unbound: BTreeSet<String> = BTreeSet::new();
+    for p in params {
+        match resolve(sources, &p.from) {
+            Resolution::Resolved(value) => match value_to_cell(&value) {
+                Some(cell) => {
+                    env.insert(p.name.clone(), cell);
+                }
+                None => {
+                    return Err(format!(
+                        "Transform param '{}' resolved to a non-scalar value",
+                        p.name
+                    ));
+                }
+            },
+            Resolution::NotResolved => {
+                unbound.insert(p.name.clone());
+            }
+            Resolution::I18nUnresolved(key) => {
+                return Err(format!(
+                    "Transform param '{}' source is an unresolved i18n key '{key}'",
+                    p.name
+                ));
+            }
+        }
+    }
+    // Prune filter steps that reference an unbound param (only `Filter` /
+    // `Derive` carry params; only `Filter` is prunable).
+    let mut pruned: Vec<TransformStep> = Vec::with_capacity(pipeline.len());
+    for step in pipeline {
+        let keep = match step {
+            TransformStep::Filter { .. } => transform::step_params(step)
+                .iter()
+                .all(|pn| !unbound.contains(pn)),
+            _ => true,
+        };
+        if keep {
+            pruned.push(step.clone());
+        }
+    }
+    transform::eval_transform(&transform::no_resolve, &env, source, &pruned).map_err(|e| {
+        format!(
+            "Transform evaluation failed: {}",
+            transform::eval_error_string(&e)
+        )
+    })
+}
+
+/// Project an evaluated [`Table`] into wire-shaped row objects (one
+/// `JVal::Obj` per row, `{ columnName: jval }`) — the shape a data-bearing
+/// node's source slot consumes. Mirrors the TS `tableToRows`; a `Null` cell
+/// becomes `JVal::Null`.
+fn table_to_rows(table: &Table) -> Vec<JVal> {
+    let n = table.columns.first().map(|c| c.cells.len()).unwrap_or(0);
+    (0..n)
+        .map(|i| {
+            JVal::Obj(
+                table
+                    .columns
+                    .iter()
+                    .map(|col| {
+                        (
+                            col.name.clone(),
+                            cell_to_jval(col.cells.get(i).unwrap_or(&Cell::Null)),
+                        )
+                    })
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn cell_to_jval(c: &Cell) -> JVal {
+    match c {
+        Cell::Null => JVal::Null,
+        Cell::Int(v) => JVal::Num(*v as f64),
+        Cell::Float(v) => JVal::Num(*v),
+        Cell::Bool(b) => JVal::Bool(*b),
+        Cell::Str(s) | Cell::Date(s) | Cell::Timestamp(s) => JVal::Str(s.clone()),
+    }
+}
+
+/// The outcome of interpreting a scalar-slot `Transform`'s 1×1 result.
+enum ScalarOutcome<T> {
+    Resolved(T),
+    NotResolved,
+    Errored(String),
+}
+
+/// Coerce a result cell to a text-slot string (via the certified
+/// `transform::cell_string` canonical layout); a `Null` cell is the slot's
+/// empty state.
+fn cell_to_text(c: &Cell) -> Result<String, String> {
+    if matches!(c, Cell::Null) {
+        return Err("Transform yielded a null cell in a text slot".to_string());
+    }
+    Ok(transform::cell_string(c))
+}
+
+/// Coerce a result cell to a numeric-slot number (a non-numeric / null cell is
+/// a loud didactic).
+fn cell_to_float(c: &Cell) -> Result<f64, String> {
+    match c {
+        Cell::Int(v) => Ok(*v as f64),
+        Cell::Float(v) => Ok(*v),
+        Cell::Str(s) => Err(format!(
+            "Transform yielded a text cell ('{s}') in a numeric slot — project a numeric column, or aggregate with count / sum / mean"
+        )),
+        Cell::Bool(_) => Err("Transform yielded a bool cell in a numeric slot".to_string()),
+        Cell::Date(s) | Cell::Timestamp(s) => Err(format!(
+            "Transform yielded a date cell ('{s}') in a numeric slot — project a numeric column, or aggregate with count / sum / mean"
+        )),
+        Cell::Null => Err("Transform yielded a null cell in a numeric slot".to_string()),
+    }
+}
+
+/// Resolve a scalar-slot `Transform` to one cell under the Phase 632 1×1 law:
+/// exactly one row × one column resolves (a non-null cell coerced), ambiguity
+/// (>1 row/col) is a loud didactic (never a silent first cell), and an empty
+/// result renders absence — except a trailing global single-`count` groupBy
+/// over an empty frame, which resolves 0 (the count of nothing is 0, the SQL
+/// global-aggregate semantic the strict fold leaves empty).
+fn resolve_scalar_transform<T>(
+    coerce: impl Fn(&Cell) -> Result<T, String>,
+    sources: &BindingSources,
+    params: &Option<Vec<TransformParam>>,
+    pipeline: &[TransformStep],
+    source: &DataSource,
+) -> ScalarOutcome<T> {
+    let table = match eval_transform_frame(sources, params, pipeline, source) {
+        Ok(t) => t,
+        Err(e) => return ScalarOutcome::Errored(e),
+    };
+    let col_count = table.columns.len();
+    let row_count = table.columns.first().map(|c| c.cells.len()).unwrap_or(0);
+    let coerce_into = |c: &Cell| match coerce(c) {
+        Ok(v) => ScalarOutcome::Resolved(v),
+        Err(e) => ScalarOutcome::Errored(e),
+    };
+    if row_count == 1 && col_count == 1 {
+        let cell = &table.columns[0].cells[0];
+        if matches!(cell, Cell::Null) {
+            return ScalarOutcome::NotResolved;
+        }
+        return coerce_into(cell);
+    }
+    if row_count == 0 {
+        // A trailing global single-`count` aggregate completes to 0 over an
+        // empty frame (checked against the ORIGINAL pipeline, matching the
+        // reference — pruning never removes a groupBy).
+        if let Some(TransformStep::GroupBy { keys, aggs }) = pipeline.last()
+            && keys.is_empty()
+            && aggs.len() == 1
+            && matches!(aggs[0].func, AggFn::Count)
+        {
+            return coerce_into(&Cell::Int(0));
+        }
+        return ScalarOutcome::NotResolved;
+    }
+    ScalarOutcome::Errored(format!(
+        "Transform in a scalar slot must yield exactly one row × one column (got {row_count}×{col_count}) — end the pipeline with `project` to one column + `limit` 1 (a row-field lookup), or aggregate with `groupBy` keys [] + one agg (count / sum / mean / first)"
+    ))
+}
+
+/// Resolve a binding in a numeric scalar slot (Metric / LabelValueRow value,
+/// Metric trend): a `Binding::Transform` evaluates through the shared frame and
+/// interprets its 1×1 result; every other binding resolves exactly as
+/// [`resolve_number`], so non-Transform slots are unaffected.
+pub fn resolve_scalar_number(sources: &BindingSources, binding: &Binding) -> NumberResolution {
+    match binding {
+        Binding::Transform {
+            params,
+            pipeline,
+            source,
+        } => match resolve_scalar_transform(cell_to_float, sources, params, pipeline, source) {
+            ScalarOutcome::Resolved(n) => NumberResolution::Resolved(n),
+            ScalarOutcome::NotResolved => NumberResolution::NotResolved,
+            ScalarOutcome::Errored(msg) => NumberResolution::Errored(msg),
+        },
+        _ => resolve_number(sources, binding),
+    }
+}
+
+/// Best-effort numeric scalar resolution — the `try_number` twin (used by the
+/// Metric trend slot).
+pub fn try_scalar_number(sources: &BindingSources, binding: &Binding) -> Option<f64> {
+    match resolve_scalar_number(sources, binding) {
+        NumberResolution::Resolved(n) => Some(n),
+        _ => None,
+    }
+}
+
+/// Best-effort text scalar resolution: a `Binding::Transform` yields its 1×1
+/// result cell as text (never the rows list), matching the client's
+/// `renderText`; every other binding resolves exactly as [`try_string`]. An
+/// ambiguous / errored / not-resolved Transform yields `None` (an empty text
+/// slot), the reference `?? ''` behaviour.
+pub fn try_scalar_string(sources: &BindingSources, binding: &Binding) -> Option<String> {
+    match binding {
+        Binding::Transform {
+            params,
+            pipeline,
+            source,
+        } => match resolve_scalar_transform(cell_to_text, sources, params, pipeline, source) {
+            ScalarOutcome::Resolved(s) => Some(s),
+            ScalarOutcome::NotResolved | ScalarOutcome::Errored(_) => None,
+        },
+        _ => try_string(sources, binding),
     }
 }
 
@@ -228,19 +515,35 @@ pub fn resolve_options(sources: &BindingSources, binding: &Binding) -> Vec<Selec
     }
 }
 
-/// Rows for a data-bound grid / chart / map: a source-supplied JSON array;
-/// anything else is empty.
+/// Rows for a data-bound grid / chart / map: a `Binding::Transform` evaluates
+/// its pipeline (Phase 649 — the row-context leg of the shared seam) and
+/// projects the result table to rows; otherwise a source-supplied JSON array;
+/// anything else is empty. A Transform that errors renders the loading surface
+/// (`NotResolved`) rather than a wrong table.
 pub fn resolve_rows<'a>(sources: &'a BindingSources, binding: &'a Binding) -> ResolvedRows<'a> {
+    if let Binding::Transform {
+        params,
+        pipeline,
+        source,
+    } = binding
+    {
+        return match eval_transform_frame(sources, params, pipeline, source) {
+            Ok(table) => ResolvedRows::Rows(Cow::Owned(table_to_rows(&table))),
+            Err(_) => ResolvedRows::NotResolved,
+        };
+    }
     match resolve(sources, binding) {
-        Resolution::Resolved(Value::Json(JVal::Arr(items))) => ResolvedRows::Rows(items),
-        Resolution::Resolved(_) => ResolvedRows::Rows(&[]),
+        Resolution::Resolved(Value::Json(JVal::Arr(items))) => {
+            ResolvedRows::Rows(Cow::Borrowed(items))
+        }
+        Resolution::Resolved(_) => ResolvedRows::Rows(Cow::Borrowed(&[])),
         Resolution::NotResolved => ResolvedRows::NotResolved,
-        Resolution::I18nUnresolved(_) => ResolvedRows::Rows(&[]),
+        Resolution::I18nUnresolved(_) => ResolvedRows::Rows(Cow::Borrowed(&[])),
     }
 }
 
 pub enum ResolvedRows<'a> {
-    Rows(&'a [JVal]),
+    Rows(Cow<'a, [JVal]>),
     NotResolved,
 }
 
@@ -297,7 +600,10 @@ fn jval_arg_string(v: &JVal) -> String {
 pub fn render_text(sources: &BindingSources, text: &TextSource) -> String {
     match text {
         TextSource::Literal(value) => value.clone(),
-        TextSource::Bound(binding) => try_string(sources, binding).unwrap_or_default(),
+        // Phase 632/649 — text slots resolve through the scalar path, so a
+        // `Binding.Transform` yields its 1×1 result cell (never the rows list);
+        // every non-Transform binding routes to `try_string` unchanged.
+        TextSource::Bound(binding) => try_scalar_string(sources, binding).unwrap_or_default(),
         TextSource::I18n { key, args } => match sources.i18n.get(key) {
             None => format!("[i18n:{key}]"),
             Some(template) => {

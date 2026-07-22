@@ -43,7 +43,8 @@ use crate::wire::{
 use super::bindings::{
     BindingSources, EM_DASH, NumberResolution, ResolvedRows, accessibility_attributes,
     display_number, format_number, render_text, resolve_float_pair, resolve_float_seq,
-    resolve_number, resolve_options, resolve_rows, try_bool, try_number, try_string,
+    resolve_number, resolve_options, resolve_rows, resolve_scalar_number, try_bool, try_number,
+    try_scalar_number, try_string,
 };
 use super::class_names::{node_class_name, tone_var};
 use super::html::{Attr, AttrVal, el, escape_attr, escape_text, text_el, void_el};
@@ -188,6 +189,10 @@ fn resolved_value_text(resolution: &NumberResolution, format: &CellFormat) -> St
         NumberResolution::Resolved(value) => format_number(format, *value),
         NumberResolution::NotResolved => EM_DASH.to_string(),
         NumberResolution::I18nUnresolved(key) => format!("[i18n:{key}]"),
+        // Phase 632/649 — a scalar-slot Transform that could not yield a single
+        // numeric cell renders its didactic loudly (never a silent em-dash),
+        // matching the F#/TS reference.
+        NumberResolution::Errored(msg) => format!("(error: {msg})"),
     }
 }
 
@@ -328,7 +333,9 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node) -> String {
             &markdown_to_html(&render_text(ctx.sources, &spec.text)),
         ),
         NodeKind::Metric(spec) => {
-            let resolution = resolve_number(ctx.sources, &spec.value);
+            // Phase 632/649 — the Metric value is a scalar slot: a
+            // `Binding.Transform` resolves to its 1×1 result cell.
+            let resolution = resolve_scalar_number(ctx.sources, &spec.value);
             if matches!(resolution, NumberResolution::NotResolved)
                 && let Some(loading) = &node.state.on_loading
             {
@@ -347,7 +354,7 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node) -> String {
                 ),
             ];
             if let Some(trend) = &spec.trend {
-                let trend_text = try_number(ctx.sources, trend)
+                let trend_text = try_scalar_number(ctx.sources, trend)
                     .map(|t| {
                         format_number(spec.trend_format.as_ref().unwrap_or(&CellFormat::None), t)
                     })
@@ -551,7 +558,9 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node) -> String {
         NodeKind::Sparkline(spec) => render_sparkline(ctx, spec),
         NodeKind::Drawing(spec) => render_drawing(ctx, spec),
         NodeKind::LabelValueRow(spec) => {
-            let resolution = resolve_number(ctx.sources, &spec.value);
+            // Phase 632/649 — a scalar slot: a `Binding.Transform` resolves to
+            // its 1×1 result cell, ambiguity stays loud.
+            let resolution = resolve_scalar_number(ctx.sources, &spec.value);
             if matches!(resolution, NumberResolution::NotResolved)
                 && let Some(loading) = &node.state.on_loading
             {
@@ -2137,15 +2146,16 @@ fn render_grid_cell(ctx: &Ctx<'_>, col: &ColumnErased, row: &JVal) -> String {
 }
 
 fn render_grid(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &GridSpec) -> String {
-    let rows = match resolve_rows(ctx.sources, &spec.source) {
+    let rows: std::borrow::Cow<'_, [JVal]> = match resolve_rows(ctx.sources, &spec.source) {
         ResolvedRows::NotResolved => {
             if let Some(loading) = &state.on_loading {
                 return render_node(ctx, loading);
             }
-            &[][..]
+            std::borrow::Cow::Borrowed(&[])
         }
         ResolvedRows::Rows(rows) => rows,
     };
+    let rows: &[JVal] = &rows;
     if rows.is_empty()
         && let Some(empty) = &state.on_empty
     {
@@ -2234,15 +2244,16 @@ fn render_static_table(ctx: &Ctx<'_>, spec: &StaticRows) -> String {
 // resolved to rows, the on-loading placeholder (or an empty drawing) shows — the
 // same not-resolved discipline every data-bound kind follows.
 fn render_chart(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &ChartSpec) -> String {
-    let rows = match resolve_rows(ctx.sources, &spec.source) {
+    let rows: std::borrow::Cow<'_, [JVal]> = match resolve_rows(ctx.sources, &spec.source) {
         ResolvedRows::NotResolved => {
             if let Some(loading) = &state.on_loading {
                 return render_node(ctx, loading);
             }
-            &[][..]
+            std::borrow::Cow::Borrowed(&[])
         }
         ResolvedRows::Rows(rows) => rows,
     };
+    let rows: &[JVal] = &rows;
     if rows.is_empty()
         && let Some(empty) = &state.on_empty
     {
