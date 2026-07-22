@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::render::server::{hydrate_script_id, island_script_id};
 use fuaran_rs::render::{BindingSources, render_hydratable, render_to_html, render_with_islands};
-use fuaran_rs::wire::{Node, decode_node, encode_node};
+use fuaran_rs::wire::{Node, NodeKind, decode_node, encode_node};
 
 fn node(json: &str) -> Node {
     decode_node(json).expect("test tree decodes")
@@ -351,5 +351,146 @@ fn reference_css_byte_copy_matches_the_reference_artefact() {
     assert_eq!(
         local_bytes, reference_bytes,
         "css/fuaran.css must stay a byte-copy of the reference stylesheet"
+    );
+}
+
+// ─── Render-time Transform resolution (Phase 649) — corpus parity ─────────────
+//
+// The server-HTML render carries the compute values a `Binding.Transform`
+// yields at render time: the Phase 632 scalar path in scalar slots (Badge /
+// Callout / Fact text), row-frame resolution in DataGrid / Chart row contexts,
+// and Phase 629 Selection.defaultValue seeding of the pipeline params. These
+// assertions fail loudly on divergence. The `wasm32` client renders through the
+// very same `render_to_html`, so this certifies both consumption legs.
+
+/// Locate `wire-format-fixtures/nodes/` by walking up from the crate dir;
+/// `None` on a standalone checkout (the corpus lives in the sibling tree).
+fn corpus_nodes_dir() -> Option<PathBuf> {
+    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
+    loop {
+        let root = dir.join("wire-format-fixtures");
+        if root.join("manifest.json").is_file() {
+            return Some(root.join("nodes"));
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+fn load_fixture(id: &str) -> Option<Node> {
+    let path = corpus_nodes_dir()?.join(format!("{id}.json"));
+    let raw = std::fs::read_to_string(path).expect("fixture file reads");
+    Some(decode_node(&raw).expect("fixture decodes with the host codec"))
+}
+
+/// Find a descendant node by id (recursing through `Box` children — the shape
+/// of these dashboard fixtures), so an assertion can scope to one sub-tree.
+fn find_node<'a>(node: &'a Node, id: &str) -> Option<&'a Node> {
+    if node.id == id {
+        return Some(node);
+    }
+    if let NodeKind::Box(spec) = &node.kind {
+        for child in &spec.children {
+            if let Some(found) = find_node(child, id) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn render_sub(tree: &Node, id: &str) -> String {
+    let node = find_node(tree, id).unwrap_or_else(|| panic!("fixture is missing node '{id}'"));
+    render_to_html(node, &BindingSources::default())
+}
+
+#[test]
+fn transform_scalar_slots_resolve_their_compute_values() {
+    let Some(tree) = load_fixture("scalar-transform-composition") else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+
+    // Badge label — a global-aggregate scalar Transform (filter severity ==
+    // critical → groupBy keys [] count): the 1×1 result cell is the count 2.
+    let badge = render_sub(&tree, "critical-count-badge");
+    assert!(
+        badge.contains("fuaran-badge-critical"),
+        "badge tone class present: {badge}"
+    );
+    assert!(
+        badge.contains(">2<"),
+        "Badge label must resolve the critical count 2 (not empty / rows): {badge}"
+    );
+
+    // Callout body — a param-defaulted row-field lookup (Selection.defaultValue
+    // 'TCK-2041' → filter id == param → project alert → limit 1).
+    let callout = render_sub(&tree, "sla-warning");
+    assert!(
+        callout.contains("TCK-2041 breaches SLA in 2 hours"),
+        "Callout body must resolve the defaulted row's alert text: {callout}"
+    );
+
+    // The DataGrid source (an embedded Transform, empty pipeline) resolves to
+    // its rows in the row context.
+    let grid = render_sub(&tree, "scalar-ticket-grid");
+    for expected in ["TCK-2041", "TCK-2042", "TCK-2043", "critical", "high"] {
+        assert!(
+            grid.contains(expected),
+            "grid must carry the resolved Transform row value '{expected}': {grid}"
+        );
+    }
+}
+
+#[test]
+fn selection_default_seeds_master_detail() {
+    let Some(tree) = load_fixture("master-detail-preselected") else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+
+    // The detail Fact reads Selection.defaultValue (field 'id') before any real
+    // selection — Phase 629.
+    let detail = render_sub(&tree, "detail-ticket");
+    assert!(
+        detail.contains("TCK-2041"),
+        "Fact must resolve the preselected Selection.defaultValue: {detail}"
+    );
+
+    // The related grid's Transform param is seeded from the same default, so it
+    // filters to exactly the preselected ticket.
+    let related = render_sub(&tree, "related-grid");
+    assert!(
+        related.contains("TCK-2041"),
+        "related grid must carry the preselected ticket row: {related}"
+    );
+    assert!(
+        !related.contains("TCK-2042"),
+        "related grid must filter to the preselected ticket only (Selection-seeded param): {related}"
+    );
+}
+
+#[test]
+fn unset_filter_params_prune_and_resolve_all_rows() {
+    let Some(tree) = load_fixture("filterable-static-dashboard") else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+
+    // No filter is written, so both Filter-sourced params are unbound; the
+    // filter steps referencing them are pruned ("unset filter ⇒ no
+    // constraint"), leaving every row — both retention values render.
+    let grid = render_sub(&tree, "episode-grid");
+    assert!(
+        grid.contains("0.62") && grid.contains("0.55"),
+        "unset filters must prune to all rows (both retention values): {grid}"
+    );
+
+    // The Chart source resolves the same way and lowers to inline SVG.
+    let chart = render_sub(&tree, "retention-chart");
+    assert!(
+        chart.contains("fuaran-chart") && chart.contains("<svg"),
+        "chart must resolve its Transform rows and lower to inline SVG: {chart}"
     );
 }
