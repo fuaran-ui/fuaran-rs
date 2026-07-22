@@ -9,6 +9,50 @@ host: it is built to the language-neutral wire-format specification
 (`WIRE_FORMAT.md`) and certified against the shared conformance corpus. Conformance
 to the spec is the contract; idiomatic Rust is the deliverable.
 
+## Get started
+
+```sh
+cargo add fuaran-ui
+```
+
+The crate publishes to crates.io as **`fuaran-ui`**; this repository is `fuaran-rs`
+(the repo-name / crate-name split is common in Rust) and the import path is
+`fuaran_rs`. Author a tree with native `enum` kinds, then encode it byte-identically
+to every host:
+
+```rust
+use fuaran_rs::wire::{encode_node, BoxLayout, BoxRole, BoxSpec, HeadingSpec,
+    HeadingVariant, Node, NodeKind, TextSource};
+
+let tree = Node {
+    id: "root".into(),
+    kind: NodeKind::Box(BoxSpec {
+        children: vec![Node {
+            id: "title".into(),
+            kind: NodeKind::Heading(HeadingSpec {
+                level: 2,
+                text: TextSource::Literal("Channel performance".into()),
+                variant: HeadingVariant::Standard,
+            }),
+            state: Default::default(),
+            style: Default::default(),
+            accessibility: None,
+        }],
+        heading: None,
+        layout: BoxLayout::Auto,
+        role: BoxRole::Dashboard,
+    }),
+    state: Default::default(),
+    style: Default::default(),
+    accessibility: None,
+};
+
+let wire: String = encode_node(&tree);   // canonical wire JSON, byte-identical to every host
+```
+
+Full walkthrough — author → encode → render (headless or browser-native WASM) →
+playground: <https://fuaran-ui.io/get-started/rust>.
+
 ## Why a Rust host
 
 Rust reaches two places the other hosts do not:
