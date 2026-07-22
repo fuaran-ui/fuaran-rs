@@ -53,43 +53,10 @@ fn str_field(j: &JVal, key: &str) -> String {
     }
 }
 
-// Harness-local upgrade shim: the shared diff-golden family predates the
-// 0.2.0 rename law (scalar `value`, collection `source`) and still spells
-// `Metric.source`, which the 0.2.0 codec hard-rejects by design. The diff
-// comparisons decode → re-encode on both sides, so renaming the key before
-// decode keeps the certification live against the family's semantics without
-// weakening the codec. Remove when the goldens regenerate on 0.2.0 bytes.
-fn upgrade_pre_020(j: &JVal) -> JVal {
-    match j {
-        JVal::Obj(fields) => {
-            let is_scalar_kind = matches!(
-                fields.iter().find(|(k, _)| k == "$type"),
-                Some((_, JVal::Str(t))) if t == "Metric" || t == "LabelValueRow"
-            );
-            JVal::Obj(
-                fields
-                    .iter()
-                    .map(|(k, v)| {
-                        let k = if is_scalar_kind && k == "source" {
-                            "value".to_string()
-                        } else {
-                            k.clone()
-                        };
-                        (k, upgrade_pre_020(v))
-                    })
-                    .collect(),
-            )
-        }
-        JVal::Arr(items) => JVal::Arr(items.iter().map(upgrade_pre_020).collect()),
-        other => other.clone(),
-    }
-}
-
 // A golden before/after sub-object → a decoded Node (render its JVal back to
 // canonical JSON, then run the host decoder — the same codec the corpus commits).
 fn node_of(j: &JVal, what: &str) -> Node {
-    decode_node(&render_canonical(&upgrade_pre_020(j)))
-        .unwrap_or_else(|e| panic!("decoding {what}: {e:?}"))
+    decode_node(&render_canonical(j)).unwrap_or_else(|e| panic!("decoding {what}: {e:?}"))
 }
 
 // A golden op-script JVal array → its canonical op bytes (decode each op then
@@ -100,7 +67,7 @@ fn golden_op_bytes(j: &JVal, what: &str) -> Vec<String> {
             .iter()
             .enumerate()
             .map(|(i, o)| {
-                let op = decode_op(&render_canonical(&upgrade_pre_020(o)))
+                let op = decode_op(&render_canonical(o))
                     .unwrap_or_else(|e| panic!("decoding {what} op #{i}: {e:?}"));
                 encode_op(&op)
             })
