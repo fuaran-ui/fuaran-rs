@@ -51,6 +51,8 @@ use std::cell::RefCell;
 
 use crate::client::{ClientError, ClientSession};
 
+pub mod rosetta;
+
 thread_local! {
     /// The last `fuaran_session_new` decode failure, as its JSON envelope —
     /// read once via [`fuaran_last_error`] when `new` returns null. Per-thread:
@@ -387,6 +389,26 @@ unsafe fn store_write(
         Ok(()) => pack_string(OK_RESULT.to_string()),
         Err(err) => pack_string(err.to_json()),
     }
+}
+
+/// Encode the public Rosetta parity demo's exemplar tree from its six scalar
+/// holes (Phase 656). The `(ptr, len)` input is a small JSON object
+/// `{"labelA":…,"valueA":…,"labelB":…,"valueB":…,"labelC":…,"valueC":…}`; the
+/// return is the canonical wire bytes (packed), or an empty buffer when the
+/// holes JSON is malformed. Additive example entry — this host builds its own
+/// tree from the six scalars and runs the corpus-certified canonical encoder, so
+/// the parity strip's "independent implementations converge on one hash" claim
+/// stays honest (see [`rosetta`]). The codec and session surface are unchanged.
+///
+/// # Safety
+/// `ptr`/`len` must name a live UTF-8 buffer per the memory contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fuaran_rosetta_encode(ptr: *const u8, len: usize) -> FuaranBuf {
+    // SAFETY: caller contract.
+    let Some(json) = (unsafe { borrow_str(ptr, len) }) else {
+        return pack_string(String::new());
+    };
+    pack_string(rosetta::encode_from_holes(json).unwrap_or_default())
 }
 
 fn invalid_utf8_envelope() -> String {

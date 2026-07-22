@@ -167,6 +167,20 @@ FuaranBuf fuaran_session_set_query(FuaranSession *session, const uint8_t *key_pt
  */
 FuaranBuf fuaran_last_error(void);
 
+/*
+ * DEMO ENCODE ENTRY (Phase 656) — additive, stateless.
+ *
+ * fuaran_rosetta_encode() powers the public Rosetta parity demo: it receives the
+ * six scalar "holes" as a small JSON object
+ * ({"labelA":..,"valueA":..,"labelB":..,"valueB":..,"labelC":..,"valueC":..}),
+ * builds the demo's exemplar tree with this crate's own typed model, and returns
+ * the canonical wire bytes (owned FuaranBuf), or an empty buffer on malformed
+ * input. It touches neither the session surface nor the codec; it is a demo
+ * helper over the public model, compiled into every target. Not part of the v0
+ * native binding surface — the mobile tiers drive rendering through a session.
+ */
+FuaranBuf fuaran_rosetta_encode(const uint8_t *ptr, size_t len);
+
 /* ------------------------------------------------------------------------- *
  * OWNERSHIP CONTRACT (summary)
  *
