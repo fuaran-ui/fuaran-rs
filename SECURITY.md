@@ -11,7 +11,7 @@ Please report suspected vulnerabilities privately — do **not** open a public i
 
 - **Preferred:** GitHub's private vulnerability reporting (the repository's **Security** tab →
   **Report a vulnerability**).
-- **Or email:** security@fuaran.com — include a description, the affected version, and steps
+- **Or email:** andrew@fuaran.com — include a description, the affected version, and steps
   to reproduce.
 
 We aim to acknowledge a report within five business days and to agree a disclosure timeline with
