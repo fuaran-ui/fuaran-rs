@@ -11,8 +11,10 @@ pub mod class_names;
 pub mod email;
 pub mod html;
 pub mod markdown;
+pub mod project;
 pub mod sanitize;
 pub mod server;
 
 pub use bindings::BindingSources;
+pub use project::project_resolved;
 pub use server::{render_hydratable, render_to_html, render_with_islands};

@@ -227,6 +227,26 @@ pub unsafe extern "C" fn fuaran_session_tree_json(session: *mut ClientSession) -
     pack_string(session.tree_json())
 }
 
+/// The session's current tree as a **resolved projection**, re-encoded to
+/// canonical wire JSON (packed) — Phase 650. Identical to
+/// [`fuaran_session_tree_json`] except every scalar-slot `Binding.Transform` is
+/// folded to the concrete value it evaluates to against the live sources, so a
+/// decode-only consumer renders already-resolved compute values without an
+/// evaluator. Additive — `tree_json` is unchanged; call this instead when the
+/// consumer cannot itself resolve `Transform`.
+///
+/// # Safety
+/// `session` must be a live handle from `fuaran_session_new`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fuaran_session_project_resolved(session: *mut ClientSession) -> FuaranBuf {
+    if session.is_null() {
+        return pack_string(String::new());
+    }
+    // SAFETY: caller contract.
+    let session = unsafe { &*session };
+    pack_string(session.project_resolved())
+}
+
 /// The success result JSON both mutating entry points return on `Ok`.
 const OK_RESULT: &str = "{\"ok\":true}";
 

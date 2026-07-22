@@ -8,8 +8,8 @@
 
 use fuaran_rs::ffi::{
     FuaranBuf, fuaran_alloc, fuaran_dealloc, fuaran_last_error, fuaran_session_apply_op,
-    fuaran_session_free, fuaran_session_new, fuaran_session_render, fuaran_session_set_state,
-    fuaran_session_tree_json,
+    fuaran_session_free, fuaran_session_new, fuaran_session_project_resolved,
+    fuaran_session_render, fuaran_session_set_state, fuaran_session_tree_json,
 };
 
 const TREE: &str = r#"{"id":"root","kind":{"$type":"Box","children":[
@@ -74,6 +74,43 @@ fn native_c_abi_session_round_trips() {
     assert!(
         rendered.contains("fuaran-metric-value\">GBP 1000.00<"),
         "the state write drives the metric"
+    );
+
+    unsafe { fuaran_session_free(session) };
+}
+
+/// A Badge whose label is a scalar Transform (count of a 2-row embedded frame)
+/// — the projection folds it to the literal "2"; tree_json keeps the Transform.
+const TRANSFORM_TREE: &str = r#"{"id":"root","kind":{"$type":"Box","children":[
+    {"id":"count-badge","kind":{"$type":"Badge","label":{"$type":"Bound","binding":{"$type":"Transform","pipeline":[{"$type":"groupBy","aggs":[{"fn":"count","name":"n","of":"id"}],"keys":[]}],"source":{"columns":{"id":{"values":["A","B"]}},"schema":[{"name":"id","type":"string"}]}}},"variant":"Neutral"}}
+],"layout":{"$type":"Auto"},"role":"Group"}}"#;
+
+#[test]
+fn native_c_abi_project_resolved_folds_scalar_transform() {
+    let (tp, tl) = input(TRANSFORM_TREE);
+    let session = unsafe { fuaran_session_new(tp, tl) };
+    unsafe { fuaran_dealloc(tp, tl) };
+    assert!(!session.is_null(), "a valid tree decodes to a live handle");
+
+    // The raw tree_json still carries the unresolved Transform (additive — the
+    // existing entry point is byte-unchanged).
+    let raw = take_buf(unsafe { fuaran_session_tree_json(session) });
+    assert!(
+        raw.contains("\"$type\":\"Transform\""),
+        "tree_json keeps the raw Transform: {raw}"
+    );
+
+    // The resolved projection folds the scalar Transform to its literal count.
+    let projected = take_buf(unsafe { fuaran_session_project_resolved(session) });
+    assert!(
+        !projected.contains("\"$type\":\"Transform\""),
+        "the scalar Transform is folded out of the projection: {projected}"
+    );
+    // A `TextSource::Literal` encodes as the bare-string shorthand (§3.3), so the
+    // folded Badge label rides as `"label":"2"`.
+    assert!(
+        projected.contains("\"label\":\"2\""),
+        "the Badge label becomes the literal count 2: {projected}"
     );
 
     unsafe { fuaran_session_free(session) };

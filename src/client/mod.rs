@@ -62,6 +62,21 @@ impl ClientSession {
         crate::wire::encode_node(&self.tree)
     }
 
+    /// The current tree as a **resolved projection**, re-encoded to canonical
+    /// wire JSON (Phase 650). Identical to [`tree_json`](Self::tree_json) except
+    /// that every scalar-slot `Binding.Transform` is folded to the concrete value
+    /// it evaluates to against the live sources — `TextSource::Bound(Transform)`
+    /// becomes a literal, and the numeric scalar slots (`Metric.value`/`trend`,
+    /// `LabelValueRow.value`) become a `Static` number. A **decode-only** consumer
+    /// (a native render surface over this core) can then render already-resolved
+    /// compute values without carrying an evaluator. Row-context Transforms and
+    /// every non-Transform binding are left byte-identical to `tree_json` — the
+    /// projection resolves only what a decode-only consumer cannot. See
+    /// [`render::project`](crate::render::project).
+    pub fn project_resolved(&self) -> String {
+        crate::wire::encode_node(&crate::render::project_resolved(&self.sources, &self.tree))
+    }
+
     /// Render the current tree to a body-fragment HTML string against the live
     /// binding sources (the shared server renderer, so client and server
     /// produce byte-identical markup for the same tree + sources — the

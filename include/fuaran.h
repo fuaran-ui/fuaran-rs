@@ -110,6 +110,23 @@ FuaranBuf fuaran_session_render(FuaranSession *session);
 FuaranBuf fuaran_session_tree_json(FuaranSession *session);
 
 /*
+ * The session's current tree as a RESOLVED PROJECTION, re-encoded to canonical
+ * wire JSON (Phase 650). Identical to fuaran_session_tree_json EXCEPT that every
+ * scalar-slot `Binding.Transform` is folded to the concrete value it evaluates to
+ * against the live sources: a TextSource `Bound(Transform)` becomes a literal, and
+ * the numeric scalar slots (Metric value/trend, LabelValueRow value) become a
+ * `Static` number (the slot's format still applies downstream). Row-context
+ * Transforms (DataGrid/Chart/Map/Sparkline sources) and every non-Transform
+ * binding are byte-identical to fuaran_session_tree_json.
+ *
+ * This is ADDITIVE: fuaran_session_tree_json is unchanged. Call this instead when
+ * the consumer is a decode-only render surface that cannot itself evaluate
+ * `Transform` — it then renders already-resolved compute values without carrying
+ * an evaluator. NULL session → empty buffer.
+ */
+FuaranBuf fuaran_session_project_resolved(FuaranSession *session);
+
+/*
  * Apply a canonical wire `TreeOp` JSON (UTF-8 at ptr/len). Returns {"ok":true}
  * on success (the session adopts the new tree) or a structured error envelope
  * on failure (the held tree is UNTOUCHED — the apply engine never partially
@@ -177,8 +194,10 @@ FuaranBuf fuaran_last_error(void);
  *   v0 is exactly the session surface declared above. The adopted native-surface
  *   architecture keeps the Rust core as the owner of truth and mutation while a
  *   native tier holds a render-only projection, so ALL native rendering is driven
- *   through a session (session_apply_op -> read back session_tree_json). No
- *   additional entry points are needed for the native binding tiers.
+ *   through a session (session_apply_op -> read back session_tree_json, or
+ *   session_project_resolved for a decode-only surface — Phase 650, an additive
+ *   projection of the same tree). No stateless entry points are needed for the
+ *   native binding tiers.
  *
  *   RESERVED (not in v0; names held for a future stateless surface if demand
  *   appears — do not bind yet):

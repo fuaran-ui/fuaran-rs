@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use fuaran_rs::canonical::{JVal, parse};
+use fuaran_rs::client::ClientSession;
 use fuaran_rs::render::server::{hydrate_script_id, island_script_id};
 use fuaran_rs::render::{BindingSources, render_hydratable, render_to_html, render_with_islands};
 use fuaran_rs::wire::{Node, NodeKind, decode_node, encode_node};
@@ -492,5 +493,104 @@ fn unset_filter_params_prune_and_resolve_all_rows() {
     assert!(
         chart.contains("fuaran-chart") && chart.contains("<svg"),
         "chart must resolve its Transform rows and lower to inline SVG: {chart}"
+    );
+}
+
+// ─── Resolved projection (Phase 650) ─────────────────────────────────────────
+//
+// The session-level resolved projection folds scalar-slot Transform resolution
+// into the wire tree itself, so a decode-only consumer renders resolved compute
+// values without an evaluator. These tests assert the projection STRUCTURALLY
+// (the scalar Transform slots become literals / Static numbers) and that the
+// existing `tree_json` entry point is byte-unchanged (the additive contract).
+
+fn load_fixture_json(id: &str) -> Option<String> {
+    let path = corpus_nodes_dir()?.join(format!("{id}.json"));
+    Some(std::fs::read_to_string(path).expect("fixture file reads"))
+}
+
+fn projected_node(session: &ClientSession, id: &str) -> Node {
+    let tree = decode_node(&session.project_resolved()).expect("resolved projection re-decodes");
+    find_node(&tree, id)
+        .unwrap_or_else(|| panic!("projection is missing node '{id}'"))
+        .clone()
+}
+
+#[test]
+fn resolved_projection_folds_scalar_transforms_to_literals() {
+    let Some(raw) = load_fixture_json("scalar-transform-composition") else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+    let session = ClientSession::new(&raw).expect("fixture decodes to a session");
+
+    // The additive contract: tree_json is byte-identical to a straight
+    // decode→encode round-trip — the projection is a SEPARATE entry point.
+    assert_eq!(
+        session.tree_json(),
+        encode_node(&node(&raw)),
+        "project_resolved must not perturb the raw tree_json round-trip"
+    );
+
+    // Badge label — a global-aggregate scalar Transform → the 1×1 count cell 2.
+    match &projected_node(&session, "critical-count-badge").kind {
+        NodeKind::Badge(spec) => assert_eq!(
+            spec.label,
+            fuaran_rs::wire::TextSource::Literal("2".to_string()),
+            "Badge label Transform must fold to the literal count 2"
+        ),
+        other => panic!("expected a Badge, got {}", other.type_name()),
+    }
+
+    // Callout body — a param-defaulted row-field lookup → the defaulted alert.
+    match &projected_node(&session, "sla-warning").kind {
+        NodeKind::Callout(spec) => assert_eq!(
+            spec.body,
+            fuaran_rs::wire::TextSource::Literal("TCK-2041 breaches SLA in 2 hours".to_string()),
+            "Callout body Transform must fold to the defaulted row's alert text"
+        ),
+        other => panic!("expected a Callout, got {}", other.type_name()),
+    }
+
+    // The DataGrid source is a ROW-context Transform (a collection) — it is left
+    // as a Transform, never folded to a scalar literal.
+    match &projected_node(&session, "scalar-ticket-grid").kind {
+        NodeKind::DataGrid(spec) => assert!(
+            matches!(spec.source, fuaran_rs::wire::Binding::Transform { .. }),
+            "a row-context Transform source stays a Transform in the projection"
+        ),
+        other => panic!("expected a DataGrid, got {}", other.type_name()),
+    }
+}
+
+#[test]
+fn resolved_projection_preserves_selection_defaults() {
+    let Some(raw) = load_fixture_json("master-detail-preselected") else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+    let session = ClientSession::new(&raw).expect("fixture decodes to a session");
+
+    // The detail Fact value is a Selection(defaultValue 'TCK-2041') — NOT a
+    // Transform — so the projection leaves it byte-identical; the decode-only
+    // consumer resolves the seeded Selection default itself. The projected tree
+    // still renders TCK-2041.
+    match &projected_node(&session, "detail-ticket").kind {
+        NodeKind::Fact(spec) => match &spec.value {
+            fuaran_rs::wire::TextSource::Bound(b) => assert!(
+                matches!(**b, fuaran_rs::wire::Binding::Selection { .. }),
+                "the Selection-bound Fact value stays a Selection binding"
+            ),
+            other => panic!("expected a Bound Selection Fact value, got {other:?}"),
+        },
+        other => panic!("expected a Fact, got {}", other.type_name()),
+    }
+
+    // The related grid's Transform param is seeded from the same Selection
+    // default; its source stays a (row-context) Transform in the projection.
+    let projected = decode_node(&session.project_resolved()).expect("projection re-decodes");
+    assert!(
+        find_node(&projected, "related-grid").is_some(),
+        "the related grid survives the projection"
     );
 }
