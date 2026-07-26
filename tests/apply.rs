@@ -4,7 +4,7 @@
 //! host's own codec — the same artefacts a driving service would hold.
 
 use fuaran_rs::ops::{ApplyErrorCode, apply, can_apply};
-use fuaran_rs::wire::{Node, TreeOp, decode_node, decode_op, encode_node};
+use fuaran_rs::wire::{Node, TreeOp, decode_node, decode_op, encode_node, encode_op};
 
 fn node(json: &str) -> Node {
     decode_node(json).expect("test tree decodes")
@@ -189,22 +189,58 @@ fn update_style_and_state() {
 }
 
 #[test]
-fn insert_child_at_positions_and_bounds() {
+fn insert_child_appends_and_ignores_a_legacy_position() {
+    // 0.4.0: InsertChild APPENDS. There is no ordinal and so no out-of-range
+    // rejection left to assert. A legacy `position` on the wire is accepted and
+    // ignored for the migration window, so a stored v1 op still applies — as an
+    // append, wherever its ordinal used to point.
     let ins = |pos: i64| {
         op(&format!(
             r#"{{"$type":"InsertChild","child":{{"id":"new-1","kind":{{"$type":"Markdown","text":{{"$type":"Literal","text":"n"}}}}}},"parentId":"root","position":{pos}}}"#
         ))
     };
-    // Position == len is legal (append).
-    assert!(apply(&sample_tree(), &ins(3)).is_ok());
-    assert!(apply(&sample_tree(), &ins(0)).is_ok());
-    assert_code(
-        apply(&sample_tree(), &ins(4)),
-        ApplyErrorCode::PositionOutOfRange,
+    for pos in [0_i64, 3, 4, -1] {
+        let out = apply(&sample_tree(), &ins(pos)).expect("a legacy position never rejects");
+        let ids = child_ids_of(&out.new_tree, "root");
+        assert_eq!(
+            ids,
+            vec!["h1", "md", "inner", "new-1"],
+            "legacy position {pos} must be ignored and the child appended"
+        );
+    }
+
+    // The canonical, positionless form does the same thing.
+    let canonical = op(
+        r#"{"$type":"InsertChild","child":{"id":"new-1","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"n"}}},"parentId":"root"}"#,
     );
+    let out = apply(&sample_tree(), &canonical).expect("applies");
+    assert_eq!(
+        child_ids_of(&out.new_tree, "root"),
+        vec!["h1", "md", "inner", "new-1"]
+    );
+    // Re-encoding never writes the field back: one wire dialect, not two.
+    assert!(!encode_op(&canonical).contains("position"));
+}
+
+#[test]
+fn batch_insert_then_reorder_places_a_node_precisely() {
+    // The pair that supersedes the ordinal: append, then state the order.
+    let batch = op(
+        r#"{"$type":"Batch","ops":[{"$type":"InsertChild","child":{"id":"new-1","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"n"}}},"parentId":"root"},{"$type":"ReorderChildren","newOrder":["new-1","h1","md","inner"],"parentId":"root"}]}"#,
+    );
+    let out = apply(&sample_tree(), &batch).expect("applies");
+    assert_eq!(
+        child_ids_of(&out.new_tree, "root"),
+        vec!["new-1", "h1", "md", "inner"]
+    );
+}
+
+#[test]
+fn reorder_that_is_not_an_exact_permutation_is_refused() {
+    let bad = op(r#"{"$type":"ReorderChildren","newOrder":["h1"],"parentId":"root"}"#);
     assert_code(
-        apply(&sample_tree(), &ins(-1)),
-        ApplyErrorCode::PositionOutOfRange,
+        apply(&sample_tree(), &bad),
+        ApplyErrorCode::OrderingMismatch,
     );
 }
 
@@ -335,4 +371,25 @@ fn state_surface_children_are_addressable() {
     let up = op(r#"{"$type":"UpdateProp","path":"Rows","target":"spinner","value":5}"#);
     let out = apply(&tree, &up).expect("applies");
     assert!(encode_node(&out.new_tree).contains("\"rows\":5"));
+}
+
+/// The ordered child ids of `parent_id` in `tree` — what the placement tests
+/// above assert on.
+fn child_ids_of(tree: &Node, parent_id: &str) -> Vec<String> {
+    fn find(n: &Node, id: &str) -> Option<Vec<String>> {
+        if n.id == id {
+            if let fuaran_rs::wire::NodeKind::Box(s) = &n.kind {
+                return Some(s.children.iter().map(|c| c.id.clone()).collect());
+            }
+        }
+        if let fuaran_rs::wire::NodeKind::Box(s) = &n.kind {
+            for c in &s.children {
+                if let Some(v) = find(c, id) {
+                    return Some(v);
+                }
+            }
+        }
+        None
+    }
+    find(tree, parent_id).expect("parent is a Box in the sample tree")
 }

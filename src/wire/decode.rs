@@ -3522,26 +3522,24 @@ fn decode_tree_op_ast(path: &str, j: &JVal) -> DResult<TreeOp> {
         }
         "InsertChild" => {
             let parent_id = req_string(path, fields, "parentId", "parent NodeId")?;
-            let position = req_int(path, fields, "position", "position integer")?;
+            // A legacy `position` is ACCEPTED AND IGNORED for the migration
+            // window: a stored v1 emission must still apply, as an append,
+            // because order is now ReorderChildren's. This decoder reads named
+            // fields and ignores the rest, so not reading it IS the tolerance.
             let child_j = req(path, fields, "child", "child Node object")?;
             let child = decode_node_ast(&format!("{path}.child"), child_j)?;
-            Ok(TreeOp::InsertChild {
-                parent_id,
-                position,
-                child,
-            })
+            Ok(TreeOp::InsertChild { parent_id, child })
         }
         "RemoveNode" => Ok(TreeOp::RemoveNode {
             target: req_string(path, fields, "target", "target NodeId")?,
         }),
         "MoveNode" => {
+            // Legacy `newPosition` accepted and ignored — see InsertChild above.
             let target = req_string(path, fields, "target", "target NodeId")?;
             let new_parent_id = req_string(path, fields, "newParentId", "new parent NodeId")?;
-            let new_position = req_int(path, fields, "newPosition", "new position integer")?;
             Ok(TreeOp::MoveNode {
                 target,
                 new_parent_id,
-                new_position,
             })
         }
         "ReorderChildren" => {

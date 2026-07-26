@@ -1472,7 +1472,6 @@ pub enum TreeOp {
     },
     InsertChild {
         parent_id: NodeId,
-        position: i64,
         child: Node,
     },
     RemoveNode {
@@ -1481,7 +1480,6 @@ pub enum TreeOp {
     MoveNode {
         target: NodeId,
         new_parent_id: NodeId,
-        new_position: i64,
     },
     ReorderChildren {
         parent_id: NodeId,

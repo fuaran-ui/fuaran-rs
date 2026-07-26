@@ -1357,18 +1357,16 @@ fn apply_one(op: &TreeOp, root: &Node, telem: &mut Vec<OpApplyTelemetryRecord>) 
             });
             Ok(new_tree)
         }
-        TreeOp::InsertChild {
-            parent_id,
-            position,
-            child,
-        } => {
+        TreeOp::InsertChild { parent_id, child } => {
             let Some(parent) = find_node(root, parent_id) else {
                 return fail(
                     ApplyErrorCode::ParentNotFound,
                     format!("Parent node '{parent_id}' not found in tree."),
                 );
             };
-            let Some(children) = layout_children(parent) else {
+            // Bound only to validate the parent is child-bearing; 0.4.0's
+            // append needs no index into it.
+            let Some(_children) = layout_children(parent) else {
                 return fail(
                     ApplyErrorCode::ChildlessKind,
                     format!(
@@ -1377,16 +1375,6 @@ fn apply_one(op: &TreeOp, root: &Node, telem: &mut Vec<OpApplyTelemetryRecord>) 
                     ),
                 );
             };
-            let position = *position;
-            if position < 0 || position as usize > children.len() {
-                return fail(
-                    ApplyErrorCode::PositionOutOfRange,
-                    format!(
-                        "Position {position} is out of range for parent '{parent_id}' (valid: 0..{}).",
-                        children.len()
-                    ),
-                );
-            }
             let existing: std::collections::HashSet<String> =
                 all_node_ids(root).into_iter().collect();
             if let Some(duplicate) = all_node_ids(child)
@@ -1403,9 +1391,11 @@ fn apply_one(op: &TreeOp, root: &Node, telem: &mut Vec<OpApplyTelemetryRecord>) 
             let mut new_tree = root.clone();
             let parent = find_node_mut(&mut new_tree, parent_id)
                 .expect("parent located above; the clone preserves it");
+            // 0.4.0: InsertChild APPENDS. Placing a node anywhere else is
+            // Batch [InsertChild, ReorderChildren] — order is stated by ids.
             layout_children_mut(parent)
                 .expect("children located above; the clone preserves them")
-                .insert(position as usize, child.clone());
+                .push(child.clone());
             telem.push(OpApplyTelemetryRecord {
                 op: "InsertChild",
                 target_id: parent_id.clone(),
@@ -1438,7 +1428,6 @@ fn apply_one(op: &TreeOp, root: &Node, telem: &mut Vec<OpApplyTelemetryRecord>) 
         TreeOp::MoveNode {
             target,
             new_parent_id,
-            new_position,
         } => {
             if target == new_parent_id {
                 return fail(
@@ -1483,7 +1472,6 @@ fn apply_one(op: &TreeOp, root: &Node, telem: &mut Vec<OpApplyTelemetryRecord>) 
             let inserted = apply_one(
                 &TreeOp::InsertChild {
                     parent_id: new_parent_id.clone(),
-                    position: *new_position,
                     child: moving,
                 },
                 &after_remove,

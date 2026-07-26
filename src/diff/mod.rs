@@ -61,7 +61,11 @@ fn own_content_same(a: &Node, b: &Node) -> bool {
 // Recurse a matched-id pair. `parent`, when present, is `(parent_id, position)`
 // — the seat for a `RemoveNode`+`InsertChild` whole-node replace; `None` marks
 // the root (a `ReplaceRoot`).
-fn diff_node(a: &Node, b: &Node, parent: Option<(&str, usize)>, ops: &mut Vec<TreeOp>) {
+/// `parent` is the node's seat: the parent id, its index there, and the
+/// parent's full ordered child id list. The id list is needed because 0.4.0's
+/// `InsertChild` APPENDS — a re-inserted node lands last, so unless the seat was
+/// already last the original order has to be restated.
+fn diff_node(a: &Node, b: &Node, parent: Option<(&str, usize, &[String])>, ops: &mut Vec<TreeOp>) {
     if encode_node(a) == encode_node(b) {
         return; // identical subtree — nothing to do
     }
@@ -72,23 +76,31 @@ fn diff_node(a: &Node, b: &Node, parent: Option<(&str, usize)>, ops: &mut Vec<Tr
     if recurse {
         let ak = structural_children(a).unwrap();
         let bk = structural_children(b).unwrap();
+        let sibling_ids: Vec<String> = bk.iter().map(|n| n.id.clone()).collect();
         for (i, (ca, cb)) in ak.iter().zip(bk.iter()).enumerate() {
-            diff_node(ca, cb, Some((a.id.as_str(), i)), ops);
+            diff_node(ca, cb, Some((a.id.as_str(), i, &sibling_ids)), ops);
         }
     } else {
         match parent {
             None => ops.push(TreeOp::ReplaceRoot { node: b.clone() }),
-            Some((parent_id, position)) => {
-                // Remove the old node, re-insert the new one at the same seat —
-                // one net-zero length change that preserves sibling positions.
+            Some((parent_id, position, sibling_ids)) => {
+                // Remove the old node and re-insert it (same id, so no
+                // duplicate-id collision). InsertChild appends, so unless the
+                // seat was already last, restate the parent's order — an exact
+                // permutation, since remove+insert leaves the id SET unchanged.
                 ops.push(TreeOp::RemoveNode {
                     target: a.id.clone(),
                 });
                 ops.push(TreeOp::InsertChild {
                     parent_id: parent_id.to_string(),
-                    position: position as i64,
                     child: b.clone(),
                 });
+                if position + 1 != sibling_ids.len() {
+                    ops.push(TreeOp::ReorderChildren {
+                        parent_id: parent_id.to_string(),
+                        new_order: sibling_ids.to_vec(),
+                    });
+                }
             }
         }
     }

@@ -2146,28 +2146,18 @@ fn tree_op(op: &TreeOp) -> String {
                 field("target", s(target)),
             ],
         ),
-        TreeOp::InsertChild {
-            parent_id,
-            position,
-            child,
-        } => case_obj(
+        TreeOp::InsertChild { parent_id, child } => case_obj(
             "InsertChild",
-            vec![
-                field("child", node(child)),
-                field("parentId", s(parent_id)),
-                field("position", num(*position as f64)),
-            ],
+            vec![field("child", node(child)), field("parentId", s(parent_id))],
         ),
         TreeOp::RemoveNode { target } => case_obj("RemoveNode", vec![field("target", s(target))]),
         TreeOp::MoveNode {
             target,
             new_parent_id,
-            new_position,
         } => case_obj(
             "MoveNode",
             vec![
                 field("newParentId", s(new_parent_id)),
-                field("newPosition", num(*new_position as f64)),
                 field("target", s(target)),
             ],
         ),
