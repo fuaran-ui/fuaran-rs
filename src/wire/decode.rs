@@ -1506,12 +1506,12 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
     let fields = as_obj(path, j)?;
     match disc(path, fields)? {
         "Static" => {
-            let v = req(
-                path,
-                fields,
-                "value",
-                "Binding.Static value of the slot's expected type",
-            )?;
+            // Phase 677 — absence is structural: a MISSING `value` means the
+            // binding carries none, and the legacy `"value": null` spelling
+            // normalises to the same thing (§16 shorthand) by routing to the very
+            // same per-slot parse, so the two cannot disagree.
+            let null = JVal::Null;
+            let v = get(fields, "value").unwrap_or(&null);
             let value = slot.parse(&format!("{path}.value"), v)?;
             Ok(Binding::Static { value })
         }
@@ -1563,13 +1563,15 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
         "State" => {
             let key = req_string(path, fields, "key", "state key string")?;
             // Field aliases: initialValue / default → defaultValue.
-            let default_value =
-                match get_aliased(fields, "defaultValue", &["initialValue", "default"]) {
-                    None => slot.placeholder(),
-                    Some(v) => slot
-                        .parse(&format!("{path}.defaultValue"), v)
-                        .unwrap_or_else(|_| slot.placeholder()),
-                };
+            // Phase 677 — an ABSENT default decodes exactly as the legacy
+            // `"defaultValue": null` did, or the encoder re-emits a placeholder
+            // and the round-trip breaks (caught by `form-declarative`).
+            let null = JVal::Null;
+            let raw =
+                get_aliased(fields, "defaultValue", &["initialValue", "default"]).unwrap_or(&null);
+            let default_value = slot
+                .parse(&format!("{path}.defaultValue"), raw)
+                .unwrap_or_else(|_| slot.placeholder());
             Ok(Binding::State { key, default_value })
         }
         "Computed" => Ok(Binding::Computed),

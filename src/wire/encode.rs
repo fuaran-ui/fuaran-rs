@@ -93,11 +93,23 @@ fn map_marker(m: &MapMarker) -> String {
     ])
 }
 
+/// Phase 677 — absence is STRUCTURAL, never a value. These payloads carry no
+/// value, so their key is omitted rather than emitting JSON `null`, for which
+/// the wire model has no case. A typed empty (`Options(vec![])`) is NOT absent:
+/// "no selection" and "selected nothing" stay distinguishable.
+fn static_is_absent(v: &StaticValue) -> bool {
+    matches!(
+        v,
+        StaticValue::StringOpt(None) | StaticValue::Ast(JVal::Null)
+    )
+}
+
 fn static_value(v: &StaticValue) -> String {
     match v {
         StaticValue::Ast(j) => obj_value(j),
         StaticValue::Options(options) => arr(options.iter().map(select_option).collect()),
-        StaticValue::StringOpt(None) => "null".to_string(),
+        // Phase 677: unreachable — an absent payload omits its key upstream.
+        StaticValue::StringOpt(None) => String::new(),
         StaticValue::StringOpt(Some(x)) => s(x),
         StaticValue::StringList(items) => arr(items.iter().map(|x| s(x)).collect()),
         StaticValue::FloatSeq(items) => arr(items.iter().map(|&x| num(x)).collect()),
@@ -396,7 +408,15 @@ fn flush_trigger(t: &LocalFlushTrigger) -> String {
 
 fn binding(b: &Binding) -> String {
     match b {
-        Binding::Static { value } => case_obj("Static", vec![field("value", static_value(value))]),
+        Binding::Static { value } => {
+            // Phase 677 — an absent payload omits the key; it never emits null.
+            let fields = if static_is_absent(value) {
+                vec![]
+            } else {
+                vec![field("value", static_value(value))]
+            };
+            case_obj("Static", fields)
+        }
         // 0.2.0 — the no-information `accessor` closure sentinel is OFF the
         // wire (no decoder ever read it); a decoded Query synthesises the
         // identity projection.
@@ -441,13 +461,17 @@ fn binding(b: &Binding) -> String {
             fields.push(field("nodeId", s(node_id)));
             case_obj("Selection", fields)
         }
-        Binding::State { key, default_value } => case_obj(
-            "State",
-            vec![
-                field("defaultValue", static_value(default_value)),
-                field("key", s(key)),
-            ],
-        ),
+        Binding::State { key, default_value } => {
+            // Phase 677 — same rule as `Static`: absence omits, never null.
+            let mut fields = vec![];
+
+            if !static_is_absent(default_value) {
+                fields.push(field("defaultValue", static_value(default_value)));
+            }
+
+            fields.push(field("key", s(key)));
+            case_obj("State", fields)
+        }
         Binding::Computed => case_obj("Computed", vec![field("fn", CLOSURE.to_string())]),
         Binding::I18n { key, args } => {
             let mut fields = vec![];
