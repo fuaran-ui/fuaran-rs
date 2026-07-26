@@ -32,7 +32,7 @@ co-equal conformant host. Cross-repo development conventions (port allocation, f
 - **Apache 2.0 from day one** — same posture as `fuaran-ts` / `fuaran-py` /
   `fuaran-go`, to make the reference-implementation claim unambiguous.
 - **Sibling reference implementation, not a transpile.** `fuaran-rs` is built to the
-  language-neutral wire-format spec (`../fuaran/docs/WIRE_FORMAT.md`) + the
+  language-neutral wire-format spec (`../fuaran-dotnet/docs/WIRE_FORMAT.md`) + the
   conformance corpus (`../wire-format-fixtures/`), not generated from any other tier.
   There is no Rust transpile path and none is wanted — the hard part (the canonical
   number form) is hand-written for every host regardless.
@@ -101,7 +101,7 @@ with a `cargo clippy -D warnings` lint gate.
 ## Wire format
 
 The canonical wire format is owned by the F# `fuaran` tier
-(`../fuaran/docs/WIRE_FORMAT.md`) with the workspace-level `../wire-format-fixtures/`
+(`../fuaran-dotnet/docs/WIRE_FORMAT.md`) with the workspace-level `../wire-format-fixtures/`
 corpus as the executable conformance suite. `fuaran-rs` is one conformant host: it
 must round-trip the corpus byte-for-byte and surface the canonical reject code + path
 for every malformed fixture. The **forward-coupling rule** (`WIRE_FORMAT.md` §11)
