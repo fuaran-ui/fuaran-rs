@@ -2861,71 +2861,6 @@ fn decode_box_spec(path: &str, j: &JVal) -> DResult<BoxSpec> {
     })
 }
 
-// Legacy decode-upgrades: the four retired container tags fold into the
-// equivalent `Box` on read (permalink / op-stream compatibility) and never
-// re-encode to their old form.
-
-fn decode_legacy_dashboard(path: &str, j: &JVal) -> DResult<BoxSpec> {
-    let fields = as_obj(path, j)?;
-    Ok(BoxSpec {
-        children: decode_children(path, fields)?,
-        heading: None,
-        layout: BoxLayout::Auto,
-        role: BoxRole::Dashboard,
-    })
-}
-
-fn decode_legacy_stack(path: &str, j: &JVal) -> DResult<BoxSpec> {
-    let fields = as_obj(path, j)?;
-    let children = decode_children(path, fields)?;
-    let orientation_j = req(path, fields, "orientation", "Orientation")?;
-    let direction = decode_orientation(&format!("{path}.orientation"), orientation_j)?;
-    let wrap = req_bool(path, fields, "wrap", "wrap bool")?;
-    Ok(BoxSpec {
-        children,
-        heading: None,
-        layout: BoxLayout::Flex {
-            direction,
-            gap: None,
-            wrap,
-        },
-        role: BoxRole::Group,
-    })
-}
-
-fn decode_legacy_grid_layout(path: &str, j: &JVal) -> DResult<BoxSpec> {
-    let fields = as_obj(path, j)?;
-    let children = decode_children(path, fields)?;
-    let cols = req_int(path, fields, "cols", "cols integer")?;
-    let template_columns = opt_string(path, fields, "templateColumns")?;
-    Ok(BoxSpec {
-        children,
-        heading: None,
-        layout: BoxLayout::Grid {
-            cols,
-            gap: None,
-            template_columns,
-        },
-        role: BoxRole::Group,
-    })
-}
-
-fn decode_legacy_card(path: &str, j: &JVal) -> DResult<BoxSpec> {
-    let fields = as_obj(path, j)?;
-    let children = decode_children(path, fields)?;
-    let heading = opt_text_source(path, fields, "heading")?;
-    Ok(BoxSpec {
-        children,
-        heading,
-        layout: BoxLayout::Flex {
-            direction: Orientation::Vertical,
-            gap: None,
-            wrap: false,
-        },
-        role: BoxRole::Card,
-    })
-}
-
 fn decode_split_panel_spec(path: &str, j: &JVal) -> DResult<SplitPanelSpec> {
     let fields = as_obj(path, j)?;
     let children = decode_children(path, fields)?;
@@ -3242,17 +3177,13 @@ fn decode_fragment_args(path: &str, j: &JVal) -> DResult<Vec<(String, FragmentAr
 
 // ─── NodeKind ────────────────────────────────────────────────────────────────
 
-const WRONG_NODE_KIND_HINT: &str = "a Layout primitive (Box | Dashboard | Stack | GridLayout | SplitPanel | Tabs | Card | Stepper | SummaryList | Disclosure | Modal | ScrollArea), a Display primitive (Heading | Markdown | Metric | Badge | Sparkline | Callout | Progress | Skeleton | LabelValueRow | Fact | Link | Image | List | Toast | CodeBlock | Math | Drawing), an Input primitive (Form | Filters | Button | FileUpload | Select), a Visualisation primitive (DataGrid | Chart | Table | Map), or Custom | ErrorBoundary | Switch | FragmentDecl | FragmentRef | Mount";
+const WRONG_NODE_KIND_HINT: &str = "a Layout primitive (Box | SplitPanel | Tabs | Stepper | SummaryList | Disclosure | Modal | ScrollArea), a Display primitive (Heading | Markdown | Metric | Badge | Sparkline | Callout | Progress | Skeleton | LabelValueRow | Fact | Link | Image | List | Toast | CodeBlock | Math | Drawing), an Input primitive (Form | Filters | Button | FileUpload | Select), a Visualisation primitive (DataGrid | Chart | Map), or Custom | ErrorBoundary | Switch | FragmentDecl | FragmentRef | Mount";
 
 fn decode_node_kind(path: &str, j: &JVal) -> DResult<NodeKind> {
     let fields = as_obj(path, j)?;
     match disc(path, fields)? {
-        // Layout (incl. the four legacy decode-upgrade tags).
+        // Layout.
         "Box" => Ok(NodeKind::Box(decode_box_spec(path, j)?)),
-        "Dashboard" => Ok(NodeKind::Box(decode_legacy_dashboard(path, j)?)),
-        "Stack" => Ok(NodeKind::Box(decode_legacy_stack(path, j)?)),
-        "GridLayout" => Ok(NodeKind::Box(decode_legacy_grid_layout(path, j)?)),
-        "Card" => Ok(NodeKind::Box(decode_legacy_card(path, j)?)),
         "SplitPanel" => Ok(NodeKind::SplitPanel(decode_split_panel_spec(path, j)?)),
         "Tabs" => Ok(NodeKind::Tabs(decode_tabs_spec(path, j)?)),
         "Stepper" => Ok(NodeKind::Stepper(decode_stepper_spec(path, j)?)),
@@ -3297,22 +3228,6 @@ fn decode_node_kind(path: &str, j: &JVal) -> DResult<NodeKind> {
         // Visualisation.
         "DataGrid" => Ok(NodeKind::DataGrid(decode_grid_spec(path, j)?)),
         "Chart" => Ok(NodeKind::Chart(decode_chart_spec(path, j)?)),
-        // Legacy decode-upgrade: a `Table` tag folds into a read-only grid
-        // (the staticRows mode) and never re-encodes as `Table`.
-        "Table" => {
-            let rows = decode_static_rows(path, j)?;
-            Ok(NodeKind::DataGrid(GridSpec {
-                columns: vec![],
-                editable: false,
-                source: Binding::Static {
-                    value: StaticValue::Ast(JVal::Str(OPAQUE.to_string())),
-                },
-                on_row_click: None,
-                row_key: None,
-                row_key_field: None,
-                static_rows: Some(rows),
-            }))
-        }
         "Map" => Ok(NodeKind::Map(decode_map_spec(path, j)?)),
         // Structural.
         "Custom" => {
