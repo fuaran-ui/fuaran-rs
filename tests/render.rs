@@ -321,37 +321,94 @@ fn hydratable_render_embeds_the_whole_tree() {
     assert!(!payload[inner_start..inner_end].contains('<'));
 }
 
-// ─── Reference-CSS byte-copy parity ──────────────────────────────────────────
+// ─── Reference-host resolution (the parity oracles' shared seam) ─────────────
+
+/// The spellings the F# reference host has shipped under. It was renamed once
+/// (`fuaran` → `fuaran-dotnet`) and this file's path was not updated, so the
+/// byte-parity oracle below silently returned early for as long as the rename was
+/// old — a gate reporting success while checking nothing. Accepting both means a
+/// rename in either direction cannot disable it again.
+const REFERENCE_HOST_NAMES: &[&str] = &["fuaran-dotnet", "fuaran"];
+
+/// Sibling hosts whose presence proves this is a cross-host checkout (the shape
+/// the conformance gate builds) rather than a standalone clone. Excludes this
+/// host and the reference host.
+const OTHER_HOST_NAMES: &[&str] = &[
+    "fuaran-ts",
+    "fuaran-py",
+    "fuaran-go",
+    "fuaran-kt",
+    "fuaran-swift",
+];
+
+/// Locates the F# reference host by walking up from the crate directory.
+///
+/// `None` means "genuinely standalone — skip", and that case is correct: it is
+/// why the guard exists. What is NOT correct is skipping in a cross-host
+/// checkout, where a missing reference host means the oracle has been silently
+/// disabled — so that case **panics** instead, naming what was tried.
+fn reference_host_root() -> Option<PathBuf> {
+    let crate_dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
+    let mut dir = crate_dir.clone();
+    loop {
+        for name in REFERENCE_HOST_NAMES {
+            if dir.join(name).join("src").is_dir() {
+                return Some(dir.join(name));
+            }
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    // Not found anywhere up the tree. Is this a standalone clone, or a
+    // cross-host checkout whose reference host moved?
+    let mut dir = crate_dir.clone();
+    loop {
+        for sibling in OTHER_HOST_NAMES {
+            if dir.join(sibling).is_dir() {
+                panic!(
+                    "cross-host checkout detected ({sibling}/ is present under {}) but the F# reference host is at \
+                     none of {REFERENCE_HOST_NAMES:?} — the render-parity oracles cannot run. This is the failure \
+                     mode this check exists for: if the sibling was renamed again, add the new spelling to \
+                     REFERENCE_HOST_NAMES rather than letting the oracle skip.",
+                    dir.display()
+                );
+            }
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
+}
 
 #[test]
 fn reference_css_byte_copy_matches_the_reference_artefact() {
     let crate_dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
     let local = crate_dir.join("css").join("fuaran.css");
     let local_bytes = std::fs::read(&local).expect("css/fuaran.css ships with the crate");
-    // The reference artefact lives in the sibling checkout; skip standalone.
-    let mut dir = crate_dir.clone();
-    let reference = loop {
-        let candidate = dir
-            .join("fuaran")
-            .join("src")
-            .join("Fuaran.UI.Renderer")
-            .join("content")
-            .join("fuaran-reference.css");
-        if candidate.is_file() {
-            break Some(candidate);
-        }
-        if !dir.pop() {
-            break None;
-        }
-    };
-    let Some(reference) = reference else {
+    let Some(root) = reference_host_root() else {
         eprintln!("reference stylesheet not found; skipping byte-parity (standalone checkout)");
         return;
     };
-    let reference_bytes = std::fs::read(&reference).expect("reading reference stylesheet");
+    let reference = root
+        .join("src")
+        .join("Fuaran.UI.Renderer")
+        .join("content")
+        .join("fuaran-reference.css");
+    // NOT an early return — the host was located, so a missing stylesheet is a
+    // moved artefact, not a standalone clone.
+    let reference_bytes = std::fs::read(&reference).unwrap_or_else(|e| {
+        panic!("canonical stylesheet missing inside the located reference host {reference:?}: {e}")
+    });
     assert_eq!(
         local_bytes, reference_bytes,
         "css/fuaran.css must stay a byte-copy of the reference stylesheet"
+    );
+    eprintln!(
+        "reference-CSS byte parity EXECUTED against {} ({} bytes)",
+        reference.display(),
+        reference_bytes.len()
     );
 }
 
@@ -645,4 +702,229 @@ fn date_range_variants_select_their_native_input_type() {
             "{variant}: {html}"
         );
     }
+}
+
+// ─── Class-vocabulary parity ─────────────────────────────────────────────────
+
+/// The rendering analogue of the wire corpus: every `fuaran-*` class this host
+/// emits must appear in the reference renderer's vocabulary.
+///
+/// This host had **no such oracle at all** — Phase 747 found the Go one dormant
+/// (a stale sibling path) and assumed the same hid Rust's known class
+/// divergence. It did not: there was nothing to be dormant. Added here so the
+/// divergence is measured rather than asserted, and so a future wrong class name
+/// in this host is caught by a gate instead of by review.
+/// Extracts (exact classes, composition prefixes) from the reference renderer
+/// sources. `None` only on a genuine standalone checkout.
+fn reference_vocabulary() -> Option<(std::collections::BTreeSet<String>, Vec<String>)> {
+    let root = reference_host_root()?;
+    let sources = [
+        root.join("src")
+            .join("Fuaran.UI.Renderer.Server")
+            .join("Render.fs"),
+        root.join("src")
+            .join("Fuaran.UI.Renderer")
+            .join("Render.fs"),
+        root.join("src")
+            .join("Fuaran.UI.Renderer.Core")
+            .join("Theme.fs"),
+        root.join("src")
+            .join("Fuaran.UI.Renderer.Core")
+            .join("DrawingSvg.fs"),
+    ];
+
+    // A token ending in '-' is a composition prefix (fuaran-metric- styles
+    // fuaran-metric-brand). The BARE namespace is not: it occurs in the
+    // reference sources as a string-concatenation fragment, and admitting it
+    // would match every class this oracle collects, making the whole check
+    // vacuous — the exact defect the Go twin was carrying.
+    let mut exact: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut prefixes: Vec<String> = Vec::new();
+    for path in &sources {
+        let raw = std::fs::read_to_string(path).unwrap_or_else(|e| {
+            panic!("reference renderer source missing inside the located host {path:?}: {e}")
+        });
+        for token in class_tokens(&raw) {
+            if token.ends_with('-') {
+                if token != "fuaran-" {
+                    prefixes.push(token);
+                }
+            } else {
+                exact.insert(token);
+            }
+        }
+    }
+    assert!(
+        exact.len() > 50 && exact.contains("fuaran-node"),
+        "reference vocabulary extraction looks broken: {} exact classes",
+        exact.len()
+    );
+    Some((exact, prefixes))
+}
+
+#[test]
+fn emitted_class_vocabulary_matches_the_reference_renderer() {
+    let Some((exact, prefixes)) = reference_vocabulary() else {
+        eprintln!("reference renderer not found; skipping class parity (standalone checkout)");
+        return;
+    };
+    let in_vocab = |cls: &str| exact.contains(cls) || prefixes.iter().any(|p| cls.starts_with(p));
+
+    let Some(corpus) = find_corpus_dir() else {
+        eprintln!("corpus not found; skipping class parity");
+        return;
+    };
+    let manifest_raw =
+        std::fs::read_to_string(corpus.join("manifest.json")).expect("reading manifest");
+    let manifest = parse(&manifest_raw).expect("manifest parses");
+    let JVal::Arr(fixtures) = manifest.field("fixtures").expect("fixtures array") else {
+        panic!("manifest fixtures is not an array");
+    };
+
+    let mut ran = 0usize;
+    let mut checked = 0usize;
+    let mut offenders: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for fx in fixtures {
+        let Some(JVal::Str(kind)) = fx.field("kind") else {
+            continue;
+        };
+        if kind != "node-round-trip" {
+            continue;
+        }
+        let Some(JVal::Str(input)) = fx.field("inputFile") else {
+            continue;
+        };
+        let text = std::fs::read_to_string(corpus.join(input)).expect("reading fixture");
+        let tree = decode_node(text.trim_end()).expect("fixture decodes");
+        let html = render_to_html(&tree, &BindingSources::default());
+        ran += 1;
+        for cls in emitted_classes(&html) {
+            checked += 1;
+            if !in_vocab(&cls) {
+                offenders.insert(cls);
+            }
+        }
+    }
+
+    // A pass proves nothing unless the oracle looked at something.
+    assert!(
+        ran > 0 && checked > 0,
+        "class-vocabulary oracle checked nothing ({ran} fixtures, {checked} class occurrences)"
+    );
+    eprintln!(
+        "class-vocabulary parity EXECUTED: {ran} fixtures, {checked} emitted-class occurrences, {} reference classes",
+        exact.len()
+    );
+    assert!(
+        offenders.is_empty(),
+        "emitted classes absent from the reference renderer vocabulary: {offenders:?}"
+    );
+}
+
+fn class_tokens(source: &str) -> Vec<String> {
+    // Equivalent of the Go twin's `fuaran-[a-zA-Z0-9-]*`, hand-scanned to keep
+    // the crate dependency-free (regex is not a dependency here, by mandate).
+    let bytes = source.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while let Some(rel) = source[i..].find("fuaran-") {
+        let start = i + rel;
+        let mut end = start + "fuaran-".len();
+        while end < bytes.len() {
+            let c = bytes[end] as char;
+            if c.is_ascii_alphanumeric() || c == '-' {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        out.push(source[start..end].to_string());
+        i = end.max(start + 1);
+    }
+    out
+}
+
+fn emitted_classes(html: &str) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let mut rest = html;
+    while let Some(idx) = rest.find("class=\"") {
+        let after = &rest[idx + 7..];
+        let Some(end) = after.find('"') else { break };
+        for tok in after[..end].split_whitespace() {
+            if tok.starts_with("fuaran-") {
+                out.insert(tok.to_string());
+            }
+        }
+        rest = &after[end..];
+    }
+    out
+}
+
+fn find_corpus_dir() -> Option<PathBuf> {
+    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
+    loop {
+        let root = dir.join("wire-format-fixtures");
+        if root.join("manifest.json").is_file() {
+            return Some(root);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+/// The corpus alone does NOT measure the form-control class vocabulary: it
+/// carries `Range` only through the `Filters` carrier (one fixture,
+/// `filters-declarative`), and a filter chip renders through a different arm with
+/// a different — and already correct — `fuaran-filter-range*` vocabulary. So the
+/// form-field `Range` arm's divergent `fuaran-form-range*` spelling was invisible
+/// to every gate, including the corpus-driven oracle above.
+///
+/// This drives a synthetic Form carrying every `FormFieldKind` through
+/// `render_form_control` and holds the emitted classes to the same reference
+/// vocabulary. Phase 747 — the finding that motivated it is that a parity oracle
+/// is only as good as the render paths its inputs reach.
+#[test]
+fn form_control_class_vocabulary_matches_the_reference_renderer() {
+    let Some((exact, prefixes)) = reference_vocabulary() else {
+        eprintln!("reference renderer not found; skipping (standalone checkout)");
+        return;
+    };
+    let in_vocab = |cls: &str| exact.contains(cls) || prefixes.iter().any(|p| cls.starts_with(p));
+
+    // One field per control kind — the whole FormFieldKind vocabulary.
+    let fields = [
+        r#"{"id":"f-text","kind":{"$type":"Text"},"label":"T","required":false}"#,
+        r#"{"id":"f-num","kind":{"$type":"Number"},"label":"N","required":false}"#,
+        r#"{"id":"f-check","kind":{"$type":"Checkbox"},"label":"C","required":false}"#,
+        r#"{"id":"f-choice","kind":{"$type":"Choice","options":[{"label":"A","value":"a"}]},"label":"Ch","required":false}"#,
+        r#"{"id":"f-seg","kind":{"$type":"SegmentedChoice","options":[{"label":"A","value":"a"}],"orientation":"Horizontal"},"label":"S","required":false}"#,
+        r#"{"id":"f-area","kind":{"$type":"TextArea","rows":3},"label":"A","required":false}"#,
+        r#"{"id":"f-rnum","kind":{"$type":"RangedNumber","max":10,"min":0},"label":"R","required":false}"#,
+        r#"{"id":"f-range","kind":{"$type":"Range","max":10,"min":0,"value":{"max":8,"min":2}},"label":"Rg","required":false}"#,
+        r#"{"id":"f-date","kind":{"$type":"Date","variant":"Date"},"label":"D","required":false}"#,
+        r#"{"id":"f-drange","kind":{"$type":"DateRange","value":{"from":"2026-03-01","to":"2026-03-08"},"variant":"Date"},"label":"DR","required":false}"#,
+    ];
+    let json = format!(
+        r#"{{"id":"form","kind":{{"$type":"Form","fields":[{}],"onSubmit":{{"$type":"Dispatch"}},"submitLabel":"Go"}}}}"#,
+        fields.join(",")
+    );
+    let html = render(&json);
+
+    let emitted = emitted_classes(&html);
+    assert!(
+        emitted.len() > 15,
+        "synthetic form emitted too few classes ({}) — it is not reaching the control arms",
+        emitted.len()
+    );
+    let offenders: Vec<&String> = emitted.iter().filter(|c| !in_vocab(c)).collect();
+    eprintln!(
+        "form-control class parity EXECUTED: {} distinct classes over {} control kinds",
+        emitted.len(),
+        fields.len()
+    );
+    assert!(
+        offenders.is_empty(),
+        "form-control classes absent from the reference renderer vocabulary: {offenders:?}"
+    );
 }

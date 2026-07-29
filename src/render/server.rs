@@ -1666,6 +1666,15 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
         } => {
             // 0.2.0 dual-thumb range: two bounded number inputs over the
             // resolved (min, max) pair.
+            //
+            // Class vocabulary reconciled to the reference renderer (Phase 747).
+            // This arm emitted `fuaran-form-range*`, which matches NEITHER of the
+            // reference's two context-dependent spellings — `fuaran-filter-range*`
+            // for a filter chip (this host's filter path already gets that right)
+            // and `fuaran-field-range*` for a form field, which is this path. The
+            // divergence survived because no gate measured it: the parity oracle
+            // this host now has did not exist, and the corpus exercises `Range`
+            // only through the Filters carrier, so it is invisible there too.
             let (lo, hi) = resolve_float_pair(ctx.sources, value).unwrap_or((0.0, 0.0));
             let bound_attrs = |v: f64, class: &'static str| {
                 let mut attrs: Vec<Attr> = vec![
@@ -1684,14 +1693,20 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
             el(
                 "span",
                 &[
-                    ("class", s("fuaran-form-range")),
+                    ("class", s("fuaran-field-range")),
                     ("id", s(field.id.clone())),
                 ],
                 &format!(
                     "{}{}{}",
-                    void_el("input", &bound_attrs(lo, "fuaran-form-range-min")),
-                    text_el("span", &[("class", s("fuaran-form-range-sep"))], "–"),
-                    void_el("input", &bound_attrs(hi, "fuaran-form-range-max"))
+                    void_el(
+                        "input",
+                        &bound_attrs(lo, "fuaran-form-field-control fuaran-field-range-min")
+                    ),
+                    text_el("span", &[("class", s("fuaran-field-range-sep"))], "–"),
+                    void_el(
+                        "input",
+                        &bound_attrs(hi, "fuaran-form-field-control fuaran-field-range-max")
+                    )
                 ),
             )
         }
