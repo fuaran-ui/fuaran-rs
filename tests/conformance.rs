@@ -128,6 +128,140 @@ fn node_kind_set_matches_manifest() {
     );
 }
 
+/// Phase 746 control-vocabulary attestation — the `node_kind_set_matches_manifest`
+/// twin over `FormFieldKind`. The kind-set pin only ever covered NodeKind, so a
+/// control-vocabulary commit that skipped this host stayed silent until a fixture
+/// happened to exercise it; this leg names the missing case ("rust decoder lacks
+/// DateRange") at the host's next test run instead.
+#[test]
+fn form_field_kind_set_matches_manifest() {
+    let Some(corpus) = find_corpus() else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+    let raw = std::fs::read_to_string(corpus.join("manifest.json")).expect("reading manifest");
+    let manifest = parse(&raw).expect("manifest.json parses with the host's own JSON layer");
+    let Some(JVal::Arr(entries)) = manifest.field("formFieldKinds") else {
+        panic!(
+            "manifest.json declares no 'formFieldKinds' array — regenerate the corpus with --emit-corpus"
+        );
+    };
+
+    let manifest_kinds: std::collections::BTreeSet<String> = entries
+        .iter()
+        .filter_map(|e| match e {
+            JVal::Str(s) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    let decoder_kinds: std::collections::BTreeSet<String> =
+        fuaran_rs::wire::CANONICAL_FORM_FIELD_KINDS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+
+    let missing: Vec<&String> = manifest_kinds.difference(&decoder_kinds).collect();
+    let extra: Vec<&String> = decoder_kinds.difference(&manifest_kinds).collect();
+
+    assert!(
+        missing.is_empty(),
+        "manifest form-field kinds the rust decoder lacks (add the FormFieldKind variant + CANONICAL_FORM_FIELD_KINDS entry): {missing:?}"
+    );
+    assert!(
+        extra.is_empty(),
+        "rust decoder form-field kinds the manifest omits (regenerate the corpus with --emit-corpus): {extra:?}"
+    );
+}
+
+/// The FormFieldKind carrier rule (WIRE_FORMAT §11.2): a control discriminator is
+/// reached through the PARENT node kind's `$type` — `"Form"` → `fields`,
+/// `"Filters"` → `items` — never by property name. `DataGrid.columns[].kind.$type`
+/// is a `CellKindErased` sharing spellings (`Text`, `Date`, `Checkbox`) with the
+/// control vocabulary, so a property-name heuristic would attest the wrong family
+/// and report green.
+fn collect_control_kinds(raw: &JVal, controls: &mut std::collections::BTreeSet<String>) {
+    let Some(kind) = raw.field("kind") else {
+        return;
+    };
+    if let Some(JVal::Str(tag)) = kind.field("$type") {
+        let carrier = match tag.as_str() {
+            "Form" => Some("fields"),
+            "Filters" => Some("items"),
+            _ => None,
+        };
+        if let Some(carrier) = carrier
+            && let Some(JVal::Arr(items)) = kind.field(carrier)
+        {
+            for item in items {
+                if let Some(control) = item.field("kind")
+                    && let Some(JVal::Str(control_tag)) = control.field("$type")
+                {
+                    controls.insert(control_tag.clone());
+                }
+            }
+        }
+    }
+    // Recurse the node-bearing positions a control carrier can nest under.
+    for slot in ["child", "fallback", "default", "body"] {
+        if let Some(inner) = kind.field(slot) {
+            collect_control_kinds(inner, controls);
+        }
+    }
+    if let Some(JVal::Arr(children)) = kind.field("children") {
+        for c in children {
+            collect_control_kinds(c, controls);
+        }
+    }
+    if let Some(JVal::Arr(cases)) = kind.field("cases") {
+        for c in cases {
+            if let Some(inner) = c.field("child") {
+                collect_control_kinds(inner, controls);
+            }
+        }
+    }
+}
+
+/// The corpus-driven exhaustiveness guard for the control vocabulary: every
+/// FormFieldKind discriminator a round-trip fixture carries must be a case the
+/// decoder recognises. Rust's `enum`s make the five value-level matches
+/// compiler-checked, but `decode_form_field_kind` is string-dispatch with an
+/// `other =>` fallback — this leg is what covers that gap.
+#[test]
+fn corpus_control_kinds_are_all_recognised() {
+    let Some(corpus) = find_corpus() else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+    let known: std::collections::BTreeSet<String> = fuaran_rs::wire::CANONICAL_FORM_FIELD_KINDS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+
+    let mut seen = std::collections::BTreeSet::new();
+    for fx in load_manifest(&corpus) {
+        if fx.kind != "node-round-trip" {
+            continue;
+        }
+        let text = read_fixture(&corpus, &fx.input_file);
+        let parsed = parse(&text).expect("fixture parses");
+        collect_control_kinds(&parsed, &mut seen);
+    }
+
+    let unknown: Vec<&String> = seen.difference(&known).collect();
+    assert!(
+        unknown.is_empty(),
+        "corpus carries form-field kinds the decoder does not recognise — add the case (forward-coupling rule): {unknown:?}"
+    );
+    assert!(
+        !seen.is_empty(),
+        "control-vocabulary guard collected no discriminators — the sweep is not reaching the carriers"
+    );
+    eprintln!(
+        "control-vocabulary guard: {} form-field kinds exercised by the corpus",
+        seen.len()
+    );
+}
+
 /// The round-trip legs: every node + op fixture must re-encode byte-identically.
 #[test]
 fn corpus_round_trips_byte_identical() {

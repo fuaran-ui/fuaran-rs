@@ -43,8 +43,8 @@ use crate::wire::{
 use super::bindings::{
     BindingSources, EM_DASH, NumberResolution, ResolvedRows, accessibility_attributes,
     display_number, format_number, render_text, resolve_float_pair, resolve_float_seq,
-    resolve_number, resolve_options, resolve_rows, resolve_scalar_number, try_bool, try_number,
-    try_scalar_number, try_string,
+    resolve_number, resolve_options, resolve_rows, resolve_scalar_number, resolve_string_pair,
+    try_bool, try_number, try_scalar_number, try_string,
 };
 use super::class_names::{node_class_name, tone_var};
 use super::html::{Attr, AttrVal, el, escape_attr, escape_text, text_el, void_el};
@@ -1807,6 +1807,72 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
                 attrs.push(("step", s(display_number(*step))));
             }
             void_el("input", &attrs)
+        }
+        FormFieldKind::DateRange {
+            value,
+            variant,
+            min,
+            max,
+            step,
+            ..
+        } => {
+            // 0.7.0 — SSR parity with the client's dual-input range: two native
+            // date/time inputs (per variant) over the pair's ends, sharing the
+            // min/max/step attributes. Inert like every other server-rendered
+            // control; only the FROM end carries `data-fuaran-field` — it is the
+            // pair's addressable slot. Class vocabulary follows the reference
+            // server renderer (`fuaran-field-range*` + `fuaran-form-field-control`),
+            // NOT this file's older `fuaran-form-range*` spellings, which have no
+            // counterpart there.
+            let input_type = match variant {
+                crate::wire::DateVariant::Time => "time",
+                crate::wire::DateVariant::DateTime => "datetime-local",
+                crate::wire::DateVariant::Date => "date",
+            };
+            let (from_v, to_v) = resolve_string_pair(ctx.sources, value)
+                .unwrap_or_else(|| (String::new(), String::new()));
+            let end_attrs = |v: &str, class: &'static str, addressable: bool| {
+                let mut attrs: Vec<Attr> = vec![("class", s(class))];
+                if addressable {
+                    attrs.push(("data-fuaran-field", s(field.id.clone())));
+                }
+                attrs.push(("type", s(input_type)));
+                attrs.push(("value", s(v.to_string())));
+                if let Some(min) = min {
+                    attrs.push(("min", s(min.clone())));
+                }
+                if let Some(max) = max {
+                    attrs.push(("max", s(max.clone())));
+                }
+                if let Some(step) = step {
+                    attrs.push(("step", s(display_number(*step))));
+                }
+                attrs
+            };
+            el(
+                "span",
+                &[("class", s("fuaran-field-range"))],
+                &format!(
+                    "{}{}{}",
+                    void_el(
+                        "input",
+                        &end_attrs(
+                            &from_v,
+                            "fuaran-form-field-control fuaran-field-range-min",
+                            true
+                        )
+                    ),
+                    text_el("span", &[("class", s("fuaran-field-range-sep"))], "–"),
+                    void_el(
+                        "input",
+                        &end_attrs(
+                            &to_v,
+                            "fuaran-form-field-control fuaran-field-range-max",
+                            false
+                        )
+                    )
+                ),
+            )
         }
     }
 }

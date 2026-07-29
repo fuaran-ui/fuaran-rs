@@ -594,3 +594,55 @@ fn resolved_projection_preserves_selection_defaults() {
         "the related grid survives the projection"
     );
 }
+
+#[test]
+fn date_range_renders_two_variant_typed_inputs_over_the_pair() {
+    // 0.7.0 — the single-control date range. Mirrors the reference SERVER
+    // renderer: a `fuaran-field-range` span over two variant-typed inputs and a
+    // separator, where only the FROM end carries `data-fuaran-field` (the pair's
+    // addressable slot) and both ends share the min/max/step constraints.
+    let html = render(
+        r#"{"id":"f1","kind":{"$type":"Form","fields":[{"id":"stay","kind":{"$type":"DateRange","max":"2026-12-31","min":"2026-01-01","value":{"from":"2026-03-01","to":"2026-03-08"},"variant":"Date"},"label":"Stay","required":true}],"onSubmit":{"$type":"Dispatch"},"submitLabel":"Book"}}"#,
+    );
+    assert!(
+        html.contains("<span class=\"fuaran-field-range\">"),
+        "{html}"
+    );
+    assert!(
+        html.contains("fuaran-form-field-control fuaran-field-range-min"),
+        "{html}"
+    );
+    assert!(
+        html.contains("fuaran-form-field-control fuaran-field-range-max"),
+        "{html}"
+    );
+    assert!(html.contains("fuaran-field-range-sep"), "{html}");
+    // The resolved pair reaches both ends, in order.
+    assert!(html.contains("value=\"2026-03-01\""), "{html}");
+    assert!(html.contains("value=\"2026-03-08\""), "{html}");
+    // Only the FROM end is addressable.
+    assert_eq!(
+        html.matches("data-fuaran-field=\"stay\"").count(),
+        1,
+        "{html}"
+    );
+    // Shared constraints ride BOTH ends.
+    assert_eq!(html.matches("min=\"2026-01-01\"").count(), 2, "{html}");
+    assert_eq!(html.matches("max=\"2026-12-31\"").count(), 2, "{html}");
+    // Variant drives the native input type.
+    assert_eq!(html.matches("type=\"date\"").count(), 2, "{html}");
+}
+
+#[test]
+fn date_range_variants_select_their_native_input_type() {
+    for (variant, expected) in [("Time", "time"), ("DateTime", "datetime-local")] {
+        let html = render(&format!(
+            r#"{{"id":"f1","kind":{{"$type":"Form","fields":[{{"id":"w","kind":{{"$type":"DateRange","variant":"{variant}"}},"label":"W","required":false}}],"onSubmit":{{"$type":"Dispatch"}},"submitLabel":"Go"}}}}"#
+        ));
+        assert_eq!(
+            html.matches(&format!("type=\"{expected}\"")).count(),
+            2,
+            "{variant}: {html}"
+        );
+    }
+}

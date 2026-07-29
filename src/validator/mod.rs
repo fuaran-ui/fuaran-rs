@@ -368,6 +368,9 @@ impl Walker {
             }
             | FormFieldKind::Date {
                 value, on_change, ..
+            }
+            | FormFieldKind::DateRange {
+                value, on_change, ..
             } => {
                 if on_change.is_none() {
                     self.check_writable(id, "value", value);

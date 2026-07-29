@@ -1240,6 +1240,8 @@ enum StaticSlot {
     Markers,
     /// The 0.2.0 `FormFieldKind.Range` dual-thumb `(min, max)` pair.
     FloatPair,
+    /// The 0.7.0 `FormFieldKind.DateRange` ordered `(from, to)` ISO-8601 pair.
+    StringPair,
 }
 
 impl StaticSlot {
@@ -1257,6 +1259,7 @@ impl StaticSlot {
             StaticSlot::FloatSeq => StaticValue::FloatSeq(vec![]),
             StaticSlot::Markers => StaticValue::Markers(vec![]),
             StaticSlot::FloatPair => StaticValue::FloatPair(0.0, 0.0),
+            StaticSlot::StringPair => StaticValue::StringPair(String::new(), String::new()),
         }
     }
 
@@ -1340,6 +1343,55 @@ impl StaticSlot {
                     "range pair ({min, max} object or [min, max] array)",
                 )),
             },
+            StaticSlot::StringPair => {
+                // Didactic domain rule: a LITERAL pair must be ordered. Same-variant
+                // ISO-8601 strings sort lexicographically in chronological order, so
+                // Rust's byte-wise `str` Ord is an ordinal compare — total for every
+                // variant, no date parsing, no locale, no dependency. Only a literal
+                // pair is checked; a bound pair's ordering is a runtime concern.
+                let ordered = |from: String, to: String| -> DResult<StaticValue> {
+                    if from > to {
+                        return Err(make_error(
+                            DecodeErrorCode::WrongType,
+                            path,
+                            format!(
+                                "date-range start '{from}' is after end '{to}' — a DateRange pair \
+                                 is ordered (from <= to); ISO-8601 strings of one variant compare \
+                                 lexicographically, so swap the two values"
+                            ),
+                            Some(
+                                "ordered ISO-8601 pair ({\"from\": <iso>, \"to\": <iso>} with from <= to)"
+                                    .to_string(),
+                            ),
+                        ));
+                    }
+                    Ok(StaticValue::StringPair(from, to))
+                };
+                match v {
+                    // Canonical: the bare `{from, to}` object (no `Static`
+                    // envelope); lenient: a two-element `[from, to]` array.
+                    JVal::Obj(pf) => {
+                        let (Some(from_j), Some(to_j)) = (get(pf, "from"), get(pf, "to")) else {
+                            return Err(wrong_type(
+                                path,
+                                "object with from and to ISO-8601 strings",
+                            ));
+                        };
+                        let from = as_str(&format!("{path}.from"), from_j)?.to_string();
+                        let to = as_str(&format!("{path}.to"), to_j)?.to_string();
+                        ordered(from, to)
+                    }
+                    JVal::Arr(items) if items.len() == 2 => {
+                        let a = as_str(&format!("{path}[0]"), &items[0])?.to_string();
+                        let b = as_str(&format!("{path}[1]"), &items[1])?.to_string();
+                        ordered(a, b)
+                    }
+                    _ => Err(wrong_type(
+                        path,
+                        "date-range pair ({from, to} object or [from, to] array)",
+                    )),
+                }
+            }
         }
     }
 }
@@ -2148,7 +2200,7 @@ impl ControlAutoBind<'_> {
 /// The typed placeholders for the 0.2.1 form-field auto-bind, pinned by the
 /// reference implementations and the `form-declarative-minimal` fixture:
 /// empty string / `0` / `false` / null-choice / `{min 0, max 0}` / ISO-empty
-/// date.
+/// date / ISO-empty `{from, to}` pair.
 mod control_value_defaults {
     use super::*;
 
@@ -2169,6 +2221,9 @@ mod control_value_defaults {
     }
     pub fn date() -> StaticValue {
         StaticValue::Ast(JVal::Str(String::new()))
+    }
+    pub fn date_range() -> StaticValue {
+        StaticValue::StringPair(String::new(), String::new())
     }
 }
 
@@ -2283,10 +2338,42 @@ fn decode_form_field_kind(
                 on_change,
             })
         }
+        "DateRange" => {
+            // The canonical Static pair rides as the BARE `{from, to}` object (no
+            // `$type`) — accept it before the generic binding dispatch, exactly as
+            // `Range` does above. The `value_or` fallback is what carries BOTH
+            // lenient forms: `decode_binding_slot` routes a bare two-element array
+            // and a `Static` envelope into `slot.parse`.
+            let value = match get(fields, "value") {
+                Some(JVal::Obj(pf))
+                    if get(pf, "$type").is_none()
+                        && get(pf, "from").is_some()
+                        && get(pf, "to").is_some() =>
+                {
+                    Binding::Static {
+                        value: StaticSlot::StringPair
+                            .parse(&format!("{path}.value"), &JVal::Obj(pf.clone()))?,
+                    }
+                }
+                _ => value_or(StaticSlot::StringPair, control_value_defaults::date_range())?,
+            };
+            let variant_j = req(path, fields, "variant", "DateVariant")?;
+            let variant = decode_date_variant(&format!("{path}.variant"), variant_j)?;
+            Ok(FormFieldKind::DateRange {
+                value,
+                variant,
+                min: opt_string(path, fields, "min")?,
+                max: opt_string(path, fields, "max")?,
+                step: opt_float(path, fields, "step")?,
+                on_change,
+            })
+        }
+        // The hint is DERIVED from the canonical vocabulary, never hand-typed —
+        // the hand-typed form had already drifted (Phase 746).
         other => Err(unknown_du_case(
             path,
             other,
-            "Text | Number | Checkbox | Choice | Range | RangedNumber | SegmentedChoice | TextArea | Date",
+            &CANONICAL_FORM_FIELD_KINDS.join(" | "),
         )),
     }
 }

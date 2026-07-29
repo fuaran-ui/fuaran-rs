@@ -120,6 +120,9 @@ fn static_value(v: &StaticValue) -> String {
         StaticValue::FloatPair(min, max) => {
             obj(vec![field("max", num(*max)), field("min", num(*min))])
         }
+        // Likewise the DateRange pair rides as the bare `{from, to}` object
+        // (0.7.0) — envelope stripped at the value position (`form_field_kind`).
+        StaticValue::StringPair(from, to) => obj(vec![field("from", s(from)), field("to", s(to))]),
     }
 }
 
@@ -1154,6 +1157,9 @@ mod control_value_defaults {
     pub fn date() -> StaticValue {
         StaticValue::Ast(JVal::Str(String::new()))
     }
+    pub fn date_range() -> StaticValue {
+        StaticValue::StringPair(String::new(), String::new())
+    }
 }
 
 /// The `value` field for a control slot: omitted when it is exactly the
@@ -1348,6 +1354,53 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
                 fields.push(field("step", num(*step)));
             }
             case_obj("Date", fields)
+        }
+        // 0.7.0 — the single-control date range. Modelled on the `Range` arm, NOT
+        // on `Date`: `control_value_field` emits `binding(value)`, which wraps a
+        // `Static` in the `{"$type":"Static","value":…}` envelope — wrong for this
+        // slot, whose canonical form is the bare `{from, to}` object.
+        FormFieldKind::DateRange {
+            value,
+            variant,
+            min,
+            max,
+            step,
+            on_change,
+        } => {
+            let mut fields = handler_field("onChange", on_change);
+            let is_auto = match (auto_bind, value) {
+                (
+                    ControlAutoBind::FilterChip(n),
+                    Binding::Filter {
+                        name,
+                        default_value: None,
+                    },
+                ) => name == n,
+                (ControlAutoBind::FormFieldId(id), Binding::State { key, default_value }) => {
+                    key == id && *default_value == control_value_defaults::date_range()
+                }
+                _ => false,
+            };
+            if !is_auto {
+                let rendered = match value {
+                    Binding::Static {
+                        value: StaticValue::StringPair(from, to),
+                    } => obj(vec![field("from", s(from)), field("to", s(to))]),
+                    other => binding(other),
+                };
+                fields.push(field("value", rendered));
+            }
+            fields.push(field("variant", s(variant.as_str())));
+            if let Some(min) = min {
+                fields.push(field("min", s(min)));
+            }
+            if let Some(max) = max {
+                fields.push(field("max", s(max)));
+            }
+            if let Some(step) = step {
+                fields.push(field("step", num(*step)));
+            }
+            case_obj("DateRange", fields)
         }
     }
 }

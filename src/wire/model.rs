@@ -117,6 +117,11 @@ pub enum StaticValue {
     /// The canonical `Static` pair rides as the BARE `{"max":…,"min":…}` object
     /// — no `Static` envelope (the Phase 423 range shape, kept at 0.2.0).
     FloatPair(f64, f64),
+    /// `string * string` slots (the 0.7.0 `FormFieldKind.DateRange` ISO pair).
+    /// The canonical `Static` pair rides as the BARE `{"from":…,"to":…}` object
+    /// — no `Static` envelope (exactly the `FloatPair` posture above). The pair
+    /// is ORDERED: a literal `from` sorting after its `to` is a decode error.
+    StringPair(String, String),
 }
 
 /// A value binding (`§3.3`), one variant per wire `$type` case.
@@ -672,6 +677,21 @@ pub enum FormFieldKind {
         on_change: Option<Closure>,
     },
     Date {
+        value: Binding,
+        variant: DateVariant,
+        min: Option<String>,
+        max: Option<String>,
+        step: Option<f64>,
+        on_change: Option<Closure>,
+    },
+    /// 0.7.0 — the single-control date range: `Range`'s pair mechanics with
+    /// `Date`'s value conventions (an identical field list to `Date`). A `Static`
+    /// pair rides as the bare `{"from":…,"to":…}` object; `variant` is always
+    /// emitted; `min`/`max` (ISO strings) and `step` (seconds) bound BOTH ends and
+    /// are omitted when absent. In a filter context the pair binds ONE filter
+    /// param, not two — the reason the case exists rather than two coordinated
+    /// `Date` fields.
+    DateRange {
         value: Binding,
         variant: DateVariant,
         min: Option<String>,
@@ -1369,6 +1389,33 @@ pub const CANONICAL_NODE_KINDS: &[&str] = &[
     "FragmentDecl",
     "FragmentRef",
     "Mount",
+];
+
+/// The emittable FormFieldKind control vocabulary — one entry per
+/// [`FormFieldKind`] variant's wire `$type` name. Pinned against the generated
+/// `wire-format-fixtures` manifest `formFieldKinds` enumeration by
+/// `tests/conformance.rs` (Phase 746 control-vocabulary attestation), the
+/// [`CANONICAL_NODE_KINDS`] twin: the kind-set pin only ever covered NodeKind, so
+/// a control-vocabulary commit that skipped this host stayed silent until a
+/// fixture happened to exercise it. Rust has no enum-variant reflection, so this
+/// list is maintained in lockstep with the `decode_form_field_kind` dispatch under
+/// the §11 forward-coupling discipline — and that decoder's unknown-case hint is
+/// DERIVED from this list, so hint and dispatch cannot diverge (they had: the
+/// hand-typed hint was already missing `DateRange`'s predecessor state).
+///
+/// Since the filters/forms unification there is ONE control vocabulary, so this
+/// covers both the `Form.fields` and `Filters.items` carriers.
+pub const CANONICAL_FORM_FIELD_KINDS: &[&str] = &[
+    "Text",
+    "Number",
+    "Checkbox",
+    "Choice",
+    "Range",
+    "RangedNumber",
+    "SegmentedChoice",
+    "TextArea",
+    "Date",
+    "DateRange",
 ];
 
 // ─── Node envelope (§3.1) ────────────────────────────────────────────────────

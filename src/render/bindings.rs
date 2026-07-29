@@ -573,6 +573,34 @@ pub fn resolve_float_pair(sources: &BindingSources, binding: &Binding) -> Option
     }
 }
 
+/// The `(from, to)` pair of a `DateRange` control's value binding: the typed
+/// `Static` pair, a source-supplied `{from, to}` object, or a two-element array.
+/// The [`resolve_float_pair`] twin — a resolved pair is deliberately NOT
+/// re-checked for ordering: the spec's ordered-pair rule binds a LITERAL on the
+/// wire, and a resolved value's ordering is a runtime concern.
+pub fn resolve_string_pair(
+    sources: &BindingSources,
+    binding: &Binding,
+) -> Option<(String, String)> {
+    match resolve(sources, binding) {
+        Resolution::Resolved(Value::Static(StaticValue::StringPair(a, b))) => {
+            Some((a.clone(), b.clone()))
+        }
+        Resolution::Resolved(Value::Json(j)) => match j {
+            JVal::Arr(items) if items.len() == 2 => match (&items[0], &items[1]) {
+                (JVal::Str(a), JVal::Str(b)) => Some((a.clone(), b.clone())),
+                _ => None,
+            },
+            JVal::Obj(_) => match (j.field("from"), j.field("to")) {
+                (Some(JVal::Str(a)), Some(JVal::Str(b))) => Some((a.clone(), b.clone())),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// The float series of a sparkline: typed `Static` payload or source array.
 pub fn resolve_float_seq(sources: &BindingSources, binding: &Binding) -> Vec<f64> {
     match resolve(sources, binding) {
