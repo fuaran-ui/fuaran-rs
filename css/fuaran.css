@@ -255,6 +255,20 @@ body {
   margin-bottom: var(--fuaran-space-sm, 8px);
 }
 
+/* The uniform icon hook (icon-contract): every icon-bearing spec (tab header /
+   Fact / Metric / Callout / Button) renders one EMPTY placement element
+   `<span class="fuaran-icon fuaran-{kind}-icon" data-icon="{name}" aria-hidden="true"></span>`.
+   The icon name rides `data-icon`, never the text content. The reference CSS
+   ships no glyphs: with no host icon system the hook renders as nothing.
+   Hosts map `data-icon` to glyphs via their own mechanism, e.g.
+   `.fuaran-icon[data-icon="user"]::before { content: "\1F464"; }`, an icon
+   font class, or hydration-time SVG injection. The per-kind classes below
+   carry placement/size/colour so injected glyphs sit correctly. */
+.fuaran-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
 .fuaran-layout-dashboard {
   display: flex;
   flex-direction: column;
@@ -410,7 +424,9 @@ body {
 }
 
 /* Phase 69 (2026-05-29): per-tab icon span + label span. The renderer
-   emits these whenever the header carries an `Icon`. Authors who only
+   emits the icon span whenever the header carries an `Icon` — since the
+   icon-contract change it is the uniform empty `data-icon` hook (see the
+   `.fuaran-icon` block), not the icon name as text. Authors who only
    set `Label` see no visual change (no icon span emitted). */
 .fuaran-tab-icon {
   display: inline-flex;
@@ -764,6 +780,120 @@ body {
   margin-top: 6px;
 }
 
+/* Icon-contract hook — sits above the label; small + muted so a host-injected
+   glyph reads as chrome, not content. Empty until a host maps `data-icon`. */
+.fuaran-metric-icon {
+  font-size: var(--fuaran-text-sm, 13px);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+/* ── Fact ─────────────────────────────────────────────────────────── */
+/* A labelled TEXT fact tile — Metric's chrome for a TextSource value
+   (names, statuses, words rather than numbers), so the tile shape and
+   7-tone matrix mirror `.fuaran-metric` while the value sits at a
+   text-friendly size. The `.fuaran-fact-icon` span is the uniform empty
+   `data-icon` hook (see the `.fuaran-icon` block): the reference CSS
+   ships no glyphs; hosts map `data-icon` names to glyphs via their own
+   icon system. */
+.fuaran-fact {
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-lg, 8px);
+  padding: var(--fuaran-space-lg, 16px);
+}
+
+.fuaran-fact-default {
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border-color: var(--fuaran-tone-default-border, #e5e7eb);
+}
+
+.fuaran-fact-subdued {
+  background: var(--fuaran-tone-subdued-bg, #f3f4f6);
+  border-color: var(--fuaran-tone-subdued-border, #d1d5db);
+}
+
+.fuaran-fact-brand {
+  background: var(--fuaran-tone-brand-bg, #eff6ff);
+  border-color: var(--fuaran-tone-brand-border, #93c5fd);
+}
+
+.fuaran-fact-brand .fuaran-fact-value {
+  color: var(--fuaran-tone-brand-fg, #1d4ed8);
+}
+
+.fuaran-fact-success {
+  background: var(--fuaran-tone-success-bg, #ecfdf5);
+  border-color: var(--fuaran-tone-success-border, #6ee7b7);
+}
+
+.fuaran-fact-success .fuaran-fact-value {
+  color: var(--fuaran-tone-success-fg, #047857);
+}
+
+.fuaran-fact-warning {
+  background: var(--fuaran-tone-warning-bg, #fffbeb);
+  border-color: var(--fuaran-tone-warning-border, #fcd34d);
+}
+
+.fuaran-fact-warning .fuaran-fact-value {
+  color: var(--fuaran-tone-warning-fg, #b45309);
+}
+
+.fuaran-fact-critical {
+  background: var(--fuaran-tone-critical-bg, #fef2f2);
+  border-color: var(--fuaran-tone-critical-border, #fca5a5);
+}
+
+.fuaran-fact-critical .fuaran-fact-value {
+  color: var(--fuaran-tone-critical-fg, #b91c1c);
+}
+
+.fuaran-fact-info {
+  background: var(--fuaran-tone-info-bg, #eff6ff);
+  border-color: var(--fuaran-tone-info-border, #93c5fd);
+}
+
+.fuaran-fact-info .fuaran-fact-value {
+  color: var(--fuaran-tone-info-fg, #1e40af);
+}
+
+.fuaran-fact-label {
+  font-size: var(--fuaran-text-sm, 13px);
+  font-weight: var(--fuaran-font-weight-medium, 500);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.fuaran-fact-value {
+  display: flex;
+  align-items: center;
+  gap: var(--fuaran-space-xs, 4px);
+  font-size: var(--fuaran-text-xl, 20px);
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+  margin-top: var(--fuaran-space-xs, 4px);
+}
+
+/* Emphasis steps the value up one size + weight stop — the tile-level
+   analogue of `.fuaran-label-value-row-emphasis`. */
+.fuaran-fact-emphasis .fuaran-fact-value {
+  font-size: var(--fuaran-text-2xl, 24px);
+  font-weight: var(--fuaran-font-weight-bold, 700);
+}
+
+.fuaran-fact-icon {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--fuaran-text-sm, 13px);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-fact-help {
+  font-size: var(--fuaran-text-xs, 12px);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  margin-top: 6px;
+}
+
 /* ── markdown / heading / spacer ──────────────────────────────── */
 .fuaran-markdown {
   color: var(--fuaran-tone-default-fg, #1f2937);
@@ -843,6 +973,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--fuaran-space-xs, 4px);
+}
+
+/* Icon-contract hook — leads the callout column; inherits the tone colour so a
+   host-injected glyph matches the callout text. Empty until a host maps
+   `data-icon`. */
+.fuaran-callout-icon {
+  font-size: var(--fuaran-text-sm, 13px);
 }
 
 /* Complete 7×N tone matrix — Phase 12.H added default/subdued/brand/info;
@@ -1072,6 +1209,15 @@ body {
   font-size: var(--fuaran-text-base, 14px);
 }
 
+/* Icon-contract hook — leads the button label; inherits the button's text
+   colour, and carries the label gap (the hook only exists on buttons whose
+   author set an `Icon`, so the gap is intentional even before a host maps
+   `data-icon` to a glyph). */
+.fuaran-button-icon {
+  margin-right: var(--fuaran-space-xs, 4px);
+  vertical-align: middle;
+}
+
 .fuaran-button-primary {
   background: var(--fuaran-tone-brand-fg, #1d4ed8);
   color: white;
@@ -1206,10 +1352,15 @@ body {
   color: var(--fuaran-tone-subdued-fg, #6b7280);
 }
 
+/* `.fuaran-form-field-control` / `.fuaran-form-field-label` are the server
+   renderer's inert form-field vocabulary (`Renderer.Server/Render.fs
+   renderFormField`); aliasing them into the client-vocabulary rules keeps
+   SSR form fields styled identically to their hydrated counterparts. */
 .fuaran-select-control,
 .fuaran-form-input,
 .fuaran-form-select,
 .fuaran-form-textarea,
+.fuaran-form-field-control,
 .fuaran-filter-input,
 .fuaran-filter-select {
   padding: 6px var(--fuaran-space-sm, 8px) 6px var(--fuaran-space-sm, 8px);
@@ -1227,6 +1378,7 @@ body {
 .fuaran-form-input:focus-visible,
 .fuaran-form-select:focus-visible,
 .fuaran-form-textarea:focus-visible,
+.fuaran-form-field-control:focus-visible,
 .fuaran-filter-input:focus-visible,
 .fuaran-filter-select:focus-visible {
   outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
@@ -1261,7 +1413,8 @@ body {
   gap: var(--fuaran-space-xs, 4px);
 }
 
-.fuaran-form-label {
+.fuaran-form-label,
+.fuaran-form-field-label {
   font-size: var(--fuaran-text-sm, 13px);
   color: var(--fuaran-tone-subdued-fg, #6b7280);
   font-weight: var(--fuaran-font-weight-medium, 500);
@@ -1344,6 +1497,19 @@ body {
   border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
   border-radius: var(--fuaran-radius-md, 6px);
   overflow: hidden;
+}
+
+/* SSR placeholder for the client-library grid: the server emits a
+   deterministic "[Grid: N rows — hydrates client-side]" body (never a
+   blank) that hydration replaces. Styled like `.fuaran-custom-placeholder`
+   so a no-JS reader sees a deliberate placeholder, not a bare text run. */
+.fuaran-grid-ssr-placeholder {
+  background: var(--fuaran-tone-subdued-bg, #f3f4f6);
+  border: var(--fuaran-border-width, 1px) dashed var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-md, 6px);
+  padding: var(--fuaran-space-sm, 8px) var(--fuaran-space-md, 12px);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  font-size: var(--fuaran-text-sm, 13px);
 }
 
 .fuaran-grid-header,
@@ -1755,6 +1921,27 @@ html[data-fuaran-disconnected]::before {
   margin: var(--fuaran-space-xs, 4px) 0;
 }
 
+/* ── Link (Phase 139) ──────────────────────────────────────────── */
+/* The crawlable `<a href>` primitive. Tokenised so reference-theme links
+   read as brand-coloured rather than user-agent blue; hosts re-bind
+   `--fuaran-tone-brand-fg` and the link follows. */
+.fuaran-link {
+  color: var(--fuaran-tone-brand-fg, #1d4ed8);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.fuaran-link:hover {
+  color: var(--fuaran-tone-brand-hover-fg, #1e40af);
+}
+
+.fuaran-link:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: var(--fuaran-focus-ring-offset, 2px);
+  border-radius: var(--fuaran-radius-sm, 4px);
+}
+
 /* ── Divider (Phase 287) ───────────────────────────────────────── */
 .fuaran-divider-horizontal {
   border: none;
@@ -2046,6 +2233,7 @@ html[data-fuaran-disconnected]::before {
      44px of tappable height at phone widths. */
   .fuaran-button,
   .fuaran-form-input,
+  .fuaran-form-field-control,
   .fuaran-select-control,
   .fuaran-file-upload,
   .fuaran-tab {
