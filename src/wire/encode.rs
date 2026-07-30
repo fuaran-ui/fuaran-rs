@@ -1555,6 +1555,29 @@ fn cell_kind_erased(k: &CellKindErased) -> String {
                 field("toneFn", CLOSURE.to_string()),
             ],
         ),
+        // Phase 750 — the declarative pill. `default` is omitted-when-`Default` (the
+        // Phase 460 discipline); `obj` Ordinal-sorts, so push order is irrelevant and
+        // the `BTreeMap`'s own ordering is a convenience rather than the contract.
+        CellKindErased::TonedPill {
+            field: row_field,
+            map,
+            default_tone,
+        } => {
+            let mut fields = vec![
+                field("field", s(row_field)),
+                field(
+                    "map",
+                    obj(map
+                        .iter()
+                        .map(|(value, tone)| field(value, s(tone.as_str())))
+                        .collect()),
+                ),
+            ];
+            if *default_tone != ToneVariant::Default {
+                fields.push(field("default", s(default_tone.as_str())));
+            }
+            case_obj("TonedPill", fields)
+        }
         CellKindErased::Progress => case_obj(
             "Progress",
             vec![

@@ -151,3 +151,45 @@ fn native_c_abi_bad_tree_yields_null_and_last_error() {
         "last_error carries the code"
     );
 }
+
+/// The Phase 750 declarative pill, driven through the raw ABI exactly as the Swift
+/// and Kotlin projections will. Named here rather than left to the codec tests
+/// because the projections' whole contract is "the Rust core owns truth, the native
+/// surface holds a render projection" — so the case reaching them at all depends on
+/// this boundary carrying it, and nothing else in the repo would notice if it did
+/// not. Two directions, both load-bearing for a decode-only projection:
+/// `tree_json` must re-emit the canonical case for the projections to decode, and
+/// `render` must paint the per-row tone the Rust core resolved.
+const TONED_PILL_TREE: &str = r#"{"id":"g","kind":{"$type":"DataGrid","columns":[{"field":"status","kind":{"$type":"TonedPill","default":"Subdued","field":"status","map":{"Delayed":"Warning"}},"label":"Status"}],"rowKeyField":"status","source":{"$type":"Transform","pipeline":[],"source":{"columns":{"status":{"validity":[true,true],"values":["Delayed","Other"]}},"schema":[{"name":"status","type":"string"}]}}}}"#;
+
+#[test]
+fn native_c_abi_carries_the_toned_pill_case() {
+    let (tp, tl) = input(TONED_PILL_TREE);
+    let session = unsafe { fuaran_session_new(tp, tl) };
+    unsafe { fuaran_dealloc(tp, tl) };
+    assert!(
+        !session.is_null(),
+        "a TonedPill tree decodes to a live handle"
+    );
+
+    // tree_json — the canonical case crosses the boundary intact, `default` and all,
+    // so a decode-only native projection sees exactly what the corpus specifies.
+    let json = take_buf(unsafe { fuaran_session_tree_json(session) });
+    assert!(
+        json.contains(r#""$type":"TonedPill","default":"Subdued","field":"status","map":{"Delayed":"Warning"}"#),
+        "tree_json did not carry the canonical TonedPill:\n{json}"
+    );
+
+    // render — the mapped row and the unmapped fallback, resolved core-side.
+    let html = take_buf(unsafe { fuaran_session_render(session) });
+    assert!(
+        html.contains(r#"<span class="fuaran-grid-cell-pill fuaran-pill-warning">Delayed</span>"#),
+        "mapped row lost its tone:\n{html}"
+    );
+    assert!(
+        html.contains(r#"<span class="fuaran-grid-cell-pill fuaran-pill-subdued">Other</span>"#),
+        "unmapped row lost the default tone:\n{html}"
+    );
+
+    unsafe { fuaran_session_free(session) };
+}

@@ -29,7 +29,7 @@
 //! The host owns the document shell (`<html>` / `<head>` / the `<link>` to the
 //! reference CSS); this renderer emits the body fragment.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::canonical::JVal;
 use crate::wire::{
@@ -37,7 +37,7 @@ use crate::wire::{
     ColumnErased, DisclosureSpec, FilterSpec, FormField, FormFieldKind, FormSpec, GridSpec,
     HeadingVariant, ImageVariant, MapSpec, MathDisplay, ModalSpec, Node, NodeKind, Orientation,
     ScrollAreaSpec, ScrollOrientation, SelectOption, SelectSpec, StateBehaviour, StaticRows,
-    StaticValue, TabsSpec, TextSource, encode_node,
+    StaticValue, TabsSpec, TextSource, ToneVariant, encode_node,
 };
 
 use super::bindings::{
@@ -2123,6 +2123,38 @@ fn project_cell(col: &ColumnErased, row: &JVal) -> CellVal {
     }
 }
 
+/// Phase 750 — lower a `CellKindErased::TonedPill` for one row: the named field's
+/// text IS the pill's label, and its tone is the map's entry for that text, or
+/// `default_tone` for a value the map does not mention.
+///
+/// The whole of the declarative pill's semantics, in one function, because the same
+/// lookup-with-fallback is what every host renders — and a per-surface copy of it is
+/// exactly how two hosts come to disagree about an *unmapped* value, which is the
+/// case a parity test misses most easily.
+///
+/// Keyed on the row-field projection's canonical text (`CellFormat::None`), not the
+/// column's own display format: the map's keys are the author's raw data values, so
+/// running them through a currency or percent format would key on a rendering rather
+/// than on the datum. Parity-locked with the reference hosts' `tonedPillOf`.
+fn toned_pill_of(
+    row: &JVal,
+    field: &str,
+    map: &BTreeMap<String, ToneVariant>,
+    default_tone: ToneVariant,
+) -> (String, ToneVariant) {
+    let label = cell_value_text(
+        &CellFormat::None,
+        &match row.field(field) {
+            Some(JVal::Str(v)) => CellVal::Str(v.clone()),
+            Some(JVal::Bool(v)) => CellVal::Bool(*v),
+            Some(JVal::Num(v)) => CellVal::Num(*v),
+            _ => CellVal::Empty,
+        },
+    );
+    let tone = map.get(&label).copied().unwrap_or(default_tone);
+    (label, tone)
+}
+
 fn cell_value_text(format: &CellFormat, value: &CellVal) -> String {
     match value {
         CellVal::Num(v) => format_number(format, *v),
@@ -2198,6 +2230,28 @@ fn render_grid_cell(ctx: &Ctx<'_>, col: &ColumnErased, row: &JVal) -> String {
             &[("class", s("fuaran-grid-cell-pill fuaran-pill-default"))],
             "<closure>",
         ),
+        // Phase 750 — the declarative twin, and the only cell kind this host renders
+        // with real per-row content on a decoded tree. Deliberately the SAME element
+        // and class vocabulary as the closure `Pill` arm above: the wire variant
+        // exists to make the tone rule *expressible*, not to render differently.
+        CellKindErased::TonedPill {
+            field,
+            map,
+            default_tone,
+        } => {
+            let (label, tone) = toned_pill_of(row, field, map, *default_tone);
+            text_el(
+                "span",
+                &[(
+                    "class",
+                    s(format!(
+                        "fuaran-grid-cell-pill fuaran-pill-{}",
+                        tone_var(tone)
+                    )),
+                )],
+                &label,
+            )
+        }
         CellKindErased::Progress => {
             // The decoded fraction placeholder reads 0.
             let fill = el(

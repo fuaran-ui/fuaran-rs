@@ -9,6 +9,8 @@
 //! faithful parsed value whose non-primitive forms re-encode as `"<opaque>"` —
 //! keeping the round-trip byte-stable.
 
+use std::collections::BTreeMap;
+
 use crate::canonical::{JVal, parse};
 
 use super::model::*;
@@ -2517,9 +2519,92 @@ fn decode_file_upload_spec(path: &str, j: &JVal) -> DResult<FileUploadSpec> {
 
 // ─── Visualisation specs ─────────────────────────────────────────────────────
 
+/// The tone-map field names a `TonedPill` cell accepts, canonical first. `map` is
+/// the shortest honest name for a value→tone dictionary and the least descriptive.
+const TONE_MAP_KEYS: [&str; 3] = ["map", "toneMap", "tones"];
+
+/// Phase 750 — a `TonedPill`'s `map`: a string-keyed object whose VALUES are
+/// `ToneVariant`s. Routed through `decode_tone` per entry, so the §3.6 tone aliases
+/// work inside the map exactly as they do at a `tone` field; a second, private tone
+/// reader here is precisely how this position would come to accept a vocabulary the
+/// `tone` field does not.
+///
+/// The refusal is RE-ISSUED rather than passed through. `unknown_du_case` reports at
+/// `<path>.$type` with "unknown discriminator", and a map value is neither a
+/// discriminator nor at a `$type` key — so the raw error names a path the document
+/// does not contain, which is actively misleading for a fixture whose whole purpose
+/// is didactic. The re-issue keeps the code and the seven legal names and points at
+/// the offending KEY, because "one of your tones is wrong" is not an actionable
+/// report when the map has nine entries. A non-string value is a `WRONG_TYPE` and
+/// already reports at the right path, so it passes through untouched.
+fn decode_tone_map(path: &str, j: &JVal) -> DResult<BTreeMap<String, ToneVariant>> {
+    let fields = as_obj(path, j)?;
+    let mut map = BTreeMap::new();
+    for (key, v) in fields {
+        let entry_path = format!("{path}.{key}");
+        let tone = decode_tone(&entry_path, v).map_err(|e| {
+            if e.code != DecodeErrorCode::UnknownDuCase {
+                return e;
+            }
+            let got = match v {
+                JVal::Str(s) => s.as_str(),
+                _ => "",
+            };
+            make_error(
+                DecodeErrorCode::UnknownDuCase,
+                &entry_path,
+                format!("tone-map value '{got}' for '{key}' is not a ToneVariant"),
+                Some(ToneVariant::WIRE_NAMES.join(" | ")),
+            )
+        })?;
+        map.insert(key.clone(), tone);
+    }
+    Ok(map)
+}
+
+/// The shared body of the canonical `TonedPill` case and the `Pill`-tagged §16
+/// shorthand — ONE reader, so the two spellings cannot drift apart in what they
+/// accept.
+fn decode_toned_pill(path: &str, fields: &Fields) -> DResult<CellKindErased> {
+    let field = req_string_aliased(
+        path,
+        fields,
+        "field",
+        &[],
+        "TonedPill row-field name (drives the label and the map key)",
+    )?;
+    let map_j = req_aliased(
+        path,
+        fields,
+        TONE_MAP_KEYS[0],
+        &TONE_MAP_KEYS[1..],
+        "TonedPill value→ToneVariant map",
+    )?;
+    let map = decode_tone_map(&format!("{path}.map"), map_j)?;
+    // `default` is omitted-when-`Default` (Phase 460); an absent key restores the
+    // identity, and an aliased `Neutral` normalises to `Default` and then omits —
+    // two rules composing, in that order.
+    let default_tone = opt_tone_default(path, fields, "default")?;
+    Ok(CellKindErased::TonedPill {
+        field,
+        map,
+        default_tone,
+    })
+}
+
 fn decode_cell_kind_erased(path: &str, j: &JVal) -> DResult<CellKindErased> {
     let fields = as_obj(path, j)?;
     match disc(path, fields)? {
+        // Lenient-ingest (WIRE_FORMAT.md §16, Phase 750): "pill" is the WORD for the
+        // thing, so a declarative tone rule arrives tagged `Pill` more often than
+        // tagged `TonedPill`. Before this phase those keys were accepted and
+        // DISCARDED — the author's whole intent gone, silently, with no error to
+        // notice. Presence of a tone map is the unambiguous tell: a closure `Pill`
+        // carries only `labelFn`/`toneFn` and can never carry one.
+        "Pill" if TONE_MAP_KEYS.iter().any(|k| get(fields, k).is_some()) => {
+            decode_toned_pill(path, fields)
+        }
+        "TonedPill" => decode_toned_pill(path, fields),
         "Text" => Ok(CellKindErased::Text),
         "Numeric" => Ok(CellKindErased::Numeric),
         "Date" => Ok(CellKindErased::Date),
@@ -2546,7 +2631,7 @@ fn decode_cell_kind_erased(path: &str, j: &JVal) -> DResult<CellKindErased> {
         other => Err(unknown_du_case(
             path,
             other,
-            "Text | Numeric | Date | Editable | Checkbox | Button | ButtonGroup | Link | Pill | Progress | Custom",
+            "Text | Numeric | Date | Editable | Checkbox | Button | ButtonGroup | Link | Pill | TonedPill | Progress | Custom",
         )),
     }
 }

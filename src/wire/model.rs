@@ -10,6 +10,8 @@
 //! presence only: [`Closure`] marks "a closure rode the wire here", and decodes
 //! /re-encodes to the same sentinel, keeping the round-trip byte-stable.
 
+use std::collections::BTreeMap;
+
 use crate::canonical::JVal;
 
 /// A node identity string (non-empty by decode invariant, §8).
@@ -783,6 +785,21 @@ pub enum CellKindErased {
     },
     Link,
     Pill,
+    /// Phase 750 — the declarative twin of `Pill`, and the ONE cell kind holding no
+    /// closure, which is exactly why it survives the wire. `field` names the row
+    /// property that is both the pill's label and the map key; `map` carries value →
+    /// tone; `default_tone` covers a value the map does not mention and is omitted on
+    /// the wire at `ToneVariant::Default`.
+    ///
+    /// A `BTreeMap` rather than a `Vec` of pairs deliberately: the tone map is a
+    /// key-addressed set, so two spellings differing only in key order are the SAME
+    /// map, and a `Vec`'s derived `PartialEq` would call them different — a difference
+    /// the round-trip property tests would surface as a phantom divergence.
+    TonedPill {
+        field: String,
+        map: BTreeMap<String, ToneVariant>,
+        default_tone: ToneVariant,
+    },
     Progress,
     Custom,
 }
