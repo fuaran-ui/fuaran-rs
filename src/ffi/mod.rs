@@ -49,7 +49,8 @@
 
 use std::cell::RefCell;
 
-use crate::client::{ClientError, ClientSession};
+use crate::canonical::{JVal, render_canonical};
+use crate::client::{ClientError, ClientSession, RowsOutcome};
 
 pub mod rosetta;
 
@@ -247,6 +248,72 @@ pub unsafe extern "C" fn fuaran_session_project_resolved(session: *mut ClientSes
     // SAFETY: caller contract.
     let session = unsafe { &*session };
     pack_string(session.project_resolved())
+}
+
+/// The **resolved rows** of one row-bearing node (`DataGrid` / `Chart` / `Map` /
+/// `Sparkline`), addressed by node id and evaluated against the live sources —
+/// packed, canonical JSON.
+///
+/// The out-of-band companion to [`fuaran_session_project_resolved`], and it
+/// exists because that projection *cannot* carry this: a row-context `Transform`
+/// resolves to a collection, and the wire's `Static` slot erases a collection to
+/// `"<opaque>"` (§2 rule 11), so resolved rows cannot ride the tree at all. A
+/// decode-only consumer therefore cannot obtain them from `tree_json` however
+/// much of the tree it understands, and renders every data-bound grid empty.
+/// This hands them over directly, keeping the division the tiers rest on: this
+/// core evaluates, the native surface renders.
+///
+/// Three distinct results, and a consumer MUST tell them apart:
+///
+/// * `{"resolved":true,"rows":[…]}` — resolved. A zero-length `rows` is an empty
+///   state; render it as one.
+/// * `{"resolved":false}` — the source did not resolve (a `Transform` that
+///   errored, or a store not yet fed). Render the LOADING surface, **not** an
+///   empty table. Flattening this to zero rows shows "no data" for "not yet".
+/// * `{"error":{"class":"lookup","code":"NO_ROW_SOURCE","message":…}}` — no node
+///   with that id, or a kind that carries no row source. A caller mistake.
+///
+/// # Safety
+/// `session` must be a live handle; `ptr`/`len` a live UTF-8 buffer naming the
+/// node id.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fuaran_session_resolved_rows(
+    session: *mut ClientSession,
+    ptr: *const u8,
+    len: usize,
+) -> FuaranBuf {
+    if session.is_null() {
+        return pack_string(String::new());
+    }
+    // SAFETY: caller contract.
+    let session = unsafe { &*session };
+    let Some(node_id) = (unsafe { borrow_str(ptr, len) }) else {
+        return pack_string(invalid_utf8_envelope());
+    };
+    let json = match session.resolved_rows(node_id) {
+        RowsOutcome::Rows(rows) => render_canonical(&JVal::Obj(vec![
+            ("resolved".to_string(), JVal::Bool(true)),
+            ("rows".to_string(), JVal::Arr(rows)),
+        ])),
+        RowsOutcome::NotResolved => render_canonical(&JVal::Obj(vec![(
+            "resolved".to_string(),
+            JVal::Bool(false),
+        )])),
+        RowsOutcome::NoRowSource => no_row_source_envelope(node_id),
+    };
+    pack_string(json)
+}
+
+/// The lookup-failure envelope, shaped like the decode/apply ones the other
+/// entry points return so a consumer parses one error shape, not three.
+fn no_row_source_envelope(node_id: &str) -> String {
+    let message = render_canonical(&JVal::Str(format!(
+        "no node '{node_id}', or its kind carries no row source \
+         (DataGrid | Chart | Map | Sparkline)"
+    )));
+    format!(
+        "{{\"error\":{{\"class\":\"lookup\",\"code\":\"NO_ROW_SOURCE\",\"message\":{message}}}}}"
+    )
 }
 
 /// The success result JSON both mutating entry points return on `Ok`.

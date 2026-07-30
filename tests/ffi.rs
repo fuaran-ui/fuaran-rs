@@ -9,7 +9,8 @@
 use fuaran_rs::ffi::{
     FuaranBuf, fuaran_alloc, fuaran_dealloc, fuaran_last_error, fuaran_session_apply_op,
     fuaran_session_free, fuaran_session_new, fuaran_session_project_resolved,
-    fuaran_session_render, fuaran_session_set_state, fuaran_session_tree_json,
+    fuaran_session_render, fuaran_session_resolved_rows, fuaran_session_set_state,
+    fuaran_session_tree_json,
 };
 
 const TREE: &str = r#"{"id":"root","kind":{"$type":"Box","children":[
@@ -190,6 +191,41 @@ fn native_c_abi_carries_the_toned_pill_case() {
         html.contains(r#"<span class="fuaran-grid-cell-pill fuaran-pill-subdued">Other</span>"#),
         "unmapped row lost the default tone:\n{html}"
     );
+
+    unsafe { fuaran_session_free(session) };
+}
+
+/// The resolved-rows hand-off across the raw ABI — the call the Swift and Kotlin
+/// grid renderers will make once they have a row loop. Driven here exactly as a
+/// native binding drives it: `fuaran_alloc` the node id, read the packed buffer,
+/// free both.
+#[test]
+fn native_c_abi_hands_over_resolved_rows() {
+    let (tp, tl) = input(TONED_PILL_TREE);
+    let session = unsafe { fuaran_session_new(tp, tl) };
+    unsafe { fuaran_dealloc(tp, tl) };
+    assert!(!session.is_null());
+
+    // The premise, asserted rather than assumed: the tree the consumer decodes
+    // carries an UNRESOLVED Transform, so the rows are not in it to be found.
+    let json = take_buf(unsafe { fuaran_session_tree_json(session) });
+    assert!(json.contains(r#""$type":"Transform""#), "{json}");
+
+    let (np, nl) = input("g");
+    let rows = take_buf(unsafe { fuaran_session_resolved_rows(session, np, nl) });
+    unsafe { fuaran_dealloc(np, nl) };
+    assert_eq!(
+        rows, r#"{"resolved":true,"rows":[{"status":"Delayed"},{"status":"Other"}]}"#,
+        "the rows the tree could not carry"
+    );
+
+    // A caller mistake reports as one, in the same error shape the other entry
+    // points use — never as an empty grid.
+    let (bp, bl) = input("no-such-node");
+    let missing = take_buf(unsafe { fuaran_session_resolved_rows(session, bp, bl) });
+    unsafe { fuaran_dealloc(bp, bl) };
+    assert!(missing.contains(r#""code":"NO_ROW_SOURCE""#), "{missing}");
+    assert!(missing.contains(r#""class":"lookup""#), "{missing}");
 
     unsafe { fuaran_session_free(session) };
 }

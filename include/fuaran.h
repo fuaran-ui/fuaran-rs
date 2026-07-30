@@ -127,6 +127,41 @@ FuaranBuf fuaran_session_tree_json(FuaranSession *session);
 FuaranBuf fuaran_session_project_resolved(FuaranSession *session);
 
 /*
+ * The RESOLVED ROWS of one row-bearing node (DataGrid / Chart / Map / Sparkline),
+ * addressed by node id (UTF-8 at ptr/len) and evaluated against the live sources.
+ *
+ * The out-of-band companion to fuaran_session_project_resolved, and it exists
+ * because that projection CANNOT carry this. A row-context Transform resolves to
+ * a COLLECTION, and the wire's `Static` slot erases a collection to "<opaque>"
+ * (WIRE_FORMAT.md 2 rule 11) — so resolved rows cannot ride the tree at all. A
+ * decode-only consumer therefore cannot obtain them from tree_json however much
+ * of the tree it understands, and renders every data-bound grid empty. This hands
+ * them over directly, keeping the division the tiers rest on: the core evaluates,
+ * the native surface renders.
+ *
+ * Addressed by NODE ID, not by kind, so the same call serves a chart or a map
+ * without a second entry point.
+ *
+ * Three results, and a consumer MUST tell them apart:
+ *
+ *   {"resolved":true,"rows":[ ... ]}
+ *       Resolved. A zero-length `rows` is an EMPTY STATE — render it as one.
+ *
+ *   {"resolved":false}
+ *       The source did not resolve: a Transform that errored, or a store the host
+ *       has not fed yet. Render the LOADING surface, NOT an empty table.
+ *       Flattening this case to zero rows shows "no data" for "not yet".
+ *
+ *   {"error":{"class":"lookup","code":"NO_ROW_SOURCE","message":"..."}}
+ *       No node with that id, or a kind with no row source. A caller mistake —
+ *       a consumer asks this of a node it has just decoded and is rendering.
+ *
+ * Rows are the source's own JSON objects, canonical-rendered. NULL session →
+ * empty buffer.
+ */
+FuaranBuf fuaran_session_resolved_rows(FuaranSession *session, const uint8_t *ptr, size_t len);
+
+/*
  * Apply a canonical wire `TreeOp` JSON (UTF-8 at ptr/len). Returns {"ok":true}
  * on success (the session adopts the new tree) or a structured error envelope
  * on failure (the held tree is UNTOUCHED — the apply engine never partially

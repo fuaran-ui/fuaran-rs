@@ -3,7 +3,8 @@
 //! [`ClientSession`]. The WASM ABI is a thin marshalling shim over exactly
 //! this type, so covering it here covers the client tier's logic.
 
-use fuaran_rs::client::{ClientError, ClientSession};
+use fuaran_rs::canonical::JVal;
+use fuaran_rs::client::{ClientError, ClientSession, RowsOutcome};
 
 const TREE: &str = r#"{"id":"root","kind":{"$type":"Box","children":[
     {"id":"title","kind":{"$type":"Heading","level":1,"text":{"$type":"Literal","text":"Live"},"variant":"Standard"}},
@@ -104,4 +105,57 @@ fn filter_and_query_stores_resolve_their_bindings() {
     let html = s.render();
     assert!(html.contains(">Widgets<"));
     assert!(html.contains(">Gadgets<"));
+}
+
+// ─── Resolved rows (the out-of-band row hand-off) ────────────────────────────
+
+/// A grid whose rows come from an embedded `Transform` — the shape a decode-only
+/// consumer cannot resolve for itself, and the reason this entry point exists.
+const GRID: &str = r#"{"id":"root","kind":{"$type":"Box","children":[
+    {"id":"shipments","kind":{"$type":"DataGrid","columns":[{"field":"status","kind":{"$type":"TonedPill","default":"Subdued","field":"status","map":{"Delayed":"Warning"}},"label":"Status"}],"rowKeyField":"status","source":{"$type":"Transform","pipeline":[],"source":{"columns":{"status":{"validity":[true,true],"values":["Delayed","Other"]}},"schema":[{"name":"status","type":"string"}]}}}},
+    {"id":"heading","kind":{"$type":"Heading","level":1,"text":"Shipments","variant":"Standard"}}
+],"layout":{"$type":"Auto"},"role":"Group"}}"#;
+
+#[test]
+fn resolved_rows_hands_over_what_the_tree_cannot_carry() {
+    let s = ClientSession::new(GRID).expect("grid decodes");
+    // The tree JSON still carries the UNRESOLVED Transform — that is the whole
+    // problem this entry point answers, so assert it rather than assume it.
+    assert!(s.tree_json().contains("\"$type\":\"Transform\""));
+    // …and `project_resolved` does not fix it either: a row-context Transform
+    // resolves to a collection, which cannot ride a `Static` slot (§2 rule 11).
+    assert!(s.project_resolved().contains("\"$type\":\"Transform\""));
+
+    let RowsOutcome::Rows(rows) = s.resolved_rows("shipments") else {
+        panic!("expected resolved rows");
+    };
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].field("status"), Some(&JVal::Str("Delayed".into())));
+    assert_eq!(rows[1].field("status"), Some(&JVal::Str("Other".into())));
+}
+
+#[test]
+fn a_node_with_no_row_source_is_distinguishable_from_empty() {
+    let s = ClientSession::new(GRID).expect("grid decodes");
+    // A real node of a kind that has no row source…
+    assert_eq!(s.resolved_rows("heading"), RowsOutcome::NoRowSource);
+    // …and an id that names nothing at all. Both are caller mistakes, and
+    // neither may masquerade as "this grid has no rows".
+    assert_eq!(s.resolved_rows("nope"), RowsOutcome::NoRowSource);
+}
+
+#[test]
+fn an_unresolvable_source_is_not_flattened_to_zero_rows() {
+    // A grid bound to a Query the host has not fed. A consumer must render its
+    // LOADING surface here — reporting zero rows would show "no data" for "not
+    // yet", and the two are not the same claim.
+    let json = r#"{"id":"g","kind":{"$type":"DataGrid","columns":[],"rowKeyField":"id","source":{"$type":"Query","dependsOn":[],"name":"shipments"}}}"#;
+    let s = ClientSession::new(json).expect("decodes");
+    assert_eq!(s.resolved_rows("g"), RowsOutcome::NotResolved);
+
+    // Once the host feeds it, the SAME call resolves — including to genuinely
+    // zero rows, which is the empty state and reads differently.
+    let mut s = s;
+    s.set_query("shipments", "[]").expect("seeds");
+    assert_eq!(s.resolved_rows("g"), RowsOutcome::Rows(vec![]));
 }

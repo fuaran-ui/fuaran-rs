@@ -33,8 +33,9 @@ pub mod wasm;
 use crate::canonical::{JVal, parse, render_canonical};
 use crate::ops::{ApplyError, apply};
 use crate::render::BindingSources;
+use crate::render::bindings::{ResolvedRows, resolve_rows};
 use crate::render::server::render_to_html;
-use crate::wire::{DecodeError, Node, decode_node, decode_op};
+use crate::wire::{DecodeError, Node, NodeKind, decode_node, decode_op};
 
 /// A live client session over one wire tree. Holds the current tree + binding
 /// sources; renders, applies ops, and writes reactive state.
@@ -85,6 +86,48 @@ impl ClientSession {
         render_to_html(&self.tree, &self.sources)
     }
 
+    /// The **resolved rows** of one row-bearing node (`DataGrid` / `Chart` /
+    /// `Map` / `Sparkline`), evaluated against the live sources.
+    ///
+    /// The out-of-band companion to [`project_resolved`](Self::project_resolved),
+    /// and it exists because that projection cannot carry this: a row-context
+    /// `Transform` resolves to a *collection*, and the wire's `Static` slot
+    /// erases a collection to `"<opaque>"` (§2 rule 11), so resolved rows cannot
+    /// ride the tree. A decode-only consumer — a native render surface over this
+    /// core — therefore has no way to obtain them from the tree JSON at all, and
+    /// renders a data-bound grid empty no matter how much of the tree it
+    /// understands. This hands them over directly instead, keeping the division
+    /// the two tiers are built on: this core evaluates, the consumer renders.
+    ///
+    /// Addressed by **node id** rather than by kind, so the same call serves a
+    /// chart or a map later without a second entry point.
+    ///
+    /// The three outcomes are deliberately distinct — see [`RowsOutcome`]. In
+    /// particular an unresolved source is NOT flattened to zero rows: the two
+    /// mean different things to a renderer (a loading surface versus an empty
+    /// state), and this host's own renderer already distinguishes them.
+    pub fn resolved_rows(&self, node_id: &str) -> RowsOutcome {
+        let Some(node) = crate::introspect::get_node(&self.tree, node_id) else {
+            return RowsOutcome::NoRowSource;
+        };
+        // The four row-bearing kinds. An exhaustive `match` would force every
+        // future kind through this list, but most kinds legitimately have no row
+        // source, so the catch-all is the honest shape here — the cost of missing
+        // a new row-bearing kind is a `NoRowSource` a consumer can see, not a
+        // silent wrong answer.
+        let source = match &node.kind {
+            NodeKind::DataGrid(spec) => &spec.source,
+            NodeKind::Chart(spec) => &spec.source,
+            NodeKind::Map(spec) => &spec.source,
+            NodeKind::Sparkline(spec) => &spec.source,
+            _ => return RowsOutcome::NoRowSource,
+        };
+        match resolve_rows(&self.sources, source) {
+            ResolvedRows::Rows(rows) => RowsOutcome::Rows(rows.into_owned()),
+            ResolvedRows::NotResolved => RowsOutcome::NotResolved,
+        }
+    }
+
     /// Apply a canonical wire `TreeOp` JSON against the held tree. On success
     /// the session adopts the new tree; on any failure the held tree is
     /// untouched (the apply engine never partially mutates). The returned
@@ -119,6 +162,28 @@ impl ClientSession {
         self.sources.query_results.insert(name.to_string(), value);
         Ok(())
     }
+}
+
+/// The outcome of a [`resolved_rows`](ClientSession::resolved_rows) request.
+///
+/// Three cases, not two, and the distinction is load-bearing: a consumer must
+/// render an unresolved source (still loading, or a `Transform` that errored)
+/// differently from a source that genuinely resolved to nothing. Collapsing them
+/// would show "no data" for "not yet", which is the quiet-wrong-looking-right
+/// failure this whole tier is built to avoid.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RowsOutcome {
+    /// The source resolved. Possibly to zero rows — that is an empty state, and
+    /// the consumer should render it as one.
+    Rows(Vec<JVal>),
+    /// The source did not resolve: a `Transform` that errored, or a store the
+    /// host has not fed yet. The consumer renders its LOADING surface, never an
+    /// empty table. (This host's renderer makes the same choice.)
+    NotResolved,
+    /// No node carries that id, or the node's kind has no row source at all.
+    /// A caller mistake rather than a data condition — a consumer asks this of a
+    /// node it has just decoded and is currently rendering.
+    NoRowSource,
 }
 
 /// A recoverable client-session failure: a malformed wire input, or a
