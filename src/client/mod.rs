@@ -92,12 +92,20 @@ impl ClientSession {
     /// The out-of-band companion to [`project_resolved`](Self::project_resolved),
     /// and it exists because that projection cannot carry this: a row-context
     /// `Transform` resolves to a *collection*, and the wire's `Static` slot
-    /// erases a collection to `"<opaque>"` (§2 rule 11), so resolved rows cannot
-    /// ride the tree. A decode-only consumer — a native render surface over this
-    /// core — therefore has no way to obtain them from the tree JSON at all, and
-    /// renders a data-bound grid empty no matter how much of the tree it
-    /// understands. This hands them over directly instead, keeping the division
-    /// the two tiers are built on: this core evaluates, the consumer renders.
+    /// erases a COMPUTED collection to `"<opaque>"` (§2 rule 11), so resolved
+    /// rows cannot ride the tree. A decode-only consumer — a native render
+    /// surface over this core — therefore has no way to obtain them from the
+    /// tree JSON at all, and renders a data-bound grid empty no matter how much
+    /// of the tree it understands. This hands them over directly instead,
+    /// keeping the division the two tiers are built on: this core evaluates, the
+    /// consumer renders.
+    ///
+    /// fuaran#665 narrowed *which* sources that argument covers, and did not
+    /// retire it: an AUTHORED rows feed (`Static` / `State`) is now typed on the
+    /// wire and does ride the tree, but a `Transform`- or `Query`-sourced feed
+    /// still resolves only here. Both arrive through this one call, so a
+    /// consumer needs no per-source knowledge — which is why the call is
+    /// addressed by node id rather than by binding case.
     ///
     /// Addressed by **node id** rather than by kind, so the same call serves a
     /// chart or a map later without a second entry point.

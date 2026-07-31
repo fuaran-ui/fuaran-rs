@@ -134,6 +134,41 @@ fn resolved_rows_hands_over_what_the_tree_cannot_carry() {
     assert_eq!(rows[1].field("status"), Some(&JVal::Str("Other".into())));
 }
 
+/// fuaran#665 — an AUTHORED rows feed is typed on the wire now, so it reaches
+/// the session as data rather than as the `"<opaque>"` sentinel. The projection
+/// consumers (the native render surfaces over this core) read every source
+/// through `resolved_rows`, so the typed path has to arrive there too — a
+/// `Static`/`State` feed silently resolving to zero rows would render an empty
+/// grid over data the tree is now carrying in full.
+#[test]
+fn an_authored_rows_feed_resolves_through_the_same_call() {
+    for source in [
+        r#"{"$type":"Static","value":[{"month":"Jan","revenue":980},{"month":"Feb","revenue":1105}]}"#,
+        r#"{"$type":"State","defaultValue":[{"month":"Jan","revenue":980},{"month":"Feb","revenue":1105}],"key":"planRows"}"#,
+    ] {
+        let json = format!(
+            r#"{{"id":"g","kind":{{"$type":"DataGrid","columns":[],"editable":true,"rowKeyField":"month","source":{source}}}}}"#
+        );
+        let s = ClientSession::new(&json).expect("decodes");
+        let RowsOutcome::Rows(rows) = s.resolved_rows("g") else {
+            panic!("expected resolved rows for {source}");
+        };
+        assert_eq!(rows.len(), 2, "{source}");
+        assert_eq!(rows[0].field("month"), Some(&JVal::Str("Jan".into())));
+        assert_eq!(rows[1].field("revenue"), Some(&JVal::Num(1105.0)));
+    }
+}
+
+/// The other half of the same change: the legacy `"<opaque>"` sentinel is still
+/// accepted and means the empty feed — never `NotResolved`, which would put a
+/// consumer into its loading surface forever.
+#[test]
+fn a_legacy_opaque_rows_sentinel_resolves_to_the_empty_feed() {
+    let json = r#"{"id":"g","kind":{"$type":"DataGrid","columns":[],"source":{"$type":"Static","value":"<opaque>"}}}"#;
+    let s = ClientSession::new(json).expect("decodes");
+    assert_eq!(s.resolved_rows("g"), RowsOutcome::Rows(vec![]));
+}
+
 #[test]
 fn a_node_with_no_row_source_is_distinguishable_from_empty() {
     let s = ClientSession::new(GRID).expect("grid decodes");

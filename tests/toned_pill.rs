@@ -23,7 +23,7 @@ use fuaran_rs::wire::{DecodeErrorCode, decode_node, encode_node};
 /// bytes when the cell kind is itself canonical.
 fn column(kind: &str) -> String {
     format!(
-        r#"{{"id":"g1","kind":{{"$type":"DataGrid","columns":[{{"field":"status","kind":{kind},"label":"Status"}}],"source":{{"$type":"Static","value":"<opaque>"}}}}}}"#
+        r#"{{"id":"g1","kind":{{"$type":"DataGrid","columns":[{{"field":"status","kind":{kind},"label":"Status"}}],"source":{{"$type":"Static","value":[]}}}}}}"#
     )
 }
 

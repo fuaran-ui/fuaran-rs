@@ -536,6 +536,12 @@ pub fn resolve_rows<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Re
         Resolution::Resolved(Value::Json(JVal::Arr(items))) => {
             ResolvedRows::Rows(Cow::Borrowed(items))
         }
+        // fuaran#665 — an authored rows feed now survives the wire as a typed
+        // `Static`/`State` payload rather than the `"<opaque>"` sentinel, so it
+        // reaches the renderer as data. Same shape a host-supplied array takes.
+        Resolution::Resolved(Value::Static(StaticValue::Rows(rows))) => ResolvedRows::Rows(
+            Cow::Owned(rows.iter().map(|r| JVal::Obj(r.clone())).collect()),
+        ),
         Resolution::Resolved(_) => ResolvedRows::Rows(Cow::Borrowed(&[])),
         Resolution::NotResolved => ResolvedRows::NotResolved,
         Resolution::I18nUnresolved(_) => ResolvedRows::Rows(Cow::Borrowed(&[])),

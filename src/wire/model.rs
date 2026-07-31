@@ -95,6 +95,13 @@ pub enum TextSource {
     },
 }
 
+/// One grid / chart row: an *open* name→cell map (unlike a fixed-field record),
+/// so a row is name-addressable — the shape the declarative column floor
+/// (`field`, `rowKeyField`) has always assumed. Cells stay faithful `JVal`s; the
+/// residual-`"<opaque>"` boundary is narrowed to the CELL, where a nested array
+/// or object re-encodes as the sentinel (`obj_value`).
+pub type Row = Vec<(String, JVal)>;
+
 /// A `Binding.Static` / `Binding.State` payload. The language-enumerated slot
 /// shapes (Phase 429) are typed variants; everything else rides the faithful
 /// parsed value (`Ast`), whose non-primitive forms re-encode as `"<opaque>"`
@@ -115,6 +122,10 @@ pub enum StaticValue {
     FloatSeq(Vec<f64>),
     /// `MapMarker seq` slots (map sources).
     Markers(Vec<MapMarker>),
+    /// `Row seq` slots (grid / chart row sources) — fuaran#665 moved these off
+    /// the residual-`"<opaque>"` boundary. An empty feed encodes `[]`, never
+    /// `null`; the legacy sentinel decodes to the empty feed indefinitely.
+    Rows(Vec<Row>),
     /// `float * float` slots (the 0.2.0 `FormFieldKind.Range` dual-thumb pair).
     /// The canonical `Static` pair rides as the BARE `{"max":…,"min":…}` object
     /// — no `Static` envelope (the Phase 423 range shape, kept at 0.2.0).

@@ -85,6 +85,19 @@ fn select_option(o: &SelectOption) -> String {
     ])
 }
 
+/// fuaran#665 — one row object: Ordinal-sorted keys (via `obj`) over best-effort
+/// scalar cells. A `null` cell is OMITTED rather than emitted as `"k":null` —
+/// rule 4, absence is structural — and a nested array/object cell rides
+/// `obj_value`'s `"<opaque>"` sentinel, the residual boundary narrowed to the
+/// cell seam.
+fn row(r: &Row) -> String {
+    obj(r
+        .iter()
+        .filter(|(_, v)| !matches!(v, JVal::Null))
+        .map(|(k, v)| field(k, obj_value(v)))
+        .collect())
+}
+
 fn map_marker(m: &MapMarker) -> String {
     obj(vec![
         field("label", text_source(&m.label)),
@@ -114,6 +127,7 @@ fn static_value(v: &StaticValue) -> String {
         StaticValue::StringList(items) => arr(items.iter().map(|x| s(x)).collect()),
         StaticValue::FloatSeq(items) => arr(items.iter().map(|&x| num(x)).collect()),
         StaticValue::Markers(items) => arr(items.iter().map(map_marker).collect()),
+        StaticValue::Rows(rows) => arr(rows.iter().map(row).collect()),
         // The Range pair rides as the bare `{max, min}` object (Phase 423
         // shape, kept at 0.2.0) — the `Static` envelope is stripped at the
         // Range value position itself (see `form_field_kind`).

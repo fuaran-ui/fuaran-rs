@@ -1240,6 +1240,8 @@ enum StaticSlot {
     StringList,
     FloatSeq,
     Markers,
+    /// The fuaran#665 grid / chart row source — an array of row objects.
+    Rows,
     /// The 0.2.0 `FormFieldKind.Range` dual-thumb `(min, max)` pair.
     FloatPair,
     /// The 0.7.0 `FormFieldKind.DateRange` ordered `(from, to)` ISO-8601 pair.
@@ -1260,6 +1262,7 @@ impl StaticSlot {
             StaticSlot::StringList => StaticValue::StringList(vec![OPAQUE.to_string()]),
             StaticSlot::FloatSeq => StaticValue::FloatSeq(vec![]),
             StaticSlot::Markers => StaticValue::Markers(vec![]),
+            StaticSlot::Rows => StaticValue::Rows(vec![]),
             StaticSlot::FloatPair => StaticValue::FloatPair(0.0, 0.0),
             StaticSlot::StringPair => StaticValue::StringPair(String::new(), String::new()),
         }
@@ -1322,6 +1325,26 @@ impl StaticSlot {
                         out.push(decode_map_marker(&format!("{path}[{i}]"), item)?);
                     }
                     Ok(StaticValue::Markers(out))
+                }
+            },
+            // fuaran#665 — the typed row source. The legacy `"<opaque>"` sentinel
+            // decodes to the empty feed indefinitely (read-compat: that *was* the
+            // whole value it carried), as does a pre-typed `null`. A non-object
+            // row element is a named decode error.
+            StaticSlot::Rows => match v {
+                JVal::Null => Ok(StaticValue::Rows(vec![])),
+                JVal::Str(s) if s == OPAQUE => Ok(StaticValue::Rows(vec![])),
+                _ => {
+                    let items = as_arr(path, v)?;
+                    let mut out = Vec::with_capacity(items.len());
+                    for (i, item) in items.iter().enumerate() {
+                        let p = format!("{path}[{i}]");
+                        match item {
+                            JVal::Obj(cells) => out.push(cells.clone()),
+                            _ => return Err(wrong_type(&p, "row object")),
+                        }
+                    }
+                    Ok(StaticValue::Rows(out))
                 }
             },
             StaticSlot::FloatPair => match v {
@@ -2695,12 +2718,13 @@ fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
     // 0.2.0 — omitted-when-default (false).
     let editable = opt_bool(path, fields, "editable")?.unwrap_or(false);
     // Field aliases: data / rows → source.
-    let source = req_binding_aliased(
+    let source = req_binding_slot_aliased(
         path,
         fields,
         "source",
         &["data", "rows"],
         "Grid source binding",
+        StaticSlot::Rows,
     )?;
     let row_key_field = opt_string(path, fields, "rowKeyField")?;
     let static_rows = match get(fields, "staticRows") {
@@ -2723,7 +2747,14 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
     let kind_j = req(path, fields, "kind", "ChartKind")?;
     let kind = decode_chart_kind(&format!("{path}.kind"), kind_j)?;
     // Field alias: data → source.
-    let source = req_binding_aliased(path, fields, "source", &["data"], "Chart source binding")?;
+    let source = req_binding_slot_aliased(
+        path,
+        fields,
+        "source",
+        &["data"],
+        "Chart source binding",
+        StaticSlot::Rows,
+    )?;
     let x_field = req_string(path, fields, "xField", "xField string")?;
     let y_fields_j = req(path, fields, "yFields", "yFields string list")?;
     let arr = as_arr(&format!("{path}.yFields"), y_fields_j)?;
