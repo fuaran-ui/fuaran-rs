@@ -36,15 +36,34 @@ fn extract_scheme(url: &str) -> Option<String> {
     Some(cleaned.trim().to_lowercase())
 }
 
+/// A protocol-relative URL: `//host/path` and the forms browsers fold into it.
+/// WHATWG URL parsing treats `\` as `/` for special schemes, so `\\host`,
+/// `/\host` and `\/host` all resolve exactly as `//host` does.
+///
+/// These carry no scheme, so the schemeless branch of [`sanitize_url`] would
+/// otherwise admit them — but the browser resolves them against the CURRENT
+/// page's scheme and lands on an OFF-ORIGIN host, defeating the same-origin
+/// intent that makes a schemeless URL safe. On an `href` that is off-origin
+/// navigation; on an image `src` it is an off-origin request that leaks the
+/// Referer.
+fn is_protocol_relative(url: &str) -> bool {
+    let mut chars = url.chars();
+    let is_sep = |c: Option<char>| matches!(c, Some('/') | Some('\\'));
+    is_sep(chars.next()) && is_sep(chars.next())
+}
+
 /// The sanitised URL, or `None` if the scheme is rejected. Empty string passes
-/// through (a valid same-page href); unknown schemes reject conservatively.
+/// through (a valid same-page href); unknown schemes reject conservatively, and
+/// so do protocol-relative URLs despite carrying no scheme (see
+/// [`is_protocol_relative`]).
 pub fn sanitize_url(url: &str) -> Option<&str> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Some(trimmed);
     }
     match extract_scheme(trimmed) {
-        None => Some(trimmed), // relative / fragment / same-origin
+        None if is_protocol_relative(trimmed) => None, // off-origin despite having no scheme
+        None => Some(trimmed),                         // relative / fragment / same-origin
         Some(scheme) => {
             if REJECTED_URL_SCHEMES.contains(&scheme.as_str()) {
                 None
@@ -219,6 +238,55 @@ mod tests {
         assert_eq!(sanitize_url("data:text/html,x"), None);
         assert_eq!(sanitize_url(""), Some(""));
         assert_eq!(sanitize_url_or_blank("vbscript:x"), "about:blank");
+    }
+
+    #[test]
+    fn protocol_relative_urls_are_rejected() {
+        // No scheme, so the schemeless branch would admit these — but the browser
+        // resolves them against the current page's scheme and lands OFF-ORIGIN.
+        // `\` is WHATWG's lenient normalisation of `/` for special schemes, so all
+        // four two-separator forms resolve identically.
+        for url in [
+            "//evil.example/x",
+            r"/\evil.example/x",
+            r"\\evil.example/x",
+            r"\/evil.example/x",
+            "//",
+            "  //evil.example/x", // rejection survives whitespace trimming
+        ] {
+            assert_eq!(sanitize_url(url), None, "expected rejection for {url:?}");
+            assert_eq!(sanitize_url_or_blank(url), "about:blank");
+        }
+    }
+
+    #[test]
+    fn single_slash_relative_paths_still_pass() {
+        for url in ["/", "/a", "/foo//bar", "./rel", "page", "#frag", "foo/bar"] {
+            assert_eq!(
+                sanitize_url(url),
+                Some(url),
+                "expected pass-through for {url:?}"
+            );
+        }
+        // An absolute URL whose authority legitimately uses `//` is unaffected.
+        assert_eq!(
+            sanitize_url("https://ok.example/x"),
+            Some("https://ok.example/x")
+        );
+    }
+
+    #[test]
+    fn markdown_sweep_is_index_aligned_under_case_folding() {
+        // This host already folds ASCII-only, so the sweep's search copy stays
+        // index-aligned with the original. Pinned so a future switch to a
+        // Unicode-aware fold (which is not length-preserving — U+0130 folds to two
+        // chars) cannot silently reintroduce the sibling hosts' misalignment.
+        assert_eq!(sanitize_markdown_html("İ<script>alert(1)</script>"), "İ");
+        assert_eq!(
+            sanitize_markdown_html("<p>İİ</p><SCRIPT>x</SCRIPT><p>b</p>"),
+            "<p>İİ</p><p>b</p>"
+        );
+        assert_eq!(sanitize_markdown_html("İ<iframe src='x'></iframe>b"), "İb");
     }
 
     #[test]
