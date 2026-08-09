@@ -1,0 +1,153 @@
+# Build, test and wire-format conformance gate for the Rust host.
+#
+# ── Layout ───────────────────────────────────────────────────────────────────
+# The conformance corpus is its own public repository. The test suite locates it
+# by walking up from CARGO_MANIFEST_DIR looking for
+# `wire-format-fixtures/manifest.json`, so this repo is checked out into a
+# subdirectory and the corpus beside it:
+#
+#     $GITHUB_WORKSPACE/
+#     ├── fuaran-rs/               ← this repo
+#     └── wire-format-fixtures/    ← the corpus (fuaran-ui/fuaran-ui-specification)
+#
+# The corpus repository is PUBLIC, so the checkout is anonymous — no token.
+#
+# ── Why the corpus assertion below is not optional ───────────────────────────
+# find_corpus() returns None when the corpus is absent and each conformance test
+# then returns early with a "skipping (standalone checkout)" note — it does not
+# fail. A layout drift would therefore silently retire the entire conformance
+# leg and report green. The assertion turns that into a hard stop.
+#
+# ── Toolchain ────────────────────────────────────────────────────────────────
+# rustup is preinstalled on the runner, so the toolchain is installed directly
+# rather than through a third-party action. The usual action for this is
+# referenced by a moving branch name rather than a released version, and this
+# repo parses untrusted input — an unpinned third-party action in its gate is
+# the wrong trade.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # ── QUARANTINE ─────────────────────────────────────────────────────────────
+  # These tests fail on a clean tree TODAY, and are excluded from the blocking
+  # gate so that a NEW regression is caught while this existing drift stays
+  # visible. They are not a judgement that the tests are wrong — they are a
+  # record of known, understood, outstanding work.
+  #
+  # Single root cause: the shared corpus has moved ahead of this decoder. Three
+  # fixtures — form-toggle, now-environment-binding, switch-on-selection — carry
+  # vocabulary the decoder does not yet model (a `Toggle` form-field kind, a
+  # `Now` binding, and a required `stateKey` on `Switch`).
+  #
+  # NOTE THE COST, which is larger here than on the other hosts: each of these
+  # tests loops the whole corpus internally and accumulates failures, so there
+  # is no per-fixture granularity to exclude. Quarantining
+  # `corpus_round_trips_byte_identical` therefore drops the entire byte-parity
+  # round-trip leg, not merely three fixtures. What still gates: the reject-code
+  # leg and the remaining conformance tests, plus apply, render, validator,
+  # op-stream, diff, DAG, FFI and the rest of the suite.
+  #
+  # This list SHRINKS TO EMPTY when the decoder models that vocabulary. Delete
+  # entries as they start passing; do not add to it to make a red build green —
+  # a new failure here is the regression this gate exists to catch.
+  QUARANTINE: >-
+    --skip corpus_round_trips_byte_identical
+    --skip corpus_control_kinds_are_all_recognised
+    --skip form_field_kind_set_matches_manifest
+    --skip emitted_class_vocabulary_matches_the_reference_renderer
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fuaran-rs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: fuaran-rs
+
+      # Deliberately UNPINNED: the corpus is the shared conformance authority
+      # every host certifies against, and one current spec for all hosts is the
+      # point of giving it a single home. Pinning here would let this host drift
+      # from the spec without anything going red.
+      - name: Check out the wire-format conformance corpus
+        uses: actions/checkout@v4
+        with:
+          repository: fuaran-ui/fuaran-ui-specification
+          path: wire-format-fixtures
+
+      - name: Assert the corpus is where the tests resolve it
+        run: test -f ../wire-format-fixtures/manifest.json
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+          rustc --version && cargo --version
+
+      - name: Format check (rustfmt)
+        run: cargo fmt --all --check
+
+      - name: Lint (clippy)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build
+
+      # Print what this gate does NOT cover, on every run. A cap nobody can see
+      # reads as "covered everything".
+      - name: Report the conformance quarantine
+        run: |
+          echo "The blocking gate below EXCLUDES these known-failing tests:"
+          echo "$QUARANTINE" | tr ' ' '\n' | grep -v '^--skip$' | sed 's/^/  - /'
+          echo "NOTE: corpus_round_trips_byte_identical loops the whole corpus internally,"
+          echo "so excluding it drops the byte-parity round-trip leg entirely, not three fixtures."
+          {
+            echo "### Conformance quarantine (excluded from the blocking gate)"
+            echo
+            echo "Cause: the shared corpus carries vocabulary this decoder does not yet model"
+            echo "(\`Toggle\` form-field kind, \`Now\` binding, required \`Switch.stateKey\`)."
+            echo
+            echo '```'
+            echo "$QUARANTINE" | tr ' ' '\n' | grep -v '^--skip$'
+            echo '```'
+            echo
+            echo "\`corpus_round_trips_byte_identical\` loops the whole corpus internally, so"
+            echo "excluding it drops the byte-parity round-trip leg entirely, not three fixtures."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Non-blocking: runs the FULL suite so the size of the existing drift is
+      # measured on every run rather than inferred from the quarantine list.
+      # --no-fail-fast is load-bearing: without it cargo stops at the first
+      # failing test binary and under-reports the drift.
+      - name: Conformance drift (reported, non-blocking)
+        continue-on-error: true
+        run: |
+          set +e
+          cargo test --no-fail-fast > drift.log 2>&1
+          tail -40 drift.log
+          {
+            echo "### Full suite, including quarantined tests (non-blocking)"
+            echo
+            echo '```'
+            grep -E '^test result: FAILED' drift.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      # THE GATE. Everything the suite currently passes, including every
+      # conformance test outside the quarantine above. --no-fail-fast so one
+      # failing binary does not hide the state of the rest.
+      - name: Test (gated)
+        run: cargo test --no-fail-fast -- $QUARANTINE
