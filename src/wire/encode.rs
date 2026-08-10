@@ -1625,7 +1625,7 @@ fn column_erased(c: &ColumnErased) -> String {
 }
 
 fn static_rows(rows: &StaticRows) -> String {
-    obj(vec![
+    let mut fields = vec![
         field(
             "headers",
             arr(rows.headers.iter().map(text_source).collect()),
@@ -1638,7 +1638,22 @@ fn static_rows(rows: &StaticRows) -> String {
                 .map(|row| arr(row.iter().map(text_source).collect()))
                 .collect()),
         ),
-    ])
+    ];
+    // Phase 801 — the declarative sort intent, each emitted only when declared, so
+    // a table saying nothing encodes exactly as it did before the fields existed.
+    if let Some(sortable) = rows.sortable {
+        fields.push(field("sortable", boolean(sortable)));
+    }
+    if let Some(ds) = &rows.default_sort {
+        fields.push(field(
+            "defaultSort",
+            obj(vec![
+                field("column", int(ds.column)),
+                field("direction", s(ds.direction.as_str())),
+            ]),
+        ));
+    }
+    obj(fields)
 }
 
 fn grid_spec(spec: &GridSpec) -> String {

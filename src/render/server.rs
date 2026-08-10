@@ -2359,11 +2359,22 @@ fn render_static_table(ctx: &Ctx<'_>, spec: &StaticRows) -> String {
         })
         .collect();
     let body = el("tbody", &[], &body_rows);
-    el(
-        "table",
-        &[("class", s("fuaran-table"))],
-        &format!("{head}{body}"),
-    )
+    // Phase 801 — the declared sort intent as data attributes, so a
+    // progressive-enhancement script honours it without re-parsing the wire. Emitted
+    // ONLY when declared (an undeclared table's bytes are unchanged), and in the same
+    // order as the F# / TS / Python / Go renderers so the markup stays parity-locked.
+    let mut attrs = vec![("class", s("fuaran-table"))];
+    if let Some(sortable) = spec.sortable {
+        attrs.push((
+            "data-fuaran-sortable",
+            s(if sortable { "true" } else { "false" }),
+        ));
+    }
+    if let Some(ds) = &spec.default_sort {
+        attrs.push(("data-fuaran-sort-column", s(ds.column.to_string())));
+        attrs.push(("data-fuaran-sort-direction", s(ds.direction.as_str())));
+    }
+    el("table", &attrs, &format!("{head}{body}"))
 }
 
 // Chart-lowering posture (Phase 551): fuaran-rs is LOWER-IN-HOST. A raw Chart is

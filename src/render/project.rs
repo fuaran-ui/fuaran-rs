@@ -334,6 +334,10 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
                     .iter()
                     .map(|r| r.iter().map(|t| map_text(sources, t)).collect())
                     .collect(),
+                // Phase 801 — the sort declaration is not text, so it projects through
+                // untouched (this pass maps TextSource chrome only).
+                sortable: sr.sortable,
+                default_sort: sr.default_sort.clone(),
             }),
         }),
         NodeKind::Chart(spec) => NodeKind::Chart(ChartSpec {

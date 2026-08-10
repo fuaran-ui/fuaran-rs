@@ -73,6 +73,9 @@ bare_enum!(MathDisplay { Inline => "Inline", Block => "Block" });
 bare_enum!(DateVariant { Date => "Date", Time => "Time", DateTime => "DateTime" });
 bare_enum!(FileReadEncoding { Text => "Text", Base64 => "Base64", DataUrl => "DataUrl" });
 bare_enum!(LiveRegionKind { Polite => "polite", Assertive => "assertive", Off => "off" });
+// Phase 801 — the closed sort direction on `staticRows.defaultSort`. Lower-case on
+// the wire, like `LiveRegionKind` and unlike most enums here.
+bare_enum!(SortDirection { Asc => "asc", Desc => "desc" });
 bare_enum!(DateStyle { Short => "Short", Medium => "Medium", Long => "Long", Full => "Full" });
 bare_enum!(RelativeTimeUnit { Second => "Second", Minute => "Minute", Hour => "Hour", Day => "Day", Week => "Week", Month => "Month", Year => "Year" });
 bare_enum!(HashStrictness { StrictReplay => "StrictReplay", AdvisoryWarning => "AdvisoryWarning", Enforced => "Enforced" });
@@ -830,6 +833,23 @@ pub struct ColumnErased {
 pub struct StaticRows {
     pub headers: Vec<TextSource>,
     pub rows: Vec<Vec<TextSource>>,
+    /// Phase 801 — the table INVITES interactive column sorting. Intent, not a
+    /// behaviour guarantee: a host with no sorting affordance renders the
+    /// authored order and stays conformant.
+    pub sortable: Option<bool>,
+    /// Phase 801 — the table's initial order. Configuration, distinct from the
+    /// transform pipeline's data `sort`.
+    pub default_sort: Option<DefaultSort>,
+}
+
+/// Phase 801 — a static table's declared initial order. `column` is a
+/// non-negative index into `StaticRows::headers`; an index past the end is
+/// deliberately not a decode error (a sibling-value relation is not something a
+/// per-object codec judges).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DefaultSort {
+    pub column: i64,
+    pub direction: SortDirection,
 }
 
 #[derive(Debug, Clone, PartialEq)]

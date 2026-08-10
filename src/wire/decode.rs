@@ -465,6 +465,7 @@ decode_bare_enum!(
     "FileReadEncoding"
 );
 decode_bare_enum!(decode_live_region, LiveRegionKind, "LiveRegionKind");
+decode_bare_enum!(decode_sort_direction, SortDirection, "SortDirection");
 decode_bare_enum!(decode_date_style, DateStyle, "DateStyle");
 decode_bare_enum!(
     decode_relative_time_unit,
@@ -2704,7 +2705,37 @@ fn decode_static_rows(path: &str, j: &JVal) -> DResult<StaticRows> {
         }
         rows.push(row);
     }
-    Ok(StaticRows { headers, rows })
+    // Phase 801 — the optional sort-intent slots. Both absent re-encodes
+    // byte-identically to the pre-801 wire.
+    let sortable = opt_bool(path, fields, "sortable")?;
+    let default_sort = match get(fields, "defaultSort") {
+        None => None,
+        Some(v) => Some(decode_default_sort(&format!("{path}.defaultSort"), v)?),
+    };
+    Ok(StaticRows {
+        headers,
+        rows,
+        sortable,
+        default_sort,
+    })
+}
+
+/// Phase 801 — the `{column, direction}` initial-order declaration. `column` is
+/// a NON-NEGATIVE index into `headers`; a negative value is `WRONG_TYPE`, which
+/// is also what `schema.json`'s `minimum: 0` says, so the two expressions of the
+/// contract agree.
+fn decode_default_sort(path: &str, j: &JVal) -> DResult<DefaultSort> {
+    let fields = as_obj(path, j)?;
+    let column = req_int(path, fields, "column", "non-negative header index")?;
+    if column < 0 {
+        return Err(wrong_type(
+            &format!("{path}.column"),
+            "JSON number (non-negative integer header index)",
+        ));
+    }
+    let direction_j = req(path, fields, "direction", "asc | desc")?;
+    let direction = decode_sort_direction(&format!("{path}.direction"), direction_j)?;
+    Ok(DefaultSort { column, direction })
 }
 
 fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
