@@ -1654,6 +1654,11 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
             Ok(Binding::State { key, default_value })
         }
         "Computed" => Ok(Binding::Computed),
+        // Phase 765 — the host-furnished instant: no wire fields, the bare
+        // `{"$type":"Now"}` object. The instant is already the wire-shaped
+        // string, so a decoded reader receives it as-is (the sibling hosts'
+        // identity projection; this closure-free host has nothing to erase).
+        "Now" => Ok(Binding::Now),
         "I18n" => {
             let key = req_string(path, fields, "key", "i18n key string")?;
             let args = match get(fields, "args") {
@@ -2288,6 +2293,12 @@ fn decode_form_field_kind(
             on_change,
         }),
         "Checkbox" => Ok(FormFieldKind::Checkbox {
+            value: value_or(StaticSlot::Untyped, control_value_defaults::checkbox())?,
+            on_toggle,
+        }),
+        // Phase 766 — the switch affordance: Checkbox's mechanics under a
+        // distinct tag.
+        "Toggle" => Ok(FormFieldKind::Toggle {
             value: value_or(StaticSlot::Untyped, control_value_defaults::checkbox())?,
             on_toggle,
         }),
@@ -3514,7 +3525,17 @@ fn decode_node_kind(path: &str, j: &JVal) -> DResult<NodeKind> {
             }))
         }
         "Switch" => {
-            let state_key = req_string(path, fields, "stateKey", "Switch stateKey string")?;
+            // Phase 768 — the selector is any Binding: `on` carries the
+            // canonical Binding wire form; the no-default `State` form keeps
+            // the compact `stateKey` spelling. Both absent keeps the stateKey
+            // MISSING_FIELD, so the reject fixture's error is unchanged.
+            let on = match get(fields, "on") {
+                Some(v) => decode_binding(&format!("{path}.on"), v)?,
+                None => Binding::State {
+                    key: req_string(path, fields, "stateKey", "Switch stateKey string")?,
+                    default_value: StaticValue::Ast(JVal::Null),
+                },
+            };
             let cases_j = req(path, fields, "cases", "Switch cases array")?;
             let arr = as_arr(&format!("{path}.cases"), cases_j)?;
             let mut cases = Vec::with_capacity(arr.len());
@@ -3529,7 +3550,7 @@ fn decode_node_kind(path: &str, j: &JVal) -> DResult<NodeKind> {
             let default_j = req(path, fields, "default", "Switch default Node")?;
             let default = decode_node_ast(&format!("{path}.default"), default_j)?;
             Ok(NodeKind::Switch(SwitchSpec {
-                state_key,
+                on,
                 cases,
                 default: Box::new(default),
             }))

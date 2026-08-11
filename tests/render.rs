@@ -917,6 +917,7 @@ fn form_control_class_vocabulary_matches_the_reference_renderer() {
         r#"{"id":"f-text","kind":{"$type":"Text"},"label":"T","required":false}"#,
         r#"{"id":"f-num","kind":{"$type":"Number"},"label":"N","required":false}"#,
         r#"{"id":"f-check","kind":{"$type":"Checkbox"},"label":"C","required":false}"#,
+        r#"{"id":"f-toggle","kind":{"$type":"Toggle"},"label":"Tg","required":false}"#,
         r#"{"id":"f-choice","kind":{"$type":"Choice","options":[{"label":"A","value":"a"}]},"label":"Ch","required":false}"#,
         r#"{"id":"f-seg","kind":{"$type":"SegmentedChoice","options":[{"label":"A","value":"a"}],"orientation":"Horizontal"},"label":"S","required":false}"#,
         r#"{"id":"f-area","kind":{"$type":"TextArea","rows":3},"label":"A","required":false}"#,

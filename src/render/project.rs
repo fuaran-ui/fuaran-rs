@@ -358,7 +358,7 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             fallback: Box::new(project_node(sources, &spec.fallback)),
         }),
         NodeKind::Switch(spec) => NodeKind::Switch(SwitchSpec {
-            state_key: spec.state_key.clone(),
+            on: spec.on.clone(),
             cases: spec
                 .cases
                 .iter()

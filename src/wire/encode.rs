@@ -490,6 +490,8 @@ fn binding(b: &Binding) -> String {
             case_obj("State", fields)
         }
         Binding::Computed => case_obj("Computed", vec![field("fn", CLOSURE.to_string())]),
+        // Phase 765 — no wire fields: the bare `{"$type":"Now"}` object.
+        Binding::Now => case_obj("Now", vec![]),
         Binding::I18n { key, args } => {
             let mut fields = vec![];
             if let Some(args) = args {
@@ -1235,6 +1237,17 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
                 value,
             ));
             case_obj("Checkbox", fields)
+        }
+        // Phase 766 — the switch affordance: Checkbox's mechanics under a
+        // distinct tag.
+        FormFieldKind::Toggle { value, on_toggle } => {
+            let mut fields = handler_field("onToggle", on_toggle);
+            fields.extend(control_value_field(
+                auto_bind,
+                control_value_defaults::checkbox(),
+                value,
+            ));
+            case_obj("Toggle", fields)
         }
         FormFieldKind::Choice {
             options,
@@ -2058,7 +2071,16 @@ fn node_kind(k: &NodeKind) -> String {
                         .collect()),
                 ),
                 field("default", node(&spec.default)),
-                field("stateKey", s(&spec.state_key)),
+                // Phase 768 collapse rule — the no-default State selector
+                // keeps the compact canonical `stateKey` spelling (existing
+                // fixtures stay byte-identical); any other selector encodes
+                // as `on`.
+                match &spec.on {
+                    Binding::State { key, default_value } if static_is_absent(default_value) => {
+                        field("stateKey", s(key))
+                    }
+                    other => field("on", binding(other)),
+                },
             ],
         ),
         NodeKind::FragmentDecl(spec) => {

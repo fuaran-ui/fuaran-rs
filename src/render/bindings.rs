@@ -45,6 +45,10 @@ pub struct BindingSources {
     pub selections: HashMap<String, JVal>,
     /// i18n key → template (`{arg}` placeholders).
     pub i18n: HashMap<String, String>,
+    /// Phase 765 — the host-furnished current instant (an ISO-8601 string),
+    /// pinned once per render pass. Absent (or empty) ⇒ `Binding::Now`
+    /// resolves not-resolved, so SSR output stays reproducible.
+    pub now: Option<String>,
 }
 
 /// A resolved binding value: either a typed `Static` payload or a raw
@@ -113,6 +117,12 @@ pub fn resolve<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Resolut
         // Host-only on the wire (§5.1): a decoded Computed is an inert
         // placeholder — resolve as not-resolved so the loading surface shows.
         Binding::Computed => Resolution::NotResolved,
+        // Phase 765 — host-furnished, resolved once per render pass; never a
+        // clock read here, so SSR output is reproducible for a pinned instant.
+        Binding::Now => match &sources.now {
+            Some(iso) if !iso.is_empty() => Resolution::Resolved(Value::Text(iso.clone())),
+            _ => Resolution::NotResolved,
+        },
         Binding::I18n { key, .. } => match sources.i18n.get(key) {
             Some(template) => Resolution::Resolved(Value::Text(template.clone())),
             None => Resolution::I18nUnresolved(key.clone()),
@@ -478,6 +488,12 @@ pub fn try_string(sources: &BindingSources, binding: &Binding) -> Option<String>
 /// A resolved value's display-string form: strings as-is, numbers in the
 /// deterministic canonical layout, bools as `true`/`false`; structured values
 /// have no display form.
+/// The display-string form of a bare `Static` payload — the Phase 768 Switch
+/// selector's `State.defaultValue` seeding reads it without a store round-trip.
+pub fn static_display_string(value: &StaticValue) -> Option<String> {
+    value_display_string(&Value::Static(value))
+}
+
 fn value_display_string(value: &Value<'_>) -> Option<String> {
     match value {
         Value::Text(s) => Some(s.clone()),

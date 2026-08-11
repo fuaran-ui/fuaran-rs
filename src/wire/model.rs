@@ -177,6 +177,11 @@ pub enum Binding {
         default_value: StaticValue,
     },
     Computed,
+    /// Phase 765 — the host-furnished current instant: the bare
+    /// `{"$type":"Now"}` object, no wire fields. Resolved once per render pass
+    /// from the host's pinned ISO-8601 string — never a clock read in the
+    /// renderer, so SSR output stays reproducible for a pinned instant.
+    Now,
     I18n {
         key: String,
         /// Per-argument bindings; omitted when absent.
@@ -665,6 +670,13 @@ pub enum FormFieldKind {
         value: Binding,
         on_toggle: Option<Closure>,
     },
+    /// Phase 766 — the switch affordance: `Checkbox`'s exact wire mechanics
+    /// (bool value slot, optional `onToggle`, the write-back default) under a
+    /// distinct tag, so the renderer can announce `role="switch"` semantics.
+    Toggle {
+        value: Binding,
+        on_toggle: Option<Closure>,
+    },
     Choice {
         options: Binding,
         value: Binding,
@@ -1014,7 +1026,13 @@ pub struct SwitchCase {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SwitchSpec {
-    pub state_key: String,
+    /// The branch selector — any Binding (Phase 768): a `State` selector keeps
+    /// the Phase 392 behaviour; a `Selection` selector lets the branch follow
+    /// the clicked row with no writer. The no-default `State` form keeps its
+    /// compact `stateKey` spelling on the wire (the encoder collapses it
+    /// back); any other selector encodes under an `on` key holding the
+    /// canonical Binding wire form.
+    pub on: Binding,
     pub cases: Vec<SwitchCase>,
     pub default: Box<Node>,
 }
@@ -1463,6 +1481,7 @@ pub const CANONICAL_FORM_FIELD_KINDS: &[&str] = &[
     "Text",
     "Number",
     "Checkbox",
+    "Toggle",
     "Choice",
     "Range",
     "RangedNumber",

@@ -385,7 +385,8 @@ impl Walker {
                 }
                 self.check_binding(id, value);
             }
-            FormFieldKind::Checkbox { value, on_toggle } => {
+            FormFieldKind::Checkbox { value, on_toggle }
+            | FormFieldKind::Toggle { value, on_toggle } => {
                 if on_toggle.is_none() {
                     self.check_writable(id, "value", value);
                 }
@@ -526,6 +527,7 @@ impl Walker {
             | Binding::Query { .. }
             | Binding::Selection { .. }
             | Binding::Computed
+            | Binding::Now
             | Binding::I18n { .. }
             | Binding::Format { .. }
             | Binding::Transform { .. }
@@ -598,6 +600,7 @@ impl Walker {
             | Binding::Filter { .. }
             | Binding::Selection { .. }
             | Binding::State { .. }
+            | Binding::Now
             | Binding::Invoke { .. } => {}
         }
     }

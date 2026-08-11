@@ -44,7 +44,7 @@ use super::bindings::{
     BindingSources, EM_DASH, NumberResolution, ResolvedRows, accessibility_attributes,
     display_number, format_number, render_text, resolve_float_pair, resolve_float_seq,
     resolve_number, resolve_options, resolve_rows, resolve_scalar_number, resolve_string_pair,
-    try_bool, try_number, try_scalar_number, try_string,
+    static_display_string, try_bool, try_number, try_scalar_number, try_string,
 };
 use super::class_names::{node_class_name, tone_var};
 use super::html::{Attr, AttrVal, el, entity_encode, escape_attr, escape_text, text_el, void_el};
@@ -881,15 +881,23 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node) -> String {
         // No error server-side — render the child inert.
         NodeKind::ErrorBoundary(spec) => render_node(ctx, &spec.child),
         NodeKind::Switch(spec) => {
-            // SSR resolves the initial state value and renders the matching
-            // case, else the default — the client's first render reads the
-            // same initial state (hydration parity).
-            let value_str = match ctx.sources.state.get(&spec.state_key) {
-                None | Some(JVal::Null) => String::new(),
-                Some(JVal::Str(v)) => v.clone(),
-                Some(JVal::Num(n)) => display_number(*n),
-                Some(JVal::Bool(b)) => if *b { "true" } else { "false" }.to_string(),
-                Some(other) => crate::canonical::render_canonical(other),
+            // SSR resolves the selector and renders the matching case, else
+            // the default — the client's first render reads the same initial
+            // state (hydration parity). Phase 768 — the selector is any
+            // Binding: `State` keeps the direct state-bag read (with the
+            // 768-form defaultValue seeding on an unwritten key); other
+            // bindings resolve through the resolver, so an SSR switch on a
+            // pre-seeded Selection renders the branch the client will.
+            let value_str = match &spec.on {
+                Binding::State { key, default_value } => match ctx.sources.state.get(key) {
+                    None => static_display_string(default_value).unwrap_or_default(),
+                    Some(JVal::Null) => String::new(),
+                    Some(JVal::Str(v)) => v.clone(),
+                    Some(JVal::Num(n)) => display_number(*n),
+                    Some(JVal::Bool(b)) => if *b { "true" } else { "false" }.to_string(),
+                    Some(other) => crate::canonical::render_canonical(other),
+                },
+                on => try_string(ctx.sources, on).unwrap_or_default(),
             };
             let matched = spec.cases.iter().find(|c| c.match_value == value_str);
             match matched {
@@ -1767,6 +1775,24 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
                 &[
                     ("class", s("fuaran-form-checkbox")),
                     ("type", s("checkbox")),
+                    ("id", s(field.id.clone())),
+                    ("checked", AttrVal::Flag(current)),
+                ],
+            )
+        }
+        // Phase 766 — the switch affordance. role/aria-checked must be in the
+        // SERVER HTML: a switch that only becomes one after hydration is
+        // announced wrongly on first paint, and never at all in a static
+        // render.
+        FormFieldKind::Toggle { value, .. } => {
+            let current = try_bool(ctx.sources, value).unwrap_or(false);
+            void_el(
+                "input",
+                &[
+                    ("class", s("fuaran-form-toggle")),
+                    ("type", s("checkbox")),
+                    ("role", s("switch")),
+                    ("aria-checked", s(if current { "true" } else { "false" })),
                     ("id", s(field.id.clone())),
                     ("checked", AttrVal::Flag(current)),
                 ],
