@@ -121,6 +121,34 @@ fn duplicate_switch_match_is_fuaran082() {
 }
 
 #[test]
+fn ungrounded_switch_state_key_is_fuaran083() {
+    // An empty-key State selector can never resolve a case — the switch is
+    // stuck on its default.
+    let ungrounded = r#"{"id":"sw","kind":{"$type":"Switch","cases":[
+        {"child":{"id":"a","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"a"}}},"match":"x"}
+    ],"default":{"id":"d","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"d"}}},"stateKey":""}}"#;
+    let tree = decode_node(ungrounded).expect("decodes");
+    let found = validate(&tree);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].code, "FUARAN083");
+    assert_eq!(found[0].severity, Severity::Warning);
+    assert_eq!(found[0].node_id, "sw");
+
+    // A named state key grounds the selector — silent.
+    let named = r#"{"id":"sw","kind":{"$type":"Switch","cases":[
+        {"child":{"id":"a","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"a"}}},"match":"x"}
+    ],"default":{"id":"d","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"d"}}},"stateKey":"mode"}}"#;
+    assert!(codes(named).is_empty());
+
+    // The widened rule: any non-State selector names its source and is
+    // grounded by construction — a Selection selector is silent.
+    let selection = r#"{"id":"sw","kind":{"$type":"Switch","cases":[
+        {"child":{"id":"a","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"a"}}},"match":"x"}
+    ],"default":{"id":"d","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"d"}}},"on":{"$type":"Selection","nodeId":"grid"}}}"#;
+    assert!(codes(selection).is_empty());
+}
+
+#[test]
 fn computed_binding_is_fuaran084_and_hardens_when_orchestrated() {
     let computed = r#"{"id":"m","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"x"},"value":{"$type":"Computed","fn":"<closure>"},"tone":"Default","weight":"Standard"}}"#;
     let tree = decode_node(computed).expect("decodes");

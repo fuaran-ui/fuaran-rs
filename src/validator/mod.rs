@@ -25,6 +25,7 @@
 //! | `FUARAN069` | Warning | inert control: omitted handler over a non-writable value binding (write-back default cannot arm; `Local` exempt) |
 //! | `FUARAN073` | Warning | fire-and-forget `Action.Call` (no `into`, no `onResult`) |
 //! | `FUARAN082` | Warning | duplicate `Switch` case match values (first-match-wins shadows the rest) |
+//! | `FUARAN083` | Warning | ungrounded `Switch` selector: an empty-key `State` binding can never resolve a case (any other `Binding` names its source and is grounded by construction) |
 //! | `FUARAN086` | Error | chart field reference absent from the statically-known data schema (Phase 640) |
 //! | `FUARAN087` | Error | grounded chart value field of a non-numeric column type (silently flat series; Phase 640) |
 //! | `FUARAN088` | Error | Pie with other than exactly one `yFields` series (the lowering refuses; Phase 638/640) |
@@ -254,6 +255,20 @@ impl Walker {
                 self.check_binding(id, &s.open);
             }
             NodeKind::Switch(s) => {
+                // FUARAN083 — an empty-key State selector is ungrounded: the
+                // switch can never resolve a case, so it is stuck on its
+                // `default` forever. Any other Binding selector names its
+                // source and is grounded by construction.
+                if let Binding::State { key, .. } = &s.on
+                    && key.is_empty()
+                {
+                    self.push(
+                        Severity::Warning,
+                        "FUARAN083",
+                        id,
+                        "Switch has an empty stateKey — it can never resolve a case and is stuck on its default; name the state key the switch selects on.".to_string(),
+                    );
+                }
                 let mut seen = std::collections::HashSet::new();
                 for case in &s.cases {
                     if !seen.insert(&case.match_value) {
