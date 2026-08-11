@@ -47,7 +47,7 @@ use super::bindings::{
     try_bool, try_number, try_scalar_number, try_string,
 };
 use super::class_names::{node_class_name, tone_var};
-use super::html::{Attr, AttrVal, el, escape_attr, escape_text, text_el, void_el};
+use super::html::{Attr, AttrVal, el, entity_encode, escape_attr, escape_text, text_el, void_el};
 use super::markdown::to_html as markdown_to_html;
 use super::sanitize::sanitize_url_or_blank;
 
@@ -611,17 +611,41 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node) -> String {
         NodeKind::Link(spec) => {
             let href =
                 sanitize_url_or_blank(&try_string(ctx.sources, &spec.href).unwrap_or_default());
-            let mut attrs: Vec<Attr> = vec![("class", s("fuaran-link")), ("href", s(href))];
-            if let Some(rel) = &spec.rel {
-                attrs.push(("rel", s(rel.clone())));
+            if spec.protection == Some(crate::wire::LinkProtection::Email)
+                && href.starts_with("mailto:")
+            {
+                // Protected email link: every UTF-16 code unit of the sanitised
+                // href AND the label is emitted as a decimal HTML entity — the
+                // browser decodes entities in both positions, so the anchor is
+                // a working `mailto:` with no JavaScript while the raw source
+                // carries no scrapeable address. Encoding every character makes
+                // the fragment injection-proof by construction, which is why
+                // the anchor is built as a raw string below the
+                // attribute-escaping floor (`escape_attr` would re-escape the
+                // entities). Byte-identical to the sibling hosts' emissions.
+                let anchor = format!(
+                    "<a class=\"fuaran-link fuaran-link-protected\" href=\"{}\">{}</a>",
+                    entity_encode(&href),
+                    entity_encode(&render_text(ctx.sources, &spec.label)),
+                );
+                el(
+                    "span",
+                    &[("class", s("fuaran-link-protected-wrap"))],
+                    &anchor,
+                )
+            } else {
+                let mut attrs: Vec<Attr> = vec![("class", s("fuaran-link")), ("href", s(href))];
+                if let Some(rel) = &spec.rel {
+                    attrs.push(("rel", s(rel.clone())));
+                }
+                if let Some(target) = &spec.target {
+                    attrs.push(("target", s(target.clone())));
+                }
+                if spec.download {
+                    attrs.push(("download", AttrVal::Flag(true)));
+                }
+                text_el("a", &attrs, &render_text(ctx.sources, &spec.label))
             }
-            if let Some(target) = &spec.target {
-                attrs.push(("target", s(target.clone())));
-            }
-            if spec.download {
-                attrs.push(("download", AttrVal::Flag(true)));
-            }
-            text_el("a", &attrs, &render_text(ctx.sources, &spec.label))
         }
         NodeKind::Image(spec) => {
             let src =

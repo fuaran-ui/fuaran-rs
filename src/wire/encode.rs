@@ -832,6 +832,10 @@ fn link_spec(spec: &LinkSpec) -> String {
     if let Some(target) = &spec.target {
         fields.push(field("target", s(target)));
     }
+    // Omitted when absent — byte parity with the reference encoder.
+    if let Some(protection) = spec.protection {
+        fields.push(field("protection", s(protection.as_str())));
+    }
     obj(fields)
 }
 

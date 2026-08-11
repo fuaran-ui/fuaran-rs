@@ -59,6 +59,26 @@ fn link_href_is_sanitised() {
 }
 
 #[test]
+fn link_protected_email_emits_no_plaintext_address() {
+    // The protected emission: wrapper span + protected anchor with every
+    // href/label character a decimal entity; no plaintext address or scheme
+    // anywhere in the output.
+    let html = render(
+        r#"{"id":"plk","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"mailto:contact@example.com"},"label":{"$type":"Literal","text":"Email us"},"protection":"email"}}"#,
+    );
+    assert!(html.contains("<span class=\"fuaran-link-protected-wrap\">"));
+    assert!(html.contains(
+        "<a class=\"fuaran-link fuaran-link-protected\" href=\"&#109;&#97;&#105;&#108;&#116;&#111;&#58;"
+    ));
+    for banned in ["mailto:", "contact@example.com", "@example", "Email us"] {
+        assert!(
+            !html.contains(banned),
+            "protected output leaks plaintext {banned:?}: {html}"
+        );
+    }
+}
+
+#[test]
 fn box_corners_render_their_retired_kind_hooks() {
     let card = render(
         r#"{"id":"c","kind":{"$type":"Box","children":[],"heading":{"$type":"Literal","text":"Totals"},"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Card"}}"#,

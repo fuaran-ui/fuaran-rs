@@ -93,3 +93,17 @@ pub fn void_el(tag: &str, attrs: &[Attr]) -> String {
 pub fn text_el(tag: &str, attrs: &[Attr], text: &str) -> String {
     el(tag, attrs, &escape_text(text))
 }
+
+/// Emit every UTF-16 code unit of the string as a decimal HTML entity
+/// (`&#78;`) — the protected-link emission. Code-unit iteration (not code
+/// points) matches the sibling hosts' per-char encode exactly, keeping the
+/// emissions byte-identical across hosts.
+pub fn entity_encode(value: &str) -> String {
+    let mut out = String::new();
+    for u in value.encode_utf16() {
+        out.push_str("&#");
+        out.push_str(&u.to_string());
+        out.push(';');
+    }
+    out
+}

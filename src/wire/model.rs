@@ -69,6 +69,10 @@ bare_enum!(StyleRole { None => "None", Eyebrow => "Eyebrow", Data => "Data", Led
 bare_enum!(FontVoice { Default => "Default", Display => "Display", Structural => "Structural" });
 bare_enum!(ChartKind { Line => "Line", Bar => "Bar", Area => "Area", Pie => "Pie", Scatter => "Scatter", Heatmap => "Heatmap" });
 bare_enum!(ImageVariant { Default => "Default", Avatar => "Avatar", Rounded => "Rounded" });
+// Anti-scraper render strategy for a `Link` — `email` marks a `mailto:` link
+// whose address must not appear in plaintext in emitted markup (the renderers
+// own the emission strategy). Lower-case on the wire, like `SortDirection`.
+bare_enum!(LinkProtection { Email => "email" });
 bare_enum!(MathDisplay { Inline => "Inline", Block => "Block" });
 bare_enum!(DateVariant { Date => "Date", Time => "Time", DateTime => "DateTime" });
 bare_enum!(FileReadEncoding { Text => "Text", Base64 => "Base64", DataUrl => "DataUrl" });
@@ -605,6 +609,8 @@ pub struct LinkSpec {
     pub download: bool,
     pub rel: Option<String>,
     pub target: Option<String>,
+    /// Omitted on the wire when `None` (every pre-existing tree byte-identical).
+    pub protection: Option<LinkProtection>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

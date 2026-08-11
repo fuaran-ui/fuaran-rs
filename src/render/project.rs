@@ -239,6 +239,7 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             download: spec.download,
             rel: spec.rel.clone(),
             target: spec.target.clone(),
+            protection: spec.protection,
         }),
         NodeKind::Image(spec) => NodeKind::Image(crate::wire::ImageSpec {
             alt: map_text(sources, &spec.alt),

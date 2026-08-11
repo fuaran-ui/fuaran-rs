@@ -457,6 +457,7 @@ decode_bare_enum!(decode_style_role, StyleRole, "StyleRole");
 decode_bare_enum!(decode_font_voice, FontVoice, "FontVoice");
 decode_bare_enum!(decode_chart_kind, ChartKind, "ChartKind");
 decode_bare_enum!(decode_image_variant, ImageVariant, "ImageVariant");
+decode_bare_enum!(decode_link_protection, LinkProtection, "LinkProtection");
 decode_bare_enum!(decode_math_display, MathDisplay, "MathDisplay");
 decode_bare_enum!(decode_date_variant, DateVariant, "DateVariant");
 decode_bare_enum!(
@@ -2064,12 +2065,19 @@ fn decode_link_spec(path: &str, j: &JVal) -> DResult<LinkSpec> {
     let download = req_bool(path, fields, "download", "download bool")?;
     let rel = opt_string(path, fields, "rel")?;
     let target = opt_string(path, fields, "target")?;
+    // Optional closed enumeration — an unknown case is UNKNOWN_DU_CASE at
+    // `$.kind.protection`.
+    let protection = match get(fields, "protection") {
+        None => None,
+        Some(v) => Some(decode_link_protection(&format!("{path}.protection"), v)?),
+    };
     Ok(LinkSpec {
         href,
         label,
         download,
         rel,
         target,
+        protection,
     })
 }
 
