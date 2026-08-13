@@ -1541,12 +1541,18 @@ body {
    Every selector here keys off an attribute THAT SCRIPT sets, so none of them
    match on a server-rendered page until sorting actually works: a table never
    advertises an interaction it cannot perform, and the SSR bytes are untouched.
-   The indicator rides ::after for the same reason — no markup change. */
-.fuaran-table-header[data-sortable] {
+   The indicator rides ::after for the same reason — no markup change.
+   Phase 818 — `.fuaran-grid-header` joins each selector: a DATA-BOUND grid
+   declaring `sortStateKey` renders the same affordance vocabulary from the
+   client renderer (which sets `data-sortable` / `aria-sort` itself), so the
+   two tabular surfaces stay visually symmetric. */
+.fuaran-table-header[data-sortable],
+.fuaran-grid-header[data-sortable] {
   cursor: pointer;
 }
 
-.fuaran-table-header[data-sortable]::after {
+.fuaran-table-header[data-sortable]::after,
+.fuaran-grid-header[data-sortable]::after {
   /* ↕ — sortable, currently unsorted. */
   content: "\2195";
   opacity: 0.35;
@@ -1554,14 +1560,16 @@ body {
   font-size: 0.8em;
 }
 
-.fuaran-table-header[aria-sort="ascending"]::after {
+.fuaran-table-header[aria-sort="ascending"]::after,
+.fuaran-grid-header[aria-sort="ascending"]::after {
   /* ↑ — mirrors the live aria-sort, so the glyph cannot drift from the
      announced state. */
   content: "\2191";
   opacity: 1;
 }
 
-.fuaran-table-header[aria-sort="descending"]::after {
+.fuaran-table-header[aria-sort="descending"]::after,
+.fuaran-grid-header[aria-sort="descending"]::after {
   /* ↓ */
   content: "\2193";
   opacity: 1;

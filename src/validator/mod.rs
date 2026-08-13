@@ -437,7 +437,7 @@ impl Walker {
     /// `Query` / host `Static` source is unknowable pre-emit and deliberately
     /// passes ungrounded — only refuse what is PROVABLY wrong).
     fn check_chart(&mut self, id: &str, s: &crate::wire::ChartSpec) {
-        use crate::wire::{ChartKind, ColumnType, DataSource};
+        use crate::wire::{ChartKind, ColumnType, DataSource, TransformSource};
 
         // FUARAN088 — pie needs exactly one series (the lowering refuses
         // multi-series geometry rather than truncating).
@@ -471,9 +471,11 @@ impl Walker {
             );
         }
 
-        // FUARAN086/087 — grounding, only where the schema is statically known.
+        // FUARAN086/087 — grounding, only where the schema is statically known
+        // (a Phase-818 LIVE source's schema is runtime data, so it is not
+        // judged here).
         let Binding::Transform {
-            source: DataSource::Embedded { schema, .. },
+            source: TransformSource::Data(DataSource::Embedded { schema, .. }),
             pipeline,
             ..
         } = &s.source

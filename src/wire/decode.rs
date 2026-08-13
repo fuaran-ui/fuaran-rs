@@ -1627,6 +1627,14 @@ fn normalise_transform_source(j: &JVal) -> JVal {
         },
         _ => j,
     };
+    transpose_row_major(unwrapped)
+}
+
+/// Phase 815/818 — the row-major half of the source normalisation, shared with
+/// the LIVE-source snapshot derivation: an array of row objects transposes to
+/// the canonical columnar `{"columns": …}` shape (FIRST-row key set, sorted
+/// ordinal; absent cells null). Anything else passes through untouched.
+pub(crate) fn transpose_row_major(unwrapped: &JVal) -> JVal {
     match unwrapped {
         JVal::Arr(rows) => match rows.first() {
             Some(JVal::Obj(first)) => {
@@ -1652,6 +1660,23 @@ fn normalise_transform_source(j: &JVal) -> JVal {
         },
         other => other.clone(),
     }
+}
+
+/// Phase 818 — the empty embedded table: the initial snapshot of a live source
+/// that carries no data yet (a Selection with no default, a Query) — the
+/// pipeline evaluates over zero rows and the node renders its empty state.
+pub(crate) fn empty_embedded_source() -> DataSource {
+    DataSource::Embedded {
+        schema: vec![],
+        columns: vec![],
+    }
+}
+
+/// Phase 818 — materialise a live source's carried / resolved data as the
+/// snapshot `DataSource` (row-major transpose, then the columnar decode) — the
+/// render-time twin of the decode-time `initial` derivation.
+pub(crate) fn live_data_source(data: &JVal) -> Result<DataSource, String> {
+    decode_data_source(&transpose_row_major(data))
 }
 
 fn decode_binding(path: &str, j: &JVal) -> DResult<Binding> {
@@ -1793,17 +1818,93 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
         "Transform" => {
             let src_j = req(path, fields, "source", "Transform DataSource object")?;
             let pipe_j = req(path, fields, "pipeline", "Transform pipeline array")?;
-            // Phase 815 — normalise the organic-demand source shapes (binding
-            // wrapper / row-major array) before the columnar decode sees them.
-            let src_j = normalise_transform_source(src_j);
-            let source = decode_data_source(&src_j).map_err(|e| {
-                make_error(
-                    DecodeErrorCode::WrongType,
-                    format!("{path}.source"),
-                    e,
-                    None,
-                )
-            })?;
+            // Phase 815 — normalise the organic-demand source shapes (Static /
+            // Bound wrapper / row-major array) before the columnar decode sees
+            // them.
+            // Phase 818 — a binding-shaped source (State / Selection / Query
+            // `$type`) is PRESERVED as `TransformSource::Live`: the decoded
+            // binding re-encodes verbatim (one wire dialect) and the runtime
+            // re-evaluates the pipeline against it, falling back to the
+            // decode-time `initial` snapshot derived from the binding's
+            // carried default data. A State wrapper carrying NO data still
+            // errors didactically through the columnar codec (the 815
+            // posture), and a State wrapper's carried data is snapshot-decoded
+            // here so the ragged-rows didactic stays byte-identical.
+            let live_tag = match src_j {
+                JVal::Obj(sf) => match get(sf, "$type") {
+                    Some(JVal::Str(t)) if t == "State" || t == "Selection" || t == "Query" => {
+                        Some(t.as_str())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            let source = match live_tag {
+                None => {
+                    let src_n = normalise_transform_source(src_j);
+                    TransformSource::Data(decode_data_source(&src_n).map_err(|e| {
+                        make_error(
+                            DecodeErrorCode::WrongType,
+                            format!("{path}.source"),
+                            e,
+                            None,
+                        )
+                    })?)
+                }
+                Some(tag) => {
+                    // The carried data rides the Rows slot, so the preserved
+                    // binding's defaultValue re-encodes faithfully.
+                    let b =
+                        decode_binding_slot(&format!("{path}.source"), src_j, StaticSlot::Rows)?;
+                    let has_carried =
+                        matches!(src_j, JVal::Obj(sf) if get(sf, "defaultValue").is_some());
+                    if tag == "State" && !has_carried {
+                        // No carried data — surface the columnar codec's own
+                        // missing-field didactic (byte-identical to pre-818).
+                        let src_n = normalise_transform_source(src_j);
+                        TransformSource::Data(decode_data_source(&src_n).map_err(|e| {
+                            make_error(
+                                DecodeErrorCode::WrongType,
+                                format!("{path}.source"),
+                                e,
+                                None,
+                            )
+                        })?)
+                    } else if tag == "State" {
+                        // The carried data IS the initial snapshot; a decode
+                        // failure (ragged / mixed-type rows) surfaces the same
+                        // didactic the 815 snapshot decode raised.
+                        let src_n = normalise_transform_source(src_j);
+                        let initial = decode_data_source(&src_n).map_err(|e| {
+                            make_error(
+                                DecodeErrorCode::WrongType,
+                                format!("{path}.source"),
+                                e,
+                                None,
+                            )
+                        })?;
+                        TransformSource::Live {
+                            binding: Box::new(b),
+                            initial,
+                        }
+                    } else {
+                        // Selection / Query — a tabular carried default seeds
+                        // the initial snapshot; anything else starts from the
+                        // empty table (runtime evaluation stays loud on a
+                        // non-tabular live value, never here).
+                        let initial = match src_j {
+                            JVal::Obj(sf) => get(sf, "defaultValue")
+                                .and_then(|dv| decode_data_source(&transpose_row_major(dv)).ok())
+                                .unwrap_or_else(empty_embedded_source),
+                            _ => empty_embedded_source(),
+                        };
+                        TransformSource::Live {
+                            binding: Box::new(b),
+                            initial,
+                        }
+                    }
+                }
+            };
             let pipeline = decode_pipeline(pipe_j).map_err(|e| {
                 make_error(
                     DecodeErrorCode::WrongType,
@@ -1996,10 +2097,40 @@ fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
             )?,
         }),
         "SetState" => {
+            // Phase 818 — `value` (a literal JSON value, written verbatim) XOR
+            // `valueFrom` (a Binding evaluated at dispatch time inside the
+            // existing gate). Exactly one must be present; both / neither
+            // error didactically naming both fields.
             let key = req_string(path, fields, "key", "state key string")?;
-            let value_j = req(path, fields, "value", "JsonValue value")?;
-            let value = decode_jval(&format!("{path}.value"), value_j)?;
-            Ok(Action::SetState { key, value })
+            let value_j = get(fields, "value");
+            let from_j = get(fields, "valueFrom");
+            match (value_j, from_j) {
+                (Some(_), Some(_)) => Err(make_error(
+                    DecodeErrorCode::WrongType,
+                    format!("{path}.valueFrom"),
+                    "SetState carries both 'value' and 'valueFrom' — exactly one is allowed: 'value' is a literal JSON value written verbatim; 'valueFrom' derives the written value from a Binding at dispatch time; remove one".to_string(),
+                    None,
+                )),
+                (None, None) => Err(make_error(
+                    DecodeErrorCode::MissingField,
+                    format!("{path}.value"),
+                    "missing required field 'value' — provide 'value' (a literal JSON value) or 'valueFrom' (a Binding evaluated at dispatch time)".to_string(),
+                    None,
+                )),
+                (Some(v), None) => Ok(Action::SetState {
+                    key,
+                    value: Some(decode_jval(&format!("{path}.value"), v)?),
+                    value_from: None,
+                }),
+                (None, Some(b)) => Ok(Action::SetState {
+                    key,
+                    value: None,
+                    value_from: Some(Box::new(decode_binding(
+                        &format!("{path}.valueFrom"),
+                        b,
+                    )?)),
+                }),
+            }
         }
         "AiTool" => {
             let tool_name = req_string(path, fields, "toolName", "AI tool name string")?;
@@ -2893,6 +3024,10 @@ fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
         StaticSlot::Rows,
     )?;
     let row_key_field = opt_string(path, fields, "rowKeyField")?;
+    // Phase 818 — the grid-sort header affordance: names the State key
+    // carrying the `{column, direction}` sort descriptor. Optional string,
+    // encode-omitted when absent.
+    let sort_state_key = opt_string(path, fields, "sortStateKey")?;
     let static_rows = match get(fields, "staticRows") {
         None => None,
         Some(v) => Some(decode_static_rows(&format!("{path}.staticRows"), v)?),
@@ -2904,6 +3039,7 @@ fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
         on_row_click: opt_closure(fields, "onRowClick"),
         row_key: opt_closure(fields, "rowKey"),
         row_key_field,
+        sort_state_key,
         static_rows,
     })
 }

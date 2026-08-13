@@ -29,7 +29,7 @@ use crate::transform::{self, Table};
 use crate::wire::{
     Accessibility, AggFn, Binding, Cell, CellFormat, DataSource, DateStyle, DurationStyle,
     DurationUnit, Format, LocaleSource, RelativeTimeUnit, SelectOption, StaticValue, TextSource,
-    TransformParam, TransformStep,
+    TransformParam, TransformSource, TransformStep,
 };
 
 /// The em-dash placeholder an unresolved value renders as.
@@ -255,8 +255,49 @@ pub fn eval_transform_frame(
     sources: &BindingSources,
     params: &Option<Vec<TransformParam>>,
     pipeline: &[TransformStep],
-    source: &DataSource,
+    source: &TransformSource,
 ) -> Result<Table, String> {
+    // Phase 818 — a LIVE source resolves its preserved binding against the
+    // stores and evaluates over the CURRENT data (row-major rows transpose
+    // through the same 815 normalisation the decode-time snapshot used); an
+    // unwritten store falls back to the decode-time `initial`, which is what
+    // keeps SSR byte-identical to the snapshot era. Non-tabular live values
+    // error loudly, never silently.
+    let live_input: Option<std::borrow::Cow<'_, DataSource>> = match source {
+        TransformSource::Data(_) => None,
+        TransformSource::Live { binding, initial } => match resolve(sources, binding) {
+            Resolution::Resolved(v) => {
+                let j: JVal = match v {
+                    Value::Json(j) => j.clone(),
+                    Value::Static(StaticValue::Rows(rows)) => {
+                        JVal::Arr(rows.iter().map(|r| JVal::Obj(r.clone())).collect())
+                    }
+                    Value::Static(StaticValue::Ast(j)) => j.clone(),
+                    _ => {
+                        return Err(
+                            "Transform live source resolved to a value that cannot be read as data — expected rows (an array of row objects) or canonical columnar data"
+                                .to_string(),
+                        );
+                    }
+                };
+                match crate::wire::live_data_source(&j) {
+                    Ok(ds) => Some(std::borrow::Cow::Owned(ds)),
+                    Err(e) => return Err(format!("Transform live source: {e}")),
+                }
+            }
+            Resolution::NotResolved => Some(std::borrow::Cow::Borrowed(initial)),
+            Resolution::I18nUnresolved(key) => {
+                return Err(format!(
+                    "Transform live source is an unresolved i18n key '{key}'"
+                ));
+            }
+        },
+    };
+    let data_source: &DataSource = match (&live_input, source) {
+        (Some(ds), _) => ds,
+        (None, TransformSource::Data(ds)) => ds,
+        (None, TransformSource::Live { initial, .. }) => initial,
+    };
     let params = params.as_deref().unwrap_or(&[]);
     let mut env = transform::EvalEnv::new();
     let mut unbound: BTreeSet<String> = BTreeSet::new();
@@ -298,7 +339,7 @@ pub fn eval_transform_frame(
             pruned.push(step.clone());
         }
     }
-    transform::eval_transform(&transform::no_resolve, &env, source, &pruned).map_err(|e| {
+    transform::eval_transform(&transform::no_resolve, &env, data_source, &pruned).map_err(|e| {
         format!(
             "Transform evaluation failed: {}",
             transform::eval_error_string(&e)
@@ -385,7 +426,7 @@ fn resolve_scalar_transform<T>(
     sources: &BindingSources,
     params: &Option<Vec<TransformParam>>,
     pipeline: &[TransformStep],
-    source: &DataSource,
+    source: &TransformSource,
 ) -> ScalarOutcome<T> {
     let table = match eval_transform_frame(sources, params, pipeline, source) {
         Ok(t) => t,

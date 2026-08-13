@@ -206,7 +206,7 @@ pub enum Binding {
         /// Phase 424 — omitted when empty.
         params: Option<Vec<TransformParam>>,
         pipeline: Vec<TransformStep>,
-        source: DataSource,
+        source: TransformSource,
     },
     Invoke {
         capability_id: String,
@@ -258,6 +258,24 @@ pub struct TransformParam {
     pub from: Binding,
 }
 
+/// Phase 818 — a `Binding::Transform`'s source slot (mirror of the reference
+/// host's `TransformSource` DU). `Data` is the canonical columnar / `ref`
+/// source (the pre-818 shape, byte-identical on the wire). `Live` preserves a
+/// binding-shaped source (State / Selection / Query) verbatim so a runtime
+/// re-evaluates the Transform with subscription semantics when the binding's
+/// channel changes; `initial` is the decode-time snapshot table derived from
+/// the binding's carried default data (never encoded — the binding IS the
+/// wire form), which SSR / diagnostic evaluation reads, byte-identical to the
+/// Phase-815 snapshot for the same input.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransformSource {
+    Data(DataSource),
+    Live {
+        binding: Box<Binding>,
+        initial: DataSource,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct InvokeArg {
     pub addr: String,
@@ -289,9 +307,13 @@ pub enum Action {
     Navigate {
         route: String,
     },
+    /// Phase 818 — `value` (a literal, written verbatim) XOR `value_from` (a
+    /// Binding evaluated at dispatch time inside the existing gate); decode
+    /// enforces exactly one present.
     SetState {
         key: String,
-        value: JVal,
+        value: Option<JVal>,
+        value_from: Option<Box<Binding>>,
     },
     AiTool {
         tool_name: String,
@@ -920,6 +942,12 @@ pub struct GridSpec {
     pub on_row_click: Option<Closure>,
     pub row_key: Option<Closure>,
     pub row_key_field: Option<String>,
+    /// Phase 818 — the grid-sort header affordance for a data-bound grid:
+    /// names the State key carrying the sort descriptor
+    /// `{"column": <index>, "direction": "asc"|"desc"}` the runtime sorts its
+    /// resolved rows by (and whose headers write it). Omitted on the wire when
+    /// absent; `static_rows`' own Phase-801 sort intent is untouched.
+    pub sort_state_key: Option<String>,
     pub static_rows: Option<StaticRows>,
 }
 

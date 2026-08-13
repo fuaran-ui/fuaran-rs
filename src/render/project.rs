@@ -331,6 +331,8 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             on_row_click: spec.on_row_click,
             row_key: spec.row_key,
             row_key_field: spec.row_key_field.clone(),
+            // Phase 818 — a state-key name, not text; projects through untouched.
+            sort_state_key: spec.sort_state_key.clone(),
             static_rows: spec.static_rows.as_ref().map(|sr| StaticRows {
                 headers: sr.headers.iter().map(|t| map_text(sources, t)).collect(),
                 rows: sr

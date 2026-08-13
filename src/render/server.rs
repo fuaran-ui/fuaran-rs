@@ -2374,6 +2374,17 @@ fn render_grid(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &GridSpec) -> String
     {
         return render_node(ctx, empty);
     }
+    // Phase 818 — `sortStateKey`: a host that seeds the named State key with a
+    // `{column, direction}` descriptor gets its resolved rows sorted by the
+    // addressed column's `field` before rendering (runtime-side sort — the
+    // author wires no Transform). No seeded descriptor (the SSR default), a
+    // malformed descriptor, an out-of-range column, or a field-less closure
+    // column leaves the authored order standing. The interactive affordance
+    // (`data-sortable` / live `aria-sort` on the headers) is a client-runtime
+    // surface this inert renderer deliberately does not advertise — a table
+    // never advertises an interaction it cannot perform.
+    let sorted: Option<Vec<JVal>> = grid_sorted_rows(ctx, spec, rows);
+    let rows: &[JVal] = sorted.as_deref().unwrap_or(rows);
     let header_cells: String = spec
         .columns
         .iter()
@@ -2403,6 +2414,60 @@ fn render_grid(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &GridSpec) -> String
         &[("class", s("fuaran-grid"))],
         &format!("{head}{body}"),
     )
+}
+
+/// Phase 818 — read the `{column, direction}` sort descriptor a `sortStateKey`
+/// grid's State key carries and sort the resolved rows by the addressed
+/// column's `field`. Every part of the descriptor is validated rather than
+/// trusted — anything malformed reads as "no sort" so the authored order
+/// stands (never an arbitrary one). Empty / missing cells sort LAST in both
+/// directions (unmeasured is not zero); ties keep their authored relative
+/// order (the sort is stable); string comparison is ordinal over the
+/// lower-cased forms — the reference host's `sortRowsByDescriptor` rules.
+fn grid_sorted_rows(ctx: &Ctx<'_>, spec: &GridSpec, rows: &[JVal]) -> Option<Vec<JVal>> {
+    let sort_key = spec.sort_state_key.as_ref()?;
+    let descriptor = ctx.sources.state.get(sort_key)?;
+    let fields = match descriptor {
+        JVal::Obj(fields) => fields,
+        _ => return None,
+    };
+    let column = fields.iter().find_map(|(k, v)| match (k.as_str(), v) {
+        ("column", JVal::Num(n)) if n.fract() == 0.0 && *n >= 0.0 => Some(*n as usize),
+        _ => None,
+    })?;
+    let ascending = fields.iter().find_map(|(k, v)| match (k.as_str(), v) {
+        ("direction", JVal::Str(d)) if d == "asc" => Some(true),
+        ("direction", JVal::Str(d)) if d == "desc" => Some(false),
+        _ => None,
+    })?;
+    let field = spec.columns.get(column)?.field.as_ref()?;
+    let cell = |row: &JVal| -> Option<JVal> { row.field(field).cloned() };
+    let rank = |v: &Option<JVal>| -> u8 {
+        match v {
+            Some(JVal::Num(_)) => 0,
+            Some(JVal::Bool(_)) => 1,
+            Some(JVal::Str(_)) => 2,
+            _ => 3, // null / missing / structured — sorts last in both directions
+        }
+    };
+    let mut out: Vec<JVal> = rows.to_vec();
+    out.sort_by(|a, b| {
+        use std::cmp::Ordering;
+        let (ka, kb) = (cell(a), cell(b));
+        let (ra, rb) = (rank(&ka), rank(&kb));
+        // Empty cells last in BOTH directions — outside the direction flip.
+        if ra == 3 || rb == 3 {
+            return ra.cmp(&rb);
+        }
+        let ord = match (&ka, &kb) {
+            (Some(JVal::Num(x)), Some(JVal::Num(y))) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
+            (Some(JVal::Bool(x)), Some(JVal::Bool(y))) => x.cmp(y),
+            (Some(JVal::Str(x)), Some(JVal::Str(y))) => x.to_lowercase().cmp(&y.to_lowercase()),
+            _ => ra.cmp(&rb),
+        };
+        if ascending { ord } else { ord.reverse() }
+    });
+    Some(out)
 }
 
 /// The static read-only table leg, driven by a grid's `staticRows`.

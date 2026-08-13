@@ -554,7 +554,18 @@ fn binding(b: &Binding) -> String {
                 "pipeline",
                 arr(pipeline.iter().map(transform_step).collect()),
             ));
-            fields.push(field("source", data_source(source)));
+            // Phase 818 — a `Data` source keeps the columnar encoding
+            // byte-identical; a `Live` source re-encodes the preserved binding
+            // itself (one wire dialect — the State/Selection/Query-shaped
+            // source round-trips byte-for-byte; the derived `initial` snapshot
+            // is never encoded).
+            fields.push(field(
+                "source",
+                match source {
+                    TransformSource::Data(ds) => data_source(ds),
+                    TransformSource::Live { binding: b, .. } => binding(b),
+                },
+            ));
             case_obj("Transform", fields)
         }
         Binding::Invoke {
@@ -604,10 +615,22 @@ fn action(a: &Action) -> String {
             ],
         ),
         Action::Navigate { route } => case_obj("Navigate", vec![field("route", s(route))]),
-        Action::SetState { key, value } => case_obj(
-            "SetState",
-            vec![field("key", s(key)), field("value", json_value(value))],
-        ),
+        // Phase 818 — `value` / `valueFrom` are XOR siblings; each is emitted
+        // only when present (keys sort, so field order stays alphabetical).
+        Action::SetState {
+            key,
+            value,
+            value_from,
+        } => {
+            let mut fields = vec![field("key", s(key))];
+            if let Some(v) = value {
+                fields.push(field("value", json_value(v)));
+            }
+            if let Some(b) = value_from {
+                fields.push(field("valueFrom", binding(b)));
+            }
+            case_obj("SetState", fields)
+        }
         Action::AiTool { tool_name, args } => case_obj(
             "AiTool",
             vec![
@@ -1730,6 +1753,11 @@ fn grid_spec(spec: &GridSpec) -> String {
     }
     if let Some(row_key_field) = &spec.row_key_field {
         fields.push(field("rowKeyField", s(row_key_field)));
+    }
+    // Phase 818 — omitted when absent, so every pre-818 grid stays
+    // byte-identical.
+    if let Some(sort_state_key) = &spec.sort_state_key {
+        fields.push(field("sortStateKey", s(sort_state_key)));
     }
     if let Some(rows) = &spec.static_rows {
         fields.push(field("staticRows", static_rows(rows)));
