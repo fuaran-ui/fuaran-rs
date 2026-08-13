@@ -27,8 +27,9 @@ use std::collections::{BTreeSet, HashMap};
 use crate::canonical::{JVal, format_number as canonical_number};
 use crate::transform::{self, Table};
 use crate::wire::{
-    Accessibility, AggFn, Binding, Cell, CellFormat, DataSource, DateStyle, Format, LocaleSource,
-    SelectOption, StaticValue, TextSource, TransformParam, TransformStep,
+    Accessibility, AggFn, Binding, Cell, CellFormat, DataSource, DateStyle, DurationStyle,
+    DurationUnit, Format, LocaleSource, RelativeTimeUnit, SelectOption, StaticValue, TextSource,
+    TransformParam, TransformStep,
 };
 
 /// The em-dash placeholder an unresolved value renders as.
@@ -686,6 +687,128 @@ fn to_precision(value: f64, digits: i64) -> String {
     display_number(rounded)
 }
 
+// ─── Duration / relative-time rendering (Phase 819) ─────────────────────────
+//
+// Mirrors the reference hosts' shared `formatDuration` / `formatRelativeEnglish`
+// exactly (ONE hand-rolled implementation per host — a duration is deliberately
+// LOCALE-INDEPENDENT: "1h 20m" / "1:20:00" / "1 hour 20 minutes" are unit
+// glyphs and English words, not CLDR-driven forms — and the cell vocabulary has
+// no locale dimension, so the English relative form IS the canonical cell
+// rendering). The numeric source counts `unit`s (Seconds = 1, Minutes = 60,
+// Hours = 3600); negatives render with a leading "-" once the rounded magnitude
+// is nonzero. Rounding is HALF-TO-EVEN, matching .NET `round` (Rust's
+// `f64::round` is half-away-from-zero, so the tie is handled explicitly).
+
+fn round_half_even(v: f64) -> f64 {
+    let f = v.floor();
+    let diff = v - f;
+    // On the exact .5 tie, round to the even neighbour; otherwise nearest.
+    let up = diff > 0.5 || (diff == 0.5 && (f as i64) % 2 != 0);
+    if up { f + 1.0 } else { f }
+}
+
+fn duration_unit_seconds(u: DurationUnit) -> f64 {
+    match u {
+        DurationUnit::Seconds => 1.0,
+        DurationUnit::Minutes => 60.0,
+        DurationUnit::Hours => 3600.0,
+    }
+}
+
+/// Render `value` (a signed count of `unit`s) per the bounded `DurationStyle`.
+pub fn format_duration(unit: DurationUnit, style: DurationStyle, value: f64) -> String {
+    let total_seconds = value * duration_unit_seconds(unit);
+    let total = round_half_even(total_seconds.abs()) as i64;
+    let sign = if total_seconds < 0.0 && total > 0 {
+        "-"
+    } else {
+        ""
+    };
+    let hours = total / 3600;
+    let minutes = (total % 3600) / 60;
+    let seconds = total % 60;
+    let body = match style {
+        DurationStyle::Compact => {
+            // Largest two grains, zero tails omitted: "1h 20m" / "2h" /
+            // "5m 30s" / "42s"; zero → "0s".
+            if hours >= 1 {
+                if minutes > 0 {
+                    format!("{hours}h {minutes}m")
+                } else {
+                    format!("{hours}h")
+                }
+            } else if minutes >= 1 {
+                if seconds > 0 {
+                    format!("{minutes}m {seconds}s")
+                } else {
+                    format!("{minutes}m")
+                }
+            } else {
+                format!("{seconds}s")
+            }
+        }
+        DurationStyle::Clock => {
+            // "h:mm:ss" from one hour up, "m:ss" below it.
+            if hours >= 1 {
+                format!("{hours}:{minutes:02}:{seconds:02}")
+            } else {
+                format!("{minutes}:{seconds:02}")
+            }
+        }
+        DurationStyle::Long => {
+            // English words, singular/plural, zero components omitted;
+            // zero → "0 minutes".
+            let part = |n: i64, word: &str| -> Option<String> {
+                if n == 0 {
+                    None
+                } else if n == 1 {
+                    Some(format!("1 {word}"))
+                } else {
+                    Some(format!("{n} {word}s"))
+                }
+            };
+            let parts: Vec<String> = [
+                part(hours, "hour"),
+                part(minutes, "minute"),
+                part(seconds, "second"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if parts.is_empty() {
+                "0 minutes".to_string()
+            } else {
+                parts.join(" ")
+            }
+        }
+    };
+    format!("{sign}{body}")
+}
+
+/// English relative-time rendering over a signed count of `unit` — "in 2
+/// hours" / "3 minutes ago" / "this minute" (Phase 819). The cell vocabulary
+/// has no locale dimension, so the English form IS the canonical cell
+/// rendering.
+pub fn format_relative_english(unit: RelativeTimeUnit, value: f64) -> String {
+    let n = round_half_even(value) as i64;
+    let unit_word = unit.as_str().to_lowercase();
+    if n == 0 {
+        format!("this {unit_word}")
+    } else {
+        let magnitude = n.abs();
+        let plural = if magnitude == 1 {
+            unit_word
+        } else {
+            format!("{unit_word}s")
+        };
+        if n < 0 {
+            format!("{magnitude} {plural} ago")
+        } else {
+            format!("in {magnitude} {plural}")
+        }
+    }
+}
+
 /// Format a numeric value per a `CellFormat`. A decoded `Custom` formatter is a
 /// closure placeholder — it renders the `"<closure>"` sentinel, as on every
 /// decoded-tree path.
@@ -709,6 +832,8 @@ pub fn format_number(format: &CellFormat, value: f64) -> String {
         }
         CellFormat::SignificantDigits { digits } => to_precision(value, *digits),
         CellFormat::Date { .. } => display_number(value),
+        CellFormat::Duration { style, unit } => format_duration(*unit, *style, value),
+        CellFormat::RelativeTime { unit } => format_relative_english(*unit, value),
         CellFormat::Custom => "<closure>".to_string(),
     }
 }
@@ -783,6 +908,12 @@ pub fn format_locale_value(_locale: &LocaleSource, format: &Format, value: f64) 
             } else {
                 format!("in {} {unit_name}{plural}", display_number(magnitude))
             }
+        }
+        Format::Duration { style, unit } => {
+            // Phase 819 — locale-independent by design (see `format_duration`
+            // above): the one Format case with exact cross-host parity, so it
+            // does not go through the invariant-fallback caveat.
+            format_duration(*unit, *style, value)
         }
     }
 }

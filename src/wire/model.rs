@@ -82,6 +82,12 @@ bare_enum!(LiveRegionKind { Polite => "polite", Assertive => "assertive", Off =>
 bare_enum!(SortDirection { Asc => "asc", Desc => "desc" });
 bare_enum!(DateStyle { Short => "Short", Medium => "Medium", Long => "Long", Full => "Full" });
 bare_enum!(RelativeTimeUnit { Second => "Second", Minute => "Minute", Hour => "Hour", Day => "Day", Week => "Week", Month => "Month", Year => "Year" });
+// Phase 819 — the Duration format enums (`Format.Duration` / `CellFormat.Duration`):
+// the numeric source counts `unit`s, rendered per the bounded `style`.
+bare_enum!(DurationUnit { Seconds => "Seconds", Minutes => "Minutes", Hours => "Hours" });
+bare_enum!(DurationStyle { Compact => "Compact", Clock => "Clock", Long => "Long" });
+// Phase 821 — the standalone `Icon` display kind's size modifier.
+bare_enum!(IconSize { Small => "Small", Medium => "Medium", Large => "Large" });
 bare_enum!(HashStrictness { StrictReplay => "StrictReplay", AdvisoryWarning => "AdvisoryWarning", Enforced => "Enforced" });
 bare_enum!(BoxRole { Group => "Group", Card => "Card", Dashboard => "Dashboard", Separator => "Separator" });
 bare_enum!(HostEffect { Pure => "Pure", ReadsHost => "ReadsHost", WritesHost => "WritesHost" });
@@ -218,11 +224,26 @@ pub enum LocalFlushTrigger {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Format {
-    Number { decimals: Option<i64> },
-    Currency { iso_code: String },
-    Percent { decimals: Option<i64> },
-    Date { date_style: DateStyle },
-    RelativeTime { unit: RelativeTimeUnit },
+    Number {
+        decimals: Option<i64>,
+    },
+    Currency {
+        iso_code: String,
+    },
+    Percent {
+        decimals: Option<i64>,
+    },
+    Date {
+        date_style: DateStyle,
+    },
+    RelativeTime {
+        unit: RelativeTimeUnit,
+    },
+    /// Phase 819 — locale-independent duration formatting.
+    Duration {
+        style: DurationStyle,
+        unit: DurationUnit,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -326,6 +347,16 @@ pub enum CellFormat {
     },
     Date {
         format: String,
+    },
+    /// Phase 819 — trendable duration cells: raw float counts `unit`s,
+    /// rendered per `style`.
+    Duration {
+        style: DurationStyle,
+        unit: DurationUnit,
+    },
+    /// Phase 819 — cell-vocabulary parity with `Format::RelativeTime`.
+    RelativeTime {
+        unit: RelativeTimeUnit,
     },
     /// The formatter is a closure (§4) — presence only.
     Custom,
@@ -579,6 +610,17 @@ pub struct ProgressSpec {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkeletonSpec {
     pub rows: i64,
+}
+
+/// Phase 821 — the standalone icon-only display kind. `size`
+/// omitted-when-`Medium`, `tone` omitted-when-`Default`, `label`
+/// omitted-when-decorative (`None` ⇒ `aria-hidden`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct IconSpec {
+    pub icon: String,
+    pub size: IconSize,
+    pub tone: ToneVariant,
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1274,6 +1316,7 @@ pub enum NodeKind {
     Callout(CalloutSpec),
     Progress(ProgressSpec),
     Skeleton(SkeletonSpec),
+    Icon(IconSpec),
     LabelValueRow(LabelValueRowSpec),
     Fact(FactSpec),
     Link(LinkSpec),
@@ -1335,6 +1378,7 @@ impl NodeKind {
             NodeKind::Callout(_) => "Callout",
             NodeKind::Progress(_) => "Progress",
             NodeKind::Skeleton(_) => "Skeleton",
+            NodeKind::Icon(_) => "Icon",
             NodeKind::LabelValueRow(_) => "LabelValueRow",
             NodeKind::Fact(_) => "Fact",
             NodeKind::Link(_) => "Link",
@@ -1380,6 +1424,7 @@ impl NodeKind {
             | NodeKind::Callout(_)
             | NodeKind::Progress(_)
             | NodeKind::Skeleton(_)
+            | NodeKind::Icon(_)
             | NodeKind::LabelValueRow(_)
             | NodeKind::Fact(_)
             | NodeKind::Link(_)
@@ -1435,6 +1480,7 @@ pub const CANONICAL_NODE_KINDS: &[&str] = &[
     "Callout",
     "Progress",
     "Skeleton",
+    "Icon",
     "LabelValueRow",
     "Fact",
     "Link",

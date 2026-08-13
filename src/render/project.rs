@@ -217,6 +217,9 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             caveat: map_opt_text(sources, &spec.caveat),
         }),
         NodeKind::Skeleton(spec) => NodeKind::Skeleton(spec.clone()),
+        // Icon carries only scalar fields — no TextSource / scalar-number slot
+        // to resolve.
+        NodeKind::Icon(spec) => NodeKind::Icon(spec.clone()),
         NodeKind::LabelValueRow(spec) => NodeKind::LabelValueRow(LabelValueRowSpec {
             label: map_text(sources, &spec.label),
             value: map_scalar_number(sources, &spec.value),

@@ -46,7 +46,7 @@ use super::bindings::{
     resolve_number, resolve_options, resolve_rows, resolve_scalar_number, resolve_string_pair,
     static_display_string, try_bool, try_number, try_scalar_number, try_string,
 };
-use super::class_names::{node_class_name, tone_var};
+use super::class_names::{icon_size_class, node_class_name, tone_var};
 use super::html::{Attr, AttrVal, el, entity_encode, escape_attr, escape_text, text_el, void_el};
 use super::markdown::to_html as markdown_to_html;
 use super::sanitize::sanitize_url_or_blank;
@@ -100,6 +100,7 @@ fn collect_fragments<'a>(acc: &mut HashMap<String, &'a Node>, node: &'a Node) {
         | NodeKind::Callout(_)
         | NodeKind::Progress(_)
         | NodeKind::Skeleton(_)
+        | NodeKind::Icon(_)
         | NodeKind::LabelValueRow(_)
         | NodeKind::Fact(_)
         | NodeKind::Link(_)
@@ -400,6 +401,33 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node) -> String {
                 .map(|_| el("div", &[("class", s("fuaran-skeleton-row"))], ""))
                 .collect();
             el("div", &[("class", s("fuaran-skeleton"))], &rows)
+        }
+        NodeKind::Icon(spec) => {
+            // Phase 821 — the standalone icon-only display kind. The glyph
+            // NAME rides `data-icon` (the uniform icon-hook contract — no text
+            // content, hosts map it to glyphs); size + tone are modifier
+            // classes. A11y: decorative (`label` absent) emits
+            // `aria-hidden="true"`; labelled emits `role="img"` +
+            // `aria-label`. Mirrors the reference SSR renderer byte-for-byte.
+            let mut attrs: Vec<Attr> = vec![
+                (
+                    "class",
+                    s(format!(
+                        "fuaran-icon fuaran-icon--{} fuaran-icon-{}",
+                        icon_size_class(spec.size),
+                        tone_var(spec.tone)
+                    )),
+                ),
+                ("data-icon", s(spec.icon.clone())),
+            ];
+            match &spec.label {
+                Some(label) => {
+                    attrs.push(("role", s("img")));
+                    attrs.push(("aria-label", s(label.clone())));
+                }
+                None => attrs.push(("aria-hidden", s("true"))),
+            }
+            el("span", &attrs, "")
         }
         NodeKind::Callout(spec) => {
             let heading = spec

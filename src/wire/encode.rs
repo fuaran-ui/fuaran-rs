@@ -681,6 +681,17 @@ fn cell_format(f: &CellFormat) -> String {
             vec![field("digits", num(*digits as f64))],
         ),
         CellFormat::Date { format } => case_obj("Date", vec![field("format", s(format))]),
+        // Phase 819 — canonical field order alphabetical: `style` before `unit`.
+        CellFormat::Duration { style, unit } => case_obj(
+            "Duration",
+            vec![
+                field("style", s(style.as_str())),
+                field("unit", s(unit.as_str())),
+            ],
+        ),
+        CellFormat::RelativeTime { unit } => {
+            case_obj("RelativeTime", vec![field("unit", s(unit.as_str()))])
+        }
         CellFormat::Custom => case_obj("Custom", vec![field("fn", CLOSURE.to_string())]),
     }
 }
@@ -706,6 +717,14 @@ fn format_intent(f: &Format) -> String {
         Format::RelativeTime { unit } => {
             case_obj("RelativeTime", vec![field("unit", s(unit.as_str()))])
         }
+        // Phase 819 — canonical field order alphabetical: `style` before `unit`.
+        Format::Duration { style, unit } => case_obj(
+            "Duration",
+            vec![
+                field("style", s(style.as_str())),
+                field("unit", s(unit.as_str())),
+            ],
+        ),
     }
 }
 
@@ -898,6 +917,24 @@ fn sparkline_spec(spec: &SparklineSpec) -> String {
 
 fn skeleton_spec(spec: &SkeletonSpec) -> String {
     obj(vec![field("rows", num(spec.rows as f64))])
+}
+
+// Phase 821 — the standalone icon-only display kind. `size`
+// omitted-when-`Medium`, `tone` omitted-when-`Default`, `label`
+// omitted-when-`None` (decorative). Canonical field order alphabetical:
+// icon, label, size, tone.
+fn icon_spec(spec: &IconSpec) -> String {
+    let mut fields = vec![field("icon", s(&spec.icon))];
+    if let Some(label) = &spec.label {
+        fields.push(field("label", s(label)));
+    }
+    if spec.size != IconSize::Medium {
+        fields.push(field("size", s(spec.size.as_str())));
+    }
+    if spec.tone != ToneVariant::Default {
+        fields.push(field("tone", s(spec.tone.as_str())));
+    }
+    obj(fields)
 }
 
 fn callout_spec(spec: &CalloutSpec) -> String {
@@ -1998,6 +2035,7 @@ fn node_kind(k: &NodeKind) -> String {
         NodeKind::Callout(spec) => case_obj_hoisted("Callout", callout_spec(spec)),
         NodeKind::Progress(spec) => case_obj_hoisted("Progress", progress_spec(spec)),
         NodeKind::Skeleton(spec) => case_obj_hoisted("Skeleton", skeleton_spec(spec)),
+        NodeKind::Icon(spec) => case_obj_hoisted("Icon", icon_spec(spec)),
         NodeKind::Fact(spec) => case_obj_hoisted("Fact", fact_spec(spec)),
         NodeKind::LabelValueRow(spec) => {
             case_obj_hoisted("LabelValueRow", label_value_row_spec(spec))

@@ -473,6 +473,12 @@ decode_bare_enum!(
     RelativeTimeUnit,
     "RelativeTimeUnit"
 );
+// Phase 819 — the Duration format enums (`decode_cell_format` /
+// `decode_format` share them).
+decode_bare_enum!(decode_duration_unit, DurationUnit, "DurationUnit");
+decode_bare_enum!(decode_duration_style, DurationStyle, "DurationStyle");
+// Phase 821 — the standalone icon-only display kind's size modifier.
+decode_bare_enum!(decode_icon_size, IconSize, "IconSize");
 
 // ─── Strict JVal decode (rule 12 — structured JSON positions) ────────────────
 
@@ -1501,10 +1507,18 @@ fn decode_format(path: &str, j: &JVal) -> DResult<Format> {
                 unit: decode_relative_time_unit(&format!("{path}.unit"), v)?,
             })
         }
+        "Duration" => {
+            // Phase 819 — locale-independent duration formatting.
+            let unit_j = req(path, fields, "unit", "DurationUnit string")?;
+            let unit = decode_duration_unit(&format!("{path}.unit"), unit_j)?;
+            let style_j = req(path, fields, "style", "DurationStyle string")?;
+            let style = decode_duration_style(&format!("{path}.style"), style_j)?;
+            Ok(Format::Duration { style, unit })
+        }
         other => Err(unknown_du_case(
             path,
             other,
-            "Number | Currency | Percent | Date | RelativeTime",
+            "Number | Currency | Percent | Date | RelativeTime | Duration",
         )),
     }
 }
@@ -1539,11 +1553,27 @@ fn decode_cell_format(path: &str, j: &JVal) -> DResult<CellFormat> {
         "Date" => Ok(CellFormat::Date {
             format: req_string(path, fields, "format", "format string")?,
         }),
+        "Duration" => {
+            // Phase 819 — trendable duration cells: raw float counts `unit`s,
+            // rendered per `style`.
+            let unit_j = req(path, fields, "unit", "DurationUnit string")?;
+            let unit = decode_duration_unit(&format!("{path}.unit"), unit_j)?;
+            let style_j = req(path, fields, "style", "DurationStyle string")?;
+            let style = decode_duration_style(&format!("{path}.style"), style_j)?;
+            Ok(CellFormat::Duration { style, unit })
+        }
+        "RelativeTime" => {
+            // Phase 819 — cell-vocabulary parity with `Format::RelativeTime`.
+            let v = req(path, fields, "unit", "RelativeTimeUnit string")?;
+            Ok(CellFormat::RelativeTime {
+                unit: decode_relative_time_unit(&format!("{path}.unit"), v)?,
+            })
+        }
         "Custom" => Ok(CellFormat::Custom),
         other => Err(unknown_du_case(
             path,
             other,
-            "None | Number | Currency | Percent | SignificantDigits | Date | Custom",
+            "None | Number | Currency | Percent | SignificantDigits | Date | Duration | RelativeTime | Custom",
         )),
     }
 }
@@ -1563,6 +1593,66 @@ fn decode_column_width(path: &str, j: &JVal) -> DResult<ColumnWidth> {
 }
 
 // ─── Binding (recursive) ─────────────────────────────────────────────────────
+
+/// Phase 815 — organic-demand leniencies for the Transform `source` slot, both
+/// observed cross-family (claude, gemini, kimi — the Tier-D pilot, 2026-08-13):
+/// models bind a derived value to a Transform whose source is
+/// `{"$type":"State","defaultValue":[{row},…]}`. Two universal priors,
+/// accommodated as typed data at THIS host bridge, before the columnar codec
+/// sees the value (the fuaran#633 `Bound`-unwrap precedent — no Core change,
+/// no wire-spec change, no new key). Mirror of the F#
+/// `normaliseTransformSource`:
+///   1. a `State`/`Static`/`Bound` binding WRAPPER around the data unwraps to
+///      its `defaultValue`/`value` (initial-snapshot semantics — a LIVE
+///      state-sourced Transform is deliberately not this);
+///   2. ROW-MAJOR data (an array of row objects) transposes to the canonical
+///      columnar `{"columns": …}` shape — FIRST-row key set (sorted ordinal,
+///      the F# Map ordering), absent cells null. Canonical columnar and `ref`
+///      sources pass through untouched, so existing fixtures stay
+///      byte-identical.
+///
+/// Ragged / mixed-type rows may still fail downstream (the mixed-type
+/// didactic) — deliberately not special-cased. A wrapper carrying neither
+/// `defaultValue` nor `value` stays UNCHANGED and fails the columnar decode.
+fn normalise_transform_source(j: &JVal) -> JVal {
+    let unwrapped: &JVal = match j {
+        JVal::Obj(fields) => match get(fields, "$type") {
+            Some(JVal::Str(t)) if t == "State" || t == "Static" || t == "Bound" => {
+                match get(fields, "defaultValue").or_else(|| get(fields, "value")) {
+                    Some(inner) => inner,
+                    None => j,
+                }
+            }
+            _ => j,
+        },
+        _ => j,
+    };
+    match unwrapped {
+        JVal::Arr(rows) => match rows.first() {
+            Some(JVal::Obj(first)) => {
+                let mut keys: Vec<&String> = first.iter().map(|(k, _)| k).collect();
+                keys.sort();
+                keys.dedup();
+                let cols: Vec<(String, JVal)> = keys
+                    .iter()
+                    .map(|k| {
+                        let cells: Vec<JVal> = rows
+                            .iter()
+                            .map(|row| match row {
+                                JVal::Obj(rf) => get(rf, k.as_str()).cloned().unwrap_or(JVal::Null),
+                                _ => JVal::Null,
+                            })
+                            .collect();
+                        ((*k).clone(), JVal::Arr(cells))
+                    })
+                    .collect();
+                JVal::Obj(vec![("columns".to_string(), JVal::Obj(cols))])
+            }
+            _ => unwrapped.clone(),
+        },
+        other => other.clone(),
+    }
+}
 
 fn decode_binding(path: &str, j: &JVal) -> DResult<Binding> {
     decode_binding_slot(path, j, StaticSlot::Untyped)
@@ -1703,7 +1793,10 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
         "Transform" => {
             let src_j = req(path, fields, "source", "Transform DataSource object")?;
             let pipe_j = req(path, fields, "pipeline", "Transform pipeline array")?;
-            let source = decode_data_source(src_j).map_err(|e| {
+            // Phase 815 — normalise the organic-demand source shapes (binding
+            // wrapper / row-major array) before the columnar decode sees them.
+            let src_j = normalise_transform_source(src_j);
+            let source = decode_data_source(&src_j).map_err(|e| {
                 make_error(
                     DecodeErrorCode::WrongType,
                     format!("{path}.source"),
@@ -2170,6 +2263,29 @@ fn decode_skeleton_spec(path: &str, j: &JVal) -> DResult<SkeletonSpec> {
     let fields = as_obj(path, j)?;
     let rows = req_int(path, fields, "rows", "skeleton row count integer")?;
     Ok(SkeletonSpec { rows })
+}
+
+// Phase 821 — the standalone icon-only display kind.
+fn decode_icon_spec(path: &str, j: &JVal) -> DResult<IconSpec> {
+    let fields = as_obj(path, j)?;
+    let icon = req_string(path, fields, "icon", "icon name string")?;
+    // `size` omitted-when-`Medium`; `tone` omitted-when-default (the
+    // Phase 460 discipline); `label` omitted-when-decorative.
+    let size = match get(fields, "size") {
+        None => IconSize::Medium,
+        Some(v) => decode_icon_size(&format!("{path}.size"), v)?,
+    };
+    let tone = opt_tone_default(path, fields, "tone")?;
+    let label = match get(fields, "label") {
+        None => None,
+        Some(v) => Some(as_str(&format!("{path}.label"), v)?.to_string()),
+    };
+    Ok(IconSpec {
+        icon,
+        size,
+        tone,
+        label,
+    })
 }
 
 fn decode_callout_spec(path: &str, j: &JVal) -> DResult<CalloutSpec> {
@@ -3432,7 +3548,7 @@ fn decode_fragment_args(path: &str, j: &JVal) -> DResult<Vec<(String, FragmentAr
 
 // ─── NodeKind ────────────────────────────────────────────────────────────────
 
-const WRONG_NODE_KIND_HINT: &str = "a Layout primitive (Box | SplitPanel | Tabs | Stepper | SummaryList | Disclosure | Modal | ScrollArea), a Display primitive (Heading | Markdown | Metric | Badge | Sparkline | Callout | Progress | Skeleton | LabelValueRow | Fact | Link | Image | List | Toast | CodeBlock | Math | Drawing), an Input primitive (Form | Filters | Button | FileUpload | Select), a Visualisation primitive (DataGrid | Chart | Map), or Custom | ErrorBoundary | Switch | FragmentDecl | FragmentRef | Mount";
+const WRONG_NODE_KIND_HINT: &str = "a Layout primitive (Box | SplitPanel | Tabs | Stepper | SummaryList | Disclosure | Modal | ScrollArea), a Display primitive (Heading | Markdown | Metric | Badge | Sparkline | Callout | Progress | Skeleton | Icon | LabelValueRow | Fact | Link | Image | List | Toast | CodeBlock | Math | Drawing), an Input primitive (Form | Filters | Button | FileUpload | Select), a Visualisation primitive (DataGrid | Chart | Map), or Custom | ErrorBoundary | Switch | FragmentDecl | FragmentRef | Mount";
 
 fn decode_node_kind(path: &str, j: &JVal) -> DResult<NodeKind> {
     let fields = as_obj(path, j)?;
@@ -3455,6 +3571,7 @@ fn decode_node_kind(path: &str, j: &JVal) -> DResult<NodeKind> {
         "Callout" => Ok(NodeKind::Callout(decode_callout_spec(path, j)?)),
         "Progress" => Ok(NodeKind::Progress(decode_progress_spec(path, j)?)),
         "Skeleton" => Ok(NodeKind::Skeleton(decode_skeleton_spec(path, j)?)),
+        "Icon" => Ok(NodeKind::Icon(decode_icon_spec(path, j)?)),
         "Fact" => Ok(NodeKind::Fact(decode_fact_spec(path, j)?)),
         "LabelValueRow" => Ok(NodeKind::LabelValueRow(decode_label_value_row_spec(
             path, j,
@@ -3961,5 +4078,10 @@ pub(crate) mod coerce {
     /// An icon rides the wire as its raw string name.
     pub fn icon_source(v: &JVal) -> C<String> {
         string(v)
+    }
+
+    /// Phase 821 — the `Icon` display kind's size modifier.
+    pub fn icon_size(v: &JVal) -> C<IconSize> {
+        via(v, decode_icon_size)
     }
 }

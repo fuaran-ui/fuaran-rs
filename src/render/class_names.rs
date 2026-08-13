@@ -3,7 +3,7 @@
 //! class-name change is a cross-host change, never a local edit.
 
 use crate::wire::{
-    BoxLayout, BoxRole, BoxSpec, Emphasis, FontVoice, NodeKind, SemanticStyle, StyleRole,
+    BoxLayout, BoxRole, BoxSpec, Emphasis, FontVoice, IconSize, NodeKind, SemanticStyle, StyleRole,
     StyleWeight, ToneVariant,
 };
 
@@ -17,6 +17,17 @@ pub fn tone_var(tone: ToneVariant) -> &'static str {
         ToneVariant::Warning => "warning",
         ToneVariant::Critical => "critical",
         ToneVariant::Info => "info",
+    }
+}
+
+/// Phase 821 — map an `IconSize` to the `fuaran-icon--<size>` modifier-class
+/// fragment for the standalone `Icon` display kind. Parity-locked to the
+/// reference renderers' shared size-class map.
+pub fn icon_size_class(size: IconSize) -> &'static str {
+    match size {
+        IconSize::Small => "small",
+        IconSize::Medium => "medium",
+        IconSize::Large => "large",
     }
 }
 
@@ -126,6 +137,7 @@ pub fn kind_class(kind: &NodeKind) -> String {
         NodeKind::Callout(_) => "fuaran-kind-callout".to_string(),
         NodeKind::Progress(_) => "fuaran-kind-progress".to_string(),
         NodeKind::Skeleton(_) => "fuaran-kind-skeleton".to_string(),
+        NodeKind::Icon(_) => "fuaran-kind-icon".to_string(),
         NodeKind::LabelValueRow(_) => "fuaran-kind-label-value-row".to_string(),
         NodeKind::Fact(_) => "fuaran-kind-fact".to_string(),
         NodeKind::Link(_) => "fuaran-kind-link".to_string(),

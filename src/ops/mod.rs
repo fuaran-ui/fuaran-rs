@@ -121,6 +121,7 @@ fn layout_children(n: &Node) -> Option<&Vec<Node>> {
         | NodeKind::Callout(_)
         | NodeKind::Progress(_)
         | NodeKind::Skeleton(_)
+        | NodeKind::Icon(_)
         | NodeKind::LabelValueRow(_)
         | NodeKind::Fact(_)
         | NodeKind::Link(_)
@@ -202,6 +203,7 @@ fn child_nodes(n: &Node) -> Vec<&Node> {
         | NodeKind::Callout(_)
         | NodeKind::Progress(_)
         | NodeKind::Skeleton(_)
+        | NodeKind::Icon(_)
         | NodeKind::LabelValueRow(_)
         | NodeKind::Fact(_)
         | NodeKind::Link(_)
@@ -512,6 +514,34 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
         NodeKind::Skeleton(_) => match field {
             "Rows" => patch(coerce::int(value), |x| {
                 NodeKind::Skeleton(crate::wire::SkeletonSpec { rows: x })
+            }),
+            _ => UnknownField,
+        },
+        // Phase 821 — the standalone Icon display kind's field surface.
+        NodeKind::Icon(s) => match field {
+            "Icon" => patch(coerce::string(value), |x| {
+                NodeKind::Icon(crate::wire::IconSpec {
+                    icon: x,
+                    ..s.clone()
+                })
+            }),
+            "Size" => patch(coerce::icon_size(value), |x| {
+                NodeKind::Icon(crate::wire::IconSpec {
+                    size: x,
+                    ..s.clone()
+                })
+            }),
+            "Tone" => patch(coerce::tone(value), |x| {
+                NodeKind::Icon(crate::wire::IconSpec {
+                    tone: x,
+                    ..s.clone()
+                })
+            }),
+            "Label" => patch(coerce::string(value), |x| {
+                NodeKind::Icon(crate::wire::IconSpec {
+                    label: Some(x),
+                    ..s.clone()
+                })
             }),
             _ => UnknownField,
         },
