@@ -58,8 +58,22 @@ const PLOT_W: f64 = PLOT_X1 - PLOT_X0;
 const PLOT_H: f64 = PLOT_Y1 - PLOT_Y0;
 
 /// A fixed, deterministic categorical palette (series index → colour).
-const PALETTE: [&str; 6] = [
-    "#3366cc", "#dc3912", "#ff9900", "#109618", "#990099", "#0099c6",
+///
+/// Phase 875 — palette v2, 8 slots, fixed assignment order. Validated on both
+/// surfaces (light + dark) against the OKLab gate set (lightness band, chroma
+/// floor, adjacent-pair CVD ΔE, adjacent-pair normal-vision ΔE). The
+/// ASSIGNMENT ORDER is load-bearing — the gates are measured over ADJACENT
+/// pairs, so re-ordering the array can drop a passing set below the floor.
+/// Do not cycle or sort it.
+const PALETTE: [&str; 8] = [
+    "#1a86ac", // loch blue
+    "#bf831c", // ochre
+    "#a51574", // magenta
+    "#21a766", // green
+    "#6454e5", // violet
+    "#af153d", // crimson
+    "#21a2b2", // teal
+    "#d3241b", // vermilion
 ];
 
 fn colour_for(i: usize) -> &'static str {
@@ -77,10 +91,35 @@ const AXIS_OPACITY: f64 = 0.8;
 const GRID_OPACITY: f64 = 0.12;
 const LABEL_OPACITY: f64 = 0.66;
 
-/// A translucent categorical fill (Phase 637 — area bands). The gridlines stay
-/// legible through the band; the series' full-strength Polyline edge on top
-/// carries the categorical colour at full contrast.
-const AREA_FILL_OPACITY: f64 = 0.35;
+/// Gap between the y-axis spine and the right edge of a tick label (Phase 875:
+/// widened alongside `TICK_MARK_LENGTH`, which occupies the first stretch of
+/// this gap).
+const TICK_LABEL_GAP: f64 = 12.0;
+
+/// Length of the small OUTSIDE tick marks on both axes (Phase 875): y-axis
+/// marks run left from the spine, x-axis marks run down from it, so neither
+/// eats plot area. Inked at axis strength, one per y tick and one per
+/// category band centre (or per x tick on the Scatter arm).
+const TICK_MARK_LENGTH: f64 = 5.0;
+
+/// Hard pixel ceiling on a single bar's thickness (Phase 875). The bar takes
+/// the MIN of its band share and this cap, then is centred in its slot.
+const BAR_MAX_THICKNESS: f64 = 28.0;
+
+/// GEOMETRIC gap between consecutive segments of a stacked bar (Phase 875) —
+/// the segment is shortened on the side facing the next segment, so the
+/// separation is absence of ink, not a surface-coloured stroke.
+const STACK_SEGMENT_GAP: f64 = 2.0;
+
+/// GEOMETRIC angular padding between pie wedges, in DEGREES (Phase 875) — half
+/// is taken from each end of every wedge's sweep.
+const WEDGE_GAP_DEGREES: f64 = 0.75;
+
+/// A translucent categorical fill (Phase 637 — area bands; opacity dropped to
+/// a wash by Phase 875). The gridlines stay legible through the band; the
+/// series' full-strength Polyline edge on top carries the categorical colour
+/// at full contrast.
+const AREA_FILL_OPACITY: f64 = 0.12;
 
 /// The chart's own font stack — carried in the wire, so a lowered chart is
 /// self-contained + legible on every host without host CSS.
@@ -363,7 +402,7 @@ pub fn lower_chart(
         |v: f64| -> f64 { r2(PLOT_X0 + (v - x_nice_lo) / (x_nice_hi - x_nice_lo) * PLOT_W) };
 
     let tick_size = 13.0;
-    let title_size = 16.0;
+    let title_size = 18.0;
 
     let mut shapes: Vec<Shape> = Vec::new();
 
@@ -445,11 +484,19 @@ pub fn lower_chart(
             };
             let top = -std::f64::consts::PI / 2.0;
 
+            // Half the angular padding comes off each end of every wedge
+            // (Phase 875), so the separation is a sliver of absent ink — no
+            // surface colour is needed and the result is theme-invariant,
+            // which a stroked wedge border could not be.
+            let half_gap = WEDGE_GAP_DEGREES * std::f64::consts::PI / 360.0;
+
             let yf = &y_fields[0];
             for (i, &f) in fractions.iter().enumerate() {
                 if f > 0.0 {
                     let mark_style = with_mark(yf, categories[i], style_fill(colour_for(i)));
                     if f >= 1.0 - 1e-9 {
+                        // A lone 100% category is a circle — there is no
+                        // neighbour to separate from, so no padding.
                         shapes.push(Shape::Circle {
                             cx,
                             cy,
@@ -457,18 +504,24 @@ pub fn lower_chart(
                             style: mark_style,
                         });
                     } else {
-                        let a0 = top + 2.0 * std::f64::consts::PI * starts[i];
-                        let a1 = top + 2.0 * std::f64::consts::PI * starts[i + 1];
-                        let mut cmds = vec![
-                            CurveCommand::MoveTo(DrawPoint { x: cx, y: cy }),
-                            CurveCommand::LineTo(pt(a0)),
-                        ];
-                        cmds.extend(arc_cubics(a0, a1));
-                        cmds.push(CurveCommand::Close);
-                        shapes.push(Shape::Curve {
-                            commands: cmds,
-                            style: mark_style,
-                        });
+                        let a0 = top + 2.0 * std::f64::consts::PI * starts[i] + half_gap;
+                        let a1 = top + 2.0 * std::f64::consts::PI * starts[i + 1] - half_gap;
+                        // A wedge narrower than the padding is DROPPED rather
+                        // than drawn inverted — the alternative is a sliver
+                        // sweeping the wrong way round the circle, which is a
+                        // wrong picture, not a small one.
+                        if a1 > a0 {
+                            let mut cmds = vec![
+                                CurveCommand::MoveTo(DrawPoint { x: cx, y: cy }),
+                                CurveCommand::LineTo(pt(a0)),
+                            ];
+                            cmds.extend(arc_cubics(a0, a1));
+                            cmds.push(CurveCommand::Close);
+                            shapes.push(Shape::Curve {
+                                commands: cmds,
+                                style: mark_style,
+                            });
+                        }
                     }
                 }
             }
@@ -526,6 +579,37 @@ pub fn lower_chart(
         });
     }
 
+    // Vertical gridlines — the Scatter arm only (Phase 875). A linear x-scale
+    // has readable x positions to trace back to; a BAND x-axis has none (a
+    // category is a label, not a magnitude), so a vertical rule there would
+    // be decoration.
+    if is_scatter {
+        for &t in &x_ticks {
+            let x = x_scale(t);
+            shapes.push(Shape::Line {
+                x1: x,
+                y1: r2(PLOT_Y0),
+                x2: x,
+                y2: r2(PLOT_Y1),
+                style: style_stroke_ink(GRID_OPACITY, 1.0),
+            });
+        }
+    }
+
+    // Zero baseline (Phase 875) — only when the domain CROSSES zero, drawn at
+    // axis strength over the ordinary gridline it shares a y with. When the
+    // domain does not cross zero the axis spine already IS the baseline.
+    if nice_lo < 0.0 && nice_hi > 0.0 {
+        let y = y_scale(0.0);
+        shapes.push(Shape::Line {
+            x1: r2(PLOT_X0),
+            y1: y,
+            x2: r2(PLOT_X1),
+            y2: y,
+            style: style_stroke_ink(AXIS_OPACITY, 1.0),
+        });
+    }
+
     // ── Axes ──
     shapes.push(Shape::Line {
         x1: r2(PLOT_X0),
@@ -542,10 +626,46 @@ pub fn lower_chart(
         style: style_stroke_ink(AXIS_OPACITY, 1.0),
     });
 
+    // Outside tick marks (Phase 875) — outside the plot on both axes, so the
+    // plot area stays ink-free and the marks tie each label to its position.
+    // y marks first, then x marks; suppressed entirely when the length is
+    // non-positive (it never is for the shipped default, but the port keeps
+    // the guard for parity with the reference's style-driven suppression).
+    if TICK_MARK_LENGTH > 0.0 {
+        for &t in &ticks {
+            let y = y_scale(t);
+            shapes.push(Shape::Line {
+                x1: r2(PLOT_X0 - TICK_MARK_LENGTH),
+                y1: y,
+                x2: r2(PLOT_X0),
+                y2: y,
+                style: style_stroke_ink(AXIS_OPACITY, 1.0),
+            });
+        }
+        let x_mark = |x: f64| -> Shape {
+            Shape::Line {
+                x1: x,
+                y1: r2(PLOT_Y1),
+                x2: x,
+                y2: r2(PLOT_Y1 + TICK_MARK_LENGTH),
+                style: style_stroke_ink(AXIS_OPACITY, 1.0),
+            }
+        };
+        if is_scatter {
+            for &t in &x_ticks {
+                shapes.push(x_mark(x_scale(t)));
+            }
+        } else {
+            for i in 0..n {
+                shapes.push(x_mark(centre_x(i)));
+            }
+        }
+    }
+
     // ── y-axis tick labels — right-anchored (End) ──
     for &t in &ticks {
         shapes.push(Shape::Label {
-            x: r2(PLOT_X0 - 8.0),
+            x: r2(PLOT_X0 - TICK_LABEL_GAP),
             y: r2(y_scale(t) + 4.0),
             text: TextSource::Literal(tick_label(t)),
             style: text_style(
@@ -606,19 +726,26 @@ pub fn lower_chart(
     // ── Series geometry ──
     match kind {
         ChartKind::Bar if stacked => {
-            // One full group-width bar per category; series stack as segments
-            // between consecutive cumulative sums (Phase 637). Category-major
-            // emit order (i outer), matching the reference.
+            // One capped bar per category, centred in its band; series stack
+            // as segments between consecutive cumulative sums (Phase 637),
+            // each shortened by `STACK_SEGMENT_GAP` on the side facing the
+            // next segment (Phase 875). Category-major emit order (i outer),
+            // matching the reference.
             let group_w = band_w * 0.7;
+            let bw = r2((group_w * 0.9).min(BAR_MAX_THICKNESS));
             for (i, category) in categories.iter().enumerate() {
-                let bx = r2(PLOT_X0 + band_w * i as f64 + (band_w - group_w) / 2.0);
-                let bw = r2(group_w * 0.9);
+                let bx = r2(PLOT_X0 + band_w * i as f64 + (band_w - bw) / 2.0);
                 let cums = cums_for(i);
                 for j in 0..m {
                     let y0 = y_scale(cums[j]);
                     let y1 = y_scale(cums[j + 1]);
-                    let top = y0.min(y1);
-                    let hgt = r2((y1 - y0).abs());
+                    // The gap comes off the far side from the baseline, and
+                    // only where another segment follows — so the stack's
+                    // outer tip keeps its full height and the total stays
+                    // honest.
+                    let gap = if j < m - 1 { STACK_SEGMENT_GAP } else { 0.0 };
+                    let top = r2(y0.min(y1) + if y1 < y0 { gap } else { 0.0 });
+                    let hgt = r2(((y1 - y0).abs() - gap).max(0.0));
                     shapes.push(Shape::Rectangle {
                         x: bx,
                         y: top,
@@ -633,15 +760,17 @@ pub fn lower_chart(
         ChartKind::Bar => {
             let group_w = band_w * 0.7;
             let sub_w = if m > 0 { group_w / m as f64 } else { group_w };
+            let bw = r2((sub_w * 0.9).min(BAR_MAX_THICKNESS));
             let base_y = y_scale(0.0);
             for (j, values) in series.iter().enumerate() {
                 let colour = colour_for(j);
                 for (i, &v) in values.iter().enumerate() {
-                    let bx = r2(PLOT_X0
-                        + band_w * i as f64
-                        + (band_w - group_w) / 2.0
-                        + j as f64 * sub_w);
-                    let bw = r2(sub_w * 0.9);
+                    // Centre the (possibly capped) bar in its own sub-slot, so
+                    // a cap takes air off BOTH sides and the group stays
+                    // symmetric about the band centre (Phase 875).
+                    let slot_x =
+                        PLOT_X0 + band_w * i as f64 + (band_w - group_w) / 2.0 + j as f64 * sub_w;
+                    let bx = r2(slot_x + (sub_w - bw) / 2.0);
                     let vy = y_scale(v);
                     let top = vy.min(base_y);
                     let hgt = r2((vy - base_y).abs());

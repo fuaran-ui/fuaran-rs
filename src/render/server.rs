@@ -1423,6 +1423,25 @@ fn draw_style_attrs(style: &crate::wire::DrawStyle, default_fill_none: bool) -> 
     out
 }
 
+/// Phase 875 — round line joins + caps on a STROKED path shape (`Polyline` /
+/// `Polygon` / `Curve`). A RENDERER default, not a wire field: `DrawStyle`
+/// gains nothing, no fixture changes shape, and every host emits the same two
+/// attributes from its own builder. SVG's initial `stroke-linejoin` is
+/// `miter`, which spikes at the acute vertices a data polyline routinely has
+/// — a visible artefact that carries no data.
+///
+/// Emitted only when the shape actually strokes, so a fill-only polygon (an
+/// area band) keeps its minimal attribute set. `Line` is deliberately
+/// excluded: a round cap on the axis and gridline rules would overhang each
+/// end by half the stroke width, lengthening chrome that is positioned
+/// exactly.
+fn stroke_join_attrs(style: &crate::wire::DrawStyle) -> &'static str {
+    match style.stroke.as_ref().and_then(draw_static_string) {
+        Some(_) => " stroke-linejoin=\"round\" stroke-linecap=\"round\"",
+        None => "",
+    }
+}
+
 fn draw_points(points: &[crate::wire::DrawPoint]) -> String {
     points
         .iter()
@@ -1496,19 +1515,22 @@ fn render_shape(ctx: &Ctx<'_>, sh: &crate::wire::Shape) -> String {
             draw_style_attrs(style, false)
         ),
         S::Polyline { points, style } => format!(
-            "<polyline class=\"fuaran-drawing-polyline\" points=\"{}\"{}/>",
+            "<polyline class=\"fuaran-drawing-polyline\" points=\"{}\"{}{}/>",
             draw_points(points),
-            draw_style_attrs(style, true)
+            draw_style_attrs(style, true),
+            stroke_join_attrs(style)
         ),
         S::Polygon { points, style } => format!(
-            "<polygon class=\"fuaran-drawing-polygon\" points=\"{}\"{}/>",
+            "<polygon class=\"fuaran-drawing-polygon\" points=\"{}\"{}{}/>",
             draw_points(points),
-            draw_style_attrs(style, false)
+            draw_style_attrs(style, false),
+            stroke_join_attrs(style)
         ),
         S::Curve { commands, style } => format!(
-            "<path class=\"fuaran-drawing-curve\" d=\"{}\"{}/>",
+            "<path class=\"fuaran-drawing-curve\" d=\"{}\"{}{}/>",
             draw_path_d(commands),
-            draw_style_attrs(style, true)
+            draw_style_attrs(style, true),
+            stroke_join_attrs(style)
         ),
         S::Circle { cx, cy, r, style } => format!(
             "<circle class=\"fuaran-drawing-circle\" cx=\"{}\" cy=\"{}\" r=\"{}\"{}/>",
