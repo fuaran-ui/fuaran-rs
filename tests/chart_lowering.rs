@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::render::chart_lowering::{
-    ChartAxisUnitMode, ChartLowerStyle, lower_chart_with, project_row,
+    ChartAxisUnitMode, ChartLowerStyle, ChartTitles, lower_chart_with, project_row,
 };
 use fuaran_rs::wire::{
     ChartKind, Format, Node, NodeKind, SemanticStyle, StateBehaviour, TextSource,
@@ -126,6 +126,17 @@ fn lowered_json(name: &str, input: &str) -> String {
         Some(JVal::Str(t)) => Some(TextSource::Literal(t.clone())),
         _ => None,
     };
+    // Phase 878 — the axis names + subtitle are plain strings in the fixture
+    // input (the neutral cross-host contract), omitted when absent.
+    let literal_field = |key: &str| -> Option<TextSource> {
+        match spec.field(key) {
+            Some(JVal::Str(t)) => Some(TextSource::Literal(t.clone())),
+            _ => None,
+        }
+    };
+    let x_title = literal_field("xTitle");
+    let y_title = literal_field("yTitle");
+    let subtitle = literal_field("subtitle");
     let rows: Vec<_> = match spec.field("data") {
         Some(JVal::Arr(items)) => items
             .iter()
@@ -159,6 +170,11 @@ fn lowered_json(name: &str, input: &str) -> String {
         &x_field,
         &y_fields,
         title.as_ref(),
+        &ChartTitles {
+            x_title: x_title.as_ref(),
+            y_title: y_title.as_ref(),
+            subtitle: subtitle.as_ref(),
+        },
         value_format.as_ref(),
         &style,
         &rows,

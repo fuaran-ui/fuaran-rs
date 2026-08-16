@@ -73,6 +73,24 @@ const TEXT_LINE_HEIGHT_FACTOR: f64 = 1.2;
 const CATEGORY_LABEL_OFFSET_Y: f64 = 20.0;
 /// Distance from the canvas bottom to the x-axis title's BASELINE.
 const AXIS_TITLE_BOTTOM_OFFSET: f64 = 12.0;
+/// Font size of the subtitle (Phase 878). Deliberately BELOW the title's — the
+/// subtitle is a qualifier on the title, and a qualifier set at the same size
+/// competes with what it qualifies.
+const SUBTITLE_FONT_SIZE: f64 = 13.0;
+/// Baseline y of the subtitle — directly under the title, and sharing its
+/// anchor, so the two read as one block.
+const SUBTITLE_BASELINE_Y: f64 = 38.0;
+/// x of the ROTATED y-axis title's baseline, measured from the canvas LEFT EDGE
+/// (Phase 878) — not from the autosized margin, so the title does not slide
+/// about as tick widths change. A rotated-by `-Y_AXIS_TITLE_DEGREES` label's
+/// ascenders extend LEFT of its baseline, which is why this sits near the outer
+/// edge of the reserved band rather than at it.
+const Y_AXIS_TITLE_OFFSET_X: f64 = 18.0;
+/// The MAGNITUDE of the y-axis title's rotation, in degrees (Phase 878).
+/// Emitted as `rotation = -Y_AXIS_TITLE_DEGREES`: rotation is clockwise (SVG's
+/// convention), so the negative angle reads BOTTOM-UP — the conventional
+/// treatment, and the same sign convention `VERTICAL_TILT_DEGREES` already uses.
+const Y_AXIS_TITLE_DEGREES: f64 = 90.0;
 /// The MAGNITUDE of the category-label tilt, in degrees. Tilt is the DEFAULT
 /// state — it is for LEGIBILITY, not a crowding fallback.
 const LABEL_TILT_DEGREES: f64 = 30.0;
@@ -785,14 +803,27 @@ pub fn lower_chart(
         x_field,
         y_fields,
         title,
+        &ChartTitles::default(),
         None,
         &ChartLowerStyle::default(),
         rows,
     )
 }
 
+/// The author's own axis names + subtitle (Phase 878) — all optional, all wire
+/// declarations. Grouped so the lowering's parameter list stays readable; the
+/// resolution (the capitalised-field-name fallback) happens inside the lowering,
+/// never here.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ChartTitles<'a> {
+    pub x_title: Option<&'a TextSource>,
+    pub y_title: Option<&'a TextSource>,
+    pub subtitle: Option<&'a TextSource>,
+}
+
 /// Lower under an explicit value-axis `Format` (a wire declaration) and an
-/// explicit style (a host choice) — Phase 876.
+/// explicit style (a host choice) — Phase 876; the Phase-878 axis names +
+/// subtitle ride alongside.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub fn lower_chart_with(
     kind: ChartKind,
@@ -800,6 +831,7 @@ pub fn lower_chart_with(
     x_field: &str,
     y_fields: &[String],
     title: Option<&TextSource>,
+    titles: &ChartTitles<'_>,
     value_format: Option<&Format>,
     style: &ChartLowerStyle,
     rows: &[LowerRow],
@@ -923,15 +955,74 @@ pub fn lower_chart_with(
             .fold(0.0f64, |acc, t| acc.max(text_width(tick_size, t)))
     };
 
+    // ── Axis names + subtitle (Phase 878) ────────────────────────────────────
+    //
+    // Resolved HERE, before any margin, because both margins have to reserve a
+    // line for text whose presence is decided by these three fields — the left
+    // margin for the rotated y-axis title, the top margin for the subtitle. The
+    // same dependency Phase 879 established when the bottom margin started
+    // reserving the x-axis title's line.
+    //
+    // An axis title is the author's own `TextSource` when declared, else the
+    // capitalised field name — which is exactly what the x axis has always
+    // drawn, now stated once and applied to both axes. `None` only where there
+    // is no honest fallback: an empty field name, or a y axis carrying no
+    // series at all.
+    let axis_title_of =
+        |declared: Option<&TextSource>, fallback_field: &str| -> Option<TextSource> {
+            match declared {
+                Some(t) => Some(t.clone()),
+                None if fallback_field.is_empty() => None,
+                None => Some(TextSource::Literal(capitalise(fallback_field))),
+            }
+        };
+
+    let x_title = axis_title_of(titles.x_title, x_field);
+
+    // The y fallback is the capitalised FIRST y-field. It is the honest answer
+    // to "what is on this axis", where the retired `"Value"` literal named
+    // neither the measure nor its unit — and it makes ONE rule cover both axes
+    // rather than a rule for x and a constant for y. The multi-series chart is
+    // the case it serves least well; there the legend already names every
+    // series, and an author plotting genuinely different measures should
+    // declare `yTitle`, which is precisely why the field exists.
+    let y_title = axis_title_of(titles.y_title, y_fields.first().map_or("", String::as_str));
+
+    // ── Top margin ──
+    // A subtitle takes one line under the visible title, and EVERYTHING below
+    // it in the top band moves down by exactly that line: the legend row, the
+    // display-unit slot, and the plot itself (so on the Pie arm the wedge
+    // centre moves too). Reserved only when a subtitle is present, so a chart
+    // without one keeps the pre-878 layout byte-for-byte.
+    let subtitle_band = if titles.subtitle.is_some() {
+        text_line_height(SUBTITLE_FONT_SIZE, TEXT_LINE_HEIGHT_FACTOR)
+    } else {
+        0.0
+    };
+    let margin_top = r2(MARGIN_TOP + subtitle_band);
+
     // ── Left margin ──
     // The truncation budget is derived from the CEILING — a constant — so the
     // truncation that feeds the margin never depends on the margin it decides.
     let left_ceiling = MARGIN_LEFT_MAX_SHARE * W;
-    let tick_text_budget = (left_ceiling - TICK_LABEL_GAP - AXIS_LABEL_PADDING).max(0.0);
+    // Phase 878 — the rotated y-axis title occupies one LINE of the left margin,
+    // outboard of the tick column. Only its line height (plus the padding beside
+    // it) is reserved here: the title is rotated, so its LENGTH runs vertically
+    // and is bounded against the plot height further down. That is what keeps
+    // this acyclic — exactly the shape Phase 879 gave the x-axis title's line in
+    // the bottom margin.
+    let y_title_band = if y_title.is_some() {
+        line_height + AXIS_LABEL_PADDING
+    } else {
+        0.0
+    };
+    let tick_text_budget =
+        (left_ceiling - TICK_LABEL_GAP - AXIS_LABEL_PADDING - y_title_band).max(0.0);
     let y_tick_label_text =
         |v: f64| -> String { truncate_to_width(tick_size, tick_text_budget, &y_tick_text(v)) };
     let tick_label_texts: Vec<String> = ticks.iter().map(|t| y_tick_label_text(*t)).collect();
-    let required_left = TICK_LABEL_GAP + widest_of(&tick_label_texts) + AXIS_LABEL_PADDING;
+    let required_left =
+        TICK_LABEL_GAP + widest_of(&tick_label_texts) + AXIS_LABEL_PADDING + y_title_band;
     let margin_left = r2(MARGIN_LEFT.max(left_ceiling.min(required_left)));
 
     let plot_x0 = margin_left;
@@ -1001,7 +1092,7 @@ pub fn lower_chart_with(
         + AXIS_TITLE_BOTTOM_OFFSET;
     let margin_bottom = r2(MARGIN_BOTTOM.max(bottom_ceiling.min(required_bottom)));
 
-    let plot_y0 = MARGIN_TOP;
+    let plot_y0 = margin_top;
     let plot_y1 = H - margin_bottom;
     let plot_h = plot_y1 - plot_y0;
 
@@ -1012,6 +1103,17 @@ pub fn lower_chart_with(
 
     let mut shapes: Vec<Shape> = Vec::new();
 
+    /// Bound a title to the extent it runs along. Only a `Literal` can be
+    /// truncated — the text behind a `Bound` or `I18n` arm is not known here —
+    /// and that is the honest boundary: those pass through and may overrun,
+    /// which is a visible fact rather than a silently wrong measurement.
+    fn bound_text(font_size: f64, extent: f64, t: &TextSource) -> TextSource {
+        match t {
+            TextSource::Literal(s) => TextSource::Literal(truncate_to_width(font_size, extent, s)),
+            other => other.clone(),
+        }
+    }
+
     // ── Visible title (a Label — bigger + emphasised) ──
     let push_title = |shapes: &mut Vec<Shape>| {
         if let Some(t) = title {
@@ -1020,6 +1122,29 @@ pub fn lower_chart_with(
                 y: 22.0,
                 text: t.clone(),
                 style: text_style(None, TextAnchor::Start, title_size, Emphasis::Loud),
+            });
+        }
+    };
+
+    // ── Subtitle (Phase 878) — the muted line under the title ──
+    //
+    // MUTED (label-role opacity, not full-strength ink) and SMALLER than the
+    // title, sharing its x and its anchor, so the pair reads as one block and
+    // the subtitle is unmistakably subordinate. It draws independently of the
+    // title: an author who sets one and not the other gets what they asked for,
+    // and the top margin has already reserved the line either way.
+    let push_subtitle = |shapes: &mut Vec<Shape>| {
+        if let Some(s) = titles.subtitle {
+            shapes.push(Shape::Label {
+                x: r2(plot_x0),
+                y: SUBTITLE_BASELINE_Y,
+                text: bound_text(SUBTITLE_FONT_SIZE, plot_w, s),
+                style: text_style(
+                    Some(LABEL_OPACITY),
+                    TextAnchor::Start,
+                    SUBTITLE_FONT_SIZE,
+                    Emphasis::Normal,
+                ),
             });
         }
     };
@@ -1163,6 +1288,7 @@ pub fn lower_chart_with(
             }
         }
         push_title(&mut shapes);
+        push_subtitle(&mut shapes);
         return DrawingSpec {
             view_box: ViewBox {
                 min_x: 0.0,
@@ -1337,25 +1463,77 @@ pub fn lower_chart_with(
         }
     }
 
-    // ── Axis titles (a name on both axes) ──
-    shapes.push(Shape::Label {
-        x: r2((plot_x0 + plot_x1) / 2.0),
-        y: r2(H - AXIS_TITLE_BOTTOM_OFFSET),
-        text: TextSource::Literal(capitalise(x_field)),
-        style: text_style(None, TextAnchor::Middle, tick_size, Emphasis::Normal),
-    });
-    shapes.push(Shape::Label {
-        x: r2(8.0),
-        y: r2(plot_y0 - 12.0),
-        // The top-left slot states the value axis's DISPLAY UNIT once when
-        // scaling applies, and otherwise keeps the horizontal "Value" hint.
-        text: TextSource::Literal(if y_display_unit.label.is_empty() {
-            "Value".to_string()
-        } else {
-            y_display_unit.label.clone()
-        }),
-        style: text_style(None, TextAnchor::Start, tick_size, Emphasis::Normal),
-    });
+    // ── Axis titles + the display-unit slot (Phase 878) ──
+    //
+    // Three rules, and together they retire the hardcoded `"Value"`:
+    //
+    //   1. NAMES. The x title stays centred under the tick band (where it has
+    //      always been); the y title is ROTATED by `-Y_AXIS_TITLE_DEGREES` in
+    //      the left margin, centred on the plot, reading BOTTOM-UP — the
+    //      conventional treatment, and the same sign convention Phase 879's
+    //      vertical category labels already use. Each falls back to its
+    //      capitalised field name, so an axis is never nameless.
+    //
+    //   2. UNITS KEEP THEIR OWN SLOT. The top-left label states the Phase-876
+    //      display unit and NOTHING else: with no scaling in play it is not
+    //      drawn at all, where it previously fell back to the literal `"Value"`
+    //      — a word naming neither the measure nor its unit, printed on every
+    //      chart in the corpus. Composing the unit INTO the rotated title
+    //      ("Revenue (Millions of £)") was the alternative and was rejected:
+    //      that concatenation is only expressible when the title is a
+    //      `Literal`, so a bound or i18n title would silently fall back to a
+    //      different layout — and a layout rule with a shape that depends on
+    //      which `TextSource` arm an author reached for is not a rule. Two
+    //      slots, always the same two, is what stays total.
+    //
+    //   3. DEDUPE. An explicit `subtitle` SUPPRESSES the unit slot. The
+    //      subtitle is the author's own place to say "£m", and the machine
+    //      restating it two lines away is exactly the clutter this rule exists
+    //      to prevent — so the author's sentence wins. PRESENCE is the whole
+    //      test: no string comparison, which is what keeps the rule total over
+    //      every `TextSource` arm and identical on every host.
+    //
+    // A SELF-EVIDENT DATE AXIS SUPPRESSES ITS DEFAULT TITLE — an axis reading
+    // "Jan Feb Mar" does not need the word "Month" beneath it. The rule is
+    // recorded here and is WIRED when the temporal axis lands: nothing in the
+    // lowering can currently tell a date column from a string one, and
+    // inferring it from the label text would be a guess dressed as a rule. It
+    // will apply to the FALLBACK only — an explicit `xTitle` is the author
+    // overriding the default, and always draws.
+    if let Some(t) = &x_title {
+        shapes.push(Shape::Label {
+            x: r2((plot_x0 + plot_x1) / 2.0),
+            y: r2(H - AXIS_TITLE_BOTTOM_OFFSET),
+            text: bound_text(tick_size, plot_w, t),
+            style: text_style(None, TextAnchor::Middle, tick_size, Emphasis::Normal),
+        });
+    }
+    if let Some(t) = &y_title {
+        // `Middle`-anchored at the plot's vertical centre: the anchor is the
+        // pivot, so the rotated text stays centred on the axis it names,
+        // whatever its length. The x is measured from the CANVAS edge, not the
+        // autosized margin, so the title does not slide as tick widths change.
+        shapes.push(Shape::Label {
+            x: r2(Y_AXIS_TITLE_OFFSET_X),
+            y: r2((plot_y0 + plot_y1) / 2.0),
+            text: bound_text(tick_size, plot_h, t),
+            style: text_style_rotated(
+                None,
+                TextAnchor::Middle,
+                tick_size,
+                Emphasis::Normal,
+                r2(-Y_AXIS_TITLE_DEGREES),
+            ),
+        });
+    }
+    if !y_display_unit.label.is_empty() && titles.subtitle.is_none() {
+        shapes.push(Shape::Label {
+            x: r2(8.0),
+            y: r2(plot_y0 - 12.0),
+            text: TextSource::Literal(y_display_unit.label.clone()),
+            style: text_style(None, TextAnchor::Start, tick_size, Emphasis::Normal),
+        });
+    }
 
     // ── Series geometry ──
     match kind {
@@ -1543,7 +1721,11 @@ pub fn lower_chart_with(
             lx_acc += LEGEND_LABEL_OFFSET_X + text_width(tick_size, yf) + LEGEND_ENTRY_GAP;
             shapes.push(Shape::Rectangle {
                 x: lx,
-                y: 34.0,
+                // Phase 878 — the legend row sits BELOW the subtitle, so it
+                // moves down by the line the subtitle took. `subtitle_band` is
+                // 0 without one, leaving the pre-878 constants exactly where
+                // they were.
+                y: r2(34.0 + subtitle_band),
                 width: 10.0,
                 height: 10.0,
                 corner_radius: Some(2.0),
@@ -1551,7 +1733,7 @@ pub fn lower_chart_with(
             });
             shapes.push(Shape::Label {
                 x: r2(lx + LEGEND_LABEL_OFFSET_X),
-                y: 43.0,
+                y: r2(43.0 + subtitle_band),
                 text: TextSource::Literal(yf.clone()),
                 style: text_style(
                     Some(LABEL_OPACITY),
@@ -1564,6 +1746,7 @@ pub fn lower_chart_with(
     }
 
     push_title(&mut shapes);
+    push_subtitle(&mut shapes);
 
     DrawingSpec {
         view_box: ViewBox {

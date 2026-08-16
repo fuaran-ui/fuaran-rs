@@ -2597,6 +2597,13 @@ fn render_chart(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &ChartSpec) -> Stri
         &spec.x_field,
         &spec.y_fields,
         spec.title.as_ref(),
+        // Phase 878 — the author's axis names + subtitle travel with the spec;
+        // the field-name fallback is the lowering's, not the renderer's.
+        &super::chart_lowering::ChartTitles {
+            x_title: spec.x_title.as_ref(),
+            y_title: spec.y_title.as_ref(),
+            subtitle: spec.subtitle.as_ref(),
+        },
         spec.value_format.as_ref(),
         &super::chart_lowering::ChartLowerStyle::default(),
         &lowered_rows,

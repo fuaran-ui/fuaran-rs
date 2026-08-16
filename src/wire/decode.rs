@@ -3074,6 +3074,11 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
         None => None,
         Some(j) => Some(decode_format(&format!("{path}.valueFormat"), j)?),
     };
+    // Phase 878 — the axis names + the subtitle. All optional; absent is the
+    // ordinary shape, and the lowering supplies the field-name fallback.
+    let x_title = opt_text_source(path, fields, "xTitle")?;
+    let y_title = opt_text_source(path, fields, "yTitle")?;
+    let subtitle = opt_text_source(path, fields, "subtitle")?;
     Ok(ChartSpec {
         kind,
         source,
@@ -3082,6 +3087,9 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
         y_fields,
         title,
         value_format,
+        x_title,
+        y_title,
+        subtitle,
         on_point_click: opt_closure(fields, "onPointClick"),
     })
 }

@@ -1786,6 +1786,17 @@ fn chart_spec(spec: &ChartSpec) -> String {
     if let Some(vf) = &spec.value_format {
         fields.push(field("valueFormat", format_intent(vf)));
     }
+    // Phase 878 — axis names + subtitle, each omitted when absent so every
+    // pre-878 chart stays byte-identical.
+    if let Some(x_title) = &spec.x_title {
+        fields.push(field("xTitle", text_source(x_title)));
+    }
+    if let Some(y_title) = &spec.y_title {
+        fields.push(field("yTitle", text_source(y_title)));
+    }
+    if let Some(subtitle) = &spec.subtitle {
+        fields.push(field("subtitle", text_source(subtitle)));
+    }
     if spec.on_point_click.is_some() {
         fields.push(field("onPointClick", CLOSURE.to_string()));
     }

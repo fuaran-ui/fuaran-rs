@@ -965,6 +965,20 @@ pub struct ChartSpec {
     /// Absent means no declared meaning — the lowering still applies its
     /// canonical default rendering.
     pub value_format: Option<Format>,
+    /// Phase 878 — the x axis's NAME. On the same side of the semantic line as
+    /// `title`: what an axis is CALLED is the author's meaning, where and how it
+    /// is drawn stays the host's. Absent falls back to the capitalised field
+    /// name, so an axis is never nameless.
+    pub x_title: Option<TextSource>,
+    /// Phase 878 — the value axis's NAME. Absent falls back to the capitalised
+    /// FIRST y-field; with no y-fields at all there is no honest fallback and no
+    /// y title draws.
+    pub y_title: Option<TextSource>,
+    /// Phase 878 — a muted qualifier line under the visible `title`. Its
+    /// PRESENCE also suppresses the display-unit slot: the subtitle is the
+    /// author's own place to state a unit, and the machine restating it two
+    /// lines away is the clutter the rule exists to prevent.
+    pub subtitle: Option<TextSource>,
     pub on_point_click: Option<Closure>,
 }
 
