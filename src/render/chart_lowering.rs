@@ -29,6 +29,15 @@
 //! `Scatter` / `Pie`) is ignored — the flag only changes `Bar` / `Area`
 //! geometry.
 //!
+//! **Legend placement (Phase 880).** ONE legend with four placements
+//! (`legendPosition`: `Top | Right | Bottom | None`), the default `Right` — a
+//! vertical column whose width is the MAX of its entries (bounded, truncated)
+//! rather than a band whose width is their SUM (unbounded, and silently off the
+//! canvas past enough entries). The cartesian arms legend their SERIES and only
+//! when there is more than one; the PIE arm legends its CATEGORIES with
+//! `name (NN%)` labels, which is why a single-series pie legends and a
+//! single-series bar does not. Both arms now draw through the same emitter.
+//!
 //! **Keyed mark identity (Phase 642).** Every data-bearing shape's style is
 //! stamped with a derivation-based `markId` — `series-field|category-key` on a
 //! per-datum mark, the series field alone on a series-level mark (Line/Area) —
@@ -37,8 +46,8 @@
 
 use crate::canonical::format_number;
 use crate::wire::{
-    Binding, ChartKind, CurveCommand, DrawPoint, DrawStyle, DrawingSpec, Emphasis, Format, Shape,
-    StaticValue, TextAnchor, TextSource, ViewBox,
+    Binding, ChartKind, ChartLegendPosition, CurveCommand, DrawPoint, DrawStyle, DrawingSpec,
+    Emphasis, Format, Shape, StaticValue, TextAnchor, TextSource, ViewBox,
 };
 
 // ─── Layout constants (the fixed canonical drawing space) ────────────────────
@@ -97,11 +106,45 @@ const LABEL_TILT_DEGREES: f64 = 30.0;
 /// The vertical arm of the escalation: one line height along the axis whatever
 /// the label's length, so it packs at any category count.
 const VERTICAL_TILT_DEGREES: f64 = 90.0;
+// ── Legend geometry (Phase 880 — ONE legend, four placements) ───────────────
+//
+// Both shapes are here because both are reachable from any arm: a horizontal
+// BAND (the `Top` / `Bottom` arms — Phase 879's per-entry pitch) and a vertical
+// COLUMN (`Right`, the default — one row per entry, the plot shrinking by the
+// column's width). The pie arm draws through exactly these constants too since
+// Phase 880; its own inlined legend numbers are retired into them at their own
+// values, so no pie geometry was restyled by the unification.
 /// Gap from a legend swatch's left edge to its label's left edge.
 const LEGEND_LABEL_OFFSET_X: f64 = 15.0;
-/// Horizontal padding after a legend entry's label, before the next entry's
-/// swatch (Phase 879). The pitch itself is per-entry, not a fixed stride.
+/// BAND arms only. Horizontal padding after a legend entry's label, before the
+/// next entry's swatch (Phase 879). The pitch itself is per-entry, not a fixed
+/// stride.
 const LEGEND_ENTRY_GAP: f64 = 24.0;
+/// Side length of a (square) legend swatch.
+const LEGEND_SWATCH_SIZE: f64 = 10.0;
+/// Corner radius of a legend swatch.
+const LEGEND_SWATCH_CORNER_RADIUS: f64 = 2.0;
+/// BAND arms only. Top y of a legend swatch in the TOP band, measured from the
+/// canvas top. The `Bottom` band mirrors from the canvas bottom via
+/// `LEGEND_LABEL_BASELINE_DY`, so it needs no second constant.
+const LEGEND_SWATCH_Y: f64 = 34.0;
+/// BAND arms only. Baseline y of a legend label in the TOP band.
+const LEGEND_LABEL_BASELINE_Y: f64 = 43.0;
+/// COLUMN arms only. Vertical pitch between legend rows.
+const LEGEND_ROW_PITCH_Y: f64 = 20.0;
+/// COLUMN arms (and the `Bottom` band). Baseline nudge from a legend row's TOP
+/// to its label's baseline — the relation that lets a row be placed by its top
+/// edge and still read as one line.
+const LEGEND_LABEL_BASELINE_DY: f64 = 9.0;
+/// COLUMN arms only. Gap between the plot's edge and the legend column's
+/// swatches. The column's own trailing clearance to the canvas edge is
+/// `MARGIN_RIGHT`, which is what it always was.
+const LEGEND_COLUMN_GAP: f64 = 16.0;
+/// Ceiling on the legend column's width, as a share of `W`. Same posture as the
+/// margin autosizes: a pathological series name is truncated with the
+/// deterministic ellipsis rather than allowed to eat the plot. The column is
+/// otherwise sized from the widest name.
+const LEGEND_COLUMN_MAX_SHARE: f64 = 0.3;
 
 /// A fixed, deterministic categorical palette (series index → colour).
 ///
@@ -777,6 +820,11 @@ fn capitalise(sr: &str) -> String {
 pub struct ChartLowerStyle {
     pub axis_unit_mode: ChartAxisUnitMode,
     pub display_unit_min_exponent: i32,
+    /// Phase 880 — which edge the legend occupies when the `ChartSpec` does not
+    /// say: the DEFAULT, not the answer. An explicit
+    /// [`ChartTitles::legend_position`] beats it, because WHERE the legend goes
+    /// is the author's meaning where the geometry realising it is the host's.
+    pub legend_position: ChartLegendPosition,
 }
 
 impl Default for ChartLowerStyle {
@@ -784,6 +832,15 @@ impl Default for ChartLowerStyle {
         Self {
             axis_unit_mode: ChartAxisUnitMode::default(),
             display_unit_min_exponent: DISPLAY_UNIT_MIN_EXPONENT,
+            // The shipped default is the vertical RIGHT column (operator decision
+            // 2026-08-16): a band's width is the SUM of its entries and runs off a
+            // 640 px canvas once the names are long enough or numerous enough,
+            // silently and with no ellipsis; a column's width is their MAX,
+            // bounded by `LEGEND_COLUMN_MAX_SHARE` and truncated at it, and its
+            // height is one pitch per entry into 400 px. Neither term grows
+            // without limit, so the eight-slot palette legends itself by
+            // construction rather than by luck of naming.
+            legend_position: ChartLegendPosition::Right,
         }
     }
 }
@@ -810,15 +867,21 @@ pub fn lower_chart(
     )
 }
 
-/// The author's own axis names + subtitle (Phase 878) — all optional, all wire
-/// declarations. Grouped so the lowering's parameter list stays readable; the
-/// resolution (the capitalised-field-name fallback) happens inside the lowering,
-/// never here.
+/// The author's own optional `ChartSpec` declarations beyond the main title —
+/// the Phase-878 axis names + subtitle, and the Phase-880 legend placement. All
+/// optional, all WIRE declarations, grouped so the lowering's parameter list
+/// stays readable; every resolution (the capitalised-field-name fallback, the
+/// style default behind an absent placement) happens inside the lowering, never
+/// here.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ChartTitles<'a> {
     pub x_title: Option<&'a TextSource>,
     pub y_title: Option<&'a TextSource>,
     pub subtitle: Option<&'a TextSource>,
+    /// Phase 880 — which edge the legend occupies. Absent means the host style's
+    /// default ([`ChartLowerStyle::legend_position`], which ships as `Right`),
+    /// NOT "no legend": suppression is the explicit `ChartLegendPosition::None`.
+    pub legend_position: Option<ChartLegendPosition>,
 }
 
 /// Lower under an explicit value-axis `Format` (a wire declaration) and an
@@ -955,6 +1018,107 @@ pub fn lower_chart_with(
             .fold(0.0f64, |acc, t| acc.max(text_width(tick_size, t)))
     };
 
+    // ── Legend placement (Phase 880) ─────────────────────────────────────────
+    //
+    // ONE legend with four placements, resolved HERE — above the margins,
+    // because a `Right` legend's column width is an INPUT to the plot rectangle
+    // and a `Bottom` legend's band is an input to the bottom margin. The same
+    // acyclicity discipline the text metrics established: everything the layout
+    // reads is computed before the layout that reads it.
+    //
+    // The pie arm's guard + shares are resolved here for the same reason: its
+    // legend labels carry them ("name (NN%)"), so they are layout input, not
+    // output.
+    let is_pie = matches!(kind, ChartKind::Pie);
+    let pie_values: &[f64] = if is_pie && m == 1 { &series[0] } else { &[] };
+    let pie_total: f64 = pie_values.iter().sum();
+    // The Phase-638 bounded-v1 guard, unchanged and merely lifted: exactly one
+    // series, no negative value, a positive total. A refused pie draws no
+    // geometry AND no legend — a legend for a picture that was refused would be
+    // a claim about data the drawing declined to show.
+    let pie_refused = is_pie && (m != 1 || pie_values.iter().any(|&v| v < 0.0) || pie_total <= 0.0);
+    let pie_fractions: Vec<f64> = if is_pie && !pie_refused {
+        pie_values.iter().map(|v| v / pie_total).collect()
+    } else {
+        vec![]
+    };
+
+    // The legend's rows in draw order — `(colour, label)`. TWO sources, ONE
+    // shape, which is what Phase 880 unified: the cartesian arms legend their
+    // SERIES and only when there is more than one (with a single series the
+    // title already names it — the pre-880 rule, preserved exactly), while the
+    // pie arm legends its CATEGORIES, which is why a single-series pie legends
+    // and a single-series bar does not. Before this phase these were two
+    // separate emitters with two separate constant sets, and only one of them
+    // could have honoured a position.
+    let legend_entries: Vec<(&'static str, String)> = if is_pie {
+        pie_fractions
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                // Routed through the canonical formatter (Phase 876) — one
+                // rounding + rendering rule for every number this module prints.
+                // A share is a whole percent, so the shipped `NN%` shape is
+                // unchanged.
+                let pct = format_value(None, 1.0, false, 1.0, f * 100.0);
+                (colour_for(i), format!("{} ({pct}%)", categories[i]))
+            })
+            .collect()
+    } else if m > 1 {
+        (0..m)
+            .map(|j| (colour_for(j), y_fields[j].clone()))
+            .collect()
+    } else {
+        vec![]
+    };
+
+    // The placement actually used: the author's explicit `ChartSpec` value where
+    // there is one, else the host style's default. With no entries at all the
+    // answer is `None` whatever either of them said — so an explicit position on
+    // a single-series chart still draws nothing and, more to the point, reserves
+    // no space.
+    let legend_pos = if legend_entries.is_empty() {
+        ChartLegendPosition::None
+    } else {
+        titles.legend_position.unwrap_or(style.legend_position)
+    };
+
+    // COLUMN arms: the widest label decides the column, bounded by
+    // `LEGEND_COLUMN_MAX_SHARE` of the canvas and truncated beyond it — the
+    // margin autosizes' posture, adopted for the same reason. A name with no
+    // bound is a data problem the layout should report by truncating, not absorb
+    // by shrinking the picture.
+    let legend_name_budget =
+        (LEGEND_COLUMN_MAX_SHARE * W - LEGEND_LABEL_OFFSET_X - LEGEND_COLUMN_GAP).max(0.0);
+    let legend_texts: Vec<String> = legend_entries
+        .iter()
+        .map(|(_, t)| match legend_pos {
+            ChartLegendPosition::Right => truncate_to_width(tick_size, legend_name_budget, t),
+            // The band arms pack at each entry's natural width and still run off
+            // the right edge past enough entries. Truncating there would not fix
+            // it (the overflow is in the SUM, not in one name), so the band is
+            // left as Phase 879 shipped it and the default moved.
+            _ => t.clone(),
+        })
+        .collect();
+
+    let legend_column_w = match legend_pos {
+        ChartLegendPosition::Right => {
+            r2(LEGEND_COLUMN_GAP + LEGEND_LABEL_OFFSET_X + widest_of(&legend_texts))
+        }
+        _ => 0.0,
+    };
+
+    // The `Bottom` band's height — one line plus its padding, reserved BELOW
+    // everything the bottom margin's autosize already accounts for (the x-axis
+    // title's line included), so the two computations never contend for the same
+    // pixels. The exact mirror of `subtitle_band` at the top: one term that
+    // shifts the whole band, present only when the arm is.
+    let legend_band_h = match legend_pos {
+        ChartLegendPosition::Bottom => r2(line_height + AXIS_LABEL_PADDING),
+        _ => 0.0,
+    };
+
     // ── Axis names + subtitle (Phase 878) ────────────────────────────────────
     //
     // Resolved HERE, before any margin, because both margins have to reserve a
@@ -1026,7 +1190,12 @@ pub fn lower_chart_with(
     let margin_left = r2(MARGIN_LEFT.max(left_ceiling.min(required_left)));
 
     let plot_x0 = margin_left;
-    let plot_x1 = W - MARGIN_RIGHT;
+    // Phase 880 — a `Right` legend takes its column off the PLOT, not off the
+    // right margin: the margin stays the clearance between the legend's widest
+    // label and the canvas edge, exactly as it was the clearance to the plot
+    // before. Every other placement leaves `legend_column_w = 0`, so the pre-880
+    // rectangle is recovered term-for-term.
+    let plot_x1 = W - MARGIN_RIGHT - legend_column_w;
     let plot_w = plot_x1 - plot_x0;
 
     let band_w = if n > 0 { plot_w / n as f64 } else { plot_w };
@@ -1090,7 +1259,11 @@ pub fn lower_chart_with(
         + AXIS_LABEL_PADDING
         + line_height
         + AXIS_TITLE_BOTTOM_OFFSET;
-    let margin_bottom = r2(MARGIN_BOTTOM.max(bottom_ceiling.min(required_bottom)));
+    // Phase 880 — the `Bottom` legend's band is ADDED to the autosized margin
+    // rather than competing inside its ceiling: the ceiling exists to stop LABELS
+    // eating the plot, and the legend is not a label. So the picture shrinks by
+    // the band, and the tilt escalation still sees the budget it had.
+    let margin_bottom = r2(legend_band_h + MARGIN_BOTTOM.max(bottom_ceiling.min(required_bottom)));
 
     let plot_y0 = margin_top;
     let plot_y1 = H - margin_bottom;
@@ -1149,6 +1322,98 @@ pub fn lower_chart_with(
         }
     };
 
+    // ── Legend (Phase 880) — one entry list, four placements ──
+    //
+    // COLUMN (`Right`, the shipped default): one row per entry, each a swatch and
+    // its label, the plot already shrunk by the column above. Rows are
+    // TOP-ALIGNED with the plot rather than vertically centred, deliberately:
+    // centring makes row j's y a function of the entry COUNT, so adding a series
+    // moves every row that was already there — chrome sliding under a data
+    // refresh is precisely what this module's mark-identity rule exists to avoid,
+    // and there is no reason to reintroduce it for the legend. Reading order is
+    // also series order, which is the order the rows are in.
+    //
+    // This is what structurally retires the overflow. A BAND's width is the SUM of
+    // its entries, so it runs off the canvas once the names are long enough or
+    // numerous enough, silently and with no ellipsis. A COLUMN's width is the MAX
+    // of its entries — bounded by `LEGEND_COLUMN_MAX_SHARE` and truncated at it —
+    // and its height is one pitch per entry into 400 px of canvas. Neither term
+    // grows without limit, so the eight-slot palette's eight-series chart legends
+    // itself by construction rather than by luck of naming.
+    //
+    // BAND (`Top` / `Bottom`): Phase 879's horizontal row, entries laid out
+    // cumulatively from the plot's left edge at each entry's own natural width —
+    // unchanged for `Top`, which is the pre-880 shape every pre-880 golden pins.
+    // It still runs off the right edge past enough entries; that survives only on
+    // the arms an author asks for explicitly.
+    let push_legend = |shapes: &mut Vec<Shape>| {
+        // ONE row emitter for all four placements: a swatch at `x`/`swatch_y` and
+        // its label one `LEGEND_LABEL_OFFSET_X` to the right on `baseline_y`.
+        let legend_row =
+            |shapes: &mut Vec<Shape>, x: f64, swatch_y: f64, baseline_y: f64, j: usize| {
+                shapes.push(Shape::Rectangle {
+                    x: r2(x),
+                    y: r2(swatch_y),
+                    width: LEGEND_SWATCH_SIZE,
+                    height: LEGEND_SWATCH_SIZE,
+                    corner_radius: Some(LEGEND_SWATCH_CORNER_RADIUS),
+                    style: style_fill(legend_entries[j].0),
+                });
+                shapes.push(Shape::Label {
+                    x: r2(x + LEGEND_LABEL_OFFSET_X),
+                    y: r2(baseline_y),
+                    text: TextSource::Literal(legend_texts[j].clone()),
+                    style: text_style(
+                        Some(LABEL_OPACITY),
+                        TextAnchor::Start,
+                        tick_size,
+                        Emphasis::Normal,
+                    ),
+                });
+            };
+        match legend_pos {
+            ChartLegendPosition::None => {}
+            ChartLegendPosition::Right => {
+                let swatch_x = plot_x1 + LEGEND_COLUMN_GAP;
+                for j in 0..legend_entries.len() {
+                    let row_top = plot_y0 + LEGEND_ROW_PITCH_Y * j as f64;
+                    legend_row(
+                        shapes,
+                        swatch_x,
+                        row_top,
+                        row_top + LEGEND_LABEL_BASELINE_DY,
+                        j,
+                    );
+                }
+            }
+            ChartLegendPosition::Top | ChartLegendPosition::Bottom => {
+                // Phase 878 — the TOP band sits BELOW the subtitle, so it moves
+                // down by the line the subtitle took; `subtitle_band` is 0 without
+                // one, leaving the pre-878 constants exactly where they were. The
+                // BOTTOM band mirrors from the canvas bottom off the band the
+                // margin already reserved, so it needs no constants of its own.
+                let (swatch_y, baseline_y) = match legend_pos {
+                    ChartLegendPosition::Bottom => {
+                        let row_top = H - legend_band_h;
+                        (row_top, row_top + LEGEND_LABEL_BASELINE_DY)
+                    }
+                    _ => (
+                        LEGEND_SWATCH_Y + subtitle_band,
+                        LEGEND_LABEL_BASELINE_Y + subtitle_band,
+                    ),
+                };
+                // Prefix sums — entry j starts where every earlier entry ended.
+                let mut lx_acc = plot_x0;
+                for (j, text) in legend_texts.iter().enumerate() {
+                    let lx = r2(lx_acc);
+                    lx_acc +=
+                        LEGEND_LABEL_OFFSET_X + text_width(tick_size, text) + LEGEND_ENTRY_GAP;
+                    legend_row(shapes, lx, swatch_y, baseline_y, j);
+                }
+            }
+        }
+    };
+
     // ── Pie (Phase 638) — the polar arm: no cartesian chrome ──
     //
     // Bounded v1: exactly ONE series (multi-series pie is a grounded-validation
@@ -1161,11 +1426,15 @@ pub fn lower_chart_with(
     // 100% category degenerates to a `Circle`. Category share reads in the
     // legend ("name (NN%)") — outside labels with leader lines are a later
     // variant.
-    if matches!(kind, ChartKind::Pie) {
-        let values: &[f64] = if m == 1 { &series[0] } else { &[] };
-        let refused = m != 1 || values.iter().any(|&v| v < 0.0);
-        let total: f64 = values.iter().sum();
-        if !refused && total > 0.0 {
+    //
+    // Phase 880 — this emits WEDGES ONLY. The pie's legend was the vertical
+    // right-hand column the cartesian arms have now converged on, so it is
+    // emitted by the shared `push_legend` (from the shared `legend_entries`,
+    // which carry the shares) and honours the placement like any other arm. The
+    // guard + the shares themselves were lifted above the margins, because the
+    // legend's width is layout input.
+    if is_pie {
+        if !pie_refused {
             let cx = r2((plot_x0 + plot_x1) / 2.0);
             let cy = r2((plot_y0 + plot_y1) / 2.0);
             let radius = 130.0;
@@ -1202,12 +1471,11 @@ pub fn lower_chart_with(
                     .collect()
             };
 
-            let fractions: Vec<f64> = values.iter().map(|v| v / total).collect();
             let starts: Vec<f64> = {
                 let mut acc = 0.0;
-                let mut out = Vec::with_capacity(fractions.len() + 1);
+                let mut out = Vec::with_capacity(pie_fractions.len() + 1);
                 out.push(0.0);
-                for f in &fractions {
+                for f in &pie_fractions {
                     acc += f;
                     out.push(acc);
                 }
@@ -1222,7 +1490,7 @@ pub fn lower_chart_with(
             let half_gap = WEDGE_GAP_DEGREES * std::f64::consts::PI / 360.0;
 
             let yf = &y_fields[0];
-            for (i, &f) in fractions.iter().enumerate() {
+            for (i, &f) in pie_fractions.iter().enumerate() {
                 if f > 0.0 {
                     let mark_style = with_mark(yf, categories[i], style_fill(colour_for(i)));
                     if f >= 1.0 - 1e-9 {
@@ -1256,37 +1524,11 @@ pub fn lower_chart_with(
                     }
                 }
             }
-
-            // Vertical category legend on the right — categories take the
-            // palette roles a cartesian chart gives its series.
-            for i in 0..n {
-                let ly = 70.0 + 20.0 * i as f64;
-                shapes.push(Shape::Rectangle {
-                    x: r2(W - 168.0),
-                    y: r2(ly),
-                    width: 10.0,
-                    height: 10.0,
-                    corner_radius: Some(2.0),
-                    style: style_fill(colour_for(i)),
-                });
-                // Routed through the canonical formatter (Phase 876) — one
-                // rounding + rendering rule for every number this module
-                // prints. A share is a whole percent here, so the shipped
-                // `NN%` shape is unchanged.
-                let pct = format_value(None, 1.0, false, 1.0, fractions[i] * 100.0);
-                shapes.push(Shape::Label {
-                    x: r2(W - 153.0),
-                    y: r2(ly + 9.0),
-                    text: TextSource::Literal(format!("{} ({pct}%)", categories[i])),
-                    style: text_style(
-                        Some(LABEL_OPACITY),
-                        TextAnchor::Start,
-                        tick_size,
-                        Emphasis::Normal,
-                    ),
-                });
-            }
         }
+        // Painter's order on the polar arm since Phase 880: wedges, then the
+        // shared legend, then the titles — the same slot the legend takes on
+        // every cartesian arm.
+        push_legend(&mut shapes);
         push_title(&mut shapes);
         push_subtitle(&mut shapes);
         return DrawingSpec {
@@ -1503,7 +1745,10 @@ pub fn lower_chart_with(
     if let Some(t) = &x_title {
         shapes.push(Shape::Label {
             x: r2((plot_x0 + plot_x1) / 2.0),
-            y: r2(H - AXIS_TITLE_BOTTOM_OFFSET),
+            // Phase 880 — the x title rides ABOVE a `Bottom` legend band, keeping
+            // its own inset from whatever is beneath it. `legend_band_h` is 0 on
+            // every other arm, so the pre-880 baseline is unchanged.
+            y: r2(H - legend_band_h - AXIS_TITLE_BOTTOM_OFFSET),
             text: bound_text(tick_size, plot_w, t),
             style: text_style(None, TextAnchor::Middle, tick_size, Emphasis::Normal),
         });
@@ -1705,45 +1950,8 @@ pub fn lower_chart_with(
         ChartKind::Pie | ChartKind::Heatmap => {}
     }
 
-    // ── Legend (only when >1 series) — a swatch + series name per series ──
-    //
-    // The pitch is PER ENTRY since Phase 879: an entry occupies its
-    // swatch-to-label offset, its own measured name width, and the inter-entry
-    // gap, so entries lay out cumulatively rather than on a fixed stride. A long
-    // series name now pushes its neighbour along instead of being overwritten by
-    // it. Legend POSITION and OVERFLOW are deliberately unchanged — they are one
-    // problem and land together in a later phase.
-    if m > 1 {
-        let mut lx_acc = plot_x0;
-        for (j, yf) in y_fields.iter().enumerate() {
-            let colour = colour_for(j);
-            let lx = r2(lx_acc);
-            lx_acc += LEGEND_LABEL_OFFSET_X + text_width(tick_size, yf) + LEGEND_ENTRY_GAP;
-            shapes.push(Shape::Rectangle {
-                x: lx,
-                // Phase 878 — the legend row sits BELOW the subtitle, so it
-                // moves down by the line the subtitle took. `subtitle_band` is
-                // 0 without one, leaving the pre-878 constants exactly where
-                // they were.
-                y: r2(34.0 + subtitle_band),
-                width: 10.0,
-                height: 10.0,
-                corner_radius: Some(2.0),
-                style: style_fill(colour),
-            });
-            shapes.push(Shape::Label {
-                x: r2(lx + LEGEND_LABEL_OFFSET_X),
-                y: r2(43.0 + subtitle_band),
-                text: TextSource::Literal(yf.clone()),
-                style: text_style(
-                    Some(LABEL_OPACITY),
-                    TextAnchor::Start,
-                    tick_size,
-                    Emphasis::Normal,
-                ),
-            });
-        }
-    }
+    // ── Legend (Phase 880) — the shared emitter, in the slot it always had ──
+    push_legend(&mut shapes);
 
     push_title(&mut shapes);
     push_subtitle(&mut shapes);

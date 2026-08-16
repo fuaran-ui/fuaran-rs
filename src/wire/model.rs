@@ -68,6 +68,13 @@ bare_enum!(TextAnchor { Start => "Start", Middle => "Middle", End => "End" });
 bare_enum!(StyleRole { None => "None", Eyebrow => "Eyebrow", Data => "Data", Lede => "Lede", Caption => "Caption" });
 bare_enum!(FontVoice { Default => "Default", Display => "Display", Structural => "Structural" });
 bare_enum!(ChartKind { Line => "Line", Bar => "Bar", Area => "Area", Pie => "Pie", Scatter => "Scatter", Heatmap => "Heatmap" });
+// Phase 880 — which edge the chart's legend occupies, or `None`, which suppresses
+// it entirely. A WIRE vocabulary on the same side of the D8 line as `title`: WHERE
+// an author wants the legend is their meaning, where the geometry that puts it
+// there (column widths, pitches, how the plot shrinks) stays the host's, in the
+// lowering's `ChartLowerStyle`. Absent means "the host default" (`Right`), NOT "no
+// legend" — suppression is the explicit `None`.
+bare_enum!(ChartLegendPosition { Top => "Top", Right => "Right", Bottom => "Bottom", None => "None" });
 bare_enum!(ImageVariant { Default => "Default", Avatar => "Avatar", Rounded => "Rounded" });
 // Anti-scraper render strategy for a `Link` — `email` marks a `mailto:` link
 // whose address must not appear in plaintext in emitted markup (the renderers
@@ -979,6 +986,16 @@ pub struct ChartSpec {
     /// author's own place to state a unit, and the machine restating it two
     /// lines away is the clutter the rule exists to prevent.
     pub subtitle: Option<TextSource>,
+    /// Phase 880 — WHERE the legend sits, and whether it sits anywhere at all.
+    /// Semantic for the same reason the titles above are (D8): the edge an author
+    /// wants the legend on is their meaning; the column widths and pitches that
+    /// realise it are the host's.
+    ///
+    /// Absent means "the host's default" (`Right`) — NOT "no legend"; suppression
+    /// is the explicit [`ChartLegendPosition::None`]. So absence stays the
+    /// ordinary shape and is omitted on the wire, and an author who wants no
+    /// legend says so.
+    pub legend_position: Option<ChartLegendPosition>,
     pub on_point_click: Option<Closure>,
 }
 

@@ -1797,6 +1797,11 @@ fn chart_spec(spec: &ChartSpec) -> String {
     if let Some(subtitle) = &spec.subtitle {
         fields.push(field("subtitle", text_source(subtitle)));
     }
+    // Phase 880 — the legend's placement, omitted when absent (absence means the
+    // host default, so every pre-880 chart stays byte-identical).
+    if let Some(legend_position) = spec.legend_position {
+        fields.push(field("legendPosition", s(legend_position.as_str())));
+    }
     if spec.on_point_click.is_some() {
         fields.push(field("onPointClick", CLOSURE.to_string()));
     }

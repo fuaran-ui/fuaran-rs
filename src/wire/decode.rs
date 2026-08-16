@@ -456,6 +456,11 @@ decode_bare_enum!(decode_text_anchor, TextAnchor, "TextAnchor");
 decode_bare_enum!(decode_style_role, StyleRole, "StyleRole");
 decode_bare_enum!(decode_font_voice, FontVoice, "FontVoice");
 decode_bare_enum!(decode_chart_kind, ChartKind, "ChartKind");
+decode_bare_enum!(
+    decode_chart_legend_position,
+    ChartLegendPosition,
+    "ChartLegendPosition"
+);
 decode_bare_enum!(decode_image_variant, ImageVariant, "ImageVariant");
 decode_bare_enum!(decode_link_protection, LinkProtection, "LinkProtection");
 decode_bare_enum!(decode_math_display, MathDisplay, "MathDisplay");
@@ -3079,6 +3084,16 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
     let x_title = opt_text_source(path, fields, "xTitle")?;
     let y_title = opt_text_source(path, fields, "yTitle")?;
     let subtitle = opt_text_source(path, fields, "subtitle")?;
+    // Phase 880 — the legend's placement. Absent is the ordinary shape and means
+    // the host's default (`Right`), never "no legend": suppression is the explicit
+    // `None` case, which is why this stays an `Option` rather than defaulting here.
+    let legend_position = match get(fields, "legendPosition") {
+        None => None,
+        Some(j) => Some(decode_chart_legend_position(
+            &format!("{path}.legendPosition"),
+            j,
+        )?),
+    };
     Ok(ChartSpec {
         kind,
         source,
@@ -3090,6 +3105,7 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
         x_title,
         y_title,
         subtitle,
+        legend_position,
         on_point_click: opt_closure(fields, "onPointClick"),
     })
 }
