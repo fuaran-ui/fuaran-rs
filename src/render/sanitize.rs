@@ -9,6 +9,8 @@
 //! the renderer's escape-by-construction; extra attributes hold the
 //! `data-*` / `aria-*` allowlist.
 
+use std::borrow::Cow;
+
 const ALLOWED_URL_SCHEMES: &[&str] = &["http", "https", "mailto", "tel", "ftp", "sftp"];
 const REJECTED_URL_SCHEMES: &[&str] = &["javascript", "vbscript", "file"];
 
@@ -52,18 +54,54 @@ fn is_protocol_relative(url: &str) -> bool {
     is_sep(chars.next()) && is_sep(chars.next())
 }
 
+/// §19 rule 1 — normalise exactly as the WHATWG URL Standard's basic URL parser
+/// does before it parses anything, ASCII-exact, in this order:
+///
+/// 1. remove leading and trailing **C0 control or space** — all of U+0000–U+0020,
+///    not merely the whitespace subset;
+/// 2. remove every U+0009 / U+000A / U+000D from anywhere in what remains.
+///
+/// Deliberately **not** [`str::trim`]. A native trim answers a different question
+/// in every language — Python's `strip` also removes U+001C–U+001F where Rust,
+/// .NET, JS and Go do not; JS alone keeps U+0085 NEL where the other four drop it
+/// — and all of them remove non-ASCII whitespace (U+00A0, U+2028, …) that the
+/// parser keeps. The floor's whole purpose is that a tree vetted on one host is
+/// safe on another, so the normalisation is defined by the parser that will
+/// actually consume the string, not by the host's standard library.
+///
+/// Step 2 is those three code points **only**: the parser removes U+000B and
+/// U+000C at the edges (step 1) and *keeps* them in the interior, so
+/// `/<VT>/host/x` is an ordinary same-origin path and must stay one.
+///
+/// Returns a [`Cow`] so the common case — nothing to remove from the interior —
+/// borrows a subslice rather than allocating.
+fn normalize_url_for_floor(url: &str) -> Cow<'_, str> {
+    let edges = url.trim_matches(|c: char| c <= '\u{20}');
+    if edges.contains(['\t', '\n', '\r']) {
+        Cow::Owned(edges.replace(['\t', '\n', '\r'], ""))
+    } else {
+        Cow::Borrowed(edges)
+    }
+}
+
 /// The sanitised URL, or `None` if the scheme is rejected. Empty string passes
 /// through (a valid same-page href); unknown schemes reject conservatively, and
 /// so do protocol-relative URLs despite carrying no scheme (see
 /// [`is_protocol_relative`]).
-pub fn sanitize_url(url: &str) -> Option<&str> {
-    let trimmed = url.trim();
+///
+/// The input is first normalised per §19 rule 1 (see [`normalize_url_for_floor`]),
+/// and that normalised form is also what is **returned** on acceptance — so an
+/// accepted URL carrying an interior tab loses it, which is what the browser would
+/// have parsed anyway. That is why the return type is a [`Cow`] rather than a
+/// borrow of the input.
+pub fn sanitize_url(url: &str) -> Option<Cow<'_, str>> {
+    let trimmed = normalize_url_for_floor(url);
     if trimmed.is_empty() {
         return Some(trimmed);
     }
-    match extract_scheme(trimmed) {
-        None if is_protocol_relative(trimmed) => None, // off-origin despite having no scheme
-        None => Some(trimmed),                         // relative / fragment / same-origin
+    match extract_scheme(&trimmed) {
+        None if is_protocol_relative(&trimmed) => None, // off-origin despite having no scheme
+        None => Some(trimmed),                          // relative / fragment / same-origin
         Some(scheme) => {
             if REJECTED_URL_SCHEMES.contains(&scheme.as_str()) {
                 None
@@ -79,7 +117,9 @@ pub fn sanitize_url(url: &str) -> Option<&str> {
 /// The URL itself if accepted, or `about:blank` — for call sites that must
 /// emit *some* href to keep the element valid.
 pub fn sanitize_url_or_blank(url: &str) -> String {
-    sanitize_url(url).unwrap_or("about:blank").to_string()
+    sanitize_url(url)
+        .map(Cow::into_owned)
+        .unwrap_or_else(|| "about:blank".to_string())
 }
 
 const DANGEROUS_ELEMENTS: &[&str] = &[
@@ -230,13 +270,19 @@ mod tests {
 
     #[test]
     fn url_schemes() {
-        assert_eq!(sanitize_url("https://x.dev/a"), Some("https://x.dev/a"));
-        assert_eq!(sanitize_url("/relative#frag"), Some("/relative#frag"));
+        assert_eq!(
+            sanitize_url("https://x.dev/a").as_deref(),
+            Some("https://x.dev/a")
+        );
+        assert_eq!(
+            sanitize_url("/relative#frag").as_deref(),
+            Some("/relative#frag")
+        );
         assert_eq!(sanitize_url("javascript:alert(1)"), None);
         assert_eq!(sanitize_url("JAVAscript:alert(1)"), None);
         assert_eq!(sanitize_url("java\tscript:alert(1)"), None);
         assert_eq!(sanitize_url("data:text/html,x"), None);
-        assert_eq!(sanitize_url(""), Some(""));
+        assert_eq!(sanitize_url("").as_deref(), Some(""));
         assert_eq!(sanitize_url_or_blank("vbscript:x"), "about:blank");
     }
 
@@ -254,23 +300,94 @@ mod tests {
             "//",
             "  //evil.example/x", // rejection survives whitespace trimming
         ] {
-            assert_eq!(sanitize_url(url), None, "expected rejection for {url:?}");
+            assert_eq!(
+                sanitize_url(url).as_deref(),
+                None,
+                "expected rejection for {url:?}"
+            );
             assert_eq!(sanitize_url_or_blank(url), "about:blank");
         }
+    }
+
+    /// §19 rule 1 — the WHATWG basic URL parser's own pre-parse normalisation.
+    ///
+    /// Control characters are written as escapes throughout: a raw C0 byte in
+    /// source is invisible in review and does not survive a copy-paste, which is
+    /// the wrong property for the payloads a security pin is made of.
+    #[test]
+    fn url_floor_normalises_as_the_url_parser_does() {
+        // V1 — an interior TAB / LF / CR BETWEEN the two slash-ish characters.
+        // Before rule 1 normalised, `/<TAB>/host/x` had first two characters `/`
+        // and TAB, so `is_protocol_relative` read an ordinary relative reference
+        // and accepted, while the browser removed the tab by the URL Standard's
+        // step 2 and resolved `//host/x` OFF-ORIGIN. Verified against the WHATWG
+        // parser: all twelve spellings resolve to `https://evil.example/x`.
+        for c in ['\t', '\n', '\r'] {
+            for a in ['/', '\\'] {
+                for b in ['/', '\\'] {
+                    let url = format!("{a}{c}{b}evil.example/x");
+                    assert_eq!(sanitize_url(&url).as_deref(), None, "V1 {url:?}");
+                }
+            }
+        }
+        assert_eq!(sanitize_url("/\t\r/\nevil.example/x").as_deref(), None);
+
+        // V2 — a LEADING C0 control that is not whitespace. No native trim removes
+        // U+0001 or NUL, so the two slashes sat at positions 1 and 2 and
+        // `is_protocol_relative` never saw them; the parser removes them by step 1
+        // and resolves off-origin.
+        for c in ['\u{1}', '\u{0}', '\u{1f}'] {
+            let url = format!("{c}//evil.example/x");
+            assert_eq!(sanitize_url(&url).as_deref(), None, "V2 {url:?}");
+        }
+
+        // Step 1 is the whole C0-or-space range, at both ends; and rule 1's output
+        // is what gets RETURNED — an accepted URL loses its interior tab.
+        assert_eq!(
+            sanitize_url("https://good.example/x\u{1}").as_deref(),
+            Some("https://good.example/x")
+        );
+        assert_eq!(
+            sanitize_url("https://good.ex\tample/x").as_deref(),
+            Some("https://good.example/x")
+        );
+
+        // U+000B and U+000C are removed at the EDGES by step 1 and KEPT in the
+        // interior — the parser treats `/<VT>/host/x` as a same-origin path, and so
+        // must the floor. Pinned because widening step 2 to "all C0" would silently
+        // over-reject here.
+        for c in ['\u{b}', '\u{c}'] {
+            let url = format!("/{c}/evil.example/x");
+            assert_eq!(sanitize_url(&url).as_deref(), Some(url.as_str()), "{url:?}");
+        }
+
+        // ASCII-exact LOOSENS these, correctly: the parser keeps them and resolves
+        // an ordinary same-origin path, where `str::trim` removed them and the floor
+        // then saw `//` and rejected. U+0085 is where JS diverged from Rust, .NET,
+        // Python and Go; ASCII-exact ends the divergence in both directions.
+        for c in ['\u{a0}', '\u{85}'] {
+            let url = format!("{c}//evil.example/x");
+            assert_eq!(sanitize_url(&url).as_deref(), Some(url.as_str()), "{url:?}");
+        }
+
+        // Rule 2 is UNCHANGED and still stricter than the browser, which is why V1
+        // and V2 are off-origin navigation rather than script execution.
+        assert_eq!(sanitize_url("java\tscript:alert(1)").as_deref(), None);
+        assert_eq!(sanitize_url("java\u{b}script:alert(1)").as_deref(), None);
     }
 
     #[test]
     fn single_slash_relative_paths_still_pass() {
         for url in ["/", "/a", "/foo//bar", "./rel", "page", "#frag", "foo/bar"] {
             assert_eq!(
-                sanitize_url(url),
+                sanitize_url(url).as_deref(),
                 Some(url),
                 "expected pass-through for {url:?}"
             );
         }
         // An absolute URL whose authority legitimately uses `//` is unaffected.
         assert_eq!(
-            sanitize_url("https://ok.example/x"),
+            sanitize_url("https://ok.example/x").as_deref(),
             Some("https://ok.example/x")
         );
     }
