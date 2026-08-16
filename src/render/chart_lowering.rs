@@ -37,7 +37,7 @@
 
 use crate::canonical::format_number;
 use crate::wire::{
-    Binding, ChartKind, CurveCommand, DrawPoint, DrawStyle, DrawingSpec, Emphasis, Shape,
+    Binding, ChartKind, CurveCommand, DrawPoint, DrawStyle, DrawingSpec, Emphasis, Format, Shape,
     StaticValue, TextAnchor, TextSource, ViewBox,
 };
 
@@ -164,7 +164,7 @@ fn nice_num(x: f64, round_it: bool) -> f64 {
 }
 
 /// A nice value domain + its tick values for `[lo, hi]`, targeting ~5 ticks.
-fn nice_domain(lo: f64, hi: f64) -> (f64, f64, Vec<f64>) {
+fn nice_domain(lo: f64, hi: f64) -> (f64, f64, f64, Vec<f64>) {
     let hi = if hi == lo { lo + 1.0 } else { hi };
     let target_ticks = 5.0;
     let range = nice_num(hi - lo, false);
@@ -174,7 +174,7 @@ fn nice_domain(lo: f64, hi: f64) -> (f64, f64, Vec<f64>) {
     // Enumerate ticks by integer count (float accumulation would drift).
     let count = ((nice_hi - nice_lo) / step).round() as i64;
     let ticks = (0..=count).map(|i| r2(nice_lo + i as f64 * step)).collect();
-    (nice_lo, nice_hi, ticks)
+    (nice_lo, nice_hi, step, ticks)
 }
 
 /// Canonical SVG number form for a stored tick-label string — a whole value
@@ -190,9 +190,301 @@ fn format_num(n: f64) -> String {
     }
 }
 
-/// Format a tick value: whole → integer, else 2-dp trimmed.
-fn tick_label(v: f64) -> String {
-    format_num(r2(v))
+// ─── The canonical invariant number formatter (Phase 876) ────────────────────
+//
+// A byte-for-byte port of the reference spec. The chart lowering does NOT
+// inherit the locale-aware rendering other surfaces give `Format`: a chart's
+// ticks are part of a drawing whose bytes must be identical on every host, so
+// the rendering here is locale-INVARIANT by definition — period decimal
+// separator, comma thousands separator, no locale data anywhere.
+//
+//   1. Decimals come from the TICK STEP, never the data (`dps_of_step`).
+//   2. The base render is round-half-up on the magnitude at that precision,
+//      grouped in threes, zero-padded to exactly d places, a leading `-` only
+//      when the rounded magnitude is non-zero.
+//   3. The `Format` arms layer meaning over that base; `Date` / `RelativeTime`
+//      / `Duration` are not value-axis formats and fall through to the base.
+//   4. Display-unit scaling divides BOTH the value and the step by 10^n.
+
+/// Decimal places implied by a tick step: the smallest `d <= 6` for which
+/// `step * 10^d` is (within relative float tolerance) an integer.
+fn dps_of_step(step: f64) -> i32 {
+    let s = step.abs();
+    if s.is_nan() || s.is_infinite() || s <= 0.0 {
+        return 0;
+    }
+    let mut scaled = s;
+    for d in 0..6 {
+        if (scaled - (scaled + 0.5).floor()).abs() <= 1e-9 * 1.0_f64.max(scaled) {
+            return d;
+        }
+        scaled *= 10.0;
+    }
+    6
+}
+
+/// Group an integral digit string in threes from the right with `,`.
+fn group_thousands(digits: &str) -> String {
+    let n = digits.len();
+    if n <= 3 {
+        return digits.to_string();
+    }
+    let head = n % 3;
+    let mut parts: Vec<&str> = Vec::new();
+    if head > 0 {
+        parts.push(&digits[..head]);
+    }
+    let mut i = head;
+    while i + 3 <= n {
+        parts.push(&digits[i..i + 3]);
+        i += 3;
+    }
+    parts.join(",")
+}
+
+/// Render `v` with EXACTLY `dps` decimals — round-half-up on the magnitude,
+/// comma thousands separators, period decimal point, locale-invariant.
+fn render_fixed(dps: i32, v: f64) -> String {
+    if v.is_nan() || v.is_infinite() {
+        return "0".to_string();
+    }
+    let d = dps.clamp(0, 6);
+    let scale = 10.0_f64.powi(d);
+    let units = (v.abs() * scale + 0.5).floor();
+    let int_part = (units / scale).floor();
+    let frac_part = units - int_part * scale;
+    let int_str = group_thousands(&format_num(int_part));
+    let body = if d == 0 {
+        int_str
+    } else {
+        let raw = format_num(frac_part);
+        let pad = "0".repeat((d as usize).saturating_sub(raw.len()));
+        format!("{int_str}.{pad}{raw}")
+    };
+    if v < 0.0 && units > 0.0 {
+        format!("-{body}")
+    } else {
+        body
+    }
+}
+
+/// ISO-4217 code -> symbol, the invariant table. An unlisted code renders as
+/// the code itself — deterministic, and never a wrong symbol.
+fn currency_symbol(iso: &str) -> String {
+    match iso {
+        "EUR" => "\u{20ac}",
+        "USD" => "$",
+        "GBP" => "\u{a3}",
+        "JPY" | "CNY" => "\u{a5}",
+        "CHF" => "CHF",
+        "AUD" | "CAD" | "NZD" | "HKD" | "SGD" | "MXN" => "$",
+        "INR" => "\u{20b9}",
+        "KRW" => "\u{20a9}",
+        "BRL" => "R$",
+        "RUB" => "\u{20bd}",
+        "ZAR" => "R",
+        "SEK" | "NOK" | "DKK" => "kr",
+        "PLN" => "z\u{142}",
+        "CZK" => "K\u{10d}",
+        "HUF" => "Ft",
+        "TRY" => "\u{20ba}",
+        "THB" => "\u{e3f}",
+        "ILS" => "\u{20aa}",
+        other => return other.to_string(),
+    }
+    .to_string()
+}
+
+/// The unit symbol a `Format` contributes to an axis-unit label.
+fn format_unit_symbol(fmt: Option<&Format>) -> String {
+    match fmt {
+        Some(Format::Currency { iso_code }) => currency_symbol(iso_code),
+        _ => String::new(),
+    }
+}
+
+/// The x100 a `Format::Percent` applies to BOTH the value and the step.
+fn format_value_scale(fmt: Option<&Format>) -> f64 {
+    match fmt {
+        Some(Format::Percent { .. }) => 100.0,
+        _ => 1.0,
+    }
+}
+
+/// Render one value-axis number. `divisor` is the display unit (`1.0` when no
+/// scaling applies); `drop_symbol` suppresses a currency symbol on the ticks
+/// because the axis-unit label already states it once.
+fn format_value(
+    fmt: Option<&Format>,
+    divisor: f64,
+    drop_symbol: bool,
+    step: f64,
+    v: f64,
+) -> String {
+    let pct = format_value_scale(fmt);
+    let dv = v * pct / divisor;
+    let ds = step * pct / divisor;
+    let pinned = match fmt {
+        Some(Format::Number { decimals }) | Some(Format::Percent { decimals }) => *decimals,
+        _ => None,
+    };
+    let dps = pinned.map_or_else(|| dps_of_step(ds), |d| d as i32);
+    let body = render_fixed(dps, dv);
+    match fmt {
+        Some(Format::Percent { .. }) => format!("{body}%"),
+        Some(Format::Currency { iso_code }) if !drop_symbol => {
+            let sym = currency_symbol(iso_code);
+            if let Some(rest) = body.strip_prefix('-') {
+                format!("-{sym}{rest}")
+            } else {
+                format!("{sym}{body}")
+            }
+        }
+        _ => body,
+    }
+}
+
+// ─── Display units (Phase 876) ───────────────────────────────────────────────
+//
+// The operator's prefix table: thresholds sit at 1 + 3k and the selected
+// threshold `t` for a magnitude of exponent `e` satisfies `e - 1 <= t < e + 2`,
+// giving the unit exponent `n = t - 1`. Each unit covers three exponents —
+// Thousands for e in {3,4,5}, Millions for {6,7,8} — which is why a 12-million
+// axis and a 900-million axis both read in millions.
+
+/// How a value axis states its display unit once scaling applies. NOT a wire
+/// value: the chart style is a lowering parameter, so a display-unit convention
+/// is the host's choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChartAxisUnitMode {
+    /// One word in the axis-unit slot — "Millions" (the shipped default).
+    #[default]
+    Words,
+    /// The word plus the value format's unit symbol — "Millions of £".
+    WordsWithSymbol,
+    /// The SI prefix plus the unit symbol — "M£" (or bare "M").
+    SIAbbreviation,
+    /// No axis-unit label: every tick carries its own compact suffix (`12K`).
+    CompactPerTick,
+    /// Never scale; every tick prints its full magnitude.
+    Off,
+}
+
+/// The smallest unit exponent that triggers scaling at the shipped default —
+/// the operator's `unit > 3` gate, so scaling begins at MILLIONS and a
+/// thousands-range axis still reads `12,500` in full.
+pub const DISPLAY_UNIT_MIN_EXPONENT: i32 = 6;
+
+fn unit_exponent_of(max_abs: f64) -> i32 {
+    if max_abs.is_nan() || max_abs.is_infinite() || max_abs <= 0.0 {
+        return 0;
+    }
+    let e = (max_abs.log10() + 0.5).floor() as i32;
+    let n = 3 * (f64::from(e - 2) / 3.0).ceil() as i32;
+    n.clamp(-15, 15)
+}
+
+fn unit_words(n: i32) -> &'static str {
+    match n {
+        3 => "Thousands",
+        6 => "Millions",
+        9 => "Billions",
+        12 => "Trillions",
+        15 => "Quadrillions",
+        _ => "",
+    }
+}
+
+fn unit_si(n: i32) -> &'static str {
+    match n {
+        3 => "k",
+        6 => "M",
+        9 => "G",
+        12 => "T",
+        15 => "P",
+        _ => "",
+    }
+}
+
+fn unit_compact(n: i32) -> &'static str {
+    match n {
+        3 => "K",
+        6 => "M",
+        9 => "B",
+        12 => "T",
+        15 => "Q",
+        _ => "",
+    }
+}
+
+/// A resolved display unit for one value axis.
+struct DisplayUnit {
+    divisor: f64,
+    tick_suffix: String,
+    drop_symbol: bool,
+    label: String,
+}
+
+impl Default for DisplayUnit {
+    fn default() -> Self {
+        Self {
+            divisor: 1.0,
+            tick_suffix: String::new(),
+            drop_symbol: false,
+            label: String::new(),
+        }
+    }
+}
+
+/// Resolve the display unit for a value axis whose PRINTED magnitudes peak at
+/// `max_abs` (already through any `Format::Percent` x100).
+fn resolve_display_unit(
+    mode: ChartAxisUnitMode,
+    min_exponent: i32,
+    fmt: Option<&Format>,
+    max_abs: f64,
+) -> DisplayUnit {
+    let n = unit_exponent_of(max_abs);
+    let threshold = if mode == ChartAxisUnitMode::CompactPerTick {
+        3
+    } else {
+        min_exponent
+    };
+    let words = unit_words(n);
+    if mode == ChartAxisUnitMode::Off || n < 3 || n < threshold || words.is_empty() {
+        return DisplayUnit::default();
+    }
+    let symbol = format_unit_symbol(fmt);
+    let divisor = 10.0_f64.powi(n);
+    match mode {
+        ChartAxisUnitMode::Words => DisplayUnit {
+            divisor,
+            label: words.to_string(),
+            ..DisplayUnit::default()
+        },
+        ChartAxisUnitMode::WordsWithSymbol => DisplayUnit {
+            divisor,
+            drop_symbol: !symbol.is_empty(),
+            label: if symbol.is_empty() {
+                words.to_string()
+            } else {
+                format!("{words} of {symbol}")
+            },
+            ..DisplayUnit::default()
+        },
+        ChartAxisUnitMode::SIAbbreviation => DisplayUnit {
+            divisor,
+            drop_symbol: !symbol.is_empty(),
+            label: format!("{}{symbol}", unit_si(n)),
+            ..DisplayUnit::default()
+        },
+        ChartAxisUnitMode::CompactPerTick => DisplayUnit {
+            divisor,
+            tick_suffix: unit_compact(n).to_string(),
+            ..DisplayUnit::default()
+        },
+        ChartAxisUnitMode::Off => DisplayUnit::default(),
+    }
 }
 
 // ─── DrawStyle builders ──────────────────────────────────────────────────────
@@ -314,13 +606,57 @@ fn capitalise(sr: &str) -> String {
 /// (grouped + stacked), `Line`, `Area` (overlaid + stacked), `Scatter`, `Pie`;
 /// `Heatmap` produces an empty drawing. `stacked` is honoured on `Bar` /
 /// `Area` only.
-#[allow(clippy::too_many_lines)]
+/// The styling knobs this lowering exposes (Phase 876). NOT wire values — a
+/// display-unit convention is the host's, made at render time, and must never
+/// rewrite a semantic node. `Default` is what the `chart-lowering/*` goldens
+/// pin.
+#[derive(Debug, Clone, Copy)]
+pub struct ChartLowerStyle {
+    pub axis_unit_mode: ChartAxisUnitMode,
+    pub display_unit_min_exponent: i32,
+}
+
+impl Default for ChartLowerStyle {
+    fn default() -> Self {
+        Self {
+            axis_unit_mode: ChartAxisUnitMode::default(),
+            display_unit_min_exponent: DISPLAY_UNIT_MIN_EXPONENT,
+        }
+    }
+}
+
+/// Lower under the shipped default style — the corpus-pinned form.
 pub fn lower_chart(
     kind: ChartKind,
     stacked: bool,
     x_field: &str,
     y_fields: &[String],
     title: Option<&TextSource>,
+    rows: &[LowerRow],
+) -> DrawingSpec {
+    lower_chart_with(
+        kind,
+        stacked,
+        x_field,
+        y_fields,
+        title,
+        None,
+        &ChartLowerStyle::default(),
+        rows,
+    )
+}
+
+/// Lower under an explicit value-axis `Format` (a wire declaration) and an
+/// explicit style (a host choice) — Phase 876.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+pub fn lower_chart_with(
+    kind: ChartKind,
+    stacked: bool,
+    x_field: &str,
+    y_fields: &[String],
+    title: Option<&TextSource>,
+    value_format: Option<&Format>,
+    style: &ChartLowerStyle,
     rows: &[LowerRow],
 ) -> DrawingSpec {
     let categories: Vec<&str> = rows.iter().map(|r| r.category.as_str()).collect();
@@ -368,7 +704,32 @@ pub fn lower_chart(
     // Bars + lines share a zero-anchored domain — deterministic + honest for
     // bars. Stacked domains come from the cumulative partial sums, so the axis
     // covers the stack totals, never a single series' range.
-    let (nice_lo, nice_hi, ticks) = nice_domain(data_min.min(0.0), data_max.max(0.0));
+    let (nice_lo, nice_hi, y_step, ticks) = nice_domain(data_min.min(0.0), data_max.max(0.0));
+
+    // ── Value-axis number formatting (Phase 876) ──
+    // The declared meaning (`value_format`) chooses the arms; the style chooses
+    // whether a large magnitude is stated once as a display unit; the tick STEP
+    // chooses the precision. The unit is resolved from the PRINTED magnitude,
+    // so a `Percent` axis is measured after its x100.
+    let y_display_unit = resolve_display_unit(
+        style.axis_unit_mode,
+        style.display_unit_min_exponent,
+        value_format,
+        nice_lo.abs().max(nice_hi.abs()) * format_value_scale(value_format),
+    );
+    let y_tick_text = |v: f64| -> String {
+        format!(
+            "{}{}",
+            format_value(
+                value_format,
+                y_display_unit.divisor,
+                y_display_unit.drop_symbol,
+                y_step,
+                v
+            ),
+            y_display_unit.tick_suffix
+        )
+    };
 
     let y_scale = |v: f64| -> f64 { r2(PLOT_Y1 - (v - nice_lo) / (nice_hi - nice_lo) * PLOT_H) };
 
@@ -387,7 +748,7 @@ pub fn lower_chart(
     } else {
         vec![]
     };
-    let (x_nice_lo, x_nice_hi, x_ticks) = if is_scatter {
+    let (x_nice_lo, x_nice_hi, x_step, x_ticks) = if is_scatter {
         if x_values.is_empty() {
             nice_domain(0.0, 1.0)
         } else {
@@ -396,8 +757,13 @@ pub fn lower_chart(
             nice_domain(lo, hi)
         }
     } else {
-        (0.0, 1.0, vec![])
+        (0.0, 1.0, 1.0, vec![])
     };
+    // The Scatter arm's x IS a value axis, so its ticks take the same canonical
+    // formatter (Phase 876). `value_format` is deliberately NOT applied to it:
+    // one declared meaning cannot be true of two different measures, and there
+    // is no second axis-unit slot to state an x display unit in.
+    let x_tick_text = |v: f64| -> String { format_value(None, 1.0, false, x_step, v) };
     let x_scale =
         |v: f64| -> f64 { r2(PLOT_X0 + (v - x_nice_lo) / (x_nice_hi - x_nice_lo) * PLOT_W) };
 
@@ -538,7 +904,11 @@ pub fn lower_chart(
                     corner_radius: Some(2.0),
                     style: style_fill(colour_for(i)),
                 });
-                let pct = format_num((fractions[i] * 100.0 + 0.5).floor());
+                // Routed through the canonical formatter (Phase 876) — one
+                // rounding + rendering rule for every number this module
+                // prints. A share is a whole percent here, so the shipped
+                // `NN%` shape is unchanged.
+                let pct = format_value(None, 1.0, false, 1.0, fractions[i] * 100.0);
                 shapes.push(Shape::Label {
                     x: r2(W - 153.0),
                     y: r2(ly + 9.0),
@@ -667,7 +1037,7 @@ pub fn lower_chart(
         shapes.push(Shape::Label {
             x: r2(PLOT_X0 - TICK_LABEL_GAP),
             y: r2(y_scale(t) + 4.0),
-            text: TextSource::Literal(tick_label(t)),
+            text: TextSource::Literal(y_tick_text(t)),
             style: text_style(
                 Some(LABEL_OPACITY),
                 TextAnchor::End,
@@ -684,7 +1054,7 @@ pub fn lower_chart(
             shapes.push(Shape::Label {
                 x: x_scale(t),
                 y: r2(PLOT_Y1 + 20.0),
-                text: TextSource::Literal(tick_label(t)),
+                text: TextSource::Literal(x_tick_text(t)),
                 style: text_style(
                     Some(LABEL_OPACITY),
                     TextAnchor::Middle,
@@ -719,7 +1089,13 @@ pub fn lower_chart(
     shapes.push(Shape::Label {
         x: r2(8.0),
         y: r2(PLOT_Y0 - 12.0),
-        text: TextSource::Literal("Value".to_string()),
+        // The top-left slot states the value axis's DISPLAY UNIT once when
+        // scaling applies, and otherwise keeps the horizontal "Value" hint.
+        text: TextSource::Literal(if y_display_unit.label.is_empty() {
+            "Value".to_string()
+        } else {
+            y_display_unit.label.clone()
+        }),
         style: text_style(None, TextAnchor::Start, tick_size, Emphasis::Normal),
     });
 

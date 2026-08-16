@@ -16,8 +16,12 @@
 use std::path::PathBuf;
 
 use fuaran_rs::canonical::{JVal, parse};
-use fuaran_rs::render::chart_lowering::{lower_chart, project_row};
-use fuaran_rs::wire::{ChartKind, Node, NodeKind, SemanticStyle, StateBehaviour, TextSource};
+use fuaran_rs::render::chart_lowering::{
+    ChartAxisUnitMode, ChartLowerStyle, lower_chart_with, project_row,
+};
+use fuaran_rs::wire::{
+    ChartKind, Format, Node, NodeKind, SemanticStyle, StateBehaviour, TextSource,
+};
 
 /// Walk up from the crate dir to the shared corpus (mirrors conformance.rs).
 fn find_corpus() -> Option<PathBuf> {
@@ -77,6 +81,30 @@ fn discover_cases(dir: &std::path::Path) -> Vec<String> {
     inputs
 }
 
+/// The corpus carries a `Format` in canonical `$type` wire JSON; the lowering
+/// takes the typed enum. Only the numeric arms appear in chart inputs.
+fn value_format_of(j: &JVal) -> Format {
+    let tag = match j.field("$type") {
+        Some(JVal::Str(t)) => t.as_str(),
+        _ => panic!("valueFormat missing $type"),
+    };
+    let decimals = match j.field("decimals") {
+        Some(JVal::Num(d)) => Some(*d as i64),
+        _ => None,
+    };
+    match tag {
+        "Number" => Format::Number { decimals },
+        "Percent" => Format::Percent { decimals },
+        "Currency" => Format::Currency {
+            iso_code: match j.field("isoCode") {
+                Some(JVal::Str(c)) => c.clone(),
+                _ => panic!("Currency valueFormat missing isoCode"),
+            },
+        },
+        other => panic!("chart-lowering input: unsupported valueFormat {other}"),
+    }
+}
+
 /// Lower one fixture input to the canonical Drawing-node wire JSON, mirroring the
 /// reference harness: lower → wrap in a Drawing node id `chart-<name>` → encode.
 fn lowered_json(name: &str, input: &str) -> String {
@@ -106,7 +134,35 @@ fn lowered_json(name: &str, input: &str) -> String {
         _ => panic!("fixture missing data array"),
     };
 
-    let drawing = lower_chart(kind, stacked, &x_field, &y_fields, title.as_ref(), &rows);
+    // Phase 876 — `valueFormat` is a WIRE field carried in canonical `Format`
+    // JSON; `axisUnitMode` is a harness-only STYLE selector (the chart style is
+    // a lowering parameter, never wire), present so the corpus can pin every
+    // mode. Both absent on the pre-876 cases.
+    let value_format = spec.field("valueFormat").map(value_format_of);
+    let style = ChartLowerStyle {
+        axis_unit_mode: match spec.field("axisUnitMode") {
+            Some(JVal::Str(m)) => match m.as_str() {
+                "WordsWithSymbol" => ChartAxisUnitMode::WordsWithSymbol,
+                "SIAbbreviation" => ChartAxisUnitMode::SIAbbreviation,
+                "CompactPerTick" => ChartAxisUnitMode::CompactPerTick,
+                "Off" => ChartAxisUnitMode::Off,
+                _ => ChartAxisUnitMode::Words,
+            },
+            _ => ChartAxisUnitMode::Words,
+        },
+        ..ChartLowerStyle::default()
+    };
+
+    let drawing = lower_chart_with(
+        kind,
+        stacked,
+        &x_field,
+        &y_fields,
+        title.as_ref(),
+        value_format.as_ref(),
+        &style,
+        &rows,
+    );
     let node = Node {
         id: format!("chart-{name}"),
         kind: NodeKind::Drawing(drawing),

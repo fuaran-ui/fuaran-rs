@@ -1782,6 +1782,10 @@ fn chart_spec(spec: &ChartSpec) -> String {
     if let Some(title) = &spec.title {
         fields.push(field("title", text_source(title)));
     }
+    // Phase 876 — the value axis's declared number format (canonical key order).
+    if let Some(vf) = &spec.value_format {
+        fields.push(field("valueFormat", format_intent(vf)));
+    }
     if spec.on_point_click.is_some() {
         fields.push(field("onPointClick", CLOSURE.to_string()));
     }

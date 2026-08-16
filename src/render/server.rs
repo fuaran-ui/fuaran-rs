@@ -2589,12 +2589,16 @@ fn render_chart(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &ChartSpec) -> Stri
         .iter()
         .map(|row| super::chart_lowering::project_row(row, &spec.x_field, &spec.y_fields))
         .collect();
-    let drawing = super::chart_lowering::lower_chart(
+    // Phase 876 — the declared value-axis number format travels with the spec
+    // into the lowering (the style stays the host's default).
+    let drawing = super::chart_lowering::lower_chart_with(
         spec.kind,
         spec.stacked,
         &spec.x_field,
         &spec.y_fields,
         spec.title.as_ref(),
+        spec.value_format.as_ref(),
+        &super::chart_lowering::ChartLowerStyle::default(),
         &lowered_rows,
     );
     // Render the lowered Drawing through the shared Drawing renderer (inline SVG),

@@ -3068,6 +3068,12 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
     // `stacked` round-trips (carried since the fixture corpus pinned it);
     // absent — the legacy wire — defaults to false.
     let stacked = opt_bool(path, fields, "stacked")?.unwrap_or(false);
+    // Phase 876 — `valueFormat`: the value axis's number format, reusing the
+    // existing `Format` vocabulary. Absent is the ordinary shape.
+    let value_format = match get(fields, "valueFormat") {
+        None => None,
+        Some(j) => Some(decode_format(&format!("{path}.valueFormat"), j)?),
+    };
     Ok(ChartSpec {
         kind,
         source,
@@ -3075,6 +3081,7 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
         x_field,
         y_fields,
         title,
+        value_format,
         on_point_click: opt_closure(fields, "onPointClick"),
     })
 }

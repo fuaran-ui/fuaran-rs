@@ -353,6 +353,7 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             x_field: spec.x_field.clone(),
             y_fields: spec.y_fields.clone(),
             title: map_opt_text(sources, &spec.title),
+            value_format: spec.value_format.clone(),
             on_point_click: spec.on_point_click,
         }),
         NodeKind::Map(spec) => NodeKind::Map(spec.clone()),
