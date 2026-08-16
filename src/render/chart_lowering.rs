@@ -47,15 +47,43 @@ const W: f64 = 640.0;
 const H: f64 = 400.0;
 const MARGIN_TOP: f64 = 64.0; // title + legend band
 const MARGIN_RIGHT: f64 = 28.0;
+// Phase 879 — both of these are now the FLOOR of an autosized margin, not the
+// margin itself: the left one is derived from the widest FORMATTED y tick, the
+// bottom one from the drop a tilted (or vertical) category label needs.
 const MARGIN_BOTTOM: f64 = 56.0; // x-axis category labels + x-axis title
 const MARGIN_LEFT: f64 = 64.0; // right-aligned y-axis tick labels
 
-const PLOT_X0: f64 = MARGIN_LEFT;
-const PLOT_X1: f64 = W - MARGIN_RIGHT;
-const PLOT_Y0: f64 = MARGIN_TOP;
-const PLOT_Y1: f64 = H - MARGIN_BOTTOM;
-const PLOT_W: f64 = PLOT_X1 - PLOT_X0;
-const PLOT_H: f64 = PLOT_Y1 - PLOT_Y0;
+// The plot rectangle is NOT a constant since Phase 879: it depends on the text
+// the chart is going to print (the widest formatted y tick decides the left
+// margin, the category labels' tilt decides the bottom one), so it is computed
+// per lowering.
+
+/// Ceiling on the autosized left margin, as a share of the canvas width.
+const MARGIN_LEFT_MAX_SHARE: f64 = 0.3;
+/// Ceiling on the autosized bottom margin, as a share of the canvas height.
+const MARGIN_BOTTOM_MAX_SHARE: f64 = 0.35;
+/// Breathing room between an autosized margin's content and the canvas edge —
+/// also absorbs the few percent by which a real font differs from the table.
+const AXIS_LABEL_PADDING: f64 = 6.0;
+/// Font size of tick / category / axis-title / legend text.
+const TICK_FONT_SIZE: f64 = 13.0;
+/// A line's height as a multiple of its font size (Phase 879).
+const TEXT_LINE_HEIGHT_FACTOR: f64 = 1.2;
+/// Drop from the x-axis spine to the category / x-tick label baseline.
+const CATEGORY_LABEL_OFFSET_Y: f64 = 20.0;
+/// Distance from the canvas bottom to the x-axis title's BASELINE.
+const AXIS_TITLE_BOTTOM_OFFSET: f64 = 12.0;
+/// The MAGNITUDE of the category-label tilt, in degrees. Tilt is the DEFAULT
+/// state — it is for LEGIBILITY, not a crowding fallback.
+const LABEL_TILT_DEGREES: f64 = 30.0;
+/// The vertical arm of the escalation: one line height along the axis whatever
+/// the label's length, so it packs at any category count.
+const VERTICAL_TILT_DEGREES: f64 = 90.0;
+/// Gap from a legend swatch's left edge to its label's left edge.
+const LEGEND_LABEL_OFFSET_X: f64 = 15.0;
+/// Horizontal padding after a legend entry's label, before the next entry's
+/// swatch (Phase 879). The pitch itself is per-entry, not a fixed stride.
+const LEGEND_ENTRY_GAP: f64 = 24.0;
 
 /// A fixed, deterministic categorical palette (series index → colour).
 ///
@@ -131,6 +159,110 @@ const CHART_FONT: &str = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-ser
 /// (avoids banker's-rounding / platform float-print divergence).
 fn r2(x: f64) -> f64 {
     (x * 100.0 + 0.5).floor() / 100.0
+}
+
+// ─── Deterministic text metrics (Phase 879) ──────────────────────────────────
+//
+// A byte-for-byte MIRROR of the F# reference table
+// (`Fuaran.UI.Charts.TextMetrics`) — mirrored, never re-derived, because the
+// margins, the legend pitch and the label rotations it decides are all pinned
+// by the shared `chart-lowering/*` corpus.
+//
+// THE APPROXIMATION IS THE SPEC. No host measures text: this one is headless
+// (and, in the wasm32 arm, has no layout pass to consult either), and a
+// browser's measurement depends on which member of the font stack actually
+// resolved — either would make the lowering's output a function of the host,
+// destroying the byte-identical cross-host property the corpus rests on. So the
+// widths come from a FIXED table of per-character advance widths as a fraction
+// of the font size (em), approximating a typical sans-serif. A real font
+// differs by a few percent; `AXIS_LABEL_PADDING` absorbs it.
+//
+//   1. Five width classes; an unlisted character (including every non-ASCII
+//      one) takes the DEFAULT, which is what makes the table total.
+//   2. Width = font_size × Σ advance_em(ch), summed LEFT TO RIGHT (float
+//      addition is not associative — the order is part of the spec), rounded
+//      once at the end.
+//   3. Line height = font_size × TEXT_LINE_HEIGHT_FACTOR.
+//   4. Truncation keeps the longest prefix that still fits with the ellipsis;
+//      when nothing fits the result is a bare `…`, never the empty string.
+
+const THIN_EM: f64 = 0.28;
+const NARROW_EM: f64 = 0.33;
+const DEFAULT_EM: f64 = 0.55;
+const WIDE_EM: f64 = 0.7;
+const EXTRA_WIDE_EM: f64 = 0.9;
+const ELLIPSIS: &str = "…";
+
+/// One character's advance width as a fraction of the font size. Total: an
+/// unlisted character takes `DEFAULT_EM`, so no host enumerates Unicode.
+fn advance_em(ch: char) -> f64 {
+    match ch {
+        ' ' | '!' | '\'' | ',' | '.' | ':' | ';' | 'I' | 'i' | 'j' | 'l' | '|' => THIN_EM,
+        '"' | '(' | ')' | '*' | '-' | '/' | '\\' | '[' | ']' | '{' | '}' | 'f' | 'r' | 't' => {
+            NARROW_EM
+        }
+        '%' | '@' | 'M' | 'W' | 'm' => EXTRA_WIDE_EM,
+        'J' | 'L' => DEFAULT_EM,
+        'A'..='Z' | 'w' => WIDE_EM,
+        _ => DEFAULT_EM,
+    }
+}
+
+/// A string's advance width in em — summed LEFT TO RIGHT (rule 2).
+fn advance_em_of(text: &str) -> f64 {
+    let mut acc = 0.0;
+    for ch in text.chars() {
+        acc += advance_em(ch);
+    }
+    acc
+}
+
+/// The estimated rendered width of `text` at `font_size`, rounded once.
+fn text_width(font_size: f64, text: &str) -> f64 {
+    r2(font_size * advance_em_of(text))
+}
+
+/// The estimated line height at `font_size` (rule 3).
+fn text_line_height(font_size: f64, line_height_factor: f64) -> f64 {
+    r2(font_size * line_height_factor)
+}
+
+/// Does `text` fit a box `max_width` × `max_height` at `font_size`? The single
+/// predicate a data-label gate answers inside/outside/suppress with, so a label
+/// can never disagree with the margin that made room for it.
+pub fn text_fits_box(
+    font_size: f64,
+    line_height_factor: f64,
+    max_width: f64,
+    max_height: f64,
+    text: &str,
+) -> bool {
+    text_width(font_size, text) <= max_width
+        && text_line_height(font_size, line_height_factor) <= max_height
+}
+
+/// Deterministic ellipsis truncation to `max_width` (rule 4). A string that
+/// already fits comes back unchanged, so a host that never hits a bound never
+/// sees a `…`.
+fn truncate_to_width(font_size: f64, max_width: f64, text: &str) -> String {
+    if text_width(font_size, text) <= max_width {
+        return text.to_string();
+    }
+    let budget = max_width - text_width(font_size, ELLIPSIS);
+    if budget < 0.0 {
+        return ELLIPSIS.to_string();
+    }
+    let mut acc = 0.0;
+    let mut take = 0usize;
+    for (i, ch) in text.char_indices() {
+        let next = acc + advance_em(ch);
+        if r2(font_size * next) > budget {
+            break;
+        }
+        acc = next;
+        take = i + ch.len_utf8();
+    }
+    format!("{}{}", &text[..take], ELLIPSIS)
 }
 
 /// A "nice" number for the magnitude of `x` — the classic `{1,2,5}·10ⁿ`
@@ -573,10 +705,23 @@ fn text_style(
         stroke: None,
         stroke_width: None,
         mark_id: None,
-        // Phase 877 — the lowering stays upright here; the tilt / vertical
-        // escalation / rotated y-title APPLICATIONS land with the chart-style
-        // phases, so this host's goldens are deliberately unchanged.
         rotation: None,
+    }
+}
+
+/// A text-label style carrying a rotation (Phase 879): the clockwise rotation
+/// in degrees about the label's own anchor point. Omitted from the wire when
+/// `None`, so an unrotated drawing is byte-unchanged.
+fn text_style_rotated(
+    opacity: Option<f64>,
+    anchor: TextAnchor,
+    size: f64,
+    emphasis: Emphasis,
+    rotation: f64,
+) -> DrawStyle {
+    DrawStyle {
+        rotation: Some(rotation),
+        ..text_style(opacity, anchor, size, emphasis)
     }
 }
 
@@ -731,11 +876,6 @@ pub fn lower_chart_with(
         )
     };
 
-    let y_scale = |v: f64| -> f64 { r2(PLOT_Y1 - (v - nice_lo) / (nice_hi - nice_lo) * PLOT_H) };
-
-    let band_w = if n > 0 { PLOT_W / n as f64 } else { PLOT_W };
-    let centre_x = |i: usize| -> f64 { r2(PLOT_X0 + band_w * (i as f64 + 0.5)) };
-
     // ── Linear x-scale (Phase 636 — the Scatter arm's numeric x axis) ──
     // Scatter reads the x-field NUMERICALLY and plots on a linear x-domain (the
     // first non-band x-scale arm). The domain is NOT zero-anchored — a
@@ -764,11 +904,111 @@ pub fn lower_chart_with(
     // one declared meaning cannot be true of two different measures, and there
     // is no second axis-unit slot to state an x display unit in.
     let x_tick_text = |v: f64| -> String { format_value(None, 1.0, false, x_step, v) };
-    let x_scale =
-        |v: f64| -> f64 { r2(PLOT_X0 + (v - x_nice_lo) / (x_nice_hi - x_nice_lo) * PLOT_W) };
 
-    let tick_size = 13.0;
+    let tick_size = TICK_FONT_SIZE;
     let title_size = 18.0;
+
+    // ── Text-metric layout (Phase 879) ───────────────────────────────────────
+    //
+    // ORDER IS LOAD-BEARING. The plot rectangle used to be six consts; it is now
+    // DERIVED from the text the chart prints — the widest formatted y tick
+    // decides the left margin, and the category labels' tilt decides the bottom
+    // one. So: the left margin, the band pitch that follows from it, the tilt,
+    // and the bottom margin the tilt needs, in that order.
+
+    let line_height = text_line_height(tick_size, TEXT_LINE_HEIGHT_FACTOR);
+    let widest_of = |texts: &[String]| -> f64 {
+        texts
+            .iter()
+            .fold(0.0f64, |acc, t| acc.max(text_width(tick_size, t)))
+    };
+
+    // ── Left margin ──
+    // The truncation budget is derived from the CEILING — a constant — so the
+    // truncation that feeds the margin never depends on the margin it decides.
+    let left_ceiling = MARGIN_LEFT_MAX_SHARE * W;
+    let tick_text_budget = (left_ceiling - TICK_LABEL_GAP - AXIS_LABEL_PADDING).max(0.0);
+    let y_tick_label_text =
+        |v: f64| -> String { truncate_to_width(tick_size, tick_text_budget, &y_tick_text(v)) };
+    let tick_label_texts: Vec<String> = ticks.iter().map(|t| y_tick_label_text(*t)).collect();
+    let required_left = TICK_LABEL_GAP + widest_of(&tick_label_texts) + AXIS_LABEL_PADDING;
+    let margin_left = r2(MARGIN_LEFT.max(left_ceiling.min(required_left)));
+
+    let plot_x0 = margin_left;
+    let plot_x1 = W - MARGIN_RIGHT;
+    let plot_w = plot_x1 - plot_x0;
+
+    let band_w = if n > 0 { plot_w / n as f64 } else { plot_w };
+    let centre_x = |i: usize| -> f64 { r2(plot_x0 + band_w * (i as f64 + 0.5)) };
+
+    // ── Category-label tilt + its vertical escalation ──
+    // Only the BAND arms label categories: Scatter labels numeric x ticks (short
+    // by construction, left horizontal) and Pie has no x axis. Both must
+    // therefore contribute NO drop, or their bottom margin — and with it the
+    // pie's centre — would move for a decision they never take.
+    let draws_category_labels = !is_scatter && !matches!(kind, ChartKind::Pie);
+
+    // A rotated label's footprint ALONG the axis is `w·cos θ + h·sin θ`.
+    // Escalate when the widest label's footprint at the tilt no longer fits the
+    // band pitch. At 90° the width term vanishes, so the vertical arm packs one
+    // label per line height at any count — which is why it is terminal.
+    let along_axis_footprint = |deg: f64, w: f64| -> f64 {
+        w * deg.to_radians().cos() + line_height * deg.to_radians().sin()
+    };
+
+    let category_strings: Vec<String> = categories.iter().map(|c| (*c).to_string()).collect();
+
+    let tilt_degrees = if !draws_category_labels || n == 0 || LABEL_TILT_DEGREES <= 0.0 {
+        // A zero tilt is a host opting out; honour it literally rather than
+        // escalating it to vertical.
+        0.0
+    } else if along_axis_footprint(LABEL_TILT_DEGREES, widest_of(&category_strings)) > band_w {
+        VERTICAL_TILT_DEGREES
+    } else {
+        LABEL_TILT_DEGREES
+    };
+
+    // ── Bottom margin ──
+    // Below the plot, top to bottom: the label offset, the tilted label's drop
+    // (`w·sin θ`), the padding, the x-axis title's own LINE (its offset measures
+    // to its BASELINE, so the glyphs above it need reserving separately), and
+    // that offset. Same ceiling-then-truncate posture as the left margin.
+    let sin_tilt = tilt_degrees.to_radians().sin();
+    let bottom_ceiling = MARGIN_BOTTOM_MAX_SHARE * H;
+    let drop_ceiling = (bottom_ceiling
+        - CATEGORY_LABEL_OFFSET_Y
+        - AXIS_LABEL_PADDING
+        - line_height
+        - AXIS_TITLE_BOTTOM_OFFSET)
+        .max(0.0);
+    let category_text_budget = if sin_tilt > 0.0 {
+        drop_ceiling / sin_tilt
+    } else {
+        f64::INFINITY
+    };
+    let category_texts: Vec<String> = if draws_category_labels {
+        category_strings
+            .iter()
+            .map(|c| truncate_to_width(tick_size, category_text_budget, c))
+            .collect()
+    } else {
+        vec![]
+    };
+    let required_bottom = CATEGORY_LABEL_OFFSET_Y
+        + sin_tilt * widest_of(&category_texts)
+        + AXIS_LABEL_PADDING
+        + line_height
+        + AXIS_TITLE_BOTTOM_OFFSET;
+    let margin_bottom = r2(MARGIN_BOTTOM.max(bottom_ceiling.min(required_bottom)));
+
+    let plot_y0 = MARGIN_TOP;
+    let plot_y1 = H - margin_bottom;
+    let plot_h = plot_y1 - plot_y0;
+
+    let y_scale = |v: f64| -> f64 { r2(plot_y1 - (v - nice_lo) / (nice_hi - nice_lo) * plot_h) };
+
+    let x_scale =
+        |v: f64| -> f64 { r2(plot_x0 + (v - x_nice_lo) / (x_nice_hi - x_nice_lo) * plot_w) };
 
     let mut shapes: Vec<Shape> = Vec::new();
 
@@ -776,7 +1016,7 @@ pub fn lower_chart_with(
     let push_title = |shapes: &mut Vec<Shape>| {
         if let Some(t) = title {
             shapes.push(Shape::Label {
-                x: r2(PLOT_X0),
+                x: r2(plot_x0),
                 y: 22.0,
                 text: t.clone(),
                 style: text_style(None, TextAnchor::Start, title_size, Emphasis::Loud),
@@ -801,8 +1041,8 @@ pub fn lower_chart_with(
         let refused = m != 1 || values.iter().any(|&v| v < 0.0);
         let total: f64 = values.iter().sum();
         if !refused && total > 0.0 {
-            let cx = r2((PLOT_X0 + PLOT_X1) / 2.0);
-            let cy = r2((PLOT_Y0 + PLOT_Y1) / 2.0);
+            let cx = r2((plot_x0 + plot_x1) / 2.0);
+            let cy = r2((plot_y0 + plot_y1) / 2.0);
             let radius = 130.0;
 
             let pt = |a: f64| -> DrawPoint {
@@ -941,9 +1181,9 @@ pub fn lower_chart_with(
     for &t in &ticks {
         let y = y_scale(t);
         shapes.push(Shape::Line {
-            x1: r2(PLOT_X0),
+            x1: r2(plot_x0),
             y1: y,
-            x2: r2(PLOT_X1),
+            x2: r2(plot_x1),
             y2: y,
             style: style_stroke_ink(GRID_OPACITY, 1.0),
         });
@@ -958,9 +1198,9 @@ pub fn lower_chart_with(
             let x = x_scale(t);
             shapes.push(Shape::Line {
                 x1: x,
-                y1: r2(PLOT_Y0),
+                y1: r2(plot_y0),
                 x2: x,
-                y2: r2(PLOT_Y1),
+                y2: r2(plot_y1),
                 style: style_stroke_ink(GRID_OPACITY, 1.0),
             });
         }
@@ -972,9 +1212,9 @@ pub fn lower_chart_with(
     if nice_lo < 0.0 && nice_hi > 0.0 {
         let y = y_scale(0.0);
         shapes.push(Shape::Line {
-            x1: r2(PLOT_X0),
+            x1: r2(plot_x0),
             y1: y,
-            x2: r2(PLOT_X1),
+            x2: r2(plot_x1),
             y2: y,
             style: style_stroke_ink(AXIS_OPACITY, 1.0),
         });
@@ -982,17 +1222,17 @@ pub fn lower_chart_with(
 
     // ── Axes ──
     shapes.push(Shape::Line {
-        x1: r2(PLOT_X0),
-        y1: r2(PLOT_Y0),
-        x2: r2(PLOT_X0),
-        y2: r2(PLOT_Y1),
+        x1: r2(plot_x0),
+        y1: r2(plot_y0),
+        x2: r2(plot_x0),
+        y2: r2(plot_y1),
         style: style_stroke_ink(AXIS_OPACITY, 1.0),
     });
     shapes.push(Shape::Line {
-        x1: r2(PLOT_X0),
-        y1: r2(PLOT_Y1),
-        x2: r2(PLOT_X1),
-        y2: r2(PLOT_Y1),
+        x1: r2(plot_x0),
+        y1: r2(plot_y1),
+        x2: r2(plot_x1),
+        y2: r2(plot_y1),
         style: style_stroke_ink(AXIS_OPACITY, 1.0),
     });
 
@@ -1005,9 +1245,9 @@ pub fn lower_chart_with(
         for &t in &ticks {
             let y = y_scale(t);
             shapes.push(Shape::Line {
-                x1: r2(PLOT_X0 - TICK_MARK_LENGTH),
+                x1: r2(plot_x0 - TICK_MARK_LENGTH),
                 y1: y,
-                x2: r2(PLOT_X0),
+                x2: r2(plot_x0),
                 y2: y,
                 style: style_stroke_ink(AXIS_OPACITY, 1.0),
             });
@@ -1015,9 +1255,9 @@ pub fn lower_chart_with(
         let x_mark = |x: f64| -> Shape {
             Shape::Line {
                 x1: x,
-                y1: r2(PLOT_Y1),
+                y1: r2(plot_y1),
                 x2: x,
-                y2: r2(PLOT_Y1 + TICK_MARK_LENGTH),
+                y2: r2(plot_y1 + TICK_MARK_LENGTH),
                 style: style_stroke_ink(AXIS_OPACITY, 1.0),
             }
         };
@@ -1035,9 +1275,11 @@ pub fn lower_chart_with(
     // ── y-axis tick labels — right-anchored (End) ──
     for &t in &ticks {
         shapes.push(Shape::Label {
-            x: r2(PLOT_X0 - TICK_LABEL_GAP),
+            x: r2(plot_x0 - TICK_LABEL_GAP),
             y: r2(y_scale(t) + 4.0),
-            text: TextSource::Literal(y_tick_text(t)),
+            // The margin-bounded text (Phase 879): whatever the margin was
+            // sized for is exactly what gets drawn.
+            text: TextSource::Literal(y_tick_label_text(t)),
             style: text_style(
                 Some(LABEL_OPACITY),
                 TextAnchor::End,
@@ -1053,7 +1295,7 @@ pub fn lower_chart_with(
         for &t in &x_ticks {
             shapes.push(Shape::Label {
                 x: x_scale(t),
-                y: r2(PLOT_Y1 + 20.0),
+                y: r2(plot_y1 + CATEGORY_LABEL_OFFSET_Y),
                 text: TextSource::Literal(x_tick_text(t)),
                 style: text_style(
                     Some(LABEL_OPACITY),
@@ -1064,31 +1306,47 @@ pub fn lower_chart_with(
             });
         }
     } else {
-        for (i, c) in categories.iter().enumerate() {
+        // A tilted category label is `End`-anchored at the band centre and
+        // rotated NEGATIVELY (counter-clockwise, against `rotation`'s clockwise
+        // convention): the anchor is the pivot, so the text ENDS under the
+        // band's tick and runs back down-and-left, reading up-to-the-right into
+        // it. The opposite sign would swing the same text up into the plot
+        // area. At 90° this degenerates to reading bottom-up.
+        for (i, c) in category_texts.iter().enumerate() {
             shapes.push(Shape::Label {
                 x: centre_x(i),
-                y: r2(PLOT_Y1 + 20.0),
-                text: TextSource::Literal((*c).to_string()),
-                style: text_style(
-                    Some(LABEL_OPACITY),
-                    TextAnchor::Middle,
-                    tick_size,
-                    Emphasis::Normal,
-                ),
+                y: r2(plot_y1 + CATEGORY_LABEL_OFFSET_Y),
+                text: TextSource::Literal(c.clone()),
+                style: if tilt_degrees > 0.0 {
+                    text_style_rotated(
+                        Some(LABEL_OPACITY),
+                        TextAnchor::End,
+                        tick_size,
+                        Emphasis::Normal,
+                        r2(-tilt_degrees),
+                    )
+                } else {
+                    text_style(
+                        Some(LABEL_OPACITY),
+                        TextAnchor::Middle,
+                        tick_size,
+                        Emphasis::Normal,
+                    )
+                },
             });
         }
     }
 
     // ── Axis titles (a name on both axes) ──
     shapes.push(Shape::Label {
-        x: r2((PLOT_X0 + PLOT_X1) / 2.0),
-        y: r2(H - 12.0),
+        x: r2((plot_x0 + plot_x1) / 2.0),
+        y: r2(H - AXIS_TITLE_BOTTOM_OFFSET),
         text: TextSource::Literal(capitalise(x_field)),
         style: text_style(None, TextAnchor::Middle, tick_size, Emphasis::Normal),
     });
     shapes.push(Shape::Label {
         x: r2(8.0),
-        y: r2(PLOT_Y0 - 12.0),
+        y: r2(plot_y0 - 12.0),
         // The top-left slot states the value axis's DISPLAY UNIT once when
         // scaling applies, and otherwise keeps the horizontal "Value" hint.
         text: TextSource::Literal(if y_display_unit.label.is_empty() {
@@ -1110,7 +1368,7 @@ pub fn lower_chart_with(
             let group_w = band_w * 0.7;
             let bw = r2((group_w * 0.9).min(BAR_MAX_THICKNESS));
             for (i, category) in categories.iter().enumerate() {
-                let bx = r2(PLOT_X0 + band_w * i as f64 + (band_w - bw) / 2.0);
+                let bx = r2(plot_x0 + band_w * i as f64 + (band_w - bw) / 2.0);
                 let cums = cums_for(i);
                 for j in 0..m {
                     let y0 = y_scale(cums[j]);
@@ -1145,7 +1403,7 @@ pub fn lower_chart_with(
                     // a cap takes air off BOTH sides and the group stays
                     // symmetric about the band centre (Phase 875).
                     let slot_x =
-                        PLOT_X0 + band_w * i as f64 + (band_w - group_w) / 2.0 + j as f64 * sub_w;
+                        plot_x0 + band_w * i as f64 + (band_w - group_w) / 2.0 + j as f64 * sub_w;
                     let bx = r2(slot_x + (sub_w - bw) / 2.0);
                     let vy = y_scale(v);
                     let top = vy.min(base_y);
@@ -1270,10 +1528,19 @@ pub fn lower_chart_with(
     }
 
     // ── Legend (only when >1 series) — a swatch + series name per series ──
+    //
+    // The pitch is PER ENTRY since Phase 879: an entry occupies its
+    // swatch-to-label offset, its own measured name width, and the inter-entry
+    // gap, so entries lay out cumulatively rather than on a fixed stride. A long
+    // series name now pushes its neighbour along instead of being overwritten by
+    // it. Legend POSITION and OVERFLOW are deliberately unchanged — they are one
+    // problem and land together in a later phase.
     if m > 1 {
+        let mut lx_acc = plot_x0;
         for (j, yf) in y_fields.iter().enumerate() {
             let colour = colour_for(j);
-            let lx = r2(PLOT_X0 + j as f64 * 100.0);
+            let lx = r2(lx_acc);
+            lx_acc += LEGEND_LABEL_OFFSET_X + text_width(tick_size, yf) + LEGEND_ENTRY_GAP;
             shapes.push(Shape::Rectangle {
                 x: lx,
                 y: 34.0,
@@ -1283,7 +1550,7 @@ pub fn lower_chart_with(
                 style: style_fill(colour),
             });
             shapes.push(Shape::Label {
-                x: r2(lx + 15.0),
+                x: r2(lx + LEGEND_LABEL_OFFSET_X),
                 y: 43.0,
                 text: TextSource::Literal(yf.clone()),
                 style: text_style(
