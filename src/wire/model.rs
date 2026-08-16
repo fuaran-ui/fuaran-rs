@@ -1232,6 +1232,19 @@ pub struct DrawStyle {
     /// omitted-when-`None` (rule 4). Chrome (axes, gridlines, labels, legend)
     /// deliberately stays unstamped.
     pub mark_id: Option<String>,
+    /// Phase 877 — clockwise `Label` text rotation in DEGREES about the label's
+    /// own anchor point (`Shape::Label`'s `x` / `y`). Renderers emit
+    /// `transform="rotate(θ x y)"` on the `<text>` element, so the anchor is the
+    /// pivot and `text_anchor` keeps its meaning in the rotated frame.
+    ///
+    /// Applies only to `Label`, like the other text-only fields — and here that
+    /// is load-bearing rather than cosmetic: an SVG `transform` on a `<rect>`
+    /// would MOVE GEOMETRY, so this is the one text field whose uniform
+    /// emission would silently distort a drawing.
+    ///
+    /// Omitted-when-`None` (rule 4). `Some(0.0)` is a legitimate PRESENT value
+    /// and a different wire shape from `None` — never collapse the two.
+    pub rotation: Option<f64>,
 }
 
 /// A single SVG path command inside a `Shape::Curve`. Closed + typed — an

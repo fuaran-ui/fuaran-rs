@@ -1042,6 +1042,12 @@ fn draw_style(style: &DrawStyle) -> String {
     if let Some(m) = &style.mark_id {
         fields.push(field("markId", s(m)));
     }
+    // Phase 877 — Label text rotation (degrees); omitted-when-None (rule 4).
+    // `if let Some` on the Option, NOT a test on the value: `Some(0.0)` is a
+    // present value and a distinct wire shape from `None`.
+    if let Some(rot) = &style.rotation {
+        fields.push(field("rotation", num(*rot)));
+    }
     obj(fields)
 }
 

@@ -949,3 +949,57 @@ fn form_control_class_vocabulary_matches_the_reference_renderer() {
         "form-control classes absent from the reference renderer vocabulary: {offenders:?}"
     );
 }
+
+#[test]
+fn drawing_label_rotation_anchors_at_the_label_position() {
+    // Phase 877 — the rotation transform pivots on the label's OWN (x, y), so it
+    // composes with `text_anchor` rather than fighting it, and the numbers use
+    // the shared canonical form. Byte-for-byte the strings the F# reference
+    // emitter produces for the same shapes: the corpus is the oracle for the
+    // codec, and this is the emission half it does not cover.
+    let html = render(
+        r#"{"id":"d","kind":{"$type":"Drawing","shapes":[
+            {"$type":"Label","style":{"rotation":-30},"text":"Q1","x":30,"y":100},
+            {"$type":"Label","style":{"rotation":12.34},"text":"F","x":110,"y":100},
+            {"$type":"Label","style":{"rotation":0},"text":"Z","x":150,"y":100},
+            {"$type":"Label","style":{},"text":"U","x":100,"y":20}
+        ],"style":{},"viewBox":{"height":120,"minX":0,"minY":0,"width":200}}}"#,
+    );
+
+    assert!(
+        html.contains(
+            "<text class=\"fuaran-drawing-label\" x=\"30\" y=\"100\" transform=\"rotate(-30 30 100)\""
+        ),
+        "rotation not anchored at the label position:\n{html}"
+    );
+    assert!(html.contains("transform=\"rotate(12.34 110 100)\""));
+    // An explicit 0 is a PRESENT value and must still emit — absent and zero are
+    // different wire shapes, and a renderer that conflates them re-introduces
+    // downstream the distinction the codec is careful to preserve.
+    assert!(
+        html.contains("transform=\"rotate(0 150 100)\""),
+        "explicit zero must still emit:\n{html}"
+    );
+    // The unrotated label carries no transform — the byte-unchanged guarantee
+    // for every pre-877 drawing.
+    assert!(html.contains("<text class=\"fuaran-drawing-label\" x=\"100\" y=\"20\">U</text>"));
+    assert_eq!(html.matches("transform=\"rotate(").count(), 3);
+}
+
+#[test]
+fn drawing_rotation_is_inert_off_label() {
+    // Unlike the other text-only `DrawStyle` fields, an SVG `transform` on a
+    // `<rect>` would MOVE GEOMETRY rather than be ignored — so uniform emission
+    // would silently distort drawings. The emitter writes it only for `Label`.
+    let html = render(
+        r#"{"id":"d","kind":{"$type":"Drawing","shapes":[
+            {"$type":"Rectangle","height":10,"style":{"rotation":45},"width":10,"x":0,"y":0},
+            {"$type":"Circle","cx":5,"cy":5,"r":2,"style":{"rotation":45}}
+        ],"style":{},"viewBox":{"height":100,"minX":0,"minY":0,"width":100}}}"#,
+    );
+
+    assert!(
+        !html.contains("transform="),
+        "rotation must be inert on non-Label shapes:\n{html}"
+    );
+}

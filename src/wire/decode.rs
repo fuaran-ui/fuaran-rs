@@ -3163,6 +3163,8 @@ fn decode_draw_style(path: &str, j: &JVal) -> DResult<DrawStyle> {
         font_family: opt_string(path, fields, "fontFamily")?,
         // Phase 642 — keyed mark identity; omitted-when-None.
         mark_id: opt_string(path, fields, "markId")?,
+        // Phase 877 — Label text rotation in degrees; optional, no default.
+        rotation: opt_float(path, fields, "rotation")?,
     })
 }
 

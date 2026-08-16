@@ -1531,10 +1531,25 @@ fn render_shape(ctx: &Ctx<'_>, sh: &crate::wire::Shape) -> String {
             draw_num(*ry),
             draw_style_attrs(style, false)
         ),
+        // Phase 877 — the rotation transform is built HERE rather than in
+        // `draw_style_attrs` because the pivot is the label's own anchor point,
+        // which the style record does not carry; `draw_style_attrs` is shared by
+        // every shape and stays position-free. Anchoring at (x, y) is what makes
+        // the rotation compose with `text_anchor` — the text turns about the
+        // point it is aligned to. Degrees, clockwise (SVG's own convention).
         S::Label { x, y, text, style } => format!(
-            "<text class=\"fuaran-drawing-label\" x=\"{}\" y=\"{}\"{}>{}</text>",
+            "<text class=\"fuaran-drawing-label\" x=\"{}\" y=\"{}\"{}{}>{}</text>",
             draw_num(*x),
             draw_num(*y),
+            style
+                .rotation
+                .map(|deg| format!(
+                    " transform=\"rotate({} {} {})\"",
+                    draw_num(deg),
+                    draw_num(*x),
+                    draw_num(*y)
+                ))
+                .unwrap_or_default(),
             draw_style_attrs(style, false),
             escape_text(&render_text(ctx.sources, text))
         ),

@@ -242,6 +242,10 @@ fn text_style(
         stroke: None,
         stroke_width: None,
         mark_id: None,
+        // Phase 877 — the lowering stays upright here; the tilt / vertical
+        // escalation / rotated y-title APPLICATIONS land with the chart-style
+        // phases, so this host's goldens are deliberately unchanged.
+        rotation: None,
     }
 }
 
