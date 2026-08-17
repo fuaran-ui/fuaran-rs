@@ -46,8 +46,8 @@
 
 use crate::canonical::format_number;
 use crate::wire::{
-    Binding, ChartDataLabels, ChartKind, ChartLegendPosition, CurveCommand, DrawPoint, DrawStyle,
-    DrawingSpec, Emphasis, Format, Shape, StaticValue, TextAnchor, TextSource, ViewBox,
+    Binding, ChartDataLabels, ChartKind, ChartLegendPosition, ChartXScale, CurveCommand, DrawPoint,
+    DrawStyle, DrawingSpec, Emphasis, Format, Shape, StaticValue, TextAnchor, TextSource, ViewBox,
 };
 
 // ─── Layout constants (the fixed canonical drawing space) ────────────────────
@@ -383,10 +383,15 @@ fn nice_num(x: f64, round_it: bool) -> f64 {
     nf * 10f64.powf(exp)
 }
 
+/// The value axis's target tick count — `nice_domain`'s target, and the base the
+/// temporal ladder's ceiling is ONE MORE than (Phase 882): a continuous step can
+/// be tuned to hit a target, a calendar rung jumps by 2–3× and cannot.
+const TARGET_TICK_COUNT: f64 = 5.0;
+
 /// A nice value domain + its tick values for `[lo, hi]`, targeting ~5 ticks.
 fn nice_domain(lo: f64, hi: f64) -> (f64, f64, f64, Vec<f64>) {
     let hi = if hi == lo { lo + 1.0 } else { hi };
-    let target_ticks = 5.0;
+    let target_ticks = TARGET_TICK_COUNT;
     let range = nice_num(hi - lo, false);
     let step = nice_num(range / (target_ticks - 1.0), true);
     let nice_lo = (lo / step).floor() * step;
@@ -395,6 +400,458 @@ fn nice_domain(lo: f64, hi: f64) -> (f64, f64, f64, Vec<f64>) {
     let count = ((nice_hi - nice_lo) / step).round() as i64;
     let ticks = (0..=count).map(|i| r2(nice_lo + i as f64 * step)).collect();
     (nice_lo, nice_hi, step, ticks)
+}
+
+// ─── The temporal x-axis (Phase 882) ─────────────────────────────────────────
+//
+// NORMATIVE CROSS-HOST SPEC, the same standing as the text metrics and the
+// number formatter above: every conformant host reproduces this module exactly,
+// and the shared `chart-lowering/*temporal*` goldens pin it byte-for-byte.
+//
+// FIVE RULES, and each one exists to remove a way two hosts could disagree.
+//
+//   1. THE UNIT IS THE DAY, and a date is an INTEGER: days since 1970-01-01 in
+//      the PROLEPTIC GREGORIAN calendar. Nothing here reads a host date type, a
+//      locale, a time zone, or a clock — no `std::time`, no date crate, ever, in
+//      the layout path. The conversions are the fixed integer algorithms below
+//      (Howard Hinnant's `days_from_civil` / `civil_from_days`, public domain),
+//      exact for every date they admit and needing no leap-year table. A
+//      timestamp cell's TIME-OF-DAY IS DISCARDED: the value is its UTC date.
+//      That is the whole of the axis's time-zone policy, and it is stated rather
+//      than inherited, because inheriting it from a host would make the picture
+//      depend on where it was drawn.
+//
+//      Integer division must TRUNCATE TOWARD ZERO. Rust's `/` on integers
+//      already does, which is exactly what these algorithms require — do NOT
+//      "fix" it to a floor (JavaScript needs `Math.trunc`, Python a truncating
+//      helper rather than `//`, which floors). The two algorithms bias their
+//      operands into the non-negative range precisely so truncation is the only
+//      convention they need.
+//
+//   2. THE DOMAIN IS THE DATA'S OWN EXTENT, UNEXPANDED — `[min, max]`, so the
+//      first and last points sit on the plot's edges. It is NOT snapped outward
+//      to a tick boundary (the value axis's `nice_domain` posture), because a
+//      calendar boundary is a coarse thing to round to: nicing a 30-day domain
+//      to whole months would add a month of empty plot at each end to make room
+//      for ticks nobody asked for. The ticks come to the domain instead. A
+//      degenerate domain (every row the same date, or no rows) becomes
+//      `[lo, lo+1]`, the same guard `nice_domain` applies for the same reason.
+//
+//   3. THE TICKS ARE CALENDAR-ALIGNED INSTANTS INSIDE THE DOMAIN, at a step
+//      drawn from a FIXED LADDER — the `{1,2,5}·10ⁿ` rule's analogue for units
+//      that are not decimal:
+//
+//        1, 2, 5, 10 DAYS · 1, 2, 3, 6 MONTHS · {1,2,5}·10ⁿ YEARS (n ≤ 6)
+//
+//      The chosen rung is the FIRST whose in-domain tick count fits the ceiling;
+//      the coarsest rung is the fallback nothing else fits. Day rungs step from
+//      the DOMAIN'S OWN START (a "nice" 2-day or 5-day boundary does not exist —
+//      days are uniform, so the honest anchor is the first datum); month rungs
+//      land on month starts where `(month-1) mod k = 0`, which makes `k = 3` the
+//      calendar quarters and `k = 6` January and July; year rungs land on the
+//      January 1 of years where `year mod k = 0`.
+//
+//      The ceiling is `TARGET_TICK_COUNT + 1` (6 at the shipped default) rather
+//      than the target itself. The value axis's step is CONTINUOUS and can be
+//      tuned to hit a target; a calendar rung jumps by 2–3× and cannot, so
+//      rounding down a rung loses roughly half the ticks. Counts are computed
+//      WITHOUT generating the ticks, so the ladder can be walked from its
+//      densest rung on a millennium-wide domain without unbounded work.
+//
+//   4. THE FORMAT FOLLOWS THE STEP'S NOMINAL LENGTH, at the operator's
+//      thresholds: `> 365` days ⇒ `yyyy`, `> 27` ⇒ `mmm yy`, else `dd mmm yy`.
+//      Nominal, not measured: a month is `365.2425 / 12 = 30.436875` days and a
+//      year `365.2425`, so the rung decides the format and the DATA cannot.
+//      Measuring the actual tick gaps instead would put the year rung's average
+//      at exactly 365.0 across a run of non-leap years (1900–1903, say) and flip
+//      a decade chart from `yyyy` to `mmm yy` on a property of the calendar
+//      nobody was asking about. The thresholds are calibrated for this: the
+//      1-month rung clears 27 and the 6-month rung does not clear 365, so each
+//      threshold separates two ADJACENT rungs.
+//
+//   5. THE MONTH NAMES ARE PART OF THE SPEC. English three-letter
+//      abbreviations, invariant, never a locale lookup — an i18n date axis is a
+//      different feature with its own vocabulary, and a chart whose golden bytes
+//      changed with the host's culture would not be certifiable at all.
+
+/// The English three-letter month abbreviations, in calendar order. INVARIANT —
+/// part of the wire-visible spec (rule 5), never a locale lookup.
+const MONTH_NAMES: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// The calendar unit a tick step counts in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TemporalUnit {
+    Days,
+    Months,
+    Years,
+}
+
+/// One rung of the ladder: `count` of `unit`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TemporalStep {
+    unit: TemporalUnit,
+    count: i64,
+}
+
+/// The calendar the temporal x-axis runs on, and the tick rule over it. Pure
+/// integer arithmetic over days since 1970-01-01 (proleptic Gregorian): no host
+/// date type, no locale, no time zone, no time-of-day.
+mod temporal {
+    use super::{MONTH_NAMES, TemporalStep, TemporalUnit};
+
+    /// Gregorian leap year (proleptic — the rule applies to every year the parser
+    /// admits, with no historical exception).
+    const fn is_leap_year(y: i64) -> bool {
+        (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+    }
+
+    /// Days in a month — the one place the calendar's irregularity is written
+    /// down, used by the PARSER only (the conversions below need no table).
+    const fn days_in_month(y: i64, m: i64) -> i64 {
+        if m == 2 {
+            if is_leap_year(y) { 29 } else { 28 }
+        } else if m == 4 || m == 6 || m == 9 || m == 11 {
+            30
+        } else {
+            31
+        }
+    }
+
+    /// `(y, m, d)` → days since 1970-01-01. Hinnant's `days_from_civil`: exact for
+    /// every proleptic-Gregorian date, no leap table, integer-only. Division
+    /// truncates toward zero — the operands are biased so that is the only
+    /// convention needed (rule 1).
+    pub const fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+        let y = if month <= 2 { year - 1 } else { year };
+        let era = (if y >= 0 { y } else { y - 399 }) / 400;
+        let yoe = y - era * 400; // [0, 399]
+        let mp = if month > 2 { month - 3 } else { month + 9 }; // March-based month
+        let doy = (153 * mp + 2) / 5 + day - 1; // [0, 365]
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+        era * 146097 + doe - 719468
+    }
+
+    /// Days since 1970-01-01 → `(y, m, d)`. Hinnant's `civil_from_days`, the exact
+    /// inverse of [`days_from_civil`].
+    pub const fn civil_from_days(days: i64) -> (i64, i64, i64) {
+        let z = days + 719468;
+        let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+        let doe = z - era * 146097; // [0, 146096]
+        let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+        let mp = (5 * doy + 2) / 153; // [0, 11], March-based
+        let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+        let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+        (if m <= 2 { y + 1 } else { y }, m, d)
+    }
+
+    /// Parse a canonical ISO-8601 date to days since epoch — `YYYY-MM-DD`,
+    /// optionally followed by `T…`, whose time-of-day is DISCARDED (rule 1).
+    /// STRICT by shape and by calendar: four digits, two, two, both hyphens, a
+    /// month in 1–12 and a day the month actually has. `None` for everything
+    /// else, including a locale spelling (`15/01/2026`) and a bare year —
+    /// admitting either would be the string-sniffing this axis exists to avoid.
+    ///
+    /// Indexes BYTES, never chars, and never slices: every byte the shape admits
+    /// is ASCII, so a multi-byte character can only make a comparison FAIL. Both
+    /// length gates precede every index, so a non-ASCII input returns `None`
+    /// rather than panicking.
+    pub fn try_parse_day(text: &str) -> Option<i64> {
+        let b = text.as_bytes();
+        if b.len() < 10 {
+            return None;
+        }
+        if b[4] != b'-' || b[7] != b'-' {
+            return None;
+        }
+        if b.len() > 10 && b[10] != b'T' {
+            return None;
+        }
+        let digits = |start: usize, len: usize| -> Option<i64> {
+            let mut acc: i64 = 0;
+            for &c in &b[start..start + len] {
+                if c.is_ascii_digit() {
+                    acc = acc * 10 + i64::from(c - b'0');
+                } else {
+                    return None;
+                }
+            }
+            Some(acc)
+        };
+        match (digits(0, 4), digits(5, 2), digits(8, 2)) {
+            (Some(y), Some(m), Some(d))
+                if (1..=12).contains(&m) && d >= 1 && d <= days_in_month(y, m) =>
+            {
+                Some(days_from_civil(y, m, d))
+            }
+            _ => None,
+        }
+    }
+
+    /// The day number a row's x cell carries, with an UNPARSEABLE cell reading as
+    /// the epoch. That mirrors `numeric_of`'s posture for a non-numeric value-axis
+    /// cell — the lowering stays total and the grounding rule (FUARAN097) is what
+    /// makes a non-date column loud, upstream, before any picture is drawn.
+    /// Silence here is not the design; refusing here would be.
+    pub fn day_of(text: &str) -> i64 {
+        try_parse_day(text).unwrap_or(0)
+    }
+
+    /// The step's NOMINAL length in days (rule 4) — a mean Gregorian month and
+    /// year, so the FORMAT is a property of the rung rather than of the data.
+    pub fn nominal_days(step: TemporalStep) -> f64 {
+        match step.unit {
+            TemporalUnit::Days => step.count as f64,
+            TemporalUnit::Months => step.count as f64 * 30.436_875, // 365.2425 / 12
+            TemporalUnit::Years => step.count as f64 * 365.2425,
+        }
+    }
+
+    /// One rung, spelled out.
+    const fn rung(unit: TemporalUnit, count: i64) -> TemporalStep {
+        TemporalStep { unit, count }
+    }
+
+    /// The ladder, ASCENDING (rule 3). Written out rather than generated: it is a
+    /// pinned vocabulary five hosts mirror, and an explicit list cannot drift on a
+    /// difference of opinion about integer exponentiation.
+    const LADDER: [TemporalStep; 29] = [
+        rung(TemporalUnit::Days, 1),
+        rung(TemporalUnit::Days, 2),
+        rung(TemporalUnit::Days, 5),
+        rung(TemporalUnit::Days, 10),
+        rung(TemporalUnit::Months, 1),
+        rung(TemporalUnit::Months, 2),
+        rung(TemporalUnit::Months, 3),
+        rung(TemporalUnit::Months, 6),
+        rung(TemporalUnit::Years, 1),
+        rung(TemporalUnit::Years, 2),
+        rung(TemporalUnit::Years, 5),
+        rung(TemporalUnit::Years, 10),
+        rung(TemporalUnit::Years, 20),
+        rung(TemporalUnit::Years, 50),
+        rung(TemporalUnit::Years, 100),
+        rung(TemporalUnit::Years, 200),
+        rung(TemporalUnit::Years, 500),
+        rung(TemporalUnit::Years, 1_000),
+        rung(TemporalUnit::Years, 2_000),
+        rung(TemporalUnit::Years, 5_000),
+        rung(TemporalUnit::Years, 10_000),
+        rung(TemporalUnit::Years, 20_000),
+        rung(TemporalUnit::Years, 50_000),
+        rung(TemporalUnit::Years, 100_000),
+        rung(TemporalUnit::Years, 200_000),
+        rung(TemporalUnit::Years, 500_000),
+        rung(TemporalUnit::Years, 1_000_000),
+        rung(TemporalUnit::Years, 2_000_000),
+        rung(TemporalUnit::Years, 5_000_000),
+    ];
+
+    /// Round an index UP to the next multiple of `k`.
+    const fn ceil_to(k: i64, i: i64) -> i64 {
+        (i + k - 1) / k * k
+    }
+
+    /// The aligned window a MONTH rung covers: `(first aligned month index,
+    /// count)` over `[lo, hi]`, in month-index space (`year·12 + month - 1`).
+    /// Closed-form, so a count never generates a tick.
+    fn month_window(k: i64, lo: i64, hi: i64) -> (i64, i64) {
+        let (y0, m0, d0) = civil_from_days(lo);
+        // A `lo` past the 1st means `lo`'s own month start is outside the domain.
+        let first_idx = (y0 * 12 + m0 - 1) + i64::from(d0 > 1);
+        let first = ceil_to(k, first_idx);
+        let (y1, m1, _) = civil_from_days(hi);
+        // `hi`'s own month start is always inside the domain (its day ≥ 1).
+        let last = (y1 * 12 + m1 - 1) / k * k;
+        if last < first {
+            (first, 0)
+        } else {
+            (first, (last - first) / k + 1)
+        }
+    }
+
+    /// The YEAR rung's twin of [`month_window`], in year space.
+    fn year_window(k: i64, lo: i64, hi: i64) -> (i64, i64) {
+        let (y0, m0, d0) = civil_from_days(lo);
+        let first_year = y0 + i64::from(!(m0 == 1 && d0 == 1));
+        let first = ceil_to(k, first_year);
+        let (y1, _, _) = civil_from_days(hi);
+        let last = y1 / k * k;
+        if last < first {
+            (first, 0)
+        } else {
+            (first, (last - first) / k + 1)
+        }
+    }
+
+    /// How many `step`-aligned ticks fall in `[lo, hi]` — CLOSED-FORM, never by
+    /// generation (rule 3), so walking the ladder is O(rungs) whatever the span.
+    fn tick_count(step: TemporalStep, lo: i64, hi: i64) -> i64 {
+        if hi < lo {
+            return 0;
+        }
+        match step.unit {
+            TemporalUnit::Days => (hi - lo) / step.count + 1,
+            TemporalUnit::Months => month_window(step.count, lo, hi).1,
+            TemporalUnit::Years => year_window(step.count, lo, hi).1,
+        }
+    }
+
+    /// The `step`-aligned ticks in `[lo, hi]`, ascending.
+    pub fn ticks(step: TemporalStep, lo: i64, hi: i64) -> Vec<i64> {
+        if hi < lo {
+            return vec![];
+        }
+        match step.unit {
+            TemporalUnit::Days => (0..=(hi - lo) / step.count)
+                .map(|i| lo + i * step.count)
+                .collect(),
+            TemporalUnit::Months => {
+                let (first, count) = month_window(step.count, lo, hi);
+                (0..count)
+                    .map(|i| {
+                        let idx = first + i * step.count;
+                        days_from_civil(idx / 12, idx % 12 + 1, 1)
+                    })
+                    .collect()
+            }
+            TemporalUnit::Years => {
+                let (first, count) = year_window(step.count, lo, hi);
+                (0..count)
+                    .map(|i| days_from_civil(first + i * step.count, 1, 1))
+                    .collect()
+            }
+        }
+    }
+
+    /// The chosen rung: the FIRST whose in-domain tick count fits `max_ticks`,
+    /// else the coarsest (rule 3). Total — the ladder is never empty.
+    pub fn choose_step(max_ticks: i64, lo: i64, hi: i64) -> TemporalStep {
+        LADDER
+            .iter()
+            .copied()
+            .find(|s| tick_count(*s, lo, hi) <= max_ticks)
+            .unwrap_or(LADDER[LADDER.len() - 1])
+    }
+
+    /// The domain: the data's own extent, unexpanded, with the degenerate guard
+    /// (rule 2). No rows ⇒ `[0, 1]` — the epoch day and the one after it, which
+    /// draws an axis rather than dividing by zero.
+    pub fn domain(days: &[i64]) -> (i64, i64) {
+        if days.is_empty() {
+            return (0, 1);
+        }
+        let lo = days.iter().copied().min().unwrap_or(0);
+        let hi = days.iter().copied().max().unwrap_or(0);
+        if hi == lo { (lo, lo + 1) } else { (lo, hi) }
+    }
+
+    /// Left-pad `v` with zeroes to `width`.
+    fn pad(width: usize, v: i64) -> String {
+        let s = v.to_string();
+        if s.len() >= width {
+            s
+        } else {
+            format!("{}{s}", "0".repeat(width - s.len()))
+        }
+    }
+
+    /// The tick label for `day` under `step` — the granularity-adaptive format
+    /// (rule 4). `yyyy` past a year, `mmm yy` past 27 days, else `dd mmm yy`.
+    pub fn label(step: TemporalStep, day: i64) -> String {
+        let (y, m, d) = civil_from_days(day);
+        let nominal = nominal_days(step);
+        let yy = pad(2, y % 100);
+        let mmm = MONTH_NAMES[(m - 1) as usize];
+        if nominal > 365.0 {
+            pad(4, y)
+        } else if nominal > 27.0 {
+            format!("{mmm} {yy}")
+        } else {
+            format!("{} {mmm} {yy}", pad(2, d))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{civil_from_days, days_from_civil, try_parse_day};
+
+        /// The two conversions are exact inverses across four centuries. Sampled
+        /// (every 7th day) rather than exhaustive, so the test stays fast while
+        /// still crossing every leap rule and every month length.
+        #[test]
+        fn civil_conversions_round_trip_across_four_centuries() {
+            // 1800-01-01 .. 2200-01-01 in days since the epoch.
+            let lo = days_from_civil(1800, 1, 1);
+            let hi = days_from_civil(2200, 1, 1);
+            let mut d = lo;
+            while d <= hi {
+                let (y, m, dd) = civil_from_days(d);
+                assert_eq!(days_from_civil(y, m, dd), d, "round-trip failed at day {d}");
+                d += 7;
+            }
+        }
+
+        /// The pair a naive four-year rule fails: 1900 is NOT a leap year (divisible
+        /// by 100, not by 400) and 2000 IS. Pinned because the whole calendar rests
+        /// on the century exception being right.
+        #[test]
+        fn leap_century_exception_is_honoured() {
+            assert_eq!(try_parse_day("1900-02-29"), None);
+            assert!(try_parse_day("2000-02-29").is_some());
+            // 1900-03-01 is exactly one day after 1900-02-28.
+            assert_eq!(
+                days_from_civil(1900, 3, 1) - days_from_civil(1900, 2, 28),
+                1
+            );
+            // 2000-03-01 is two days after 2000-02-28, the 29th between them.
+            assert_eq!(
+                days_from_civil(2000, 3, 1) - days_from_civil(2000, 2, 28),
+                2
+            );
+        }
+
+        /// The epoch itself, and a date the goldens depend on.
+        #[test]
+        fn the_epoch_is_day_zero() {
+            assert_eq!(try_parse_day("1970-01-01"), Some(0));
+            assert_eq!(try_parse_day("2026-02-01"), Some(20485));
+            // Pre-epoch dates are negative, not refused.
+            assert_eq!(try_parse_day("1969-12-31"), Some(-1));
+        }
+
+        /// STRICT by shape and by calendar, and TOTAL over any input — including
+        /// non-ASCII, which must return `None` rather than panic on a byte index.
+        #[test]
+        fn the_parser_is_strict_and_total() {
+            // A timestamp's time-of-day is discarded, never refused.
+            assert_eq!(try_parse_day("2026-02-01T13:45:00Z"), Some(20485));
+            assert_eq!(try_parse_day("2026-02-01T00:00:00"), Some(20485));
+            for bad in [
+                "",
+                "2026",
+                "2026-02",
+                "2026-2-1",
+                "15/01/2026",
+                "1 Feb 2026",
+                "2026-13-01", // month out of range
+                "2026-00-01",
+                "2026-02-30",  // a day February never has
+                "2026-04-31",  // nor April
+                "2026/02/01",  // wrong separators
+                "2026-02-01X", // a suffix that is not `T`
+                "20xx-02-01",
+                "2026-02-0é", // multi-byte tail — must not panic
+                "202é-02-01", // multi-byte inside the year
+                "日付-02-01", // wholly non-ASCII
+            ] {
+                assert_eq!(try_parse_day(bad), None, "expected {bad:?} to be refused");
+            }
+        }
+    }
 }
 
 /// Canonical SVG number form for a stored tick-label string — a whole value
@@ -914,6 +1371,12 @@ pub struct ChartTitles<'a> {
     /// to the pre-881 picture byte-for-byte. `Ends` labels bar CAPS (a stacked
     /// bar's TOTAL only) and LINE/AREA ENDPOINTS, and there is no third value.
     pub data_labels: Option<ChartDataLabels>,
+    /// Phase 882 — what the x column MEANS: discrete `Category` bands (the
+    /// default, and what an absent field means) or `Temporal` dates on a
+    /// continuous day-scale. DECLARED, never inferred — see the temporal-axis
+    /// spec block above. Absent lowers to the pre-882 picture byte-for-byte, and
+    /// a `Temporal` declaration on a PIE is neutralised (a pie has no x axis).
+    pub x_scale: Option<ChartXScale>,
 }
 
 /// Lower under an explicit value-axis `Format` (a wire declaration) and an
@@ -1010,27 +1473,106 @@ pub fn lower_chart_with(
     // zero-anchored with the other arms, deliberately: one shared y-domain
     // rule).
     let is_scatter = matches!(kind, ChartKind::Scatter);
-    let x_values: Vec<f64> = if is_scatter {
+
+    // ── Temporal x-scale (Phase 882 — the SECOND non-band x-scale) ──
+    //
+    // DECLARED, never inferred. `ChartSpec.xScale = Temporal` is the author
+    // saying "this column is dates"; the language then GROUNDS that claim against
+    // the statically-known column type (FUARAN097) wherever it can. Inference was
+    // the alternative and is wrong twice over: the schema is statically known only
+    // for an embedded table with an EMPTY pipeline (FUARAN086's window), so an
+    // inferred axis would make the same tree draw a band axis or a temporal one
+    // depending on where its rows came from — a picture that depends on data
+    // PROVENANCE — and sniffing the cell strings for an ISO-8601 shape is the
+    // guess-dressed-as-a-rule Phase 878 refused. Absent is `Category`, which is
+    // every pre-882 chart, byte-for-byte.
+    //
+    // Pie is excluded because it HAS no x axis: a temporal declaration there is
+    // dead intent the polar arm cannot honour, and neutralising it here keeps the
+    // pie geometry free of a scale it never reads.
+    let is_temporal =
+        matches!(titles.x_scale, Some(ChartXScale::Temporal)) && !matches!(kind, ChartKind::Pie);
+
+    // Each row's x as a DAY NUMBER, read off the same string projection the band
+    // arms label with — which is exactly the canonical ISO-8601 form a date /
+    // timestamp cell carries through the row bridge. So the mark identity keeps
+    // the ISO string while the geometry uses the integer, and neither has to be
+    // derived from the other.
+    let day_values: Vec<i64> = if is_temporal {
+        categories.iter().map(|c| temporal::day_of(c)).collect()
+    } else {
+        vec![]
+    };
+
+    // The x axis is CONTINUOUS (Phase 903's split) on exactly two arms: the
+    // Scatter arm's numeric x and a temporal x. Everything keyed off this — tick
+    // marks AT the value, vertical gridlines, marks placed by value rather than by
+    // band index — follows from that one property rather than from a list of kinds.
+    let is_continuous_x = is_scatter || is_temporal;
+
+    let x_values: Vec<f64> = if is_temporal {
+        day_values.iter().map(|&d| d as f64).collect()
+    } else if is_scatter {
         rows.iter().map(|r| r.x_value).collect()
     } else {
         vec![]
     };
-    let (x_nice_lo, x_nice_hi, x_step, x_ticks) = if is_scatter {
-        if x_values.is_empty() {
-            nice_domain(0.0, 1.0)
-        } else {
-            let lo = x_values.iter().copied().fold(f64::INFINITY, f64::min);
-            let hi = x_values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            nice_domain(lo, hi)
-        }
+
+    // The chosen calendar rung, on a temporal axis only. ONE value decides both
+    // the tick positions and the label format, so the two cannot disagree about
+    // the axis's granularity.
+    let temporal_step: Option<TemporalStep> = if is_temporal {
+        let (lo, hi) = temporal::domain(&day_values);
+        Some(temporal::choose_step(TARGET_TICK_COUNT as i64 + 1, lo, hi))
     } else {
-        (0.0, 1.0, 1.0, vec![])
+        None
+    };
+
+    let (x_nice_lo, x_nice_hi, x_step, x_ticks) = match temporal_step {
+        // The domain is the data's own extent (rule 2) — deliberately NOT nice-d
+        // outward — and the ticks are the calendar-aligned instants inside it.
+        // `x_step` carries the rung's NOMINAL length, which is what the label
+        // format reads.
+        Some(step) => {
+            let (lo, hi) = temporal::domain(&day_values);
+            (
+                lo as f64,
+                hi as f64,
+                temporal::nominal_days(step),
+                temporal::ticks(step, lo, hi)
+                    .into_iter()
+                    .map(|t| t as f64)
+                    .collect(),
+            )
+        }
+        None => {
+            if is_scatter {
+                if x_values.is_empty() {
+                    nice_domain(0.0, 1.0)
+                } else {
+                    let lo = x_values.iter().copied().fold(f64::INFINITY, f64::min);
+                    let hi = x_values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                    nice_domain(lo, hi)
+                }
+            } else {
+                (0.0, 1.0, 1.0, vec![])
+            }
+        }
     };
     // The Scatter arm's x IS a value axis, so its ticks take the same canonical
     // formatter (Phase 876). `value_format` is deliberately NOT applied to it:
     // one declared meaning cannot be true of two different measures, and there
     // is no second axis-unit slot to state an x display unit in.
-    let x_tick_text = |v: f64| -> String { format_value(None, 1.0, false, x_step, v) };
+    //
+    // A TEMPORAL tick takes the calendar label instead (Phase 882) — the same
+    // one-formatter-per-axis discipline over a different vocabulary: the number
+    // formatter has nothing true to say about a date.
+    let x_tick_text = |v: f64| -> String {
+        match temporal_step {
+            Some(step) => temporal::label(step, v as i64),
+            None => format_value(None, 1.0, false, x_step, v),
+        }
+    };
 
     let tick_size = TICK_FONT_SIZE;
     let title_size = 18.0;
@@ -1173,7 +1715,19 @@ pub fn lower_chart_with(
             }
         };
 
-    let x_title = axis_title_of(titles.x_title, x_field);
+    // Phase 882 wires Phase 878's date-axis rule: a SELF-EVIDENT DATE AXIS
+    // SUPPRESSES ITS DEFAULT TITLE — an axis reading "Jan Feb Mar" does not need
+    // the word "Month" beneath it. Two boundaries, both stated when the rule was written
+    // down and both kept: it applies to the FALLBACK only (an explicit `xTitle` is
+    // the author overriding the default and always draws), and it suppresses the
+    // TITLE, never the axis. The declaration is what made it wirable — nothing
+    // before 882 could tell a date column from a string one, which is why 878
+    // recorded the rule instead of shipping it.
+    let x_title = if is_temporal && titles.x_title.is_none() {
+        None
+    } else {
+        axis_title_of(titles.x_title, x_field)
+    };
 
     // The y fallback is the capitalised FIRST y-field. It is the honest answer
     // to "what is on this axis", where the retired `"Value"` literal named
@@ -1237,12 +1791,12 @@ pub fn lower_chart_with(
     // tick marks land here, where a label lands at `centre_x`.
     let boundary_x = |i: usize| -> f64 { r2(plot_x0 + band_w * i as f64) };
 
-    // ── The category-label ANGLE LADDER (Phase 903, correcting Phase 879) ──
-    // Only the BAND arms label categories: Scatter labels numeric x ticks (short
-    // by construction, left horizontal) and Pie has no x axis. Both must
-    // therefore contribute NO drop, or their bottom margin — and with it the
-    // pie's centre — would move for a decision they never take.
-    let draws_category_labels = !is_scatter && !matches!(kind, ChartKind::Pie);
+    // ── The x-axis-label ANGLE LADDER (Phase 903, correcting Phase 879) ──
+    // The BAND arms label categories; Pie has no x axis at all and Scatter labels
+    // numeric x ticks (short by construction, left horizontal). Both of those must
+    // contribute NO drop, or their bottom margin — and with it the pie's centre —
+    // would move for a decision they never take.
+    let draws_category_labels = !is_scatter && !is_temporal && !matches!(kind, ChartKind::Pie);
 
     // A rotated label's footprint ALONG the axis is `w·cos θ + h·sin θ`. At 0°
     // that is the bare width (`cos 0 = 1`, `sin 0 = 0`, both exact on every
@@ -1253,20 +1807,64 @@ pub fn lower_chart_with(
         w * deg.to_radians().cos() + line_height * deg.to_radians().sin()
     };
 
-    let category_strings: Vec<String> = categories.iter().map(|c| (*c).to_string()).collect();
+    // Phase 882 — a TEMPORAL axis labels its TICKS, and the ladder applies to
+    // them: same three rungs, same footprint formula, measured against the TICK
+    // PITCH instead of the band pitch. A date label is not short by construction
+    // the way a numeric tick is (`15 Jan 26` against `150`), so leaving it
+    // always-flat would recreate exactly the overlap the ladder exists to resolve
+    // — and reusing the ladder rather than adding a second rule is what keeps one
+    // angle policy for the whole x axis.
+    let temporal_tick_texts: Vec<String> = if is_temporal {
+        x_ticks.iter().map(|&t| x_tick_text(t)).collect()
+    } else {
+        vec![]
+    };
+
+    // Whether the x axis draws labels the ladder governs at all — the band arms'
+    // categories or a temporal axis's ticks. Scatter and Pie: no.
+    let draws_x_axis_labels = draws_category_labels || is_temporal;
+
+    // The pitch the ladder measures a label against: a band's width, or — on a
+    // temporal axis — the SMALLEST pixel gap between consecutive ticks, since
+    // calendar gaps are not uniform (28 to 31 days a month) and the tightest pair
+    // is the one that has to fit. Computable here because it needs `plot_w` only,
+    // which the left margin has already fixed: the acyclicity Phase 879
+    // established survives intact, with nothing reading the bottom margin the
+    // ladder is about to decide.
+    let x_label_pitch = if is_temporal {
+        let span = x_nice_hi - x_nice_lo;
+        if x_ticks.len() < 2 {
+            plot_w
+        } else {
+            let min_gap = x_ticks
+                .windows(2)
+                .fold(span, |acc, pair| acc.min(pair[1] - pair[0]));
+            plot_w * min_gap / span
+        }
+    } else {
+        band_w
+    };
+
+    // The labels the ladder decides on, AS AUTHORED (see below).
+    let x_labels_as_authored: Vec<String> = if is_temporal {
+        temporal_tick_texts
+    } else {
+        categories.iter().map(|c| (*c).to_string()).collect()
+    };
 
     // THREE RUNGS, ONE PREDICATE, applied to the WIDEST label and therefore
     // UNIFORMLY to the axis: flat while every label fits its band, 30° when it
     // does not, vertical when 30° no longer packs either. Deciding on the widest
     // label rather than per-label is what keeps an axis from mixing angles.
     //
-    // Decided on the labels AS AUTHORED (`category_strings`, not
-    // `category_texts`): the truncation budget below is a function of the angle,
-    // so reading truncated text here would be circular as well as wrong.
-    let widest_category = widest_of(&category_strings);
-    let packs_at = |deg: f64| -> bool { along_axis_footprint(deg, widest_category) <= band_w };
+    // Decided on the labels AS AUTHORED (`x_labels_as_authored`, not the truncated
+    // `x_label_texts`): the truncation budget below is a function of the angle, so
+    // reading truncated text here would be circular as well as wrong.
+    let widest_x_label = widest_of(&x_labels_as_authored);
+    let packs_at =
+        |deg: f64| -> bool { along_axis_footprint(deg, widest_x_label) <= x_label_pitch };
 
-    let tilt_degrees = if !draws_category_labels || n == 0 || LABEL_TILT_DEGREES <= 0.0 {
+    let tilt_degrees = if !draws_x_axis_labels || n == 0 || LABEL_TILT_DEGREES <= 0.0 {
         // A zero angle is FLAT-ALWAYS, not "the ladder with a flat rung": a host
         // that zeroed it named the one rotation the ladder may use, so escalating
         // past it to vertical would override an explicit choice with a computed
@@ -1298,8 +1896,11 @@ pub fn lower_chart_with(
     } else {
         f64::INFINITY
     };
-    let category_texts: Vec<String> = if draws_category_labels {
-        category_strings
+    // The x labels as DRAWN — the ladder's own labels, bounded by the drop
+    // ceiling. Empty on the arms that draw none, so their bottom margin is unmoved
+    // (Scatter's short numeric ticks are emitted separately, flat).
+    let x_label_texts: Vec<String> = if draws_x_axis_labels {
+        x_labels_as_authored
             .iter()
             .map(|c| truncate_to_width(tick_size, category_text_budget, c))
             .collect()
@@ -1307,7 +1908,7 @@ pub fn lower_chart_with(
         vec![]
     };
     let required_bottom = CATEGORY_LABEL_OFFSET_Y
-        + sin_tilt * widest_of(&category_texts)
+        + sin_tilt * widest_of(&x_label_texts)
         + AXIS_LABEL_PADDING
         + line_height
         + AXIS_TITLE_BOTTOM_OFFSET;
@@ -1323,8 +1924,13 @@ pub fn lower_chart_with(
 
     let y_scale = |v: f64| -> f64 { r2(plot_y1 - (v - nice_lo) / (nice_hi - nice_lo) * plot_h) };
 
-    let x_scale =
-        |v: f64| -> f64 { r2(plot_x0 + (v - x_nice_lo) / (x_nice_hi - x_nice_lo) * plot_w) };
+    // The x-scale before rounding. Split out by Phase 882 so the bar arms can
+    // derive an UNROUNDED slot origin from it: rounding a centre and then
+    // subtracting half a width would round twice, and the band arms' goldens pin
+    // the single-rounding form.
+    let x_scale_raw =
+        |v: f64| -> f64 { plot_x0 + (v - x_nice_lo) / (x_nice_hi - x_nice_lo) * plot_w };
+    let x_scale = |v: f64| -> f64 { r2(x_scale_raw(v)) };
 
     let mut shapes: Vec<Shape> = Vec::new();
 
@@ -1609,11 +2215,15 @@ pub fn lower_chart_with(
         });
     }
 
-    // Vertical gridlines — the Scatter arm only (Phase 875). A linear x-scale
-    // has readable x positions to trace back to; a BAND x-axis has none (a
-    // category is a label, not a magnitude), so a vertical rule there would
-    // be decoration.
-    if is_scatter {
+    // Vertical gridlines — wherever the x axis is CONTINUOUS (Phase 875 for
+    // Scatter, extended to the temporal axis by Phase 882). A continuous scale has
+    // readable x positions to trace back to; a BAND x-axis has none (a category is
+    // a label, not a magnitude), so a vertical rule there would be decoration.
+    // Stating it as "continuous" rather than "Scatter" is what let the temporal
+    // axis inherit the behaviour instead of re-deciding it — including on a
+    // temporal BAR chart, where the rules read as date guides through the bars
+    // rather than as chrome.
+    if is_continuous_x {
         for &t in &x_ticks {
             let x = x_scale(t);
             shapes.push(Shape::Line {
@@ -1687,8 +2297,11 @@ pub fn lower_chart_with(
         // land on the band BOUNDARIES and the label stays centred between two of
         // them — the category-axis convention, and the honest one: a category has
         // an extent, not a position, so a mark under its centre claims a
-        // coordinate the axis does not have.
-        if is_scatter {
+        // coordinate the axis does not have. Phase 882's temporal axis TAKES the
+        // continuous side of this split: a date IS a position, so its marks sit at
+        // their dates and its labels are centred ON them — there are no boundaries
+        // to delimit, because there are no bands.
+        if is_continuous_x {
             for &t in &x_ticks {
                 shapes.push(x_mark(x_scale(t)));
             }
@@ -1745,28 +2358,46 @@ pub fn lower_chart_with(
         // the band centre and runs back down-and-left, reading up-to-the-right
         // into it. The opposite sign would swing the same text up into the plot
         // area. At 90° this degenerates to reading bottom-up.
-        for (i, c) in category_texts.iter().enumerate() {
-            shapes.push(Shape::Label {
-                x: centre_x(i),
-                y: r2(plot_y1 + CATEGORY_LABEL_OFFSET_Y),
-                text: TextSource::Literal(c.clone()),
-                style: if tilt_degrees > 0.0 {
-                    text_style_rotated(
-                        Some(LABEL_OPACITY),
-                        TextAnchor::End,
-                        tick_size,
-                        Emphasis::Normal,
-                        r2(-tilt_degrees),
-                    )
-                } else {
-                    text_style(
-                        Some(LABEL_OPACITY),
-                        TextAnchor::Middle,
-                        tick_size,
-                        Emphasis::Normal,
-                    )
-                },
-            });
+        //
+        // Phase 882 — a TEMPORAL axis's labels sit at their TICKS (not at a band
+        // centre, because there are no bands) and take the ladder's rung and
+        // anchor exactly as the band arms do. So one style expression covers
+        // "centred at the position the label names" on both, and the only thing
+        // that differs is which positions those are.
+        let x_label_style = if tilt_degrees > 0.0 {
+            text_style_rotated(
+                Some(LABEL_OPACITY),
+                TextAnchor::End,
+                tick_size,
+                Emphasis::Normal,
+                r2(-tilt_degrees),
+            )
+        } else {
+            text_style(
+                Some(LABEL_OPACITY),
+                TextAnchor::Middle,
+                tick_size,
+                Emphasis::Normal,
+            )
+        };
+        if is_temporal {
+            for (&t, text) in x_ticks.iter().zip(x_label_texts.iter()) {
+                shapes.push(Shape::Label {
+                    x: x_scale(t),
+                    y: r2(plot_y1 + CATEGORY_LABEL_OFFSET_Y),
+                    text: TextSource::Literal(text.clone()),
+                    style: x_label_style.clone(),
+                });
+            }
+        } else {
+            for (i, c) in x_label_texts.iter().enumerate() {
+                shapes.push(Shape::Label {
+                    x: centre_x(i),
+                    y: r2(plot_y1 + CATEGORY_LABEL_OFFSET_Y),
+                    text: TextSource::Literal(c.clone()),
+                    style: x_label_style.clone(),
+                });
+            }
         }
     }
 
@@ -1845,6 +2476,42 @@ pub fn lower_chart_with(
         });
     }
 
+    // ── Where a datum sits along x (Phase 882) ───────────────────────────────
+    //
+    // ONE pair of expressions the series geometry reads, and the band-vs-value
+    // difference lives here and nowhere else. On a band axis a datum sits at its
+    // band's INDEX; on a temporal axis it sits at its DATE — the same datum, a
+    // different question asked of the axis.
+    //
+    // The temporal slot keeps `band_w` as its PITCH — `plot_w / n`, the average
+    // spacing — so a bar's thickness is decided by the same expression on both
+    // axes and a monthly bar chart looks like a bar chart rather than like a
+    // sequence of hairlines. With irregular dates two slots can overlap; that is
+    // honest, because the bars are at their true positions and the overlap is the
+    // data's, not the layout's. `BAR_MAX_THICKNESS` already bounds the other
+    // direction.
+
+    // The x a datum's mark centres on.
+    let x_centre = |i: usize| -> f64 {
+        if is_temporal {
+            x_scale(x_values[i])
+        } else {
+            centre_x(i)
+        }
+    };
+
+    // The UNROUNDED left edge of the slot a datum's bar geometry lays out in.
+    // Unrounded because the bar arms round once, at the end — the band form is
+    // `plot_x0 + band_w·i` character-for-character, so every band golden is
+    // unmoved.
+    let slot_origin_x = |i: usize| -> f64 {
+        if is_temporal {
+            x_scale_raw(x_values[i]) - band_w / 2.0
+        } else {
+            plot_x0 + band_w * i as f64
+        }
+    };
+
     // ── Series geometry ──
     match kind {
         ChartKind::Bar if stacked => {
@@ -1856,7 +2523,7 @@ pub fn lower_chart_with(
             let group_w = band_w * 0.7;
             let bw = r2((group_w * 0.9).min(BAR_MAX_THICKNESS));
             for (i, category) in categories.iter().enumerate() {
-                let bx = r2(plot_x0 + band_w * i as f64 + (band_w - bw) / 2.0);
+                let bx = r2(slot_origin_x(i) + (band_w - bw) / 2.0);
                 let cums = cums_for(i);
                 for j in 0..m {
                     let y0 = y_scale(cums[j]);
@@ -1890,8 +2557,7 @@ pub fn lower_chart_with(
                     // Centre the (possibly capped) bar in its own sub-slot, so
                     // a cap takes air off BOTH sides and the group stays
                     // symmetric about the band centre (Phase 875).
-                    let slot_x =
-                        plot_x0 + band_w * i as f64 + (band_w - group_w) / 2.0 + j as f64 * sub_w;
+                    let slot_x = slot_origin_x(i) + (band_w - group_w) / 2.0 + j as f64 * sub_w;
                     let bx = r2(slot_x + (sub_w - bw) / 2.0);
                     let vy = y_scale(v);
                     let top = vy.min(base_y);
@@ -1918,12 +2584,12 @@ pub fn lower_chart_with(
                     let yf = &y_fields[j];
                     let upper: Vec<DrawPoint> = (0..n)
                         .map(|i| DrawPoint {
-                            x: centre_x(i),
+                            x: x_centre(i),
                             y: y_scale(cums[i][j + 1]),
                         })
                         .collect();
                     let lower = (0..n).rev().map(|i| DrawPoint {
-                        x: centre_x(i),
+                        x: x_centre(i),
                         y: y_scale(cums[i][j]),
                     });
                     let mut band = upper.clone();
@@ -1953,17 +2619,17 @@ pub fn lower_chart_with(
                         .iter()
                         .enumerate()
                         .map(|(i, &v)| DrawPoint {
-                            x: centre_x(i),
+                            x: x_centre(i),
                             y: y_scale(v),
                         })
                         .collect();
                     let mut band = vec![DrawPoint {
-                        x: centre_x(0),
+                        x: x_centre(0),
                         y: base_y,
                     }];
                     band.extend(points.iter().cloned());
                     band.push(DrawPoint {
-                        x: centre_x(n - 1),
+                        x: x_centre(n - 1),
                         y: base_y,
                     });
                     shapes.push(Shape::Polygon {
@@ -1984,7 +2650,7 @@ pub fn lower_chart_with(
                     .iter()
                     .enumerate()
                     .map(|(i, &v)| DrawPoint {
-                        x: centre_x(i),
+                        x: x_centre(i),
                         y: y_scale(v),
                     })
                     .collect();
@@ -2117,7 +2783,7 @@ pub fn lower_chart_with(
                 let bar_group_w = band_w * 0.7;
                 let bw = r2((bar_group_w * 0.9).min(BAR_MAX_THICKNESS));
                 for i in 0..n {
-                    let bx = r2(plot_x0 + band_w * i as f64 + (band_w - bw) / 2.0);
+                    let bx = r2(slot_origin_x(i) + (band_w - bw) / 2.0);
                     push_cap_label(&mut shapes, bx + bw / 2.0, band_w, cums_for(i)[m]);
                 }
             }
@@ -2131,10 +2797,8 @@ pub fn lower_chart_with(
                 let bw = r2((sub_w * 0.9).min(BAR_MAX_THICKNESS));
                 for (j, values) in series.iter().enumerate() {
                     for (i, &v) in values.iter().enumerate() {
-                        let slot_x = plot_x0
-                            + band_w * i as f64
-                            + (band_w - bar_group_w) / 2.0
-                            + j as f64 * sub_w;
+                        let slot_x =
+                            slot_origin_x(i) + (band_w - bar_group_w) / 2.0 + j as f64 * sub_w;
                         let bx = r2(slot_x + (sub_w - bw) / 2.0);
                         push_cap_label(&mut shapes, bx + bw / 2.0, sub_w, v);
                     }
@@ -2152,7 +2816,7 @@ pub fn lower_chart_with(
                 // because that is the edge that was drawn; the series' own datum is
                 // nowhere on the picture.
                 let last_cums = cums_for(n - 1);
-                let label_x = centre_x(n - 1) + DATA_LABEL_END_OFFSET_X;
+                let label_x = x_centre(n - 1) + DATA_LABEL_END_OFFSET_X;
                 // The budget runs to the PLOT's right edge, not the canvas's: beyond
                 // it lies the legend column, and running into it is the collision
                 // the gate refuses.

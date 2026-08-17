@@ -361,6 +361,8 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             legend_position: spec.legend_position,
             // Phase 881 — whether the values are written onto the picture.
             data_labels: spec.data_labels,
+            // Phase 882 — a scale declaration, not text; projects through untouched.
+            x_scale: spec.x_scale,
             on_point_click: spec.on_point_click,
         }),
         NodeKind::Map(spec) => NodeKind::Map(spec.clone()),

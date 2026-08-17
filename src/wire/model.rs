@@ -83,6 +83,20 @@ bare_enum!(ChartLegendPosition { Top => "Top", Right => "Right", Bottom => "Bott
 // no all-points case, so no shape of this enum can request a number on every
 // interior point. Absent means `Off`, which is also the default.
 bare_enum!(ChartDataLabels { Off => "Off", Ends => "Ends" });
+// Phase 882 — what a chart's x column MEANS: discrete `Category` bands or
+// `Temporal` dates read on a continuous day-scale. A WIRE vocabulary on the
+// semantic side of the D8 line: whether a column is a set of categories or a run
+// of dates is a fact about the data the author is DECLARING; where the ticks
+// land, how they are formatted and how much margin they need are the host's, in
+// the lowering. DECLARED, NEVER INFERRED — the chart's schema is statically known
+// only for an embedded table with an empty pipeline, so an inferred axis would
+// make one wire tree draw a band axis or a temporal one depending on where its
+// rows came from, and sniffing the cell strings for an ISO-8601 shape is a guess
+// dressed as a rule. The declaration is GROUNDED instead (FUARAN097 refuses a
+// temporal axis over a non-date column). Absent means `Category`, which is also
+// the default, so every pre-882 chart is byte-identical on the wire and in the
+// picture.
+bare_enum!(ChartXScale { Category => "Category", Temporal => "Temporal" });
 bare_enum!(ImageVariant { Default => "Default", Avatar => "Avatar", Rounded => "Rounded" });
 // Anti-scraper render strategy for a `Link` — `email` marks a `mailto:` link
 // whose address must not appear in plaintext in emitted markup (the renderers
@@ -1015,6 +1029,17 @@ pub struct ChartSpec {
     /// absent field is byte-identical to the pre-881 wire and to the pre-881
     /// picture.
     pub data_labels: Option<ChartDataLabels>,
+    /// Phase 882 — what the x column MEANS: discrete categories, or dates on a
+    /// continuous temporal scale. Semantic in the same way (D8): whether a column
+    /// is a set of categories or a run of dates is a fact about the data; the tick
+    /// ladder, the label format and the margins that realise it are the host's.
+    ///
+    /// Absent means [`ChartXScale::Category`], which is also the shipped default,
+    /// so an absent field is byte-identical to the pre-882 wire AND to the pre-882
+    /// picture. `Temporal` is a DECLARATION the pre-emit validator grounds against
+    /// the column type (FUARAN097) — never an inference from the data, which would
+    /// make the same tree draw differently depending on where its rows came from.
+    pub x_scale: Option<ChartXScale>,
     pub on_point_click: Option<Closure>,
 }
 

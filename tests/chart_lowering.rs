@@ -20,8 +20,8 @@ use fuaran_rs::render::chart_lowering::{
     ChartAxisUnitMode, ChartLowerStyle, ChartTitles, lower_chart_with, project_row,
 };
 use fuaran_rs::wire::{
-    ChartDataLabels, ChartKind, ChartLegendPosition, Format, Node, NodeKind, SemanticStyle,
-    StateBehaviour, TextSource,
+    ChartDataLabels, ChartKind, ChartLegendPosition, ChartXScale, Format, Node, NodeKind,
+    SemanticStyle, StateBehaviour, TextSource,
 };
 
 /// Walk up from the crate dir to the shared corpus (mirrors conformance.rs).
@@ -156,6 +156,14 @@ fn lowered_json(name: &str, input: &str) -> String {
         ),
         _ => None,
     };
+    // Phase 882 — `xScale` is a bare wire string in the fixture input, omitted
+    // when the case declares none (which means `Category`, the default).
+    let x_scale: Option<ChartXScale> = match spec.field("xScale") {
+        Some(JVal::Str(x)) => Some(
+            ChartXScale::from_wire(x).unwrap_or_else(|| panic!("unknown xScale in fixture: {x}")),
+        ),
+        _ => None,
+    };
     let rows: Vec<_> = match spec.field("data") {
         Some(JVal::Arr(items)) => items
             .iter()
@@ -195,6 +203,7 @@ fn lowered_json(name: &str, input: &str) -> String {
             subtitle: subtitle.as_ref(),
             legend_position,
             data_labels,
+            x_scale,
         },
         value_format.as_ref(),
         &style,

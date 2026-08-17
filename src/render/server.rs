@@ -2608,6 +2608,9 @@ fn render_chart(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &ChartSpec) -> Stri
             legend_position: spec.legend_position,
             // Phase 881 — whether the values are written onto the picture.
             data_labels: spec.data_labels,
+            // Phase 882 — what the x column MEANS. Absent here means `Category`,
+            // which is the default, so a pre-882 chart lowers unchanged.
+            x_scale: spec.x_scale,
         },
         spec.value_format.as_ref(),
         &super::chart_lowering::ChartLowerStyle::default(),

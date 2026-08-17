@@ -1807,6 +1807,12 @@ fn chart_spec(spec: &ChartSpec) -> String {
     if let Some(data_labels) = spec.data_labels {
         fields.push(field("dataLabels", s(data_labels.as_str())));
     }
+    // Phase 882 — what the x column MEANS (canonical key order). Absent means
+    // `Category`, which is the default, so the key is OMITTED and every pre-882
+    // chart stays byte-identical.
+    if let Some(x_scale) = spec.x_scale {
+        fields.push(field("xScale", s(x_scale.as_str())));
+    }
     if spec.on_point_click.is_some() {
         fields.push(field("onPointClick", CLOSURE.to_string()));
     }

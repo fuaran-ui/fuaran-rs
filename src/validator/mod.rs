@@ -30,6 +30,7 @@
 //! | `FUARAN087` | Error | grounded chart value field of a non-numeric column type (silently flat series; Phase 640) |
 //! | `FUARAN088` | Error | Pie with other than exactly one `yFields` series (the lowering refuses; Phase 638/640) |
 //! | `FUARAN089` | Warning | `stacked` on a kind where stacking is meaningless (Line/Scatter/Pie; Phase 637/640) |
+//! | `FUARAN097` | Error | a declared TEMPORAL x-axis over a grounded non-date column (Phase 882) |
 //! | `FUARAN084` | Warning / Error | `Binding.Computed` — host-only, erases on the wire (Error in orchestrated runs) |
 
 use crate::canonical::JVal;
@@ -428,7 +429,8 @@ impl Walker {
         }
     }
 
-    /// FUARAN086–089 (Phase 640) — schema-grounded ChartSpec validation. An
+    /// FUARAN086–089 (Phase 640) + FUARAN097 (Phase 882) — schema-grounded
+    /// ChartSpec validation. An
     /// ungrounded field reference is the language's defect to catch before
     /// lowering — a wrong field name otherwise lowers to a silently
     /// flat/empty chart. Grounding fires only where the schema is statically
@@ -437,7 +439,7 @@ impl Walker {
     /// `Query` / host `Static` source is unknowable pre-emit and deliberately
     /// passes ungrounded — only refuse what is PROVABLY wrong).
     fn check_chart(&mut self, id: &str, s: &crate::wire::ChartSpec) {
-        use crate::wire::{ChartKind, ColumnType, DataSource, TransformSource};
+        use crate::wire::{ChartKind, ChartXScale, ColumnType, DataSource, TransformSource};
 
         // FUARAN088 — pie needs exactly one series (the lowering refuses
         // multi-series geometry rather than truncating).
@@ -515,10 +517,39 @@ impl Walker {
                 ),
             );
         };
+        // FUARAN097 (Phase 882) — a temporal x-axis is a DECLARATION, and this is
+        // where the language grounds it. `date` and `timestamp` are both honoured
+        // (a timestamp's time-of-day is discarded by the lowering, a documented
+        // narrowing rather than a mismatch); anything else cannot parse as a date,
+        // so every row's x would read as the epoch and the chart would draw every
+        // point stacked on one date.
+        let temporal_x = matches!(s.x_scale, Some(ChartXScale::Temporal));
+        let dated =
+            |t: ColumnType| -> bool { matches!(t, ColumnType::Date | ColumnType::Timestamp) };
+        let temporal_not_date = |v: &mut Self, field: &str, t: ColumnType| {
+            v.push(
+                Severity::Error,
+                "FUARAN097",
+                id,
+                format!(
+                    "chart '{id}' declares a temporal x-axis over field '{field}' of type '{}' — a date axis needs a date column, and every row's x would read as 1970-01-01; give the column type 'date' (canonical ISO-8601 YYYY-MM-DD cells), or drop xScale to plot the values as categories (Phase 882)",
+                    t.as_str()
+                ),
+            );
+        };
         match col_type(&s.x_field) {
             None => ungrounded(self, &s.x_field),
             Some(t) => {
-                if matches!(s.kind, ChartKind::Scatter) && !numeric(t) {
+                if temporal_x && !dated(t) {
+                    temporal_not_date(self, &s.x_field, t);
+                }
+                // FUARAN087's x arm is NARROWED by a temporal declaration: a
+                // temporal Scatter reads its x as dates, so a date column there is
+                // correct rather than "not numeric", and FUARAN097 above is the
+                // rule that governs it. Without the narrowing a correctly-authored
+                // time-series scatter would raise a mismatch about the very column
+                // it declared.
+                if matches!(s.kind, ChartKind::Scatter) && !numeric(t) && !temporal_x {
                     mismatch(self, &s.x_field, t);
                 }
             }

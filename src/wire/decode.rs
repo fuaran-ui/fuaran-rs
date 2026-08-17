@@ -462,6 +462,7 @@ decode_bare_enum!(
     "ChartLegendPosition"
 );
 decode_bare_enum!(decode_chart_data_labels, ChartDataLabels, "ChartDataLabels");
+decode_bare_enum!(decode_chart_x_scale, ChartXScale, "ChartXScale");
 decode_bare_enum!(decode_image_variant, ImageVariant, "ImageVariant");
 decode_bare_enum!(decode_link_protection, LinkProtection, "LinkProtection");
 decode_bare_enum!(decode_math_display, MathDisplay, "MathDisplay");
@@ -3102,6 +3103,16 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
         None => None,
         Some(j) => Some(decode_chart_data_labels(&format!("{path}.dataLabels"), j)?),
     };
+    // Phase 882 — what the x column MEANS: discrete `Category` bands or `Temporal`
+    // dates on a continuous day-scale. Absent means `Category`, which is ALSO the
+    // default, so the ordinary wire shape omits the key and lowers to the pre-882
+    // picture byte-for-byte. A `Temporal` declaration is GROUNDED pre-emit
+    // (FUARAN097) rather than second-guessed here: the decoder's job is to carry
+    // the author's claim faithfully, not to check it against the rows.
+    let x_scale = match get(fields, "xScale") {
+        None => None,
+        Some(j) => Some(decode_chart_x_scale(&format!("{path}.xScale"), j)?),
+    };
     Ok(ChartSpec {
         kind,
         source,
@@ -3115,6 +3126,7 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
         subtitle,
         legend_position,
         data_labels,
+        x_scale,
         on_point_click: opt_closure(fields, "onPointClick"),
     })
 }
