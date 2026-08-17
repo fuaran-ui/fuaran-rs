@@ -100,11 +100,15 @@ const Y_AXIS_TITLE_OFFSET_X: f64 = 18.0;
 /// convention), so the negative angle reads BOTTOM-UP — the conventional
 /// treatment, and the same sign convention `VERTICAL_TILT_DEGREES` already uses.
 const Y_AXIS_TITLE_DEGREES: f64 = 90.0;
-/// The MAGNITUDE of the category-label tilt, in degrees. Tilt is the DEFAULT
-/// state — it is for LEGIBILITY, not a crowding fallback.
+/// The MAGNITUDE of the MIDDLE RUNG of the category-label angle ladder, in
+/// degrees. The ladder is fit-driven and UNIFORM per axis: flat while every label
+/// fits its band, all at this angle when any does not, all vertical when this
+/// angle no longer packs either. (Phase 879 read the tilt as the resting state;
+/// Phase 903's correction makes it the middle rung.) `0` opts out of rotation
+/// entirely — flat at every label length, never escalated instead.
 const LABEL_TILT_DEGREES: f64 = 30.0;
-/// The vertical arm of the escalation: one line height along the axis whatever
-/// the label's length, so it packs at any category count.
+/// The terminal rung of the ladder: one line height along the axis whatever the
+/// label's length, so it packs at any category count.
 const VERTICAL_TILT_DEGREES: f64 = 90.0;
 // ── Legend geometry (Phase 880 — ONE legend, four placements) ───────────────
 //
@@ -1228,32 +1232,52 @@ pub fn lower_chart_with(
 
     let band_w = if n > 0 { plot_w / n as f64 } else { plot_w };
     let centre_x = |i: usize| -> f64 { r2(plot_x0 + band_w * (i as f64 + 0.5)) };
+    // The `i`th BAND BOUNDARY — `n` bands have `n+1` of them, boundary `0` on the
+    // y-axis spine and boundary `n` on the plot's right edge. Phase 903's category
+    // tick marks land here, where a label lands at `centre_x`.
+    let boundary_x = |i: usize| -> f64 { r2(plot_x0 + band_w * i as f64) };
 
-    // ── Category-label tilt + its vertical escalation ──
+    // ── The category-label ANGLE LADDER (Phase 903, correcting Phase 879) ──
     // Only the BAND arms label categories: Scatter labels numeric x ticks (short
     // by construction, left horizontal) and Pie has no x axis. Both must
     // therefore contribute NO drop, or their bottom margin — and with it the
     // pie's centre — would move for a decision they never take.
     let draws_category_labels = !is_scatter && !matches!(kind, ChartKind::Pie);
 
-    // A rotated label's footprint ALONG the axis is `w·cos θ + h·sin θ`.
-    // Escalate when the widest label's footprint at the tilt no longer fits the
-    // band pitch. At 90° the width term vanishes, so the vertical arm packs one
-    // label per line height at any count — which is why it is terminal.
+    // A rotated label's footprint ALONG the axis is `w·cos θ + h·sin θ`. At 0°
+    // that is the bare width (`cos 0 = 1`, `sin 0 = 0`, both exact on every
+    // IEEE-754 host, so the flat rung needs no special case); at 90° the width
+    // term vanishes, so the vertical rung takes one line height per label at any
+    // count — which is why it is terminal.
     let along_axis_footprint = |deg: f64, w: f64| -> f64 {
         w * deg.to_radians().cos() + line_height * deg.to_radians().sin()
     };
 
     let category_strings: Vec<String> = categories.iter().map(|c| (*c).to_string()).collect();
 
+    // THREE RUNGS, ONE PREDICATE, applied to the WIDEST label and therefore
+    // UNIFORMLY to the axis: flat while every label fits its band, 30° when it
+    // does not, vertical when 30° no longer packs either. Deciding on the widest
+    // label rather than per-label is what keeps an axis from mixing angles.
+    //
+    // Decided on the labels AS AUTHORED (`category_strings`, not
+    // `category_texts`): the truncation budget below is a function of the angle,
+    // so reading truncated text here would be circular as well as wrong.
+    let widest_category = widest_of(&category_strings);
+    let packs_at = |deg: f64| -> bool { along_axis_footprint(deg, widest_category) <= band_w };
+
     let tilt_degrees = if !draws_category_labels || n == 0 || LABEL_TILT_DEGREES <= 0.0 {
-        // A zero tilt is a host opting out; honour it literally rather than
-        // escalating it to vertical.
+        // A zero angle is FLAT-ALWAYS, not "the ladder with a flat rung": a host
+        // that zeroed it named the one rotation the ladder may use, so escalating
+        // past it to vertical would override an explicit choice with a computed
+        // one.
         0.0
-    } else if along_axis_footprint(LABEL_TILT_DEGREES, widest_of(&category_strings)) > band_w {
-        VERTICAL_TILT_DEGREES
-    } else {
+    } else if packs_at(0.0) {
+        0.0
+    } else if packs_at(LABEL_TILT_DEGREES) {
         LABEL_TILT_DEGREES
+    } else {
+        VERTICAL_TILT_DEGREES
     };
 
     // ── Bottom margin ──
@@ -1657,13 +1681,20 @@ pub fn lower_chart_with(
                 style: style_stroke_ink(AXIS_OPACITY, 1.0),
             }
         };
+        // BAND vs CONTINUOUS (Phase 903). Where the axis is CONTINUOUS a tick
+        // marks a VALUE and sits at it: the y axis above, and Scatter's numeric
+        // x. Where it is a BAND axis a tick DELIMITS a group, so the `n+1` marks
+        // land on the band BOUNDARIES and the label stays centred between two of
+        // them — the category-axis convention, and the honest one: a category has
+        // an extent, not a position, so a mark under its centre claims a
+        // coordinate the axis does not have.
         if is_scatter {
             for &t in &x_ticks {
                 shapes.push(x_mark(x_scale(t)));
             }
-        } else {
-            for i in 0..n {
-                shapes.push(x_mark(centre_x(i)));
+        } else if n > 0 {
+            for i in 0..=n {
+                shapes.push(x_mark(boundary_x(i)));
             }
         }
     }
@@ -1702,11 +1733,17 @@ pub fn lower_chart_with(
             });
         }
     } else {
-        // A tilted category label is `End`-anchored at the band centre and
-        // rotated NEGATIVELY (counter-clockwise, against `rotation`'s clockwise
-        // convention): the anchor is the pivot, so the text ENDS under the
-        // band's tick and runs back down-and-left, reading up-to-the-right into
-        // it. The opposite sign would swing the same text up into the plot
+        // Every category label sits at its band CENTRE — including since Phase
+        // 903, when the tick marks moved to the boundaries: the label names the
+        // band, the marks delimit it.
+        //
+        // The ANCHOR follows the ladder's rung. At the FLAT rung a label is
+        // `Middle`-anchored on the band centre (the pre-879 convention,
+        // restored). At either ROTATED rung it is `End`-anchored at the same
+        // point and rotated NEGATIVELY (counter-clockwise, against `rotation`'s
+        // clockwise convention): the anchor is the pivot, so the text ENDS under
+        // the band centre and runs back down-and-left, reading up-to-the-right
+        // into it. The opposite sign would swing the same text up into the plot
         // area. At 90° this degenerates to reading bottom-up.
         for (i, c) in category_texts.iter().enumerate() {
             shapes.push(Shape::Label {
