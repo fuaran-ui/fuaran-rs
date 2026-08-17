@@ -461,6 +461,7 @@ decode_bare_enum!(
     ChartLegendPosition,
     "ChartLegendPosition"
 );
+decode_bare_enum!(decode_chart_data_labels, ChartDataLabels, "ChartDataLabels");
 decode_bare_enum!(decode_image_variant, ImageVariant, "ImageVariant");
 decode_bare_enum!(decode_link_protection, LinkProtection, "LinkProtection");
 decode_bare_enum!(decode_math_display, MathDisplay, "MathDisplay");
@@ -3094,6 +3095,13 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
             j,
         )?),
     };
+    // Phase 881 — whether the values are written onto the picture. Absent is the
+    // ordinary shape and means `Off`, which is ALSO the default, so a pre-881 tree
+    // lowers to the pre-881 picture byte-for-byte.
+    let data_labels = match get(fields, "dataLabels") {
+        None => None,
+        Some(j) => Some(decode_chart_data_labels(&format!("{path}.dataLabels"), j)?),
+    };
     Ok(ChartSpec {
         kind,
         source,
@@ -3106,6 +3114,7 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
         y_title,
         subtitle,
         legend_position,
+        data_labels,
         on_point_click: opt_closure(fields, "onPointClick"),
     })
 }

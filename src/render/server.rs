@@ -2606,6 +2606,8 @@ fn render_chart(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &ChartSpec) -> Stri
             // Phase 880 — the author's legend placement; the host DEFAULT lives in
             // `ChartLowerStyle`, so absent here means "whatever the style says".
             legend_position: spec.legend_position,
+            // Phase 881 — whether the values are written onto the picture.
+            data_labels: spec.data_labels,
         },
         spec.value_format.as_ref(),
         &super::chart_lowering::ChartLowerStyle::default(),

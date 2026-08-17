@@ -75,6 +75,14 @@ bare_enum!(ChartKind { Line => "Line", Bar => "Bar", Area => "Area", Pie => "Pie
 // lowering's `ChartLowerStyle`. Absent means "the host default" (`Right`), NOT "no
 // legend" — suppression is the explicit `None`.
 bare_enum!(ChartLegendPosition { Top => "Top", Right => "Right", Bottom => "Bottom", None => "None" });
+// Phase 881 — whether a chart writes its values onto the picture, and where. A
+// WIRE vocabulary on the semantic side of the D8 line: whether the reader is
+// meant to READ THE NUMBERS or read the shape is the author's meaning; the type
+// size, the offsets and the fit rule that realise it stay the host's, in the
+// lowering. THE CASE SET IS TWO, AND THAT IS THE POINT — there is deliberately
+// no all-points case, so no shape of this enum can request a number on every
+// interior point. Absent means `Off`, which is also the default.
+bare_enum!(ChartDataLabels { Off => "Off", Ends => "Ends" });
 bare_enum!(ImageVariant { Default => "Default", Avatar => "Avatar", Rounded => "Rounded" });
 // Anti-scraper render strategy for a `Link` — `email` marks a `mailto:` link
 // whose address must not appear in plaintext in emitted markup (the renderers
@@ -996,6 +1004,17 @@ pub struct ChartSpec {
     /// ordinary shape and is omitted on the wire, and an author who wants no
     /// legend says so.
     pub legend_position: Option<ChartLegendPosition>,
+    /// Phase 881 — whether the values are written onto the picture. Semantic in
+    /// the same way (D8): whether a reader is meant to read the NUMBERS or the
+    /// shape is the author's meaning; the type size, the offsets and the fit rule
+    /// that decide whether a given label draws are the host's.
+    ///
+    /// Absent means [`ChartDataLabels::Off`], which is ALSO the default — the one
+    /// place this differs from `legend_position`, deliberately: a legend is chrome
+    /// an author opts OUT of, where a data label is ink an author opts IN to. So an
+    /// absent field is byte-identical to the pre-881 wire and to the pre-881
+    /// picture.
+    pub data_labels: Option<ChartDataLabels>,
     pub on_point_click: Option<Closure>,
 }
 

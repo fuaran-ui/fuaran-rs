@@ -1802,6 +1802,11 @@ fn chart_spec(spec: &ChartSpec) -> String {
     if let Some(legend_position) = spec.legend_position {
         fields.push(field("legendPosition", s(legend_position.as_str())));
     }
+    // Phase 881 — whether the values are written onto the picture (canonical key
+    // order). Absent means `Off`, which is the default, so the key is omitted.
+    if let Some(data_labels) = spec.data_labels {
+        fields.push(field("dataLabels", s(data_labels.as_str())));
+    }
     if spec.on_point_click.is_some() {
         fields.push(field("onPointClick", CLOSURE.to_string()));
     }

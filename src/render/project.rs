@@ -359,6 +359,8 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             subtitle: map_opt_text(sources, &spec.subtitle),
             // Phase 880 — a placement, not text; projects through untouched.
             legend_position: spec.legend_position,
+            // Phase 881 — whether the values are written onto the picture.
+            data_labels: spec.data_labels,
             on_point_click: spec.on_point_click,
         }),
         NodeKind::Map(spec) => NodeKind::Map(spec.clone()),

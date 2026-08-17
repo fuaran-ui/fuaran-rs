@@ -46,8 +46,8 @@
 
 use crate::canonical::format_number;
 use crate::wire::{
-    Binding, ChartKind, ChartLegendPosition, CurveCommand, DrawPoint, DrawStyle, DrawingSpec,
-    Emphasis, Format, Shape, StaticValue, TextAnchor, TextSource, ViewBox,
+    Binding, ChartDataLabels, ChartKind, ChartLegendPosition, CurveCommand, DrawPoint, DrawStyle,
+    DrawingSpec, Emphasis, Format, Shape, StaticValue, TextAnchor, TextSource, ViewBox,
 };
 
 // ─── Layout constants (the fixed canonical drawing space) ────────────────────
@@ -194,6 +194,29 @@ const TICK_MARK_LENGTH: f64 = 5.0;
 /// Hard pixel ceiling on a single bar's thickness (Phase 875). The bar takes
 /// the MIN of its band share and this cap, then is centred in its slot.
 const BAR_MAX_THICKNESS: f64 = 28.0;
+
+// ── Data-label geometry (Phase 881 — the `Ends` placements) ─────────────────
+//
+// NONE of these feeds a margin: a data label never makes the plot smaller, it
+// either fits the room the picture already has or it is suppressed. That is what
+// keeps `Off` byte-identical to the pre-881 layout rather than merely visually
+// similar.
+//
+// The font size is one point BELOW the tick size, and a constant of its own: a
+// tick sits OUTSIDE the plot in a column, where a data label sits INSIDE it
+// competing with the mark it describes.
+const DATA_LABEL_FONT_SIZE: f64 = 12.0;
+// Clearance between a bar's cap and the nearest ink of its label, in BOTH
+// directions — one constant used twice, so the two placements are mirrors.
+const DATA_LABEL_OFFSET_Y: f64 = 5.0;
+// Clearance a label keeps from the plot edge, and half the clearance it keeps
+// from its neighbour's. Feeds the fit gate only.
+const DATA_LABEL_PADDING: f64 = 2.0;
+// Gap from a line/area endpoint to the left edge of its label.
+const DATA_LABEL_END_OFFSET_X: f64 = 6.0;
+// Rise from a line/area endpoint to its label's baseline — the nudge that takes
+// the text off the line it belongs to.
+const DATA_LABEL_END_NUDGE_Y: f64 = 5.0;
 
 /// GEOMETRIC gap between consecutive segments of a stacked bar (Phase 875) —
 /// the segment is shortened on the side facing the next segment, so the
@@ -882,6 +905,11 @@ pub struct ChartTitles<'a> {
     /// default ([`ChartLowerStyle::legend_position`], which ships as `Right`),
     /// NOT "no legend": suppression is the explicit `ChartLegendPosition::None`.
     pub legend_position: Option<ChartLegendPosition>,
+    /// Phase 881 — whether the values are written onto the picture. Absent means
+    /// `ChartDataLabels::Off`, which is ALSO the default, so an absent field lowers
+    /// to the pre-881 picture byte-for-byte. `Ends` labels bar CAPS (a stacked
+    /// bar's TOTAL only) and LINE/AREA ENDPOINTS, and there is no third value.
+    pub data_labels: Option<ChartDataLabels>,
 }
 
 /// Lower under an explicit value-axis `Format` (a wire declaration) and an
@@ -1948,6 +1976,180 @@ pub fn lower_chart_with(
             }
         }
         ChartKind::Pie | ChartKind::Heatmap => {}
+    }
+
+    // ── Data labels (Phase 881) — the values, written selectively ────────────
+    //
+    // Two states and no third: `Off` (the default, and what an absent field means)
+    // and `Ends`. There is deliberately NO all-points mode — a number on every
+    // interior point is the clutter this vocabulary exists to prevent, so the API
+    // cannot express it. `Ends` names the placements that read on their own:
+    //
+    //   * BARS label the CAP — above a positive cap, below a negative one, the two
+    //     exact mirrors about the cap.
+    //   * A GROUPED bar labels every bar. A STACKED bar labels the TOTAL at the
+    //     stack cap and nothing else: an interior segment's value is unreadable
+    //     against the segment above it, and the legend plus the hover readout
+    //     already serve it.
+    //   * LINES and AREA EDGES label the LAST point of each series, right of the
+    //     endpoint and nudged up off the line.
+    //   * SCATTER gets nothing in v1 (recorded decision): a scatter's x IS a value
+    //     axis, so its last ROW carries no meaning its first does not, and
+    //     labelling by row order would present an accident of the feed as a
+    //     reading of the chart.
+    //   * PIE is unchanged — its legend already carries `name (NN%)`.
+    //
+    // Every value goes through `y_tick_text`, so a label and a tick agree by
+    // construction. NO LABEL EVER MOVES A MARGIN: the plot rectangle is decided
+    // long before this point, so a label either fits the room the picture already
+    // has or it is SUPPRESSED — never clipped, never overlapped, never relocated
+    // inside the bar.
+    if titles.data_labels.unwrap_or(ChartDataLabels::Off) == ChartDataLabels::Ends {
+        let data_label_line = text_line_height(DATA_LABEL_FONT_SIZE, TEXT_LINE_HEIGHT_FACTOR);
+
+        // The single fit gate: `text_fits_box` against the room the placement
+        // actually has. Returns whether the label was admitted, which the endpoint
+        // arm needs so a suppressed label does not claim a separation slot.
+        let push_data_label = |shapes: &mut Vec<Shape>,
+                               anchor: TextAnchor,
+                               x: f64,
+                               baseline: f64,
+                               max_width: f64,
+                               max_height: f64,
+                               text: String|
+         -> bool {
+            if !text_fits_box(
+                DATA_LABEL_FONT_SIZE,
+                TEXT_LINE_HEIGHT_FACTOR,
+                max_width,
+                max_height,
+                &text,
+            ) {
+                return false;
+            }
+            // Label-role ink at the chrome opacity — NEVER the series colour: a
+            // value is a reading of the mark, not a second copy of its identity.
+            shapes.push(Shape::Label {
+                x: r2(x),
+                y: r2(baseline),
+                text: TextSource::Literal(text),
+                style: text_style(
+                    Some(LABEL_OPACITY),
+                    anchor,
+                    DATA_LABEL_FONT_SIZE,
+                    Emphasis::Normal,
+                ),
+            });
+            true
+        };
+
+        // A value at a bar's cap, centred on `cx`. `pitch` is the distance to the
+        // NEXT label's centre — the neighbouring bar's slot — so the budget is what
+        // separates two labels rather than what fits one bar: a label may
+        // legitimately be wider than the bar it caps, and may not be wider than the
+        // room beside it.
+        let push_cap_label = |shapes: &mut Vec<Shape>, cx: f64, pitch: f64, v: f64| {
+            let cap_y = y_scale(v);
+            let max_width = (pitch - 2.0 * DATA_LABEL_PADDING).max(0.0);
+            if v < 0.0 {
+                push_data_label(
+                    shapes,
+                    TextAnchor::Middle,
+                    cx,
+                    cap_y + DATA_LABEL_OFFSET_Y + DATA_LABEL_FONT_SIZE,
+                    max_width,
+                    plot_y1 - cap_y - DATA_LABEL_OFFSET_Y - DATA_LABEL_PADDING,
+                    y_tick_text(v),
+                );
+            } else {
+                push_data_label(
+                    shapes,
+                    TextAnchor::Middle,
+                    cx,
+                    cap_y - DATA_LABEL_OFFSET_Y,
+                    max_width,
+                    cap_y - plot_y0 - DATA_LABEL_OFFSET_Y - DATA_LABEL_PADDING,
+                    y_tick_text(v),
+                );
+            }
+        };
+
+        match kind {
+            ChartKind::Bar if stacked => {
+                // The TOTAL at the stack cap, once per category.
+                let bar_group_w = band_w * 0.7;
+                let bw = r2((bar_group_w * 0.9).min(BAR_MAX_THICKNESS));
+                for i in 0..n {
+                    let bx = r2(plot_x0 + band_w * i as f64 + (band_w - bw) / 2.0);
+                    push_cap_label(&mut shapes, bx + bw / 2.0, band_w, cums_for(i)[m]);
+                }
+            }
+            ChartKind::Bar => {
+                let bar_group_w = band_w * 0.7;
+                let sub_w = if m > 0 {
+                    bar_group_w / m as f64
+                } else {
+                    bar_group_w
+                };
+                let bw = r2((sub_w * 0.9).min(BAR_MAX_THICKNESS));
+                for (j, values) in series.iter().enumerate() {
+                    for (i, &v) in values.iter().enumerate() {
+                        let slot_x = plot_x0
+                            + band_w * i as f64
+                            + (band_w - bar_group_w) / 2.0
+                            + j as f64 * sub_w;
+                        let bx = r2(slot_x + (sub_w - bw) / 2.0);
+                        push_cap_label(&mut shapes, bx + bw / 2.0, sub_w, v);
+                    }
+                }
+            }
+            ChartKind::Line | ChartKind::Area if n > 0 => {
+                // The series-endpoint labels, in series order. Two gates, the second
+                // the vertical analogue of the cap labels' pitch: every endpoint
+                // label shares one x, so the thing they collide with is each other.
+                // A label is admitted only when its line clears every
+                // ALREADY-ADMITTED one — series order decides who yields, which
+                // makes the outcome deterministic and identical on every host.
+                //
+                // A stacked area's labelled value is the CUMULATIVE boundary,
+                // because that is the edge that was drawn; the series' own datum is
+                // nowhere on the picture.
+                let last_cums = cums_for(n - 1);
+                let label_x = centre_x(n - 1) + DATA_LABEL_END_OFFSET_X;
+                // The budget runs to the PLOT's right edge, not the canvas's: beyond
+                // it lies the legend column, and running into it is the collision
+                // the gate refuses.
+                let max_width = (plot_x1 - label_x - DATA_LABEL_PADDING).max(0.0);
+                let stacked_area = stacked && kind == ChartKind::Area;
+                let mut admitted: Vec<f64> = Vec::new();
+                for j in 0..m {
+                    let v = if stacked_area {
+                        last_cums[j + 1]
+                    } else {
+                        series[j][n - 1]
+                    };
+                    let baseline = y_scale(v) - DATA_LABEL_END_NUDGE_Y;
+                    if !admitted
+                        .iter()
+                        .all(|b| (b - baseline).abs() >= data_label_line + DATA_LABEL_PADDING)
+                    {
+                        continue;
+                    }
+                    if push_data_label(
+                        &mut shapes,
+                        TextAnchor::Start,
+                        label_x,
+                        baseline,
+                        max_width,
+                        baseline - plot_y0 - DATA_LABEL_PADDING,
+                        y_tick_text(v),
+                    ) {
+                        admitted.push(baseline);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     // ── Legend (Phase 880) — the shared emitter, in the slot it always had ──
