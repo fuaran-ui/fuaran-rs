@@ -245,11 +245,37 @@ fn strip_event_handlers(input: Vec<char>) -> Vec<char> {
 
 /// Allowlist predicate for an extra-attribute key: `data-*` / `aria-*` only,
 /// with explicit rejection of `on*` handlers and `style`.
+/// Positive character allowlist for an HTML attribute NAME: `[A-Za-z0-9-]`.
+///
+/// Everything else — `=`, quotes, backtick, `<`, `>`, `/`, space, tab, newline,
+/// C0 controls, any non-ASCII byte — is rejected.
+///
+/// A **rejection** gate, not an escape, because HTML has no escape for an illegal
+/// character in an attribute name: a space inside a name simply starts a NEW
+/// attribute and an `=` starts its value. So `data-x=1 onmouseover=alert(1) z` is
+/// not a mangled attribute name — it is three attributes, one of them a live event
+/// handler. Renderers escape attribute *values*, never *names*, so dropping the
+/// entry is the only sound response.
+///
+/// Public so an emission site can re-check it as defence in depth rather than
+/// trusting upstream validation alone.
+pub fn is_safe_attribute_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// The `data-*` / `aria-*` allowlist, with explicit `on*` / `style` rejects, plus
+/// [`is_safe_attribute_name`] over the whole trimmed key — without which a key
+/// like `data-x=1 onmouseover=alert(1) z` satisfies the `data-` prefix and
+/// smuggles a live event handler into rendered HTML.
+///
+/// Judges the TRIMMED form, so a caller using it directly must trim before
+/// emission too.
 pub fn is_allowed_extra_attribute_key(key: &str) -> bool {
     let trimmed = key.trim();
     if trimmed.is_empty()
         || trimmed.to_lowercase().starts_with("on")
         || trimmed.to_lowercase() == "style"
+        || !is_safe_attribute_name(trimmed)
     {
         return false;
     }
