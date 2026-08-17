@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "host": "fuaran-rs",
+  "family": "pre-emit",
+  "vocabulary": "wire-format-fixtures/validator/defect-vocabulary.json",
+  "posture": "subset",
+  "postureReason": "The widest sibling coverage, and the only one carrying the code as a first-class value on the finding rather than inside the message prose — which is why it is the only sibling whose declaration can be machine-checked against its implementation.",
+  "implemented": [
+    "FUARAN047",
+    "FUARAN048",
+    "FUARAN049",
+    "FUARAN069",
+    "FUARAN073",
+    "FUARAN082",
+    "FUARAN083",
+    "FUARAN086",
+    "FUARAN087",
+    "FUARAN088",
+    "FUARAN089"
+  ],
+  "abstentionDefault": "Not ported. This is an honest 'not yet', not a principled exclusion: the set above is whichever rules this host happened to need, and an unported rule is a gap.",
+  "abstained": {},
+  "otherFamilies": {
+    "ast-walker": [
+      "FUARAN001",
+      "FUARAN050",
+      "FUARAN061",
+      "FUARAN063",
+      "FUARAN064",
+      "FUARAN084"
+    ]
+  },
+  "otherFamiliesNote": "Codes this host raises that belong to the reference's BUILD-TIME source-AST walker, not the pre-emit family enumerated in the vocabulary. Recorded so the gate reads them as a different family rather than as a code this host invented. That second family is not yet enumerated; until it is, this list is a declaration of intent, not something the gate can verify.",
+  "machineChecked": true,
+  "machineCheckedNote": "This host carries the code as a value on the finding, so `implemented` is checkable against the validator source. The check is not yet wired — the gate verifies the declaration against the vocabulary only."
+}
