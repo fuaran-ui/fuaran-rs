@@ -882,6 +882,28 @@ fn format_num(n: f64) -> String {
 //   3. The `Format` arms layer meaning over that base; `Date` / `RelativeTime`
 //      / `Duration` are not value-axis formats and fall through to the base.
 //   4. Display-unit scaling divides BOTH the value and the step by 10^n.
+//   5. THE INTEGER PART IS RENDERED IN POSITIONAL NOTATION AT EVERY MAGNITUDE,
+//      by an expansion this module owns — never by inheriting a host's default
+//      float→string switch. Grouping walks decimal digits, so handing it an
+//      exponent form corrupts it silently (`group_thousands("1E+17")` is
+//      `"1E,+17"`), and the hosts do not agree on WHEN that form appears: the
+//      .NET `"R"` layout that `format_finite_double` mirrors (and that
+//      `WIRE_FORMAT.md` §5 pins) goes scientific once the leading-digit
+//      exponent passes 16, i.e. at 1e17, while JavaScript's
+//      `Number.prototype.toString` stays positional until 1e21. So above 1e17
+//      four hosts drew a grouped exponent and one drew correct digits: the same
+//      chart, different bytes. `expand_to_fixed` re-lays any `d[.ddd]E±NN`
+//      mantissa/exponent pair (JavaScript's lower-case `e+NN` included) as its
+//      digits zero-padded to `exp + 1` places, and leaves an already-positional
+//      form untouched — so every host groups the same digit string and nothing
+//      below 1e17 moves.
+//      NOTE the threshold is 1e17, not the 1e15 in `format_num` — that constant
+//      bounds the exact `i64` fast path, not the notation switch.
+//      The expansion is over the SHORTEST-ROUND-TRIP digits, the canonical
+//      decimal identity of the f64, not its exact binary value: 1e21 reads
+//      `1,000,000,000,000,000,000,000`, never `999,999,999,999,999,916,000`.
+//      Only the INTEGER part needs this — the fraction is bounded by
+//      `10^d <= 10^6` by rule 1's cap.
 
 /// Decimal places implied by a tick step: the smallest `d <= 6` for which
 /// `step * 10^d` is (within relative float tolerance) an integer.
@@ -919,6 +941,40 @@ fn group_thousands(digits: &str) -> String {
     parts.join(",")
 }
 
+/// Expand a canonical round-trip number form into POSITIONAL notation (rule 5).
+/// `s` is whatever the host's shortest-round-trip formatter produced for a
+/// non-negative INTEGER-valued `f64`: positional at small magnitudes, and
+/// `d[.ddd]E±NN` — or JavaScript's lower-case `e+NN` — above whichever
+/// magnitude that host switches at. Total by construction: a form carrying no
+/// exponent is returned unchanged, as is the negative-exponent form an integer
+/// part cannot produce.
+fn expand_to_fixed(s: &str) -> String {
+    let Some(e_idx) = s.find('E').or_else(|| s.find('e')) else {
+        return s.to_string();
+    };
+    let mant = &s[..e_idx];
+    let Ok(exp) = s[e_idx + 1..].parse::<i32>() else {
+        return s.to_string();
+    };
+    if exp < 0 {
+        return s.to_string();
+    }
+    let digits = match mant.find('.') {
+        Some(dot) => format!("{}{}", &mant[..dot], &mant[dot + 1..]),
+        None => mant.to_string(),
+    };
+    // An integer-valued f64's shortest round-trip always has at least as many
+    // places as digits; the guard keeps the function total rather than
+    // describing a reachable case.
+    let want = (exp + 1) as usize;
+    if digits.len() >= want {
+        digits
+    } else {
+        let pad = "0".repeat(want - digits.len());
+        format!("{digits}{pad}")
+    }
+}
+
 /// Render `v` with EXACTLY `dps` decimals — round-half-up on the magnitude,
 /// comma thousands separators, period decimal point, locale-invariant.
 fn render_fixed(dps: i32, v: f64) -> String {
@@ -930,7 +986,9 @@ fn render_fixed(dps: i32, v: f64) -> String {
     let units = (v.abs() * scale + 0.5).floor();
     let int_part = (units / scale).floor();
     let frac_part = units - int_part * scale;
-    let int_str = group_thousands(&format_num(int_part));
+    // Rule 5 — expand before grouping. `format_num` alone would hand the
+    // grouper an exponent form above the host's own switch magnitude.
+    let int_str = group_thousands(&expand_to_fixed(&format_num(int_part)));
     let body = if d == 0 {
         int_str
     } else {
