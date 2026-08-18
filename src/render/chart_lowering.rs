@@ -33,7 +33,11 @@
 //! (`legendPosition`: `Top | Right | Bottom | None`), the default `Right` — a
 //! vertical column whose width is the MAX of its entries (bounded, truncated)
 //! rather than a band whose width is their SUM (unbounded, and silently off the
-//! canvas past enough entries). The cartesian arms legend their SERIES and only
+//! canvas past enough entries). Since the 2026-08-18 operator decision an
+//! explicit `Top`/`Bottom` whose entries do not PACK into one band row falls
+//! back to that column too, so the band can no longer overflow at all — the arms
+//! read "band if it fits, column if it cannot", with no wire change.
+//! The cartesian arms legend their SERIES and only
 //! when there is more than one; the PIE arm legends its CATEGORIES with
 //! `name (NN%)` labels, which is why a single-series pie legends and a
 //! single-series bar does not. Both arms now draw through the same emitter.
@@ -1715,107 +1719,6 @@ pub fn lower_chart_with(
             .fold(0.0f64, |acc, t| acc.max(text_width(tick_size, t)))
     };
 
-    // ── Legend placement (Phase 880) ─────────────────────────────────────────
-    //
-    // ONE legend with four placements, resolved HERE — above the margins,
-    // because a `Right` legend's column width is an INPUT to the plot rectangle
-    // and a `Bottom` legend's band is an input to the bottom margin. The same
-    // acyclicity discipline the text metrics established: everything the layout
-    // reads is computed before the layout that reads it.
-    //
-    // The pie arm's guard + shares are resolved here for the same reason: its
-    // legend labels carry them ("name (NN%)"), so they are layout input, not
-    // output.
-    let is_pie = matches!(kind, ChartKind::Pie);
-    let pie_values: &[f64] = if is_pie && m == 1 { &series[0] } else { &[] };
-    let pie_total: f64 = pie_values.iter().sum();
-    // The Phase-638 bounded-v1 guard, unchanged and merely lifted: exactly one
-    // series, no negative value, a positive total. A refused pie draws no
-    // geometry AND no legend — a legend for a picture that was refused would be
-    // a claim about data the drawing declined to show.
-    let pie_refused = is_pie && (m != 1 || pie_values.iter().any(|&v| v < 0.0) || pie_total <= 0.0);
-    let pie_fractions: Vec<f64> = if is_pie && !pie_refused {
-        pie_values.iter().map(|v| v / pie_total).collect()
-    } else {
-        vec![]
-    };
-
-    // The legend's rows in draw order — `(colour, label)`. TWO sources, ONE
-    // shape, which is what Phase 880 unified: the cartesian arms legend their
-    // SERIES and only when there is more than one (with a single series the
-    // title already names it — the pre-880 rule, preserved exactly), while the
-    // pie arm legends its CATEGORIES, which is why a single-series pie legends
-    // and a single-series bar does not. Before this phase these were two
-    // separate emitters with two separate constant sets, and only one of them
-    // could have honoured a position.
-    let legend_entries: Vec<(&'static str, String)> = if is_pie {
-        pie_fractions
-            .iter()
-            .enumerate()
-            .map(|(i, f)| {
-                // Routed through the canonical formatter (Phase 876) — one
-                // rounding + rendering rule for every number this module prints.
-                // A share is a whole percent, so the shipped `NN%` shape is
-                // unchanged.
-                let pct = format_value(None, 1.0, false, 1.0, f * 100.0);
-                (colour_for(i), format!("{} ({pct}%)", categories[i]))
-            })
-            .collect()
-    } else if m > 1 {
-        (0..m)
-            .map(|j| (colour_for(j), y_fields[j].clone()))
-            .collect()
-    } else {
-        vec![]
-    };
-
-    // The placement actually used: the author's explicit `ChartSpec` value where
-    // there is one, else the host style's default. With no entries at all the
-    // answer is `None` whatever either of them said — so an explicit position on
-    // a single-series chart still draws nothing and, more to the point, reserves
-    // no space.
-    let legend_pos = if legend_entries.is_empty() {
-        ChartLegendPosition::None
-    } else {
-        titles.legend_position.unwrap_or(style.legend_position)
-    };
-
-    // COLUMN arms: the widest label decides the column, bounded by
-    // `LEGEND_COLUMN_MAX_SHARE` of the canvas and truncated beyond it — the
-    // margin autosizes' posture, adopted for the same reason. A name with no
-    // bound is a data problem the layout should report by truncating, not absorb
-    // by shrinking the picture.
-    let legend_name_budget =
-        (LEGEND_COLUMN_MAX_SHARE * W - LEGEND_LABEL_OFFSET_X - LEGEND_COLUMN_GAP).max(0.0);
-    let legend_texts: Vec<String> = legend_entries
-        .iter()
-        .map(|(_, t)| match legend_pos {
-            ChartLegendPosition::Right => truncate_to_width(tick_size, legend_name_budget, t),
-            // The band arms pack at each entry's natural width and still run off
-            // the right edge past enough entries. Truncating there would not fix
-            // it (the overflow is in the SUM, not in one name), so the band is
-            // left as Phase 879 shipped it and the default moved.
-            _ => t.clone(),
-        })
-        .collect();
-
-    let legend_column_w = match legend_pos {
-        ChartLegendPosition::Right => {
-            r2(LEGEND_COLUMN_GAP + LEGEND_LABEL_OFFSET_X + widest_of(&legend_texts))
-        }
-        _ => 0.0,
-    };
-
-    // The `Bottom` band's height — one line plus its padding, reserved BELOW
-    // everything the bottom margin's autosize already accounts for (the x-axis
-    // title's line included), so the two computations never contend for the same
-    // pixels. The exact mirror of `subtitle_band` at the top: one term that
-    // shifts the whole band, present only when the arm is.
-    let legend_band_h = match legend_pos {
-        ChartLegendPosition::Bottom => r2(line_height + AXIS_LABEL_PADDING),
-        _ => 0.0,
-    };
-
     // ── Axis names + subtitle (Phase 878) ────────────────────────────────────
     //
     // Resolved HERE, before any margin, because both margins have to reserve a
@@ -1899,6 +1802,165 @@ pub fn lower_chart_with(
     let margin_left = r2(MARGIN_LEFT.max(left_ceiling.min(required_left)));
 
     let plot_x0 = margin_left;
+
+    // ── Legend placement (Phase 880; BAND overflow fallback 2026-08-18) ──────
+    //
+    // ONE legend with four placements, resolved HERE — AFTER the left margin,
+    // whose `plot_x0` is where a band packs FROM, and before the plot's right
+    // edge, because a `Right` legend's column width is an INPUT to the plot
+    // rectangle and a `Bottom` legend's band is an input to the bottom margin.
+    // The same acyclicity discipline the text metrics established: everything
+    // the layout reads is computed before the layout that reads it. Phase 880
+    // resolved this block above ALL the margins; the overflow rule moved it
+    // below the LEFT one, because that is where the band's available width
+    // comes from. Nothing between the two reads the legend, so the block moved
+    // whole.
+    //
+    // The pie arm's guard + shares are resolved here for the same reason: its
+    // legend labels carry them ("name (NN%)"), so they are layout input, not
+    // output.
+    let is_pie = matches!(kind, ChartKind::Pie);
+    let pie_values: &[f64] = if is_pie && m == 1 { &series[0] } else { &[] };
+    let pie_total: f64 = pie_values.iter().sum();
+    // The Phase-638 bounded-v1 guard, unchanged and merely lifted: exactly one
+    // series, no negative value, a positive total. A refused pie draws no
+    // geometry AND no legend — a legend for a picture that was refused would be
+    // a claim about data the drawing declined to show.
+    let pie_refused = is_pie && (m != 1 || pie_values.iter().any(|&v| v < 0.0) || pie_total <= 0.0);
+    let pie_fractions: Vec<f64> = if is_pie && !pie_refused {
+        pie_values.iter().map(|v| v / pie_total).collect()
+    } else {
+        vec![]
+    };
+
+    // The legend's rows in draw order — `(colour, label)`. TWO sources, ONE
+    // shape, which is what Phase 880 unified: the cartesian arms legend their
+    // SERIES and only when there is more than one (with a single series the
+    // title already names it — the pre-880 rule, preserved exactly), while the
+    // pie arm legends its CATEGORIES, which is why a single-series pie legends
+    // and a single-series bar does not. Before this phase these were two
+    // separate emitters with two separate constant sets, and only one of them
+    // could have honoured a position.
+    let legend_entries: Vec<(&'static str, String)> = if is_pie {
+        pie_fractions
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                // Routed through the canonical formatter (Phase 876) — one
+                // rounding + rendering rule for every number this module prints.
+                // A share is a whole percent, so the shipped `NN%` shape is
+                // unchanged.
+                let pct = format_value(None, 1.0, false, 1.0, f * 100.0);
+                (colour_for(i), format!("{} ({pct}%)", categories[i]))
+            })
+            .collect()
+    } else if m > 1 {
+        (0..m)
+            .map(|j| (colour_for(j), y_fields[j].clone()))
+            .collect()
+    } else {
+        vec![]
+    };
+
+    // The placement the author ASKED FOR: their explicit `ChartSpec` value where
+    // there is one, else the host style's default. With no entries at all the
+    // answer is `None` whatever either of them said — so an explicit position on
+    // a single-series chart still draws nothing and, more to the point, reserves
+    // no space.
+    let requested_pos = if legend_entries.is_empty() {
+        ChartLegendPosition::None
+    } else {
+        titles.legend_position.unwrap_or(style.legend_position)
+    };
+
+    // A BAND entry's PITCH: the swatch's label offset, the label's own natural
+    // width, and the gap before the next entry. Read by the overflow predicate
+    // AND by the band emitter far below — one expression, so the rule can never
+    // decide against geometry the drawing does not use. The name is the
+    // untruncated one, because a band never truncates.
+    let band_entry_width =
+        |t: &str| LEGEND_LABEL_OFFSET_X + text_width(tick_size, t) + LEGEND_ENTRY_GAP;
+
+    // The width a BAND has to pack into: from the plot's left edge, where the
+    // band starts, to the plot's right edge — which on a band arm is the canvas
+    // less the right margin, since a band reserves no column and
+    // `legend_column_w` is 0 there by construction. So the term is not circular,
+    // and it is the PLOT's width rather than canvas-minus-declared-margins: the
+    // band packs from `plot_x0`, the AUTOSIZED left margin, not from
+    // `MARGIN_LEFT`.
+    let band_available_w = W - MARGIN_RIGHT - plot_x0;
+
+    // **The BAND overflow rule (operator decision, 2026-08-18).** An explicit
+    // `Top` or `Bottom` legend whose entries do not pack into one band row FALLS
+    // BACK TO THE RIGHT-HAND COLUMN. A band's width is the SUM of its entries,
+    // so it runs off the canvas once the names are long enough or numerous
+    // enough — and truncating any one name cannot fix a sum, which is why Phase
+    // 879's per-entry natural pitch and Phase 880's repositioning both left it
+    // standing.
+    //
+    // The column never loses information, never grows the band unboundedly, and
+    // reuses layout that already shipped. Two alternatives were considered and
+    // DECLINED: a second row grows the reserved band and moves the plot
+    // rectangle with the entry COUNT (chrome sliding under a data refresh); a
+    // refusal loses the legend entirely, when the author's intent — a visible
+    // legend — is honourable at another edge. So `Top`/`Bottom` mean "band if it
+    // fits, column if it cannot"; the wire is unchanged.
+    //
+    // The comparison INCLUDES the last entry's trailing `LEGEND_ENTRY_GAP`,
+    // exactly as the emitter computes it — that gap is the clearance to the
+    // right margin. Strict `>`, so an exact fit stays a band. And the fallback
+    // is UNIFORM: the whole legend moves, never a split across two edges.
+    let band_overflows = matches!(
+        requested_pos,
+        ChartLegendPosition::Top | ChartLegendPosition::Bottom
+    ) && legend_entries
+        .iter()
+        .fold(0.0f64, |acc, (_, t)| acc + band_entry_width(t))
+        > band_available_w;
+
+    // The placement actually used.
+    let legend_pos = if band_overflows {
+        ChartLegendPosition::Right
+    } else {
+        requested_pos
+    };
+
+    // COLUMN arms: the widest label decides the column, bounded by
+    // `LEGEND_COLUMN_MAX_SHARE` of the canvas and truncated beyond it — the
+    // margin autosizes' posture, adopted for the same reason. A name with no
+    // bound is a data problem the layout should report by truncating, not absorb
+    // by shrinking the picture.
+    let legend_name_budget =
+        (LEGEND_COLUMN_MAX_SHARE * W - LEGEND_LABEL_OFFSET_X - LEGEND_COLUMN_GAP).max(0.0);
+    let legend_texts: Vec<String> = legend_entries
+        .iter()
+        .map(|(_, t)| match legend_pos {
+            ChartLegendPosition::Right => truncate_to_width(tick_size, legend_name_budget, t),
+            // A BAND arm packs at NATURAL width and never truncates: its
+            // overflow is in the SUM, not in one name, so truncating would cost
+            // information without fixing anything — a band that cannot pack
+            // falls back to the column above.
+            _ => t.clone(),
+        })
+        .collect();
+
+    let legend_column_w = match legend_pos {
+        ChartLegendPosition::Right => {
+            r2(LEGEND_COLUMN_GAP + LEGEND_LABEL_OFFSET_X + widest_of(&legend_texts))
+        }
+        _ => 0.0,
+    };
+
+    // The `Bottom` band's height — one line plus its padding, reserved BELOW
+    // everything the bottom margin's autosize already accounts for (the x-axis
+    // title's line included), so the two computations never contend for the same
+    // pixels. The exact mirror of `subtitle_band` at the top: one term that
+    // shifts the whole band, present only when the arm is.
+    let legend_band_h = match legend_pos {
+        ChartLegendPosition::Bottom => r2(line_height + AXIS_LABEL_PADDING),
+        _ => 0.0,
+    };
+
     // Phase 880 — a `Right` legend takes its column off the PLOT, not off the
     // right margin: the margin stays the clearance between the legend's widest
     // label and the canvas edge, exactly as it was the clearance to the plot
@@ -2125,8 +2187,10 @@ pub fn lower_chart_with(
     // BAND (`Top` / `Bottom`): Phase 879's horizontal row, entries laid out
     // cumulatively from the plot's left edge at each entry's own natural width —
     // unchanged for `Top`, which is the pre-880 shape every pre-880 golden pins.
-    // It still runs off the right edge past enough entries; that survives only on
-    // the arms an author asks for explicitly.
+    // A band that cannot PACK into the plot's width no longer runs off the edge:
+    // `band_overflows` above sends the whole legend to the column instead
+    // (operator decision, 2026-08-18), so by the time this arm is reached the
+    // entries are known to fit.
     let push_legend = |shapes: &mut Vec<Shape>| {
         // ONE row emitter for all four placements: a swatch at `x`/`swatch_y` and
         // its label one `LEGEND_LABEL_OFFSET_X` to the right on `baseline_y`.
@@ -2183,12 +2247,13 @@ pub fn lower_chart_with(
                         LEGEND_LABEL_BASELINE_Y + subtitle_band,
                     ),
                 };
-                // Prefix sums — entry j starts where every earlier entry ended.
+                // Prefix sums — entry j starts where every earlier entry ended,
+                // at the same `band_entry_width` the overflow rule measured
+                // against.
                 let mut lx_acc = plot_x0;
                 for (j, text) in legend_texts.iter().enumerate() {
                     let lx = r2(lx_acc);
-                    lx_acc +=
-                        LEGEND_LABEL_OFFSET_X + text_width(tick_size, text) + LEGEND_ENTRY_GAP;
+                    lx_acc += band_entry_width(text);
                     legend_row(shapes, lx, swatch_y, baseline_y, j);
                 }
             }
