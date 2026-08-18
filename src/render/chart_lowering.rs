@@ -1463,6 +1463,86 @@ pub struct ChartTitles<'a> {
     pub x_scale: Option<ChartXScale>,
 }
 
+// ─── The accessible summary (Phase 921) ──────────────────────────────────────
+//
+// NORMATIVE CROSS-HOST SPEC, ported verbatim from the F# reference and pinned by
+// the `chart-lowering/*` goldens; `docs/CHARTS-DRAWING-PRIMITIVE-DESIGN.md` §4i
+// carries the language-neutral statement.
+//
+// The drawing root is `role="img"`, which presents the chart as ONE graphic and
+// does not traverse into it — so the per-mark `<title>`s are never announced.
+// Operator decision 2026-08-18: the root keeps that role, and the lowering
+// generates a deterministic summary as the drawing's `description`, which the
+// SVG builder wires to the root's `aria-label`. The title is NOT part of it: it
+// is a `TextSource` whose bound/i18n arms resolve only at render time, so the
+// builder composes it in front instead.
+
+/// The clause separator + terminator. Periods, not commas: a screen reader
+/// pauses at a sentence boundary.
+const SUMMARY_CLAUSE_SEPARATOR: &str = ". ";
+
+/// At most this many series are NAMED before the summary folds the rest into a
+/// count — a legibility bound, not a technical one.
+const SUMMARY_MAX_SERIES_NAMED: usize = 4;
+
+/// The per-NAME character cap (a series field, a category label) — untrusted
+/// strings straight off the data feed.
+const SUMMARY_MAX_NAME_CHARS: usize = 32;
+
+/// The whole summary's character cap.
+const SUMMARY_MAX_CHARS: usize = 320;
+
+/// Truncate to at most `max_chars`, marking the cut with the ellipsis.
+///
+/// The cap counts UTF-16 code units, which is what the F#/TypeScript hosts count
+/// natively — so a non-BMP character costs two here as it does there and the cut
+/// lands in the same place on every host. Filling by whole `char`s is also why a
+/// surrogate pair can never be split.
+fn clamp_text(max_chars: usize, s: &str) -> String {
+    let total: usize = s.chars().map(char::len_utf16).sum();
+    if total <= max_chars {
+        return s.to_string();
+    }
+    let budget = max_chars - 1; // one unit for the ellipsis
+    let mut used = 0usize;
+    let mut out = String::new();
+    for ch in s.chars() {
+        let w = ch.len_utf16();
+        if used + w > budget {
+            break;
+        }
+        used += w;
+        out.push(ch);
+    }
+    out.push_str(ELLIPSIS);
+    out
+}
+
+/// The chart's kind in words. `stacked` earns a word only on the two arms where
+/// it changes the geometry — the same rule the lowering itself applies.
+fn summary_kind_words(kind: ChartKind, stacked: bool) -> &'static str {
+    match kind {
+        ChartKind::Bar => {
+            if stacked {
+                "Stacked bar chart"
+            } else {
+                "Bar chart"
+            }
+        }
+        ChartKind::Line => "Line chart",
+        ChartKind::Area => {
+            if stacked {
+                "Stacked area chart"
+            } else {
+                "Area chart"
+            }
+        }
+        ChartKind::Scatter => "Scatter chart",
+        ChartKind::Pie => "Pie chart",
+        ChartKind::Heatmap => "Heatmap chart",
+    }
+}
+
 /// Lower under an explicit value-axis `Format` (a wire declaration) and an
 /// explicit style (a host choice) — Phase 876; the Phase-878 axis names +
 /// subtitle ride alongside.
@@ -2279,6 +2359,115 @@ pub fn lower_chart_with(
     // which carry the shares) and honours the placement like any other arm. The
     // guard + the shares themselves were lifted above the margins, because the
     // legend's width is layout input.
+    // ── The accessible summary (Phase 921) ───────────────────────────────────
+    //
+    // The grammar is stated at the section head above and normatively in §4i;
+    // this is its four clauses in order. Computed HERE, ahead of the pie arm's
+    // early return, so both return sites carry it. A REFUSED PIE announces
+    // nothing, for the reason Phase 880 gave when it stopped emitting the
+    // refused pie's legend: a claim about data the drawing declined to show.
+    let accessible_summary: Option<TextSource> = if pie_refused {
+        None
+    } else {
+        let named_series = y_fields
+            .iter()
+            .take(SUMMARY_MAX_SERIES_NAMED)
+            .map(|f| clamp_text(SUMMARY_MAX_NAME_CHARS, f))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let series_clause = if m == 0 {
+            "no series".to_string()
+        } else if m > SUMMARY_MAX_SERIES_NAMED {
+            format!(
+                "{m} series: {named_series}, and {} more",
+                m - SUMMARY_MAX_SERIES_NAMED
+            )
+        } else {
+            format!("{m} series: {named_series}")
+        };
+
+        // The extent clause follows the X AXIS's own kind, not the chart's: a
+        // band axis states its first and last category, a continuous axis its
+        // domain endpoints through that axis's own tick formatter.
+        let extent_clause = if is_continuous_x {
+            if n == 0 {
+                "no points".to_string()
+            } else {
+                let head = if n == 1 {
+                    "1 point: ".to_string()
+                } else {
+                    format!("{n} points: ")
+                };
+                format!(
+                    "{head}{} to {}",
+                    x_tick_text(x_nice_lo),
+                    x_tick_text(x_nice_hi)
+                )
+            }
+        } else if n == 0 {
+            "no categories".to_string()
+        } else if n == 1 {
+            format!(
+                "1 category: {}",
+                clamp_text(SUMMARY_MAX_NAME_CHARS, categories[0])
+            )
+        } else {
+            format!(
+                "{n} categories: {} to {}",
+                clamp_text(SUMMARY_MAX_NAME_CHARS, categories[0]),
+                clamp_text(SUMMARY_MAX_NAME_CHARS, categories[n - 1])
+            )
+        };
+
+        let mut clauses = vec![
+            summary_kind_words(kind, stacked).to_string(),
+            series_clause,
+            extent_clause,
+        ];
+
+        // The peak is the largest SINGLE DATUM — never a stacked total, because
+        // the clause names one series at one category and a total belongs to
+        // neither. Ties resolve to the earliest category then the earliest
+        // series (a strict `>` scanned category-major), which is the axis's own
+        // reading order. The number takes the value axis's rendering (the
+        // Phase-876 formatter at the axis's step precision, plus the axis's
+        // display unit in its own words); the category is the datum's OWN label,
+        // verbatim, even on a temporal axis.
+        if n > 0 && m > 0 {
+            let (mut bi, mut bj, mut bv) = (0usize, 0usize, series[0][0]);
+            // `series` is indexed [series][category] but scanned CATEGORY-major
+            // (the tie-break rule), so neither loop iterates the collection it
+            // indexes and the iterator rewrite clippy suggests cannot express it.
+            #[allow(clippy::needless_range_loop)]
+            for i in 0..n {
+                for j in 0..m {
+                    if series[j][i] > bv {
+                        bv = series[j][i];
+                        bi = i;
+                        bj = j;
+                    }
+                }
+            }
+            let unit_suffix = if y_display_unit.label.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", y_display_unit.label)
+            };
+            clauses.push(format!(
+                "Peak {} at {}, {}{unit_suffix}",
+                clamp_text(SUMMARY_MAX_NAME_CHARS, &y_fields[bj]),
+                clamp_text(SUMMARY_MAX_NAME_CHARS, categories[bi]),
+                y_tick_text(bv)
+            ));
+        }
+
+        Some(TextSource::Literal(clamp_text(
+            SUMMARY_MAX_CHARS,
+            &format!("{}.", clauses.join(SUMMARY_CLAUSE_SEPARATOR)),
+        )))
+    };
+
     if is_pie {
         if !pie_refused {
             let cx = r2((plot_x0 + plot_x1) / 2.0);
@@ -2397,7 +2586,7 @@ pub fn lower_chart_with(
             shapes,
             style: DrawStyle::default(),
             title: title.cloned(),
-            description: None,
+            description: accessible_summary,
         };
     }
 
@@ -3101,7 +3290,7 @@ pub fn lower_chart_with(
         shapes,
         style: DrawStyle::default(),
         title: title.cloned(),
-        description: None,
+        description: accessible_summary,
     }
 }
 

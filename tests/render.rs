@@ -1003,3 +1003,98 @@ fn drawing_rotation_is_inert_off_label() {
         "rotation must be inert on non-Label shapes:\n{html}"
     );
 }
+
+// ── Phase 921 — the drawing root's ANNOUNCED accessible name ─────────────────
+//
+// `role="img"` (Phase 532's R3) presents the drawing as ONE graphic and does not
+// traverse into it, and `<desc>` is not uniformly mapped to the accessible
+// description (Chromium has never exposed it) — so the description the markup
+// has carried since Phase 525 was a value no reader could reach. The root now
+// emits `aria-label` composing the title and the description. Byte-parity with
+// the F# builder's `DrawingSvgTests` block of the same name.
+
+fn drawing_root(title: Option<&str>, description: Option<&str>) -> String {
+    let mut fields = String::new();
+    if let Some(t) = title {
+        fields.push_str(&format!(r#","title":"{t}""#));
+    }
+    if let Some(d) = description {
+        fields.push_str(&format!(r#","description":"{d}""#));
+    }
+    render(&format!(
+        r#"{{"id":"d","kind":{{"$type":"Drawing","shapes":[],"style":{{}},"viewBox":{{"height":100,"minX":0,"minY":0,"width":200}}{fields}}}}}"#
+    ))
+}
+
+#[test]
+fn drawing_root_composes_title_and_description_into_aria_label() {
+    let html = drawing_root(
+        Some("Sales vs target"),
+        Some("Bar chart. 2 series: sales, target."),
+    );
+    assert!(
+        html.contains(concat!(
+            r#"<svg class="fuaran-drawing" role="img" viewBox="0 0 200 100" "#,
+            r#"aria-label="Sales vs target. Bar chart. 2 series: sales, target.">"#,
+            "<title>Sales vs target</title>",
+            "<desc>Bar chart. 2 series: sales, target.</desc></svg>"
+        )),
+        "root wiring drifted:\n{html}"
+    );
+}
+
+#[test]
+fn drawing_root_terminates_the_title_only_when_needed() {
+    assert!(
+        drawing_root(Some("Ends in a period."), Some("D."))
+            .contains(r#"aria-label="Ends in a period. D.""#)
+    );
+    assert!(drawing_root(Some("Really?"), Some("D.")).contains(r#"aria-label="Really? D.""#));
+    assert!(drawing_root(Some("Now!"), Some("D.")).contains(r#"aria-label="Now! D.""#));
+    assert!(drawing_root(Some("Plain"), Some("D.")).contains(r#"aria-label="Plain. D.""#));
+    // An EMPTY title contributes nothing rather than a bare period.
+    assert!(drawing_root(Some(""), Some("D.")).contains(r#"aria-label="D.""#));
+}
+
+#[test]
+fn drawing_root_without_a_description_is_byte_identical_to_pre_921() {
+    let titled = drawing_root(Some("Bars"), None);
+    assert!(
+        titled.contains(
+            r#"<svg class="fuaran-drawing" role="img" viewBox="0 0 200 100"><title>Bars</title></svg>"#
+        ),
+        "a title-only root gained an attribute:\n{titled}"
+    );
+    assert!(!drawing_root(None, None).contains("aria-label"));
+}
+
+#[test]
+fn drawing_root_announces_a_description_only_root_on_its_own() {
+    let html = drawing_root(None, Some("One filled circle."));
+    assert!(
+        html.contains(concat!(
+            r#"<svg class="fuaran-drawing" role="img" viewBox="0 0 200 100" aria-label="One filled circle.">"#,
+            "<desc>One filled circle.</desc></svg>"
+        )),
+        "description-only wiring drifted:\n{html}"
+    );
+}
+
+#[test]
+fn drawing_root_escapes_hostile_text_inside_the_aria_label_attribute() {
+    // The builder emits raw markup, so its own XML escape is the whole defence —
+    // and an attribute value needs the quote entities the element-content path
+    // also emits. The chart lowering feeds this seam untrusted series and
+    // category strings straight off the data feed.
+    let html = drawing_root(
+        Some(r#"a\"b"#),
+        Some(r#"<script>alert('x') & \"y\"</script>"#),
+    );
+    assert!(
+        html.contains(
+            r#"aria-label="a&quot;b. &lt;script&gt;alert(&#39;x&#39;) &amp; &quot;y&quot;&lt;/script&gt;""#
+        ),
+        "hostile text is not fully escaped in the attribute:\n{html}"
+    );
+    assert!(!html.contains("<script>"));
+}

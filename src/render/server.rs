@@ -47,7 +47,7 @@ use super::bindings::{
     static_display_string, try_bool, try_number, try_scalar_number, try_string,
 };
 use super::class_names::{icon_size_class, node_class_name, tone_var};
-use super::html::{Attr, AttrVal, el, entity_encode, escape_attr, escape_text, text_el, void_el};
+use super::html::{Attr, AttrVal, el, entity_encode, escape_attr, text_el, void_el};
 use super::markdown::to_html as markdown_to_html;
 use super::sanitize::sanitize_url_or_blank;
 
@@ -1481,10 +1481,29 @@ fn draw_path_d(commands: &[crate::wire::CurveCommand]) -> String {
 /// `<title>` is inert geometry-wise on all of them (unlike `rotation`, whose
 /// off-`Label` emission would MOVE GEOMETRY).
 ///
-/// The text is XML-escaped through the same `escape_text` the label text and
-/// the drawing title/desc already use: this builder emits raw markup, so the
-/// escape is the whole defence, and the chart lowering feeds it UNTRUSTED
-/// series/category strings straight off the data feed.
+/// The Drawing builder's XML escape — all five escapable characters
+/// (`& < > " '`), matching the reference builder byte-for-byte.
+///
+/// It is deliberately NOT the general [`escape_text`], which leaves quotes
+/// alone because HTML text content does not need them escaped: this builder's
+/// strings land in ATTRIBUTE values as well as element content (Phase 921's
+/// root `aria-label`), where an unescaped `"` terminates the attribute. One
+/// escape for the whole builder is also what keeps its bytes identical to the
+/// other conformant hosts', which each apply the same five-character rule at
+/// every seam of their own Drawing emitter.
+fn draw_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// The text is XML-escaped through [`draw_escape`], as every other string this
+/// builder writes is: it emits raw markup, so the escape is the whole defence,
+/// and the chart lowering feeds it UNTRUSTED series/category strings straight
+/// off the data feed.
 fn draw_tip_child(ctx: &Ctx<'_>, style: &crate::wire::DrawStyle) -> String {
     style
         .tip
@@ -1492,7 +1511,7 @@ fn draw_tip_child(ctx: &Ctx<'_>, style: &crate::wire::DrawStyle) -> String {
         .map(|t| {
             format!(
                 "<title>{}</title>",
-                escape_text(&render_text(ctx.sources, t))
+                draw_escape(&render_text(ctx.sources, t))
             )
         })
         .unwrap_or_default()
@@ -1622,9 +1641,54 @@ fn render_shape(ctx: &Ctx<'_>, sh: &crate::wire::Shape) -> String {
             // The tip precedes the visible run — `<title>` is the accessible
             // name only as the FIRST child.
             draw_tip_child(ctx, style),
-            escape_text(&render_text(ctx.sources, text))
+            draw_escape(&render_text(ctx.sources, text))
         ),
     }
+}
+
+/// Phase 921 — terminate a title with `.` unless it already ends in sentence
+/// punctuation, so the composed accessible name reads as two sentences rather
+/// than one run-on.
+fn terminate_title(t: &str) -> String {
+    match t.chars().last() {
+        None | Some('.') | Some('!') | Some('?') => t.to_string(),
+        Some(_) => format!("{t}."),
+    }
+}
+
+/// Phase 921 — the drawing root's ANNOUNCED accessible name, or `""` when the
+/// root emits no `aria-label`.
+///
+/// `role="img"` (Phase 532's R3) presents the drawing as ONE graphic and does not
+/// traverse into it, and `<desc>` is not uniformly mapped to the accessible
+/// description (Chromium has never exposed it) — so the value the markup has
+/// carried since Phase 525 is one a reader cannot reach. `aria-label` is the
+/// accessible NAME, which every assistive technology announces unconditionally
+/// for a `role="img"` element.
+///
+/// NOT `aria-labelledby` / `aria-describedby`: both reference elements BY ID, and
+/// this builder has no id to give — its whole input is a `DrawingSpec`, several
+/// drawings routinely share one document, and any minted id would have to be both
+/// unique per page and byte-identical across five hosts.
+///
+/// Emitted ONLY when a description is present, so every pre-921 title-only or
+/// bare drawing is byte-identical.
+fn root_aria_label(ctx: &Ctx<'_>, spec: &crate::wire::DrawingSpec) -> String {
+    let Some(d) = spec.description.as_ref() else {
+        return String::new();
+    };
+    let desc_text = render_text(ctx.sources, d);
+    let title_text = spec
+        .title
+        .as_ref()
+        .map(|t| terminate_title(&render_text(ctx.sources, t)))
+        .unwrap_or_default();
+    let composed = if title_text.is_empty() {
+        desc_text
+    } else {
+        format!("{title_text} {desc_text}")
+    };
+    format!(" aria-label=\"{}\"", draw_escape(&composed))
 }
 
 fn render_drawing(ctx: &Ctx<'_>, spec: &crate::wire::DrawingSpec) -> String {
@@ -1642,19 +1706,20 @@ fn render_drawing(ctx: &Ctx<'_>, spec: &crate::wire::DrawingSpec) -> String {
         .map(|t| {
             format!(
                 "<title>{}</title>",
-                escape_text(&render_text(ctx.sources, t))
+                draw_escape(&render_text(ctx.sources, t))
             )
         })
         .unwrap_or_default();
     let desc = spec
         .description
         .as_ref()
-        .map(|d| format!("<desc>{}</desc>", escape_text(&render_text(ctx.sources, d))))
+        .map(|d| format!("<desc>{}</desc>", draw_escape(&render_text(ctx.sources, d))))
         .unwrap_or_default();
     let body: String = spec.shapes.iter().map(|s| render_shape(ctx, s)).collect();
     let root_style = draw_style_attrs(&spec.style, false);
+    let aria = root_aria_label(ctx, spec);
     let svg = format!(
-        "<svg class=\"fuaran-drawing\" role=\"img\" viewBox=\"{view_box}\"{root_style}>{title}{desc}{body}</svg>"
+        "<svg class=\"fuaran-drawing\" role=\"img\" viewBox=\"{view_box}\"{aria}{root_style}>{title}{desc}{body}</svg>"
     );
     format!("<div>{svg}</div>")
 }
