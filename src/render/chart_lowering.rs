@@ -1231,6 +1231,27 @@ fn with_series_mark(series_field: &str, style: DrawStyle) -> DrawStyle {
     }
 }
 
+/// Phase 883 — the separator between the three parts of a hover readout. A
+/// middle dot with spaces of its own: not a character a series or category name
+/// is likely to contain (a hyphen, a slash and a comma all are), and it reads as
+/// a separator rather than as punctuation belonging to either side.
+const TIP_SEPARATOR: &str = " \u{b7} ";
+
+/// Phase 883 — stamp the hover readout onto a data-bearing shape's style. An
+/// EMPTY readout is dropped rather than encoded: an empty SVG `<title>`
+/// suppresses the native tooltip AND overrides the element's accessible name
+/// with nothing, which is worse than having no title at all.
+fn with_tip(text: String, style: DrawStyle) -> DrawStyle {
+    if text.is_empty() {
+        style
+    } else {
+        DrawStyle {
+            tip: Some(TextSource::Literal(text)),
+            ..style
+        }
+    }
+}
+
 /// A text-label style: surface-relative ink (`currentColor`) + an optional
 /// per-role opacity (`None` = full-strength, e.g. titles) + alignment + size +
 /// weight + the chart font.
@@ -1251,6 +1272,7 @@ fn text_style(
         stroke_width: None,
         mark_id: None,
         rotation: None,
+        tip: None,
     }
 }
 
@@ -1464,6 +1486,49 @@ pub fn lower_chart_with(
             ),
             y_display_unit.tick_suffix
         )
+    };
+
+    // ── Hover readout (Phase 883) ────────────────────────────────────────────
+    //
+    // THE TIP IS WHERE FULL PRECISION LIVES. A printed data label (Phase 881)
+    // goes through `y_tick_text` — the axis's own formatter, step precision and
+    // display unit — and reads ROUGHLY WHERE. The tip answers the other
+    // question, WHAT EXACTLY IS THIS, so it takes the opposite three decisions:
+    // UNSCALED by the display unit (a tooltip has no unit slot beside it), the
+    // DATUM's own precision rather than the tick step's (an author's EXPLICIT
+    // `Number` / `Percent` precision still wins — a declared precision is a
+    // statement about the data, not about the axis), and the currency symbol
+    // KEPT (the ticks drop it because the axis-unit label states it once).
+    //
+    // Passing `v` as the step is what selects the datum's own precision:
+    // `format_value` derives its decimals from the step when no explicit
+    // precision is declared, so step = value gives the fewest decimals that
+    // reproduce the value exactly.
+    let tip_value_text = |v: f64| -> String { format_value(value_format, 1.0, false, v, v) };
+
+    // The readout for a PER-DATUM mark (bar, stack segment, wedge, scatter
+    // point). Both leading parts are untrusted strings straight off the data
+    // feed — the renderer's XML escape is what makes that safe. The series name
+    // is the FIELD name, matching the legend and the mark id rather than the
+    // capitalised axis title.
+    let datum_tip =
+        |series_field: &str, category_key: &str, v: f64, style: DrawStyle| -> DrawStyle {
+            with_tip(
+                format!(
+                    "{series_field}{TIP_SEPARATOR}{category_key}{TIP_SEPARATOR}{}",
+                    tip_value_text(v)
+                ),
+                style,
+            )
+        };
+
+    // The readout for a SERIES-LEVEL mark (a line, an area band or its edge).
+    // THE TIP'S GRANULARITY FOLLOWS THE MARK'S IDENTITY GRANULARITY — one
+    // element IS the whole series, and SVG resolves a tooltip per ELEMENT, so a
+    // single `<title>` cannot honestly report one point's value: whichever was
+    // chosen would show for a hover anywhere along the line.
+    let series_tip = |series_field: &str, style: DrawStyle| -> DrawStyle {
+        with_tip(series_field.to_string(), style)
     };
 
     // ── Linear x-scale (Phase 636 — the Scatter arm's numeric x axis) ──
@@ -2150,7 +2215,17 @@ pub fn lower_chart_with(
             let yf = &y_fields[0];
             for (i, &f) in pie_fractions.iter().enumerate() {
                 if f > 0.0 {
-                    let mark_style = with_mark(yf, categories[i], style_fill(colour_for(i)));
+                    // The wedge's own VALUE, not its share. The share is
+                    // already stated, once, in the legend entry
+                    // (`name (NN%)`); restating it here would leave the
+                    // magnitude behind the slice the one number still
+                    // unreachable.
+                    let mark_style = datum_tip(
+                        yf,
+                        categories[i],
+                        pie_values[i],
+                        with_mark(yf, categories[i], style_fill(colour_for(i))),
+                    );
                     if f >= 1.0 - 1e-9 {
                         // A lone 100% category is a circle — there is no
                         // neighbour to separate from, so no padding.
@@ -2541,7 +2616,17 @@ pub fn lower_chart_with(
                         width: bw,
                         height: hgt,
                         corner_radius: None,
-                        style: with_mark(&y_fields[j], category, style_fill(colour_for(j))),
+                        // Phase 883 — a stack SEGMENT's tip carries its
+                        // OWN series value, never the running total. This is
+                        // where an interior segment gets its readout: Phase
+                        // 881 prints the stack TOTAL at the cap and nothing
+                        // else, and pointed here for the rest.
+                        style: datum_tip(
+                            &y_fields[j],
+                            category,
+                            series[j][i],
+                            with_mark(&y_fields[j], category, style_fill(colour_for(j))),
+                        ),
                     });
                 }
             }
@@ -2568,7 +2653,12 @@ pub fn lower_chart_with(
                         width: bw,
                         height: hgt,
                         corner_radius: None,
-                        style: with_mark(&y_fields[j], categories[i], style_fill(colour)),
+                        style: datum_tip(
+                            &y_fields[j],
+                            categories[i],
+                            v,
+                            with_mark(&y_fields[j], categories[i], style_fill(colour)),
+                        ),
                     });
                 }
             }
@@ -2596,11 +2686,14 @@ pub fn lower_chart_with(
                     band.extend(lower);
                     shapes.push(Shape::Polygon {
                         points: band,
-                        style: with_series_mark(yf, style_fill_opacity(colour, AREA_FILL_OPACITY)),
+                        style: series_tip(
+                            yf,
+                            with_series_mark(yf, style_fill_opacity(colour, AREA_FILL_OPACITY)),
+                        ),
                     });
                     shapes.push(Shape::Polyline {
                         points: upper,
-                        style: with_series_mark(yf, style_stroke(colour, 2.0)),
+                        style: series_tip(yf, with_series_mark(yf, style_stroke(colour, 2.0))),
                     });
                 }
             }
@@ -2634,11 +2727,14 @@ pub fn lower_chart_with(
                     });
                     shapes.push(Shape::Polygon {
                         points: band,
-                        style: with_series_mark(yf, style_fill_opacity(colour, AREA_FILL_OPACITY)),
+                        style: series_tip(
+                            yf,
+                            with_series_mark(yf, style_fill_opacity(colour, AREA_FILL_OPACITY)),
+                        ),
                     });
                     shapes.push(Shape::Polyline {
                         points,
-                        style: with_series_mark(yf, style_stroke(colour, 2.0)),
+                        style: series_tip(yf, with_series_mark(yf, style_stroke(colour, 2.0))),
                     });
                 }
             }
@@ -2656,7 +2752,10 @@ pub fn lower_chart_with(
                     .collect();
                 shapes.push(Shape::Polyline {
                     points,
-                    style: with_series_mark(&y_fields[j], style_stroke(colour, 2.0)),
+                    style: series_tip(
+                        &y_fields[j],
+                        with_series_mark(&y_fields[j], style_stroke(colour, 2.0)),
+                    ),
                 });
             }
         }
@@ -2673,7 +2772,17 @@ pub fn lower_chart_with(
                         cx: x_scale(x_values[i]),
                         cy: y_scale(v),
                         r: 4.0,
-                        style: with_mark(yf, &format_num(x_values[i]), style_fill(colour)),
+                        // The tip's middle part is the x cell as
+                        // PROJECTED (`categories[i]`), not the mark id's
+                        // canonical numeric form: the id is for object
+                        // constancy, the tip is for a human, and on a temporal
+                        // axis the projection is the ISO date, not a day count.
+                        style: datum_tip(
+                            yf,
+                            categories[i],
+                            values[i],
+                            with_mark(yf, &format_num(x_values[i]), style_fill(colour)),
+                        ),
                     });
                 }
             }

@@ -1048,6 +1048,12 @@ fn draw_style(style: &DrawStyle) -> String {
     if let Some(rot) = &style.rotation {
         fields.push(field("rotation", num(*rot)));
     }
+    // Phase 883 — the per-mark hover readout; omitted-when-None (rule 4). Same
+    // `if let Some` discipline: an explicitly EMPTY tip is a present value and
+    // a distinct wire shape from `None`.
+    if let Some(t) = &style.tip {
+        fields.push(field("tip", text_source(t)));
+    }
     obj(fields)
 }
 

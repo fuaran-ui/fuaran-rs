@@ -1470,14 +1470,53 @@ fn draw_path_d(commands: &[crate::wire::CurveCommand]) -> String {
         .join(" ")
 }
 
+/// Phase 883 — the mark's hover readout as an SVG `<title>` CHILD of its own
+/// element: the native browser tooltip and the element's accessible name, with
+/// no script, so a statically-served page carries it. `<title>` must be the
+/// FIRST child to be the accessible name, which is why every arm below emits it
+/// ahead of any other content.
+///
+/// A tip is the one `DrawStyle` field honoured on EVERY shape rather than only
+/// on `Label` — the marks a reader hovers are bars, wedges and points, and a
+/// `<title>` is inert geometry-wise on all of them (unlike `rotation`, whose
+/// off-`Label` emission would MOVE GEOMETRY).
+///
+/// The text is XML-escaped through the same `escape_text` the label text and
+/// the drawing title/desc already use: this builder emits raw markup, so the
+/// escape is the whole defence, and the chart lowering feeds it UNTRUSTED
+/// series/category strings straight off the data feed.
+fn draw_tip_child(ctx: &Ctx<'_>, style: &crate::wire::DrawStyle) -> String {
+    style
+        .tip
+        .as_ref()
+        .map(|t| {
+            format!(
+                "<title>{}</title>",
+                escape_text(&render_text(ctx.sources, t))
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// The tail of a shape element carrying no child content of its own:
+/// self-closing when untipped (byte-unchanged from every pre-883 drawing), an
+/// open/close pair wrapping the `<title>` when tipped.
+fn draw_close(ctx: &Ctx<'_>, style: &crate::wire::DrawStyle, element: &str) -> String {
+    match &style.tip {
+        None => "/>".to_string(),
+        Some(_) => format!(">{}</{element}>", draw_tip_child(ctx, style)),
+    }
+}
+
 fn render_shape(ctx: &Ctx<'_>, sh: &crate::wire::Shape) -> String {
     use crate::wire::Shape as S;
     match sh {
         S::Group { children, style } => {
             let inner: String = children.iter().map(|c| render_shape(ctx, c)).collect();
             format!(
-                "<g class=\"fuaran-drawing-group\"{}>{inner}</g>",
-                draw_style_attrs(style, false)
+                "<g class=\"fuaran-drawing-group\"{}>{}{inner}</g>",
+                draw_style_attrs(style, false),
+                draw_tip_child(ctx, style)
             )
         }
         S::Rectangle {
@@ -1492,12 +1531,13 @@ fn render_shape(ctx: &Ctx<'_>, sh: &crate::wire::Shape) -> String {
                 .map(|cr| format!(" rx=\"{}\"", draw_num(cr)))
                 .unwrap_or_default();
             format!(
-                "<rect class=\"fuaran-drawing-rect\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{rx}{}/>",
+                "<rect class=\"fuaran-drawing-rect\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"{rx}{}{}",
                 draw_num(*x),
                 draw_num(*y),
                 draw_num(*width),
                 draw_num(*height),
-                draw_style_attrs(style, false)
+                draw_style_attrs(style, false),
+                draw_close(ctx, style, "rect")
             )
         }
         S::Line {
@@ -1507,37 +1547,42 @@ fn render_shape(ctx: &Ctx<'_>, sh: &crate::wire::Shape) -> String {
             y2,
             style,
         } => format!(
-            "<line class=\"fuaran-drawing-line\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"{}/>",
+            "<line class=\"fuaran-drawing-line\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"{}{}",
             draw_num(*x1),
             draw_num(*y1),
             draw_num(*x2),
             draw_num(*y2),
-            draw_style_attrs(style, false)
+            draw_style_attrs(style, false),
+            draw_close(ctx, style, "line")
         ),
         S::Polyline { points, style } => format!(
-            "<polyline class=\"fuaran-drawing-polyline\" points=\"{}\"{}{}/>",
+            "<polyline class=\"fuaran-drawing-polyline\" points=\"{}\"{}{}{}",
             draw_points(points),
             draw_style_attrs(style, true),
-            stroke_join_attrs(style)
+            stroke_join_attrs(style),
+            draw_close(ctx, style, "polyline")
         ),
         S::Polygon { points, style } => format!(
-            "<polygon class=\"fuaran-drawing-polygon\" points=\"{}\"{}{}/>",
+            "<polygon class=\"fuaran-drawing-polygon\" points=\"{}\"{}{}{}",
             draw_points(points),
             draw_style_attrs(style, false),
-            stroke_join_attrs(style)
+            stroke_join_attrs(style),
+            draw_close(ctx, style, "polygon")
         ),
         S::Curve { commands, style } => format!(
-            "<path class=\"fuaran-drawing-curve\" d=\"{}\"{}{}/>",
+            "<path class=\"fuaran-drawing-curve\" d=\"{}\"{}{}{}",
             draw_path_d(commands),
             draw_style_attrs(style, true),
-            stroke_join_attrs(style)
+            stroke_join_attrs(style),
+            draw_close(ctx, style, "path")
         ),
         S::Circle { cx, cy, r, style } => format!(
-            "<circle class=\"fuaran-drawing-circle\" cx=\"{}\" cy=\"{}\" r=\"{}\"{}/>",
+            "<circle class=\"fuaran-drawing-circle\" cx=\"{}\" cy=\"{}\" r=\"{}\"{}{}",
             draw_num(*cx),
             draw_num(*cy),
             draw_num(*r),
-            draw_style_attrs(style, false)
+            draw_style_attrs(style, false),
+            draw_close(ctx, style, "circle")
         ),
         S::Ellipse {
             cx,
@@ -1546,12 +1591,13 @@ fn render_shape(ctx: &Ctx<'_>, sh: &crate::wire::Shape) -> String {
             ry,
             style,
         } => format!(
-            "<ellipse class=\"fuaran-drawing-ellipse\" cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{}/>",
+            "<ellipse class=\"fuaran-drawing-ellipse\" cx=\"{}\" cy=\"{}\" rx=\"{}\" ry=\"{}\"{}{}",
             draw_num(*cx),
             draw_num(*cy),
             draw_num(*rx),
             draw_num(*ry),
-            draw_style_attrs(style, false)
+            draw_style_attrs(style, false),
+            draw_close(ctx, style, "ellipse")
         ),
         // Phase 877 — the rotation transform is built HERE rather than in
         // `draw_style_attrs` because the pivot is the label's own anchor point,
@@ -1560,7 +1606,7 @@ fn render_shape(ctx: &Ctx<'_>, sh: &crate::wire::Shape) -> String {
         // the rotation compose with `text_anchor` — the text turns about the
         // point it is aligned to. Degrees, clockwise (SVG's own convention).
         S::Label { x, y, text, style } => format!(
-            "<text class=\"fuaran-drawing-label\" x=\"{}\" y=\"{}\"{}{}>{}</text>",
+            "<text class=\"fuaran-drawing-label\" x=\"{}\" y=\"{}\"{}{}>{}{}</text>",
             draw_num(*x),
             draw_num(*y),
             style
@@ -1573,6 +1619,9 @@ fn render_shape(ctx: &Ctx<'_>, sh: &crate::wire::Shape) -> String {
                 ))
                 .unwrap_or_default(),
             draw_style_attrs(style, false),
+            // The tip precedes the visible run — `<title>` is the accessible
+            // name only as the FIRST child.
+            draw_tip_child(ctx, style),
             escape_text(&render_text(ctx.sources, text))
         ),
     }

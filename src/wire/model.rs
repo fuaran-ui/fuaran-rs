@@ -1326,6 +1326,25 @@ pub struct DrawStyle {
     /// Omitted-when-`None` (rule 4). `Some(0.0)` is a legitimate PRESENT value
     /// and a different wire shape from `None` — never collapse the two.
     pub rotation: Option<f64>,
+    /// Phase 883 — the mark's hover-readable text. Renderers emit it as an SVG
+    /// `<title>` element that is the FIRST CHILD of that shape's own element:
+    /// the native browser tooltip and the element's accessible name, with no
+    /// script, so a statically-served page carries the readout too.
+    ///
+    /// Unlike the Phase 528.1 text cluster and `rotation`, this applies to
+    /// EVERY shape, not just `Label` — the marks a reader hovers are bars,
+    /// wedges and points, and a `<title>` child is inert geometry-wise
+    /// everywhere.
+    ///
+    /// The emission consequence to get right: a TIPPED shape cannot be emitted
+    /// self-closing — `<rect …/>` becomes `<rect …><title>…</title></rect>`.
+    /// An absent tip leaves the emitted bytes unchanged, self-closing tag
+    /// included.
+    ///
+    /// Omitted-when-`None` (rule 4). `Some(TextSource::Literal(""))` is a
+    /// legitimate PRESENT value and a different wire shape from `None` — never
+    /// collapse the two.
+    pub tip: Option<TextSource>,
 }
 
 /// A single SVG path command inside a `Shape::Curve`. Closed + typed — an

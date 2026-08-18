@@ -3217,6 +3217,10 @@ fn decode_draw_style(path: &str, j: &JVal) -> DResult<DrawStyle> {
         mark_id: opt_string(path, fields, "markId")?,
         // Phase 877 — Label text rotation in degrees; optional, no default.
         rotation: opt_float(path, fields, "rotation")?,
+        // Phase 883 — the per-mark hover readout, a full TextSource (so a
+        // `Bound` envelope decodes here as well as the canonical bare-string
+        // `Literal`); optional, absent = untipped.
+        tip: opt_text_source(path, fields, "tip")?,
     })
 }
 
