@@ -278,7 +278,7 @@ impl Walker {
                             "FUARAN082",
                             id,
                             format!(
-                                "Switch declares duplicate case match \"{}\" — first-match-wins shadows the later case.",
+                                "Switch declares duplicate case match \"{}\" — first-match-wins shadows the later \n                 case; give each case a distinct match value.",
                                 case.match_value
                             ),
                         );
