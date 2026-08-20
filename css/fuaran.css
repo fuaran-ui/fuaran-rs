@@ -1575,6 +1575,90 @@ body {
   opacity: 1;
 }
 
+/* Phase 862 — the renderer-owned pager of a grid declaring `pageStateKey` +
+   `pageSize`. The wrapper exists only on a paged grid, so an unpaged grid's
+   markup and cascade are untouched. Every token has a literal fallback, per
+   the reference sheet's contract. */
+.fuaran-grid-paged {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-sm, 8px);
+}
+
+.fuaran-grid-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--fuaran-space-sm, 8px);
+  font-size: var(--fuaran-text-xs, 12px);
+}
+
+.fuaran-grid-pager-status {
+  color: var(--fuaran-tone-muted-fg, #6b7280);
+  /* The status is the pager's only text that changes on every step; a fixed
+     minimum keeps the buttons from shifting under the pointer as the page
+     number gains a digit. */
+  min-width: 8ch;
+  text-align: center;
+}
+
+.fuaran-grid-pager-step {
+  padding: 2px var(--fuaran-space-sm, 8px);
+  font-size: var(--fuaran-text-xs, 12px);
+  border-radius: var(--fuaran-radius-sm, 4px);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  cursor: pointer;
+}
+
+.fuaran-grid-pager-step:disabled {
+  /* At the first or last page the step is inert rather than absent: a control
+     that vanishes moves the ones beside it. */
+  opacity: 0.45;
+  cursor: default;
+}
+
+.fuaran-grid-pager-step:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: 1px;
+}
+
+/* Phase 934 — the declarative row-reorder affordance. The handle is a real
+   <button> (focusable, keyboard-activatable); the cell column is as narrow as
+   the glyph, so a non-reorderable grid loses nothing and a reorderable one
+   gains one slim leading column. `cursor: grab` telegraphs the pointer
+   affordance; arrow keys on the focused handle are the keyboard one. */
+.fuaran-grid-reorder-header {
+  width: 1%;
+}
+
+.fuaran-grid-reorder-cell {
+  width: 1%;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.fuaran-grid-reorder-handle {
+  padding: 0 var(--fuaran-space-xs, 4px);
+  font-size: var(--fuaran-text-sm, 14px);
+  line-height: 1;
+  border: none;
+  background: transparent;
+  color: var(--fuaran-color-text-muted, #6b7280);
+  cursor: grab;
+}
+
+.fuaran-grid-reorder-handle:active {
+  cursor: grabbing;
+}
+
+.fuaran-grid-reorder-handle:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: 1px;
+}
+
 .fuaran-grid-cell-editable {
   width: 100px;
   padding: 2px var(--fuaran-space-xs, 4px);
