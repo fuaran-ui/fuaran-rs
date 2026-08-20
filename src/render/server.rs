@@ -214,6 +214,29 @@ fn render_node(ctx: &Ctx<'_>, node: &Node) -> String {
     }
 }
 
+/// Does this kind render a body that IS the node's semantic element — so the
+/// a11y projection belongs on the body, not on the wrapper `<div>`?
+///
+/// Three conditions, all required: the body is a SINGLE root element (not a
+/// container of siblings, not a label-wrapped control); that element carries
+/// native semantics of its own (an interactive role, or a graphic), so `role` /
+/// `aria-*` on an ancestor `<div>` is announced against the wrong node; and the
+/// element IS the node, with nothing else in the body competing for the
+/// accessible name. `Link` (`<a>`), `Button` (`<button>`) and `Image` (`<img>`)
+/// satisfy all three. The form-field kinds deliberately do not: a `Select`'s
+/// control sits inside a `<label>` that already names it.
+///
+/// Kind-level by construction — the wrapper must decide before the body is
+/// rendered, and the only thing it has then is the `NodeKind`. Where an arm has
+/// a runtime branch (the protected-email `Link`), the arm owns placement within
+/// its own body.
+fn forwards_to_semantic_element(kind: &NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::Link(_) | NodeKind::Button(_) | NodeKind::Image(_)
+    )
+}
+
 fn render_node_plain(ctx: &Ctx<'_>, node: &Node) -> String {
     let class_name = node_class_name(&node.kind, &node.style);
     let mut attrs: Vec<Attr> = vec![
@@ -221,13 +244,26 @@ fn render_node_plain(ctx: &Ctx<'_>, node: &Node) -> String {
         ("data-fuaran-node-id", s(node.id.clone())),
         ("class", s(class_name)),
     ];
+    // Route the projection: a kind whose body IS the node's semantic element
+    // takes the a11y attributes onto that element; every other kind carries
+    // them on the wrapper, as before. The wrapper keeps the node's address
+    // (`data-fuaran-node-id`) either way.
+    let mut semantic_attrs: Vec<Attr> = Vec::new();
+    let forwards = forwards_to_semantic_element(&node.kind);
     for (name, value) in accessibility_attributes(ctx.sources, node.accessibility.as_ref()) {
-        attrs.push((name, s(value)));
+        if forwards {
+            semantic_attrs.push((name, s(value)));
+        } else {
+            attrs.push((name, s(value)));
+        }
     }
-    el("div", &attrs, &render_kind(ctx, node))
+    el("div", &attrs, &render_kind(ctx, node, &semantic_attrs))
 }
 
-fn render_kind(ctx: &Ctx<'_>, node: &Node) -> String {
+/// `semantic_attrs` carries the node's a11y projection for the kinds that emit
+/// it on their own semantic element (`Link` / `Button` / `Image`); it is empty
+/// for every other kind.
+fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
     match &node.kind {
         // Layout
         NodeKind::Box(spec) => render_box(ctx, spec),
@@ -656,11 +692,13 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node) -> String {
                     entity_encode(&href),
                     entity_encode(&render_text(ctx.sources, &spec.label)),
                 );
-                el(
-                    "span",
-                    &[("class", s("fuaran-link-protected-wrap"))],
-                    &anchor,
-                )
+                // The anchor here is an entity-encoded opaque string, so the
+                // projection lands on the wrap `<span>`: the only element this
+                // arm owns in every tier, and cross-tier parity outranks
+                // reaching one tier's anchor.
+                let mut attrs: Vec<Attr> = vec![("class", s("fuaran-link-protected-wrap"))];
+                attrs.extend_from_slice(semantic_attrs);
+                el("span", &attrs, &anchor)
             } else {
                 let mut attrs: Vec<Attr> = vec![("class", s("fuaran-link")), ("href", s(href))];
                 if let Some(rel) = &spec.rel {
@@ -672,6 +710,8 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node) -> String {
                 if spec.download {
                     attrs.push(("download", AttrVal::Flag(true)));
                 }
+                // The node's a11y projection lands on the anchor.
+                attrs.extend_from_slice(semantic_attrs);
                 text_el("a", &attrs, &render_text(ctx.sources, &spec.label))
             }
         }
@@ -683,14 +723,14 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node) -> String {
                 ImageVariant::Rounded => "fuaran-image fuaran-image-rounded",
                 ImageVariant::Default => "fuaran-image",
             };
-            void_el(
-                "img",
-                &[
-                    ("class", s(variant_class)),
-                    ("src", s(src)),
-                    ("alt", s(render_text(ctx.sources, &spec.alt))),
-                ],
-            )
+            // The a11y projection lands on the `<img>` itself.
+            let mut attrs: Vec<Attr> = vec![
+                ("class", s(variant_class)),
+                ("src", s(src)),
+                ("alt", s(render_text(ctx.sources, &spec.alt))),
+            ];
+            attrs.extend_from_slice(semantic_attrs);
+            void_el("img", &attrs)
         }
         NodeKind::List(spec) => {
             let items: String = spec
@@ -837,6 +877,8 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node) -> String {
             if unwired {
                 attrs.push(("title", s(UNWIRED_TOOLTIP)));
             }
+            // Before `disabled`, matching the reference server renderer's order.
+            attrs.extend_from_slice(semantic_attrs);
             if is_disabled {
                 attrs.push(("disabled", AttrVal::Flag(true)));
             }

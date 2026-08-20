@@ -221,14 +221,78 @@ fn modal_stays_in_dom_hidden_when_closed() {
     assert!(!open.contains("hidden"));
 }
 
+/// A kind whose body is NOT the node's semantic element keeps the whole
+/// projection on the wrapper — which is every kind except `Link` / `Button` /
+/// `Image`. See `accessibility_projects_onto_the_semantic_element` below for
+/// the other half of the rule.
 #[test]
-fn accessibility_projects_onto_the_wrapper() {
+fn accessibility_projects_onto_the_wrapper_for_a_non_forwarding_kind() {
     let html = render(
         r#"{"id":"a","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"x"}},"accessibility":{"label":{"$type":"Static","value":"Summary"},"role":"region","liveRegion":"polite"}}"#,
     );
     assert!(html.contains("aria-label=\"Summary\""));
     assert!(html.contains("role=\"region\""));
     assert!(html.contains("aria-live=\"polite\""));
+}
+
+// ─── WHERE the projection lands ──────────────────────────────────────────────
+//
+// A node's accessibility projection is emitted on the node's SEMANTIC ELEMENT —
+// the single element the kind body renders, when that element rather than the
+// wrapper carries the node's semantics: Link (<a>), Button (<button>), Image
+// (<img>). Assistive technology does not associate a role on a non-interactive
+// container with the interactive element inside it, so placement is the whole
+// point, and these assertions are placement-sensitive: they split the emitted
+// HTML at each element's own open tag rather than searching the whole string,
+// which is what every other check in this file does.
+
+/// The wrapper's own open tag — everything up to its first `>`.
+fn wrapper_tag(html: &str) -> &str {
+    &html[..html.find('>').expect("a wrapper open tag") + 1]
+}
+
+/// The open tag of the first `<tag …>` in the markup.
+fn open_tag<'a>(html: &'a str, tag: &str) -> &'a str {
+    let from = &html[html.find(&format!("<{tag}")).expect("the element")..];
+    &from[..from.find('>').expect("an open tag") + 1]
+}
+
+const A11Y: &str = r#""accessibility":{"label":{"$type":"Static","value":"Home"},"role":"link"}"#;
+
+#[test]
+fn accessibility_projects_onto_the_semantic_element() {
+    let link = render(&format!(
+        r#"{{"id":"lk","kind":{{"$type":"Link","download":false,"href":{{"$type":"Static","value":"/home"}},"label":{{"$type":"Literal","text":"Home"}}}},{A11Y}}}"#
+    ));
+    assert!(!wrapper_tag(&link).contains("role="));
+    assert!(!wrapper_tag(&link).contains("aria-label"));
+    assert!(wrapper_tag(&link).contains(r#"data-fuaran-node-id="lk""#));
+    assert!(open_tag(&link, "a").contains(r#"role="link""#));
+    assert!(open_tag(&link, "a").contains(r#"aria-label="Home""#));
+
+    let button = render(&format!(
+        r#"{{"id":"btn","kind":{{"$type":"Button","label":{{"$type":"Literal","text":"Go"}},"onClick":{{"$type":"Navigate","route":"/x"}},"variant":"Primary"}},{A11Y}}}"#
+    ));
+    assert!(!wrapper_tag(&button).contains("aria-label"));
+    assert!(open_tag(&button, "button").contains(r#"aria-label="Home""#));
+
+    let image = render(&format!(
+        r#"{{"id":"img","kind":{{"$type":"Image","alt":{{"$type":"Literal","text":"Alt"}},"src":{{"$type":"Static","value":"/a.png"}},"variant":"Default"}},{A11Y}}}"#
+    ));
+    assert!(!wrapper_tag(&image).contains("aria-label"));
+    assert!(open_tag(&image, "img").contains(r#"aria-label="Home""#));
+}
+
+/// The protected-email Link builds its anchor as an entity-encoded opaque
+/// string, so the projection lands on the wrap `<span>` — the only element that
+/// arm owns in every tier. A stated limit, pinned so it stays deliberate.
+#[test]
+fn protected_email_link_projects_onto_the_wrap_span() {
+    let html = render(&format!(
+        r#"{{"id":"plk","kind":{{"$type":"Link","download":false,"href":{{"$type":"Static","value":"mailto:u@e.com"}},"label":{{"$type":"Literal","text":"u@e.com"}},"protection":"email"}},{A11Y}}}"#
+    ));
+    assert!(!wrapper_tag(&html).contains("aria-label"));
+    assert!(open_tag(&html, "span").contains(r#"aria-label="Home""#));
 }
 
 #[test]
