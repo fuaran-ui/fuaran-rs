@@ -2933,8 +2933,77 @@ fn decode_cell_kind_erased(path: &str, j: &JVal) -> DResult<CellKindErased> {
     }
 }
 
+/// Decode-time didactics for the grid-behaviour family's NEAR MISSES (Phase
+/// 860's charter, its rejected-spellings deliverable).
+///
+/// Every shape in the tables below decoded SILENTLY before: §2 rule 2 tolerates
+/// unknown keys, so a model that reached for the wrong name got a tree that
+/// decoded, validated and rendered while the declaration did nothing — the
+/// fake-affordance failure in a new guise, and tolerance is what hid it. The
+/// narrowing is an ENUMERATED set with an unambiguous canonical form each; rule
+/// 2 holds for everything else.
+fn check_near_misses(path: &str, fields: &Fields, candidates: &[(&str, &str)]) -> DResult<()> {
+    for (found, canonical) in candidates {
+        if get(fields, found).is_some() {
+            return Err(make_error(
+                DecodeErrorCode::WrongType,
+                format!("{path}.{found}"),
+                format!(
+                    "'{found}' is not part of the grid vocabulary — it would be ignored, not honoured"
+                ),
+                Some((*canonical).to_string()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Named by the census row itself. Deliberately NOT aliased to `editable:
+/// false`: an inverting alias that guesses wrong makes a read-only column
+/// editable.
+const COLUMN_NEAR_MISSES: &[(&str, &str)] = &[(
+    "readOnly",
+    "editable: false — the column flag NARROWS the grid's editable capability",
+)];
+
+/// The grid-level rejected spellings, walked in declaration order so which
+/// defect surfaces first is deterministic across hosts.
+const GRID_NEAR_MISSES: &[(&str, &str)] = &[
+    // The sharpest of them: a LITERAL page number is not expressible at all,
+    // because the position lives in State so a control can move it.
+    (
+        "currentPage",
+        "pageStateKey — the page POSITION lives in State as {\"page\": N} so the pager can move it; a literal page number is not expressible",
+    ),
+    (
+        "page",
+        "pageStateKey — the page POSITION lives in State as {\"page\": N} so the pager can move it; a literal page number is not expressible",
+    ),
+    (
+        "pageIndex",
+        "pageStateKey — the page POSITION lives in State as {\"page\": N}, 1-based (not a zero-based index)",
+    ),
+    (
+        "sortable",
+        "sortStateKey on the grid + sortable on each COLUMN — grid-wide sortable is the staticRows spelling; a data-bound grid narrows per column",
+    ),
+    (
+        "onEdit",
+        "editStateKey — the edit DESTINATION is a State key on the grid; onEdit is a per-cell host closure and carries no destination across the wire",
+    ),
+    (
+        "behaviour",
+        "sibling fields on the grid (sortStateKey / pageStateKey / pageSize / editStateKey / defaultSort) — grid behaviour is not a nested record",
+    ),
+    (
+        "behavior",
+        "sibling fields on the grid (sortStateKey / pageStateKey / pageSize / editStateKey / defaultSort) — grid behaviour is not a nested record",
+    ),
+];
+
 fn decode_column_erased(path: &str, j: &JVal) -> DResult<ColumnErased> {
     let fields = as_obj(path, j)?;
+    check_near_misses(path, fields, COLUMN_NEAR_MISSES)?;
     // Phase 460 — format/width omitted-when-default. Field aliases: type → kind,
     // header/title → label.
     let format = opt_cell_format_default(path, fields, "format")?;
@@ -2949,6 +3018,11 @@ fn decode_column_erased(path: &str, j: &JVal) -> DResult<ColumnErased> {
     )?;
     let width = opt_column_width_default(path, fields, "width")?;
     let field = opt_string(path, fields, "field")?;
+    // Phase 861 / 863 — per-column sort and editability NARROWING; absent
+    // inherits the grid-level flag, so an explicit `false` is carried rather
+    // than omitted-when-default (omitting it would erase the narrowing).
+    let sortable = opt_bool(path, fields, "sortable")?;
+    let editable = opt_bool(path, fields, "editable")?;
     Ok(ColumnErased {
         format,
         kind,
@@ -2956,6 +3030,8 @@ fn decode_column_erased(path: &str, j: &JVal) -> DResult<ColumnErased> {
         width,
         value: opt_closure(fields, "value"),
         field,
+        sortable,
+        editable,
     })
 }
 
@@ -3035,6 +3111,35 @@ fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
     // carrying the `{column, direction}` sort descriptor. Optional string,
     // encode-omitted when absent.
     let sort_state_key = opt_string(path, fields, "sortStateKey")?;
+    // Phase 862 — declarative pagination. `pageSize` is how many rows a page
+    // holds; a page of zero or fewer rows names no page at all, so it is
+    // WRONG_TYPE — which is also what schema.json's `minimum: 1` says. The pager
+    // that writes `pageStateKey` is renderer-owned, so nothing here decodes a
+    // control.
+    let page_size = match opt_int(path, fields, "pageSize")? {
+        None => None,
+        Some(n) if n >= 1 => Some(n),
+        Some(_) => {
+            return Err(wrong_type(
+                &format!("{path}.pageSize"),
+                "JSON number (integer page size of 1 or more)",
+            ));
+        }
+    };
+    // Phase 861 — the bound path's declared initial order, decoded by the SAME
+    // function the staticRows spelling uses: same record, same bound, same
+    // message at a different path.
+    let default_sort = match get(fields, "defaultSort") {
+        None => None,
+        Some(v) => Some(decode_default_sort(&format!("{path}.defaultSort"), v)?),
+    };
+    check_near_misses(path, fields, GRID_NEAR_MISSES)?;
+    // Phase 863 — the declared edit destination.
+    let edit_state_key = opt_string(path, fields, "editStateKey")?;
+    let page_state_key = opt_string(path, fields, "pageStateKey")?;
+    // Phase 934 — omitted-when-default (false), the same convention as
+    // `editable`.
+    let reorderable = opt_bool(path, fields, "reorderable")?.unwrap_or(false);
     let static_rows = match get(fields, "staticRows") {
         None => None,
         Some(v) => Some(decode_static_rows(&format!("{path}.staticRows"), v)?),
@@ -3047,6 +3152,11 @@ fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
         row_key: opt_closure(fields, "rowKey"),
         row_key_field,
         sort_state_key,
+        default_sort,
+        page_size,
+        page_state_key,
+        edit_state_key,
+        reorderable,
         static_rows,
     })
 }

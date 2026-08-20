@@ -333,6 +333,14 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             row_key_field: spec.row_key_field.clone(),
             // Phase 818 — a state-key name, not text; projects through untouched.
             sort_state_key: spec.sort_state_key.clone(),
+            // Phase 861 / 862 / 863 / 934 — sort intent, paging, the edit
+            // destination and the reorder flag are all declarations, not text;
+            // this pass maps TextSource chrome only, so they project untouched.
+            default_sort: spec.default_sort.clone(),
+            page_size: spec.page_size,
+            page_state_key: spec.page_state_key.clone(),
+            edit_state_key: spec.edit_state_key.clone(),
+            reorderable: spec.reorderable,
             static_rows: spec.static_rows.as_ref().map(|sr| StaticRows {
                 headers: sr.headers.iter().map(|t| map_text(sources, t)).collect(),
                 rows: sr

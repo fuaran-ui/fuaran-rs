@@ -1710,6 +1710,15 @@ fn column_erased(c: &ColumnErased) -> String {
     if let Some(f) = &c.field {
         fields.push(field("field", s(f)));
     }
+    // Phase 861 / 863 — the per-column narrowings, each emitted only when
+    // declared. NOT omitted-when-false: an explicit `false` IS the narrowing,
+    // and dropping it would silently widen the column back to the grid's flag.
+    if let Some(sortable) = c.sortable {
+        fields.push(field("sortable", boolean(sortable)));
+    }
+    if let Some(editable) = c.editable {
+        fields.push(field("editable", boolean(editable)));
+    }
     obj(fields)
 }
 
@@ -1734,15 +1743,19 @@ fn static_rows(rows: &StaticRows) -> String {
         fields.push(field("sortable", boolean(sortable)));
     }
     if let Some(ds) = &rows.default_sort {
-        fields.push(field(
-            "defaultSort",
-            obj(vec![
-                field("column", int(ds.column)),
-                field("direction", s(ds.direction.as_str())),
-            ]),
-        ));
+        fields.push(field("defaultSort", default_sort(ds)));
     }
     obj(fields)
+}
+
+/// Phase 801 / 861 — the `{column, direction}` initial-order declaration. ONE
+/// writer, shared by the `static_rows` spelling and the bound path, so the two
+/// positions cannot drift apart in what they emit.
+fn default_sort(ds: &DefaultSort) -> String {
+    obj(vec![
+        field("column", int(ds.column)),
+        field("direction", s(ds.direction.as_str())),
+    ])
 }
 
 fn grid_spec(spec: &GridSpec) -> String {
@@ -1770,6 +1783,23 @@ fn grid_spec(spec: &GridSpec) -> String {
     // byte-identical.
     if let Some(sort_state_key) = &spec.sort_state_key {
         fields.push(field("sortStateKey", s(sort_state_key)));
+    }
+    // Phase 861 / 862 / 863 / 934 — each omitted when absent (and `reorderable`
+    // omitted-when-false), so every pre-861 grid stays byte-identical.
+    if let Some(ds) = &spec.default_sort {
+        fields.push(field("defaultSort", default_sort(ds)));
+    }
+    if let Some(page_size) = spec.page_size {
+        fields.push(field("pageSize", int(page_size)));
+    }
+    if let Some(page_state_key) = &spec.page_state_key {
+        fields.push(field("pageStateKey", s(page_state_key)));
+    }
+    if let Some(edit_state_key) = &spec.edit_state_key {
+        fields.push(field("editStateKey", s(edit_state_key)));
+    }
+    if spec.reorderable {
+        fields.push(field("reorderable", boolean(true)));
     }
     if let Some(rows) = &spec.static_rows {
         fields.push(field("staticRows", static_rows(rows)));

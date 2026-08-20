@@ -938,6 +938,15 @@ pub struct ColumnErased {
     /// Phase 425 — `value` (closure) + `field` (declarative) are sibling slots.
     pub value: Option<Closure>,
     pub field: Option<String>,
+    /// Phase 861 — per-column sort NARROWING on the bound path. Absent inherits
+    /// the grid-level intent, which is why an explicit `false` is carried on the
+    /// wire rather than omitted-when-default: omitting it would erase the
+    /// narrowing the author declared.
+    pub sortable: Option<bool>,
+    /// Phase 863 — per-column editability NARROWING; absent inherits the
+    /// grid-level `editable` flag. Deliberately not spelled `readOnly`: an
+    /// inverting alias that guesses wrong makes a read-only column editable.
+    pub editable: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -977,6 +986,22 @@ pub struct GridSpec {
     /// resolved rows by (and whose headers write it). Omitted on the wire when
     /// absent; `static_rows`' own Phase-801 sort intent is untouched.
     pub sort_state_key: Option<String>,
+    /// Phase 861 — the BOUND path's declared initial order, the same record the
+    /// `static_rows` spelling carries at its own path.
+    pub default_sort: Option<DefaultSort>,
+    /// Phase 862 — how many rows a page holds. A page of zero or fewer rows
+    /// names no page at all, so a non-positive value is a decode error.
+    pub page_size: Option<i64>,
+    /// Phase 862 — names the State key carrying `{"page": N}` (1-based). The
+    /// page POSITION lives in State so a pager can move it; a literal page
+    /// number is deliberately not expressible.
+    pub page_state_key: Option<String>,
+    /// Phase 863 — the declared edit DESTINATION: a State key on the grid, not
+    /// a per-cell host closure (which carries no destination across the wire).
+    pub edit_state_key: Option<String>,
+    /// Phase 934 — declarative row reorder; omitted-when-false, the same
+    /// convention as `editable`. Edits and reorders share one destination.
+    pub reorderable: bool,
     pub static_rows: Option<StaticRows>,
 }
 
