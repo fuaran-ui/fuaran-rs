@@ -1,0 +1,40 @@
+name: Notify cross-host conformance gate
+
+# This repo is one of the conformant hosts of the Fuaran UI wire format, so a
+# push HERE is precisely the change the cross-implementation conformance gate
+# exists to check — yet until this workflow landed, a host push fired NOTHING at
+# that gate. `ci.yml` runs this host's own suite; nothing told the cross-host
+# gate that a host had moved, and the gate's own push filter cannot see pushes
+# to another repo. So it had to be dispatched by hand and the nightly schedule
+# was the only backstop. That is the "a quiet run history is not evidence of no
+# drift" caveat, on the host side.
+#
+# The corpus repo already solved this for its own pushes; this is a mirror of
+# its workflow, differing only in `source_repo`.
+#
+# Requires a repo/Actions secret WORKSPACE_DISPATCH_TOKEN — a fine-grained PAT
+# or GitHub App token with `Contents: write` on the dispatch target (the scope
+# the repository_dispatch REST endpoint requires; the classic-PAT equivalent is
+# the `repo` scope). The default GITHUB_TOKEN is scoped to THIS repo only and
+# cannot dispatch cross-repo.
+#
+# NOTE: an unfired trigger looks identical to a green one. If this ever needs
+# proving, push a trivial commit and confirm a gate run appears.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger cross-host wire-format conformance gate
+        env:
+          GH_TOKEN: ${{ secrets.WORKSPACE_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/fuaran-ui/workspace/dispatches \
+            --method POST \
+            -f event_type=wire-conformance \
+            -f 'client_payload[source_repo]=fuaran-rs' \
+            -f 'client_payload[sha]=${{ github.sha }}'

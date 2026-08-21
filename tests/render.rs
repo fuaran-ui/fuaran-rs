@@ -613,6 +613,68 @@ fn selection_default_seeds_master_detail() {
     );
 }
 
+/// The second-row fixture exists to make PRUNE-vs-SEED observable, and until
+/// this test it did not: this host decoded and re-encoded it byte-identically,
+/// which a host that *pruned* rather than *seeded* would also do. `render.rs`
+/// loads its fixtures BY NAME and this one was not among them, so the fixture
+/// was decorative here — carried by the corpus, asserted by nothing.
+///
+/// The discriminator is the SECOND row. Its `Selection.defaultValue` is
+/// `TCK-2042`, so a host that seeds from the default resolves to the second
+/// row's values, while a host that prunes the unwritten selection resolves to
+/// all three rows (or none) — and the first-row fixture beside it cannot tell
+/// those apart, because row one is what you get either way.
+#[test]
+fn selection_default_seeds_master_detail_second_row() {
+    let Some(tree) = load_fixture("master-detail-preselected-second-row") else {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    };
+
+    // The detail Fact reads Selection.defaultValue (field 'id') — the SECOND
+    // row's ticket, not the first.
+    let detail = render_sub(&tree, "detail-ticket");
+    assert!(
+        detail.contains("TCK-2042"),
+        "Fact must resolve the second row's Selection.defaultValue: {detail}"
+    );
+    assert!(
+        !detail.contains("TCK-2041"),
+        "Fact must NOT fall back to the first row — that is the prune behaviour this fixture discriminates: {detail}"
+    );
+
+    // The Callout body is a Transform seeded from the same default: filter on
+    // the param, project the note column, limit 1. Its resolved cell is the
+    // second row's note.
+    let note = render_sub(&tree, "detail-note");
+    assert!(
+        note.contains("Search index stale"),
+        "Callout body must resolve the second row's note: {note}"
+    );
+
+    // The related grid's Transform param is seeded from the same default, so it
+    // filters to EXACTLY the preselected ticket — one row. Counted rather than
+    // substring-checked: "contains TCK-2042" would also pass on an unpruned
+    // three-row grid, which is the very confusion this fixture was authored to
+    // resolve.
+    //
+    // The class is `fuaran-grid-row`, the BOUND-grid row: `fuaran-table-row` is
+    // the `staticRows` leg and matches zero times here, so reaching for it
+    // would have made this assertion fail for the wrong reason.
+    let related = render_sub(&tree, "related-grid");
+    assert_eq!(
+        related.matches("fuaran-grid-row").count(),
+        1,
+        "related grid must render exactly one row (the Selection-seeded param): {related}"
+    );
+    assert!(
+        related.contains("TCK-2042")
+            && !related.contains("TCK-2041")
+            && !related.contains("TCK-2043"),
+        "the single related row must be the preselected ticket: {related}"
+    );
+}
+
 #[test]
 fn unset_filter_params_prune_and_resolve_all_rows() {
     let Some(tree) = load_fixture("filterable-static-dashboard") else {
