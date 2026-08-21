@@ -235,28 +235,18 @@
   --fuaran-breakpoint-md: 768px;
   --fuaran-breakpoint-lg: 1024px;
 
-  /* ── extension points previously fallback-only ────────────────────
-     These 14 tokens were referenced only as `var(--X, fallback)` inside
-     component rules and never declared here, so a host reading this
-     sheet could not discover them: an extension point that exists only
-     in a fallback is undiscoverable, and re-binding it is guesswork.
-     The values below are exactly the fallbacks the component rules
-     already carried — declaring them changes no rendered pixel, it only
-     makes the contract enumerable. */
-  --fuaran-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --fuaran-code-bg: #1e1e2e;
-  --fuaran-code-fg: #cdd6f4;
-  --fuaran-code-copy-bg: #313244;
-  --fuaran-code-copy-border: #45475a;
-  --fuaran-avatar-size: 40px;
-  --fuaran-disclosure-summary-padding: var(--fuaran-space-md, 12px) var(--fuaran-space-lg, 16px);
-  --fuaran-modal-backdrop: rgba(0, 0, 0, 0.5);
-  --fuaran-modal-max-width: 560px;
-  --fuaran-toast-max-width: 360px;
-  --fuaran-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-  --fuaran-shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
-  --fuaran-z-modal: 1000;
-  --fuaran-z-toast: 1100;
+  /* NOTE — fourteen further `--fuaran-*` tokens are referenced by the
+     component rules below but are deliberately NOT declared here:
+     --fuaran-font-mono, -code-bg/-fg, -code-copy-bg/-border,
+     -avatar-size, -disclosure-summary-padding, -modal-backdrop/
+     -max-width, -toast-max-width, -shadow-lg/-xl, -z-modal/-z-toast.
+     This `:root` block is bijective with the typed `Theme` record —
+     `ThemeTests` asserts the correspondence in BOTH directions — so
+     declaring a token here without adding it to `Theme` breaks that
+     contract, and adding it to `Theme` is a typed-surface change with
+     cross-tier reach. Until such a decision, they are host extension
+     points carried by their `var(--X, fallback)` sites, enumerated in
+     HOST-STYLING-CHECKLIST.md §1.4b so a host can still find them. */
 }
 
 body {
