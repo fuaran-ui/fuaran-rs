@@ -234,11 +234,34 @@
   --fuaran-breakpoint-sm: 640px;
   --fuaran-breakpoint-md: 768px;
   --fuaran-breakpoint-lg: 1024px;
+
+  /* ── extension points previously fallback-only ────────────────────
+     These 14 tokens were referenced only as `var(--X, fallback)` inside
+     component rules and never declared here, so a host reading this
+     sheet could not discover them: an extension point that exists only
+     in a fallback is undiscoverable, and re-binding it is guesswork.
+     The values below are exactly the fallbacks the component rules
+     already carried — declaring them changes no rendered pixel, it only
+     makes the contract enumerable. */
+  --fuaran-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --fuaran-code-bg: #1e1e2e;
+  --fuaran-code-fg: #cdd6f4;
+  --fuaran-code-copy-bg: #313244;
+  --fuaran-code-copy-border: #45475a;
+  --fuaran-avatar-size: 40px;
+  --fuaran-disclosure-summary-padding: var(--fuaran-space-md, 12px) var(--fuaran-space-lg, 16px);
+  --fuaran-modal-backdrop: rgba(0, 0, 0, 0.5);
+  --fuaran-modal-max-width: 560px;
+  --fuaran-toast-max-width: 360px;
+  --fuaran-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  --fuaran-shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+  --fuaran-z-modal: 1000;
+  --fuaran-z-toast: 1100;
 }
 
 body {
   margin: 0;
-  background: #f9fafb;
+  background: var(--fuaran-tone-default-bg, #f9fafb);
   color: var(--fuaran-tone-default-fg, #1f2937);
   font-size: var(--fuaran-text-base, 14px);
   line-height: var(--fuaran-line-height-normal, 1.5);
@@ -663,9 +686,9 @@ body {
 }
 
 .fuaran-role-lede {
-  font-size: var(--fuaran-text-lg, 18px);
+  font-size: var(--fuaran-text-lg, 16px);
   font-weight: var(--fuaran-font-weight-regular, 400);
-  line-height: var(--fuaran-line-height-relaxed, 1.6);
+  line-height: var(--fuaran-line-height-relaxed, 1.75);
   color: var(--fuaran-tone-subdued-fg, #6b7280);
 }
 
@@ -678,12 +701,12 @@ body {
 
 .fuaran-voice-display {
   font-weight: var(--fuaran-font-weight-bold, 700);
-  line-height: var(--fuaran-line-height-tight, 1.1);
+  line-height: var(--fuaran-line-height-tight, 1.25);
   letter-spacing: -0.01em;
 }
 
 .fuaran-voice-structural {
-  line-height: var(--fuaran-line-height-normal, 1.4);
+  line-height: var(--fuaran-line-height-normal, 1.5);
 }
 
 /* ── Metric ───────────────────────────────────────────────────────── */
@@ -2036,7 +2059,7 @@ html[data-fuaran-disconnected]::before {
 /* ── List (Phase 287) ──────────────────────────────────────────── */
 .fuaran-list {
   margin: 0;
-  padding-left: var(--fuaran-space-xl, 20px);
+  padding-left: var(--fuaran-space-xl, 24px);
   color: var(--fuaran-tone-default-fg, #1f2937);
 }
 
@@ -2194,17 +2217,17 @@ html[data-fuaran-disconnected]::before {
   position: relative;
   max-width: var(--fuaran-modal-max-width, 560px);
   width: 100%;
-  max-height: calc(100% - var(--fuaran-space-xl, 20px));
+  max-height: calc(100% - var(--fuaran-space-xl, 24px));
   overflow-y: auto;
   background: var(--fuaran-tone-default-bg, #ffffff);
   border-radius: var(--fuaran-radius-lg, 8px);
   box-shadow: var(--fuaran-shadow-xl, 0 20px 25px -5px rgba(0, 0, 0, 0.1));
-  padding: var(--fuaran-space-xl, 20px);
+  padding: var(--fuaran-space-xl, 24px);
 }
 
 .fuaran-modal-heading {
   margin: 0 0 var(--fuaran-space-md, 12px) 0;
-  font-size: var(--fuaran-text-xl, 18px);
+  font-size: var(--fuaran-text-xl, 20px);
   font-weight: var(--fuaran-font-weight-semibold, 600);
 }
 
@@ -2262,7 +2285,7 @@ html[data-fuaran-disconnected]::before {
   border-radius: var(--fuaran-radius-sm, 4px);
   background: var(--fuaran-code-copy-bg, #313244);
   color: inherit;
-  font-size: var(--fuaran-text-xs, 11px);
+  font-size: var(--fuaran-text-xs, 12px);
   cursor: pointer;
 }
 
