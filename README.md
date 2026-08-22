@@ -118,9 +118,73 @@ Shipped:
   (`src/client/wasm.rs`) exposes it over WASM linear memory, driven by a thin
   hand-written loader (`js/`) — **no `wasm-bindgen`, no framework**.
 
+- **`bounded`** — the bounded program loop at the client placement: behaviour
+  carried as data, run under a per-interaction resource budget. The closed
+  action walk (whose only store mutation is the state write and whose only
+  outward reach is the closed client-effect vocabulary), the default-deny effect
+  policy, the binding re-resolution pass that makes a state write visible, and
+  the loop that orders them — validate → interpret → effects → re-resolve. See
+  the conformance declaration below.
+
 Beyond this tier: the lenient-profile / envelope / elicitation conformance
 families, dataframe (`Binding.Transform`) evaluation, and a host-locale seam
 for `Binding.Format`.
+
+## Bounded program loop — the conformance declaration
+
+The **program wire specification** governs behaviour carried as data: the
+handler declared form, both placements' closed effect vocabularies, the
+invocation record and the outcome report. Alongside the document families it
+certifies with round-trip and reject vectors, it carries a **driver-semantics**
+scenario family that certifies what a bounded program *loop* does — a tree, an
+ordered event script, and the per-step trace a conformant loop produces from
+them.
+
+That family is opt-in **by declaration**, because asserting what a loop does is
+a stronger claim than round-tripping a document and a host that only decodes,
+encodes, records, relays or validates those documents is out of scope for it
+rather than failing it. The specification fixes no encoding for the declaration:
+a conformance claim is a sentence somebody writes down. Here is this host's, and
+it names both halves.
+
+> **`fuaran-rs` implements the bounded path, and it reproduces the
+> driver-semantics family of the program wire specification's conformance
+> corpus.** Every scenario the corpus enumerates is driven through this loop and
+> compared step by step — the resolved tree semantically, through this host's own
+> decoder and encoder; the client effects byte-for-byte in their as-emitted
+> envelope; the refusal exactly — and the first divergence is reported with its
+> step index and the member that differed. The claim is certified on **both**
+> targets this host ships: natively, and on `wasm32` by executing the same
+> comparison inside the module.
+
+The claim covers the **client** placement. Running host-registered handlers is a
+separate obligation this host does not declare, so a call action resolves to the
+documented no-op it has always been where nothing is registered.
+
+What the claim asserts is that the loop folds the same way: same resolved tree,
+same effects reached with the same values in the same order, same refusals, at
+every step. It asserts **nothing** about what a host does with an effect it
+reached — performance is host-defined, and a host that declines every effect is
+conformant, because both vocabularies default to deny. What is not conformant is
+silence: a declined effect is reported as a denial carrying the derived
+capability, never dropped.
+
+### Running it
+
+The scenario corpus is a separate artefact and is not vendored here, so this is
+a **local, operator-invoked** gate:
+
+```powershell
+$env:FUARAN_PROGRAM_SPEC = "<the program wire specification's directory>"
+.\run.ps1 -DriverSemantics        # both targets: the native leg, then wasm32 under node
+cargo test --test driver_semantics # the native leg alone
+```
+
+The corpus is also found automatically when it is checked out beside this
+repository. Where a corpus is **claimed** and cannot be read, the leg **fails**
+rather than skipping — a conformance check that passes without its oracle
+reports the same green as one that ran. Where none is claimed at all, it reports
+that it did not run and asserts nothing.
 
 ## WASM client
 
@@ -190,11 +254,13 @@ fuaran-rs/
 │   ├── ops/             # tree-op apply engine + ApplyError envelope + dry-run
 │   ├── validator/       # pre-emit structural validator (FUARAN### codes)
 │   ├── render/          # server-HTML renderer + islands + markdown + sanitise floor
+│   ├── bounded/         # the bounded program loop — interpreter, budget, effects, re-resolve
 │   └── client/          # wasm32 client — ClientSession (mod.rs) + C-ABI shim (wasm.rs)
 ├── css/
 │   └── fuaran.css       # byte-copy of the reference stylesheet (parity-tested)
 ├── js/
 │   ├── fuaran-loader.js # thin hand-written WASM loader (no wasm-bindgen)
+│   ├── driver-semantics.mjs # the wasm32 leg of the bounded-loop conformance check
 │   └── index.html       # client-loop demo
 ├── tests/
 │   ├── conformance.rs   # shared-corpus certification (round-trip + reject legs)
@@ -202,7 +268,8 @@ fuaran-rs/
 │   ├── validator.rs     # per-rule fire / stay-silent pairs
 │   ├── markdown.rs      # markdown corpus certification (byte-for-byte)
 │   ├── render.rs        # renderer behaviour + islands laws + CSS byte-parity
-│   └── client.rs        # client-session decode → render → drive loop
+│   ├── client.rs        # client-session decode → render → drive loop
+│   └── driver_semantics.rs # bounded-loop conformance against the scenario corpus
 ├── run.ps1              # cargo fmt --check -> clippy -> build -> test -> wasm build
 ├── LICENSE              # Apache-2.0
 ├── README.md
@@ -214,6 +281,7 @@ fuaran-rs/
 ```powershell
 .\run.ps1              # cargo fmt --check -> cargo clippy -> cargo build -> cargo test
 .\run.ps1 -SkipTests   # fast-iteration switches: -SkipFormat / -SkipBuild / -SkipTests
+.\run.ps1 -DriverSemantics  # add the bounded-loop conformance legs (see the declaration above)
 ```
 
 Requires the Rust toolchain (see `Cargo.toml` for the pinned edition / `rust-version`).

@@ -13,6 +13,16 @@
 #                  absent, so this stays green on a machine with no mobile toolchains.
 #   -Package       assemble the Apple XCFramework (macOS-only) + the Android jniLibs/
 #                  layout from the built legs (implies -CrossTargets).
+#
+# Opt-in driver-semantics conformance for the bounded program loop:
+#   -DriverSemantics  run the loop against the program wire specification's scenario
+#                     corpus on BOTH targets — natively (the `cargo test` leg, which
+#                     already rides the ordinary run and reports "NOT RUN" when no
+#                     corpus is present) and on `wasm32`, by building the module with
+#                     the harness ABI feature and executing it under node.
+#                     The corpus is resolved from FUARAN_PROGRAM_SPEC, or from a
+#                     `fuaran-program-spec/` checkout beside this repository. A
+#                     CLAIMED corpus that cannot be read FAILS rather than skipping.
 [CmdletBinding()]
 param(
     [switch]$SkipFormat,
@@ -20,7 +30,8 @@ param(
     [switch]$SkipTests,
     [switch]$SkipWasm,
     [switch]$CrossTargets,
-    [switch]$Package
+    [switch]$Package,
+    [switch]$DriverSemantics
 )
 
 $ErrorActionPreference = "Stop"
@@ -195,6 +206,35 @@ if (-not $SkipWasm) {
         if ($LASTEXITCODE -ne 0) { throw "wasm32 client-module build failed." }
     } else {
         Write-Host "==> wasm32 target not installed; skipping the client-module build (rustup target add wasm32-unknown-unknown to enable)." -ForegroundColor Yellow
+    }
+}
+
+if ($DriverSemantics) {
+    # The bounded loop is shipped for two targets, so it is certified on two
+    # targets. The native leg is an ordinary test and has already run above (it
+    # reports "NOT RUN" when no corpus is present); this is the wasm32 leg,
+    # which needs the harness ABI feature and a runtime to execute in.
+    Write-Host "==> driver-semantics conformance (native leg)" -ForegroundColor Cyan
+    & $cargo test --test driver_semantics -- --nocapture
+    if ($LASTEXITCODE -ne 0) { throw "the native driver-semantics leg failed." }
+
+    $targets = & rustup target list --installed 2>$null
+    if ($targets -match "wasm32-unknown-unknown") {
+        $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $node) {
+            Write-Host "==> skip the wasm32 driver-semantics leg — node not found on PATH (install Node.js to enable)." -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "==> cargo build --target wasm32-unknown-unknown --release --features driver-semantics-abi" -ForegroundColor Cyan
+            & $cargo build --target wasm32-unknown-unknown --release --features driver-semantics-abi
+            if ($LASTEXITCODE -ne 0) { throw "the wasm32 harness-ABI build failed." }
+            Write-Host "==> driver-semantics conformance (wasm32 leg)" -ForegroundColor Cyan
+            & $node.Source (Join-Path $PSScriptRoot "js/driver-semantics.mjs")
+            if ($LASTEXITCODE -ne 0) { throw "the wasm32 driver-semantics leg failed." }
+        }
+    }
+    else {
+        Write-Host "==> skip the wasm32 driver-semantics leg — Rust target not installed (rustup target add wasm32-unknown-unknown to enable)." -ForegroundColor Yellow
     }
 }
 

@@ -34,6 +34,15 @@ lto = true
 panic = "abort"
 strip = true
 
+[features]
+# OFF by default. Adds one `extern "C"` entry point that runs the bounded
+# loop's driver-semantics comparison inside the module, so the `wasm32` target
+# can be certified by EXECUTION rather than by the fact that it compiles.
+# Deliberately not part of the default export surface `include/fuaran.h`
+# declares: a conformance-harness entry point is not a contract a consumer
+# binding that surface should have to carry.
+driver-semantics-abi = []
+
 [dependencies]
 # The runtime host uses the Rust standard library only — no third-party crates.
 # Rust's stdlib has no JSON, so the canonical JSON layer is hand-written for

@@ -14,6 +14,11 @@
 //! byte-for-byte against the shared conformance corpus (round-trip + reject
 //! families). The apply engine, validator, and emission tiers are roadmap work.
 
+/// The bounded program loop (client placement) — behaviour carried as data:
+/// the closed action walk, the per-interaction budget, the default-deny effect
+/// vocabulary, and the binding re-resolution pass that makes a state write
+/// visible. Carries this host's bounded-path conformance declaration.
+pub mod bounded;
 pub mod canonical;
 pub mod client;
 pub mod dag;

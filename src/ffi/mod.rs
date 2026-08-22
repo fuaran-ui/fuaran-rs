@@ -52,6 +52,11 @@ use std::cell::RefCell;
 use crate::canonical::{JVal, render_canonical};
 use crate::client::{ClientError, ClientSession, RowsOutcome};
 
+/// The bounded loop's conformance-harness entry point — feature-gated and
+/// OFF by default, so it imposes no obligation on the stable surface
+/// `include/fuaran.h` declares. See the module header for why it exists.
+#[cfg(feature = "driver-semantics-abi")]
+pub mod bounded;
 pub mod rosetta;
 
 thread_local! {
@@ -104,7 +109,7 @@ fn make_buf(ptr: *mut u8, len: usize) -> FuaranBuf {
 /// Leak an exact-length boxed byte slice from a `String`, returning the owned
 /// `(ptr, len)` [`FuaranBuf`]. The caller reads `len` UTF-8 bytes at `ptr`, then
 /// frees via [`fuaran_dealloc`].
-fn pack_string(s: String) -> FuaranBuf {
+pub(crate) fn pack_string(s: String) -> FuaranBuf {
     let boxed = s.into_bytes().into_boxed_slice();
     let len = boxed.len();
     let ptr = Box::into_raw(boxed) as *mut u8;
@@ -118,7 +123,7 @@ fn pack_string(s: String) -> FuaranBuf {
 /// `ptr` must point at `len` initialised bytes that outlive the borrow — true
 /// for a caller-owned `fuaran_alloc` buffer that the caller frees only after the
 /// call.
-unsafe fn borrow_str<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
+pub(crate) unsafe fn borrow_str<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
     if ptr.is_null() {
         return Some("");
     }

@@ -68,6 +68,9 @@ fuaran-rs/
 ├── src/validator/       # pre-emit structural validator — canonical FUARAN### defect codes
 ├── src/render/          # emission tier — server.rs (HTML walk + islands) + markdown.rs (corpus-certified)
 │                        #   + sanitize.rs (injection floor) + bindings.rs / class_names.rs / html.rs
+├── src/bounded/         # the bounded program loop (client placement) — actions.rs (the one evaluating
+│                        #   match) + budget.rs + effect.rs + resolve.rs + validate.rs + program.rs
+│                        #   + trace.rs (the IO-free scenario runner + first-divergence comparison)
 ├── src/ffi/             # target-neutral C-ABI (Phase 537) — fuaran_* over an opaque ClientSession, all targets
 ├── src/client/          # mod.rs (ClientSession, target-agnostic) + wasm.rs (wasm32 re-export of src/ffi/)
 ├── include/fuaran.h     # hand-written C header for src/ffi/ — the native binding surface + ownership/threading contract
@@ -120,6 +123,46 @@ canonical error code + `$`-rooted path prefix (the harness locates
 `../wire-format-fixtures/` via `manifest.json` — the authoritative enumeration — and
 skips when absent). The **lenient-accept**, **envelope**, and **elicitation**
 families certify the same way — the full corpus enumeration runs, none skipped.
+
+## The bounded program loop + its conformance leg (`src/bounded/`)
+
+`src/bounded/` is the **client placement of the bounded program loop** — behaviour
+carried as data: the closed action walk (`actions.rs`, the one evaluating `match`
+over `Action` in this crate), the per-interaction resource budget (`budget.rs`),
+the default-deny client-effect vocabulary and policy (`effect.rs`), the binding
+re-resolution pass that makes a state write visible (`resolve.rs`), the inbound
+trust boundary (`validate.rs`), and the loop that orders them (`program.rs`).
+
+**Four things about it are load-bearing and easy to undo by accident.**
+
+- **The client-effect envelope is NOT canonical, on purpose.** `kind` rather than
+  `$type`, declaration-ordered members, short escapes for the three common control
+  characters. Its encoder is deliberately separate from `canonical::` rather than a
+  flag on it, so encoding an effect canonically fails to compile rather than
+  silently erasing an exception a rendering surface already reads. Unifying it is a
+  migration with a version, never a tidy-up.
+- **`resolve.rs`'s coverage floor is a recorded negative result.** The kinds it does
+  NOT reach are pinned by a conformance scenario, so widening the floor changes a
+  recorded expectation rather than moving behaviour silently. Both its per-kind
+  match and `validate.rs`'s event-legitimacy table are exhaustive with **no
+  catch-all**, so a new `NodeKind` is a build error until somebody decides.
+- **`trace.rs` does no IO**, so the identical comparison compiles for `wasm32`. The
+  tree is compared **semantically** (decoded and re-encoded through this host's own
+  codec — this host is measured against its own bytes) and the effects
+  **byte-for-byte**; normalising the effects would erase the exception above.
+- **The conformance leg is LOCAL and operator-invoked.** The scenario corpus is a
+  separate artefact this repository does not vendor and its public workflow does not
+  check out, so `tests/driver_semantics.rs` runs when the corpus is present locally
+  (`FUARAN_PROGRAM_SPEC`, or a checkout beside this repository) and reports "NOT RUN"
+  otherwise. A **claimed** corpus that cannot be read **fails** — never skips. Do not
+  add a corpus checkout to the public workflow.
+
+`run.ps1 -DriverSemantics` runs both targets: the native leg, then the `wasm32` leg,
+which builds the module with the `driver-semantics-abi` feature (off by default, and
+deliberately not part of the stable `include/fuaran.h` surface) and executes the same
+comparison inside it under node. The `§10.2` bounded-path declaration itself lives in
+`README.md` and in `src/bounded/mod.rs`'s header — a conformance claim is a sentence
+somebody writes down, and both halves of it must be named.
 
 ## Interactivity — a client-side host, not only a headless one
 
