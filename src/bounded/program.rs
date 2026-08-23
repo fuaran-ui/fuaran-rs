@@ -167,7 +167,14 @@ impl BoundedProgram {
     /// Re-resolving the base tree rather than the previous step's output is what
     /// keeps the store the only thing carrying state: fold a step's
     /// substitutions into the next step's input and a binding an earlier step
-    /// happened to resolve could never be recovered.
+    /// happened to resolve could never be recovered. Specified — §10.5, pinned
+    /// by the corpus's `fixed-base-reresolution` scenario.
+    ///
+    /// The refusal reported here is **event-level** and nothing else (§10.5): a
+    /// step is refused when the trust boundary or a budget declined the event
+    /// itself. An action that declines inside an admitted event — a reserved
+    /// state key, an unsafe destination — leaves `rejected` unset and shows as
+    /// an *absent effect*.
     pub fn handle_event(&mut self, event: &LiveEvent) -> StepOutput {
         let action = match validate(&*self.can_dispatch, &self.resolved, event) {
             Err(reason) => return self.refuse(ProgramReject::Gate(reason)),

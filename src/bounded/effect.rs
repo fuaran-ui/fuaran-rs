@@ -226,6 +226,12 @@ impl EffectPolicy {
 /// control characters as their short escapes, and every remaining control
 /// character as `\u00xx` with lower-case hex. Nothing else is escaped — a
 /// non-ASCII character passes through as its literal UTF-8 sequence.
+///
+/// The `\u00xx` half is the part that is easy to omit, and §5.2 now says so in
+/// as many words: the envelope's exception narrows three code points and no
+/// more, and an encoder emitting any other control raw has produced text that is
+/// not JSON. A substitution list is complete for the three it names and silently
+/// empty for the rest, which no printable-string corpus can catch.
 fn quoted(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');

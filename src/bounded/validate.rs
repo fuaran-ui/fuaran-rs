@@ -243,6 +243,13 @@ fn bounds_check(node: &Node, event: &LiveEvent) -> Result<(), RejectReason> {
 /// recover. A surface that wants those controls to move state does it the way
 /// the wire provides for — the write-back over the control's own writable slot —
 /// which is a host act, not an action this boundary could resolve.
+///
+/// Specified since §10.5: an event on a closure-slotted control resolves to no
+/// action **at every host**, and a host MUST NOT recover behaviour from such a
+/// slot. Whether a decoder erases the slot or substitutes an inert placeholder
+/// is a mechanism, and the two are observationally identical — which is what
+/// closes the cross-host divergence this comment used to record as open. The
+/// resulting step is inert and, per the same section, is **not** a refusal.
 pub fn resolve_action(node: &Node, event: &LiveEvent) -> Option<Action> {
     match &node.kind {
         NodeKind::Button(spec) if event.event == "click" => Some(spec.on_click.clone()),

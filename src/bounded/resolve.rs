@@ -12,7 +12,10 @@
 //! previous step's output. Resolving a resolved tree would fold each step's
 //! substitutions into the next one's input, so a later step could not recover a
 //! binding an earlier step happened to resolve — the store would stop being the
-//! only thing that carries state.
+//! only thing that carries state. This is now **normative** rather than
+//! inherited: the specification's §10.5 states it, and the corpus's
+//! `fixed-base-reresolution` scenario is the multi-event trace that tells the
+//! two readings apart — every one-event scenario passes under both.
 //!
 //! ## The coverage floor is deliberate, and it is recorded rather than implied
 //!
@@ -22,6 +25,14 @@
 //! That is a **negative result the conformance corpus pins**, not an accident: a
 //! scenario records the kinds the pass does not reach, so widening the floor
 //! changes a recorded expectation rather than moving behaviour silently.
+//!
+//! §10.5 rules that arrangement normative and puts the membership where it
+//! already was: a floor exists and is neither everything nor nothing — the part
+//! a host cannot derive — while *which* kinds are in it is enumerated by the
+//! corpus rather than tabulated in a document that does not own the tree
+//! vocabulary. For a kind no scenario reaches, this module's floor is this
+//! host's own, and the two paragraphs above are the declaration §10.5 requires
+//! of it.
 //!
 //! Structure is never lost. Children recurse generically through
 //! [`structural_children`], so an uncovered container still has its covered

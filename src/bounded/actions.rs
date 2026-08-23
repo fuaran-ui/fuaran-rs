@@ -53,6 +53,13 @@ use super::effect::ClientEffect;
 /// The state namespace a host reserves for itself. A program is untrusted by
 /// construction, so a program writing under it is exactly the case the namespace
 /// exists for — and is refused, not quietly honoured.
+///
+/// The reservation binds **this** placement as well as the one the specification
+/// spells it under: §4.3 rules it a property of the namespace rather than of a
+/// handler document, because untrustedness does not vary by which loop is
+/// running. What is placement-specific is only the refusal's shape — a client
+/// write under `host.` is a legitimate document whose action does nothing, not a
+/// decode failure.
 pub const HOST_RESERVED_STATE_PREFIX: &str = "host.";
 
 /// A readable "this did nothing, on purpose" signal.
@@ -260,6 +267,15 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
         // client-side sink. A refusal emits NO effect and one diagnostic — never
         // a silently-neutered destination, which would leave an author believing
         // the navigation happened somewhere.
+        //
+        // The PREDICATE is not this host's choice: it is the tree wire
+        // specification's renderer URL floor, which names the navigation
+        // destination among the slots it governs, and reaches here as a
+        // referenced value (program wire §3). What §10.5 adds is the RESPONSE —
+        // decline the action rather than substitute a destination, since a loop
+        // emits no markup for the floor's own rejection rule to govern. A host
+        // whose policy is stricter than the floor must declare the divergence;
+        // `sanitize_url` is exactly the floor and no more.
         Action::Navigate { route } => match sanitize_url(route) {
             Some(safe) => emitted(
                 store,
@@ -272,6 +288,9 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
         Action::WriteToClipboard { text } => {
             emitted(store, ClientEffect::WriteToClipboard { text: text.clone() })
         }
+        // `nodeId` is the node the EVENT came from, which §5.2 now states: the
+        // surface holds the selected file against that node, so a reference
+        // taken from the action would name something it cannot resolve.
         Action::ReadFileBody { encoding, .. } => emitted(
             store,
             ClientEffect::ReadFileBody {
