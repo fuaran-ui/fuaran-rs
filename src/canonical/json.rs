@@ -42,6 +42,12 @@ impl JVal {
 pub struct ParseError {
     pub message: String,
     pub offset: usize,
+    /// True when this failure is a §21 resource-limit breach rather than a
+    /// syntax error. §21.2 rule 2 forbids reporting a limit breach as
+    /// `INVALID_JSON` — the input is well-formed and merely too large to walk,
+    /// and calling it malformed sends the author to repair the wrong thing.
+    /// `decode_node` reads this to choose between the two codes.
+    pub limit: bool,
 }
 
 // ─── Parser ──────────────────────────────────────────────────────────────────
@@ -49,15 +55,35 @@ pub struct ParseError {
 struct Parser<'a> {
     bytes: &'a [u8],
     pos: usize,
+    /// Current SYNTACTIC nesting depth (§21.1 MAX_JSON_DEPTH). Incremented on
+    /// the way DOWN, before the recursion that would breach it (§21.2 rule 4).
+    /// Without it `parse_value` / `parse_object` / `parse_array` are unbounded
+    /// mutual recursion, and a Rust stack overflow ABORTS THE PROCESS — not a
+    /// catchable condition, so no `Result` could ever be returned.
+    depth: usize,
 }
 
 type PResult<T> = Result<T, ParseError>;
 
 impl<'a> Parser<'a> {
+    /// A §21 resource-limit refusal. Distinct from `fail` only in the flag,
+    /// which is what stops the breach being reported as a syntax error above.
+    fn fail_limit<T>(&self) -> PResult<T> {
+        Err(ParseError {
+            message: format!(
+                "JSON nesting deeper than the wire limit MAX_JSON_DEPTH = {}",
+                crate::limits::MAX_JSON_DEPTH
+            ),
+            offset: self.pos,
+            limit: true,
+        })
+    }
+
     fn fail<T>(&self, message: impl Into<String>) -> PResult<T> {
         Err(ParseError {
             message: message.into(),
             offset: self.pos,
+            limit: false,
         })
     }
 
@@ -232,8 +258,27 @@ impl<'a> Parser<'a> {
     fn parse_value(&mut self) -> PResult<JVal> {
         self.skip_ws();
         match self.peek() {
-            b'{' => self.parse_object(),
-            b'[' => self.parse_array(),
+            b'{' => {
+                // §21.2 rule 4 — refuse BEFORE descending. A check after the
+                // walk has already paid the cost it exists to refuse, and here
+                // it would never run at all: the overflow is fatal.
+                if self.depth >= crate::limits::MAX_JSON_DEPTH {
+                    return self.fail_limit();
+                }
+                self.depth += 1;
+                let r = self.parse_object();
+                self.depth -= 1;
+                r
+            }
+            b'[' => {
+                if self.depth >= crate::limits::MAX_JSON_DEPTH {
+                    return self.fail_limit();
+                }
+                self.depth += 1;
+                let r = self.parse_array();
+                self.depth -= 1;
+                r
+            }
             b'"' => self.parse_string_raw().map(JVal::Str),
             b't' => {
                 if self.bytes[self.pos..].starts_with(b"true") {
@@ -343,12 +388,14 @@ pub fn parse(input: &str) -> Result<JVal, ParseError> {
     let mut p = Parser {
         bytes: input.as_bytes(),
         pos: 0,
+        depth: 0,
     };
     p.skip_ws();
     if p.pos >= p.bytes.len() {
         return Err(ParseError {
             message: "input is empty".to_string(),
             offset: 0,
+            limit: false,
         });
     }
     p.parse_value()

@@ -36,6 +36,7 @@ pub mod ffi;
 pub mod function;
 pub mod gate;
 pub mod introspect;
+pub mod limits;
 pub mod ops;
 pub mod opstream;
 pub mod render;

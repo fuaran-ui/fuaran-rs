@@ -3854,209 +3854,373 @@ fn decode_fragment_args(path: &str, j: &JVal) -> DResult<Vec<(String, FragmentAr
 
 const WRONG_NODE_KIND_HINT: &str = "a Layout primitive (Box | SplitPanel | Tabs | Stepper | SummaryList | Disclosure | Modal | ScrollArea), a Display primitive (Heading | Markdown | Metric | Badge | Sparkline | Callout | Progress | Skeleton | Icon | LabelValueRow | Fact | Link | Image | List | Toast | CodeBlock | Math | Drawing), an Input primitive (Form | Filters | Button | FileUpload | Select), a Visualisation primitive (DataGrid | Chart | Map), or Custom | ErrorBoundary | Switch | FragmentDecl | FragmentRef | Mount";
 
+/// Decode a `NodeKind` from its `$type`-discriminated object.
+///
+/// # Why this is a chain of small functions rather than one match
+///
+/// It WAS one match over the whole kind vocabulary, and that shape cost this
+/// host its conformance. In a debug build a function's frame reserves space for
+/// every local across all its branches, so a match carrying one spec temporary
+/// per arm held the entire vocabulary's worth of stack at EVERY level of the
+/// recursion. Measured: ~128 KB per node level, which overflows the default
+/// 1 MB main-thread stack at 8 levels — below `MAX_NODE_DEPTH` of 24. So the
+/// unoptimised build ABORTED on documents `WIRE_FORMAT.md` §21.2 rule 1
+/// requires every conformant host to ACCEPT.
+///
+/// A Rust stack overflow is not catchable, so no depth guard could have rescued
+/// that: the guard at 24 was never reached, because the process was already gone
+/// at 9. Shrinking the frame was the prerequisite for the guard, not a tidy-up
+/// beside it.
+///
+/// The groups below are called in SEQUENCE, not nested, so only one group's
+/// slots are live at a time. Each returns `None` for a tag it does not own and
+/// the next is tried. The split is load-bearing: keep the groups small when
+/// adding a kind, and do not merge them back into one match.
 fn decode_node_kind(path: &str, j: &JVal) -> DResult<NodeKind> {
     let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        // Layout.
-        "Box" => Ok(NodeKind::Box(decode_box_spec(path, j)?)),
-        "SplitPanel" => Ok(NodeKind::SplitPanel(decode_split_panel_spec(path, j)?)),
-        "Tabs" => Ok(NodeKind::Tabs(decode_tabs_spec(path, j)?)),
-        "Stepper" => Ok(NodeKind::Stepper(decode_stepper_spec(path, j)?)),
-        "SummaryList" => Ok(NodeKind::SummaryList(decode_summary_list_spec(path, j)?)),
-        "Disclosure" => Ok(NodeKind::Disclosure(decode_disclosure_spec(path, j)?)),
-        "Modal" => Ok(NodeKind::Modal(decode_modal_spec(path, j)?)),
-        "ScrollArea" => Ok(NodeKind::ScrollArea(decode_scroll_area_spec(path, j)?)),
-        // Display.
-        "Heading" => Ok(NodeKind::Heading(decode_heading_spec(path, j)?)),
-        "Markdown" => Ok(NodeKind::Markdown(decode_markdown_spec(path, j)?)),
-        "Metric" => Ok(NodeKind::Metric(decode_metric_spec(path, j)?)),
-        "Badge" => Ok(NodeKind::Badge(decode_badge_spec(path, j)?)),
-        "Sparkline" => Ok(NodeKind::Sparkline(decode_sparkline_spec(path, j)?)),
-        "Callout" => Ok(NodeKind::Callout(decode_callout_spec(path, j)?)),
-        "Progress" => Ok(NodeKind::Progress(decode_progress_spec(path, j)?)),
-        "Skeleton" => Ok(NodeKind::Skeleton(decode_skeleton_spec(path, j)?)),
-        "Icon" => Ok(NodeKind::Icon(decode_icon_spec(path, j)?)),
-        "Fact" => Ok(NodeKind::Fact(decode_fact_spec(path, j)?)),
-        "LabelValueRow" => Ok(NodeKind::LabelValueRow(decode_label_value_row_spec(
-            path, j,
-        )?)),
-        "Link" => Ok(NodeKind::Link(decode_link_spec(path, j)?)),
-        "Image" => Ok(NodeKind::Image(decode_image_spec(path, j)?)),
-        "List" => Ok(NodeKind::List(decode_list_spec(path, j)?)),
-        "Toast" => Ok(NodeKind::Toast(decode_toast_spec(path, j)?)),
-        "CodeBlock" => Ok(NodeKind::CodeBlock(decode_code_block_spec(path, j)?)),
-        "Math" => Ok(NodeKind::Math(decode_math_spec(path, j)?)),
-        "Drawing" => Ok(NodeKind::Drawing(decode_drawing_spec(path, j)?)),
-        // Input.
-        "Form" => Ok(NodeKind::Form(decode_form_spec(path, j)?)),
-        "Filters" => {
-            let items_j = req(path, fields, "items", "Filters item list")?;
-            let arr = as_arr(&format!("{path}.items"), items_j)?;
-            let mut specs = Vec::with_capacity(arr.len());
-            for (i, item) in arr.iter().enumerate() {
-                specs.push(decode_filter_spec(&format!("{path}.items[{i}]"), item)?);
-            }
-            Ok(NodeKind::Filters(specs))
-        }
-        "Button" => Ok(NodeKind::Button(decode_button_spec(path, j)?)),
-        "FileUpload" => Ok(NodeKind::FileUpload(decode_file_upload_spec(path, j)?)),
-        "Select" => Ok(NodeKind::Select(decode_select_spec(path, j)?)),
-        // Visualisation.
-        "DataGrid" => Ok(NodeKind::DataGrid(decode_grid_spec(path, j)?)),
-        "Chart" => Ok(NodeKind::Chart(decode_chart_spec(path, j)?)),
-        "Map" => Ok(NodeKind::Map(decode_map_spec(path, j)?)),
-        // Structural.
-        "Custom" => {
-            let module_id = req_string(path, fields, "moduleId", "Custom moduleId string")?;
-            let component_id =
-                req_string(path, fields, "componentId", "Custom componentId string")?;
-            let props_j = req(path, fields, "props", "Custom props map")?;
-            let props = decode_jval_map(&format!("{path}.props"), props_j)?;
-            let content_hash = match get(fields, "contentHash") {
-                None => None,
-                Some(v) => Some(decode_content_hash(&format!("{path}.contentHash"), v)?),
-            };
-            let exposed_node_ids = match get(fields, "exposedNodeIds") {
-                None => vec![],
-                Some(v) => {
-                    let arr = as_arr(&format!("{path}.exposedNodeIds"), v)?;
-                    let mut ids = Vec::with_capacity(arr.len());
-                    for (i, item) in arr.iter().enumerate() {
-                        ids.push(as_str(&format!("{path}.exposedNodeIds[{i}]"), item)?.to_string());
-                    }
-                    ids
-                }
-            };
-            Ok(NodeKind::Custom(CustomSpec {
-                module_id,
-                component_id,
-                props,
-                content_hash,
-                exposed_node_ids,
-            }))
-        }
-        "ErrorBoundary" => {
-            let child_j = req(path, fields, "child", "ErrorBoundary child Node")?;
-            let child = decode_node_ast(&format!("{path}.child"), child_j)?;
-            let fallback_j = req(path, fields, "fallback", "ErrorBoundary fallback Node")?;
-            let fallback = decode_node_ast(&format!("{path}.fallback"), fallback_j)?;
-            Ok(NodeKind::ErrorBoundary(ErrorBoundarySpec {
-                child: Box::new(child),
-                fallback: Box::new(fallback),
-            }))
-        }
-        "Switch" => {
-            // Phase 768 — the selector is any Binding: `on` carries the
-            // canonical Binding wire form; the no-default `State` form keeps
-            // the compact `stateKey` spelling. Both absent keeps the stateKey
-            // MISSING_FIELD, so the reject fixture's error is unchanged.
-            let on = match get(fields, "on") {
-                Some(v) => decode_binding(&format!("{path}.on"), v)?,
-                None => Binding::State {
-                    key: req_string(path, fields, "stateKey", "Switch stateKey string")?,
-                    default_value: StaticValue::Ast(JVal::Null),
-                },
-            };
-            let cases_j = req(path, fields, "cases", "Switch cases array")?;
-            let arr = as_arr(&format!("{path}.cases"), cases_j)?;
-            let mut cases = Vec::with_capacity(arr.len());
-            for (i, item) in arr.iter().enumerate() {
-                let cp = format!("{path}.cases[{i}]");
-                let cf = as_obj(&cp, item)?;
-                let match_value = req_string(&cp, cf, "match", "Switch case match string")?;
-                let child_j = req(&cp, cf, "child", "Switch case child Node")?;
-                let child = decode_node_ast(&format!("{cp}.child"), child_j)?;
-                cases.push(SwitchCase { match_value, child });
-            }
-            let default_j = req(path, fields, "default", "Switch default Node")?;
-            let default = decode_node_ast(&format!("{path}.default"), default_j)?;
-            Ok(NodeKind::Switch(SwitchSpec {
-                on,
-                cases,
-                default: Box::new(default),
-            }))
-        }
-        "FragmentDecl" => {
-            let name = req_string(path, fields, "name", "FragmentDecl name string")?;
-            let body_j = req(path, fields, "body", "FragmentDecl body Node")?;
-            let body = decode_node_ast(&format!("{path}.body"), body_j)?;
-            let holes = match get(fields, "holes") {
-                None => vec![],
-                Some(v) => {
-                    let arr = as_arr(&format!("{path}.holes"), v)?;
-                    let mut holes = Vec::with_capacity(arr.len());
-                    for (i, item) in arr.iter().enumerate() {
-                        holes.push(decode_hole_decl(&format!("{path}.holes[{i}]"), item)?);
-                    }
-                    holes
-                }
-            };
-            let effect = match get(fields, "effect") {
-                None => EffectClass::PURE_DETERMINISTIC,
-                Some(v) => decode_effect_class(&format!("{path}.effect"), v)?,
-            };
-            Ok(NodeKind::FragmentDecl(FragmentDeclSpec {
-                name,
-                body: Box::new(body),
-                holes,
-                effect,
-            }))
-        }
-        "FragmentRef" => {
-            let name = req_string(path, fields, "name", "FragmentRef name string")?;
-            let args = match get(fields, "args") {
-                None => vec![],
-                Some(v) => decode_fragment_args(&format!("{path}.args"), v)?,
-            };
-            Ok(NodeKind::FragmentRef(FragmentRefSpec { name, args }))
-        }
-        "Mount" => {
-            let scope_id = req_string(path, fields, "scopeId", "Mount scopeId string")?;
-            let channel_j = req(path, fields, "channel", "Mount channel object")?;
-            let channel_fields = as_obj(&format!("{path}.channel"), channel_j)?;
-            let channel_path = format!("{path}.channel");
-            let direction = req_string(
-                &channel_path,
-                channel_fields,
-                "direction",
-                "channel direction string",
-            )?;
-            let direction = ChannelDirection::from_wire(&direction).ok_or_else(|| {
-                make_error(
-                    DecodeErrorCode::UnknownDuCase,
-                    format!("{channel_path}.direction"),
-                    format!("unknown ChannelDirection '{direction}'"),
-                    Some("OutOnly | TwoWay".to_string()),
-                )
-            })?;
-            let message_shape = opt_string(&channel_path, channel_fields, "messageShape")?;
-            let caps_j = req(path, fields, "capabilities", "Mount capabilities array")?;
-            let caps_arr = as_arr(&format!("{path}.capabilities"), caps_j)?;
-            let mut capabilities = Vec::with_capacity(caps_arr.len());
-            for (i, item) in caps_arr.iter().enumerate() {
-                capabilities.push(as_str(&format!("{path}.capabilities[{i}]"), item)?.to_string());
-            }
-            let inputs = match get(fields, "inputs") {
-                None => vec![],
-                Some(v) => decode_fragment_args(&format!("{path}.inputs"), v)?,
-            };
-            Ok(NodeKind::Mount(MountSpec {
-                scope_id,
-                inputs,
-                channel: MountChannel {
-                    direction,
-                    message_shape,
-                },
-                capabilities,
-            }))
-        }
-        other => Err(make_error(
-            DecodeErrorCode::WrongNodeKind,
-            format!("{path}.$type"),
-            format!("unknown NodeKind discriminator '{other}'"),
-            Some(WRONG_NODE_KIND_HINT.to_string()),
-        )),
+    let tag = disc(path, fields)?;
+    if let Some(r) = decode_node_kind_g0(tag, path, j, fields) {
+        return r;
     }
+    if let Some(r) = decode_node_kind_g1(tag, path, j, fields) {
+        return r;
+    }
+    if let Some(r) = decode_node_kind_g2(tag, path, j, fields) {
+        return r;
+    }
+    if let Some(r) = decode_node_kind_g3(tag, path, j, fields) {
+        return r;
+    }
+    if let Some(r) = decode_node_kind_g4(tag, path, j, fields) {
+        return r;
+    }
+    let other = tag;
+    Err(make_error(
+        DecodeErrorCode::WrongNodeKind,
+        format!("{path}.$type"),
+        format!("unknown NodeKind discriminator '{other}'"),
+        Some(WRONG_NODE_KIND_HINT.to_string()),
+    ))
+}
+
+/// One group of the `NodeKind` dispatch — see `decode_node_kind` for why the
+/// dispatch is split. Returns `None` for a tag this group does not own.
+fn decode_node_kind_g0(
+    tag: &str,
+    path: &str,
+    j: &JVal,
+    fields: &Fields,
+) -> Option<DResult<NodeKind>> {
+    let _ = fields;
+    Some(match tag {
+        // Layout.
+        "Box" => (|| -> DResult<NodeKind> { Ok(NodeKind::Box(decode_box_spec(path, j)?)) })(),
+        "SplitPanel" => (|| -> DResult<NodeKind> {
+            Ok(NodeKind::SplitPanel(decode_split_panel_spec(path, j)?))
+        })(),
+        "Tabs" => (|| -> DResult<NodeKind> { Ok(NodeKind::Tabs(decode_tabs_spec(path, j)?)) })(),
+        "Stepper" => {
+            (|| -> DResult<NodeKind> { Ok(NodeKind::Stepper(decode_stepper_spec(path, j)?)) })()
+        }
+        "SummaryList" => (|| -> DResult<NodeKind> {
+            Ok(NodeKind::SummaryList(decode_summary_list_spec(path, j)?))
+        })(),
+        "Disclosure" => {
+            (|| -> DResult<NodeKind> { Ok(NodeKind::Disclosure(decode_disclosure_spec(path, j)?)) })(
+            )
+        }
+        "Modal" => (|| -> DResult<NodeKind> { Ok(NodeKind::Modal(decode_modal_spec(path, j)?)) })(),
+        _ => return None,
+    })
+}
+
+/// One group of the `NodeKind` dispatch — see `decode_node_kind` for why the
+/// dispatch is split. Returns `None` for a tag this group does not own.
+fn decode_node_kind_g1(
+    tag: &str,
+    path: &str,
+    j: &JVal,
+    fields: &Fields,
+) -> Option<DResult<NodeKind>> {
+    let _ = fields;
+    Some(match tag {
+        // Display.
+        "ScrollArea" => (|| -> DResult<NodeKind> {
+            Ok(NodeKind::ScrollArea(decode_scroll_area_spec(path, j)?))
+        })(),
+        "Heading" => {
+            (|| -> DResult<NodeKind> { Ok(NodeKind::Heading(decode_heading_spec(path, j)?)) })()
+        }
+        "Markdown" => {
+            (|| -> DResult<NodeKind> { Ok(NodeKind::Markdown(decode_markdown_spec(path, j)?)) })()
+        }
+        "Metric" => {
+            (|| -> DResult<NodeKind> { Ok(NodeKind::Metric(decode_metric_spec(path, j)?)) })()
+        }
+        "Badge" => (|| -> DResult<NodeKind> { Ok(NodeKind::Badge(decode_badge_spec(path, j)?)) })(),
+        "Sparkline" => {
+            (|| -> DResult<NodeKind> { Ok(NodeKind::Sparkline(decode_sparkline_spec(path, j)?)) })()
+        }
+        "Callout" => {
+            (|| -> DResult<NodeKind> { Ok(NodeKind::Callout(decode_callout_spec(path, j)?)) })()
+        }
+        "Progress" => {
+            (|| -> DResult<NodeKind> { Ok(NodeKind::Progress(decode_progress_spec(path, j)?)) })()
+        }
+        "Skeleton" => {
+            (|| -> DResult<NodeKind> { Ok(NodeKind::Skeleton(decode_skeleton_spec(path, j)?)) })()
+        }
+        "Icon" => (|| -> DResult<NodeKind> { Ok(NodeKind::Icon(decode_icon_spec(path, j)?)) })(),
+        _ => return None,
+    })
+}
+
+/// One group of the `NodeKind` dispatch — see `decode_node_kind` for why the
+/// dispatch is split. Returns `None` for a tag this group does not own.
+fn decode_node_kind_g2(
+    tag: &str,
+    path: &str,
+    j: &JVal,
+    fields: &Fields,
+) -> Option<DResult<NodeKind>> {
+    let _ = fields;
+    Some(match tag {
+        "Fact" => (|| -> DResult<NodeKind> { Ok(NodeKind::Fact(decode_fact_spec(path, j)?)) })(),
+        "LabelValueRow" => (|| -> DResult<NodeKind> {
+            Ok(NodeKind::LabelValueRow(decode_label_value_row_spec(
+                path, j,
+            )?))
+        })(),
+        "Link" => (|| -> DResult<NodeKind> { Ok(NodeKind::Link(decode_link_spec(path, j)?)) })(),
+        "Image" => (|| -> DResult<NodeKind> { Ok(NodeKind::Image(decode_image_spec(path, j)?)) })(),
+        "List" => (|| -> DResult<NodeKind> { Ok(NodeKind::List(decode_list_spec(path, j)?)) })(),
+        "Toast" => (|| -> DResult<NodeKind> { Ok(NodeKind::Toast(decode_toast_spec(path, j)?)) })(),
+        "CodeBlock" => {
+            (|| -> DResult<NodeKind> { Ok(NodeKind::CodeBlock(decode_code_block_spec(path, j)?)) })(
+            )
+        }
+        "Math" => (|| -> DResult<NodeKind> { Ok(NodeKind::Math(decode_math_spec(path, j)?)) })(),
+        _ => return None,
+    })
+}
+
+/// One group of the `NodeKind` dispatch — see `decode_node_kind` for why the
+/// dispatch is split. Returns `None` for a tag this group does not own.
+fn decode_node_kind_g3(
+    tag: &str,
+    path: &str,
+    j: &JVal,
+    fields: &Fields,
+) -> Option<DResult<NodeKind>> {
+    let _ = fields;
+    Some(match tag {
+        // Input.
+        "Drawing" => {
+            (|| -> DResult<NodeKind> { Ok(NodeKind::Drawing(decode_drawing_spec(path, j)?)) })()
+        }
+        "Form" => (|| -> DResult<NodeKind> { Ok(NodeKind::Form(decode_form_spec(path, j)?)) })(),
+        "Filters" => (|| -> DResult<NodeKind> {
+            {
+                let items_j = req(path, fields, "items", "Filters item list")?;
+                let arr = as_arr(&format!("{path}.items"), items_j)?;
+                let mut specs = Vec::with_capacity(arr.len());
+                for (i, item) in arr.iter().enumerate() {
+                    specs.push(decode_filter_spec(&format!("{path}.items[{i}]"), item)?);
+                }
+                Ok(NodeKind::Filters(specs))
+            }
+        })(),
+        "Button" => {
+            (|| -> DResult<NodeKind> { Ok(NodeKind::Button(decode_button_spec(path, j)?)) })()
+        }
+        "FileUpload" => (|| -> DResult<NodeKind> {
+            Ok(NodeKind::FileUpload(decode_file_upload_spec(path, j)?))
+        })(),
+        _ => return None,
+    })
+}
+
+/// One group of the `NodeKind` dispatch — see `decode_node_kind` for why the
+/// dispatch is split. Returns `None` for a tag this group does not own.
+fn decode_node_kind_g4(
+    tag: &str,
+    path: &str,
+    j: &JVal,
+    fields: &Fields,
+) -> Option<DResult<NodeKind>> {
+    let _ = fields;
+    Some(match tag {
+        // Visualisation.
+        "Select" => {
+            (|| -> DResult<NodeKind> { Ok(NodeKind::Select(decode_select_spec(path, j)?)) })()
+        }
+        "DataGrid" => {
+            (|| -> DResult<NodeKind> { Ok(NodeKind::DataGrid(decode_grid_spec(path, j)?)) })()
+        }
+        "Chart" => (|| -> DResult<NodeKind> { Ok(NodeKind::Chart(decode_chart_spec(path, j)?)) })(),
+        // Structural.
+        "Map" => (|| -> DResult<NodeKind> { Ok(NodeKind::Map(decode_map_spec(path, j)?)) })(),
+        "Custom" => (|| -> DResult<NodeKind> {
+            {
+                let module_id = req_string(path, fields, "moduleId", "Custom moduleId string")?;
+                let component_id =
+                    req_string(path, fields, "componentId", "Custom componentId string")?;
+                let props_j = req(path, fields, "props", "Custom props map")?;
+                let props = decode_jval_map(&format!("{path}.props"), props_j)?;
+                let content_hash = match get(fields, "contentHash") {
+                    None => None,
+                    Some(v) => Some(decode_content_hash(&format!("{path}.contentHash"), v)?),
+                };
+                let exposed_node_ids = match get(fields, "exposedNodeIds") {
+                    None => vec![],
+                    Some(v) => {
+                        let arr = as_arr(&format!("{path}.exposedNodeIds"), v)?;
+                        let mut ids = Vec::with_capacity(arr.len());
+                        for (i, item) in arr.iter().enumerate() {
+                            ids.push(
+                                as_str(&format!("{path}.exposedNodeIds[{i}]"), item)?.to_string(),
+                            );
+                        }
+                        ids
+                    }
+                };
+                Ok(NodeKind::Custom(CustomSpec {
+                    module_id,
+                    component_id,
+                    props,
+                    content_hash,
+                    exposed_node_ids,
+                }))
+            }
+        })(),
+        "ErrorBoundary" => (|| -> DResult<NodeKind> {
+            {
+                let child_j = req(path, fields, "child", "ErrorBoundary child Node")?;
+                let child = decode_node_ast(&format!("{path}.child"), child_j)?;
+                let fallback_j = req(path, fields, "fallback", "ErrorBoundary fallback Node")?;
+                let fallback = decode_node_ast(&format!("{path}.fallback"), fallback_j)?;
+                Ok(NodeKind::ErrorBoundary(ErrorBoundarySpec {
+                    child: Box::new(child),
+                    fallback: Box::new(fallback),
+                }))
+            }
+        })(),
+        "Switch" => (|| -> DResult<NodeKind> {
+            {
+                // Phase 768 — the selector is any Binding: `on` carries the
+                // canonical Binding wire form; the no-default `State` form keeps
+                // the compact `stateKey` spelling. Both absent keeps the stateKey
+                // MISSING_FIELD, so the reject fixture's error is unchanged.
+                let on = match get(fields, "on") {
+                    Some(v) => decode_binding(&format!("{path}.on"), v)?,
+                    None => Binding::State {
+                        key: req_string(path, fields, "stateKey", "Switch stateKey string")?,
+                        default_value: StaticValue::Ast(JVal::Null),
+                    },
+                };
+                let cases_j = req(path, fields, "cases", "Switch cases array")?;
+                let arr = as_arr(&format!("{path}.cases"), cases_j)?;
+                let mut cases = Vec::with_capacity(arr.len());
+                for (i, item) in arr.iter().enumerate() {
+                    let cp = format!("{path}.cases[{i}]");
+                    let cf = as_obj(&cp, item)?;
+                    let match_value = req_string(&cp, cf, "match", "Switch case match string")?;
+                    let child_j = req(&cp, cf, "child", "Switch case child Node")?;
+                    let child = decode_node_ast(&format!("{cp}.child"), child_j)?;
+                    cases.push(SwitchCase { match_value, child });
+                }
+                let default_j = req(path, fields, "default", "Switch default Node")?;
+                let default = decode_node_ast(&format!("{path}.default"), default_j)?;
+                Ok(NodeKind::Switch(SwitchSpec {
+                    on,
+                    cases,
+                    default: Box::new(default),
+                }))
+            }
+        })(),
+        "FragmentDecl" => (|| -> DResult<NodeKind> {
+            {
+                let name = req_string(path, fields, "name", "FragmentDecl name string")?;
+                let body_j = req(path, fields, "body", "FragmentDecl body Node")?;
+                let body = decode_node_ast(&format!("{path}.body"), body_j)?;
+                let holes = match get(fields, "holes") {
+                    None => vec![],
+                    Some(v) => {
+                        let arr = as_arr(&format!("{path}.holes"), v)?;
+                        let mut holes = Vec::with_capacity(arr.len());
+                        for (i, item) in arr.iter().enumerate() {
+                            holes.push(decode_hole_decl(&format!("{path}.holes[{i}]"), item)?);
+                        }
+                        holes
+                    }
+                };
+                let effect = match get(fields, "effect") {
+                    None => EffectClass::PURE_DETERMINISTIC,
+                    Some(v) => decode_effect_class(&format!("{path}.effect"), v)?,
+                };
+                Ok(NodeKind::FragmentDecl(FragmentDeclSpec {
+                    name,
+                    body: Box::new(body),
+                    holes,
+                    effect,
+                }))
+            }
+        })(),
+        "FragmentRef" => (|| -> DResult<NodeKind> {
+            {
+                let name = req_string(path, fields, "name", "FragmentRef name string")?;
+                let args = match get(fields, "args") {
+                    None => vec![],
+                    Some(v) => decode_fragment_args(&format!("{path}.args"), v)?,
+                };
+                Ok(NodeKind::FragmentRef(FragmentRefSpec { name, args }))
+            }
+        })(),
+        "Mount" => (|| -> DResult<NodeKind> {
+            {
+                let scope_id = req_string(path, fields, "scopeId", "Mount scopeId string")?;
+                let channel_j = req(path, fields, "channel", "Mount channel object")?;
+                let channel_fields = as_obj(&format!("{path}.channel"), channel_j)?;
+                let channel_path = format!("{path}.channel");
+                let direction = req_string(
+                    &channel_path,
+                    channel_fields,
+                    "direction",
+                    "channel direction string",
+                )?;
+                let direction = ChannelDirection::from_wire(&direction).ok_or_else(|| {
+                    make_error(
+                        DecodeErrorCode::UnknownDuCase,
+                        format!("{channel_path}.direction"),
+                        format!("unknown ChannelDirection '{direction}'"),
+                        Some("OutOnly | TwoWay".to_string()),
+                    )
+                })?;
+                let message_shape = opt_string(&channel_path, channel_fields, "messageShape")?;
+                let caps_j = req(path, fields, "capabilities", "Mount capabilities array")?;
+                let caps_arr = as_arr(&format!("{path}.capabilities"), caps_j)?;
+                let mut capabilities = Vec::with_capacity(caps_arr.len());
+                for (i, item) in caps_arr.iter().enumerate() {
+                    capabilities
+                        .push(as_str(&format!("{path}.capabilities[{i}]"), item)?.to_string());
+                }
+                let inputs = match get(fields, "inputs") {
+                    None => vec![],
+                    Some(v) => decode_fragment_args(&format!("{path}.inputs"), v)?,
+                };
+                Ok(NodeKind::Mount(MountSpec {
+                    scope_id,
+                    inputs,
+                    channel: MountChannel {
+                        direction,
+                        message_shape,
+                    },
+                    capabilities,
+                }))
+            }
+        })(),
+        _ => return None,
+    })
 }
 
 // ─── StateBehaviour / SemanticStyle / Accessibility / Node ───────────────────
@@ -4126,6 +4290,12 @@ fn decode_accessibility(path: &str, j: &JVal) -> DResult<Accessibility> {
 }
 
 fn decode_node_ast(path: &str, j: &JVal) -> DResult<Node> {
+    // §21 node-depth + total-node bounds, on the way DOWN (rule 4). The guard
+    // pops in `Drop`, which is what makes the counter correct on the ERROR
+    // paths — and those are most of the paths, since this decoder is a long
+    // chain of `?` early returns.
+    let _guard = crate::limits::NodeGuard::enter().map_err(|b| limit_error(path, b))?;
+
     let fields = as_obj(path, j)?;
     let id_j = req(path, fields, "id", "Node id string")?;
     let id = as_str(&format!("{path}.id"), id_j)?;
@@ -4162,103 +4332,186 @@ fn decode_node_ast(path: &str, j: &JVal) -> DResult<Node> {
 
 // ─── TreeOp ──────────────────────────────────────────────────────────────────
 
+/// Decode a `TreeOp` from its `$type`-discriminated object.
+///
+/// Split into sequential groups for the same reason as `decode_node_kind` — see
+/// that function's note. It matters here despite there being only eleven ops,
+/// because `TreeOp` is over a kilobyte and two of its arms carry a whole `Node`
+/// as well. Measured before the split: the op axis aborted at 23 levels on a
+/// 1 MB main-thread stack, one level short of `MAX_NODE_DEPTH`, so `OpGuard`
+/// could never fire on a conformant document.
 fn decode_tree_op_ast(path: &str, j: &JVal) -> DResult<TreeOp> {
+    // The op axis, counted separately from the node axis and held to the same
+    // ceiling — §21.5's note for implementers, since `Batch` makes this
+    // self-recursive and the syntactic bound only LOOKS like cover for it.
+    let _guard = crate::limits::OpGuard::enter().map_err(|b| limit_error(path, b))?;
+
     let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "EditNode" => {
-            let target = req_string(path, fields, "target", "target NodeId")?;
-            let kind_j = req(path, fields, "newKind", "NodeKind object")?;
-            let new_kind = decode_node_kind(&format!("{path}.newKind"), kind_j)?;
-            Ok(TreeOp::EditNode { target, new_kind })
-        }
-        "UpdateProp" => {
-            let target = req_string(path, fields, "target", "target NodeId")?;
-            let prop_path = req_string(path, fields, "path", "dot-separated path string")?;
-            let value_j = req(path, fields, "value", "JsonValue payload")?;
-            let value = decode_jval(&format!("{path}.value"), value_j)?;
-            Ok(TreeOp::UpdateProp {
-                target,
-                path: prop_path,
-                value,
-            })
-        }
-        "ReplaceBinding" => {
-            let target = req_string(path, fields, "target", "target NodeId")?;
-            let slot = req_string(path, fields, "slot", "slot name string")?;
-            let binding = req_binding(path, fields, "binding", "Binding object")?;
-            Ok(TreeOp::ReplaceBinding {
-                target,
-                slot,
-                binding,
-            })
-        }
-        "UpdateStyle" => {
-            let target = req_string(path, fields, "target", "target NodeId")?;
-            let style_j = req(path, fields, "style", "SemanticStyle object")?;
-            let style = decode_semantic_style(&format!("{path}.style"), style_j)?;
-            Ok(TreeOp::UpdateStyle { target, style })
-        }
-        "UpdateState" => {
-            let target = req_string(path, fields, "target", "target NodeId")?;
-            let state_j = req(path, fields, "state", "StateBehaviour object")?;
-            let state = decode_state_behaviour(&format!("{path}.state"), state_j)?;
-            Ok(TreeOp::UpdateState { target, state })
-        }
-        "InsertChild" => {
-            let parent_id = req_string(path, fields, "parentId", "parent NodeId")?;
-            // A legacy `position` is ACCEPTED AND IGNORED for the migration
-            // window: a stored v1 emission must still apply, as an append,
-            // because order is now ReorderChildren's. This decoder reads named
-            // fields and ignores the rest, so not reading it IS the tolerance.
-            let child_j = req(path, fields, "child", "child Node object")?;
-            let child = decode_node_ast(&format!("{path}.child"), child_j)?;
-            Ok(TreeOp::InsertChild { parent_id, child })
-        }
-        "RemoveNode" => Ok(TreeOp::RemoveNode {
-            target: req_string(path, fields, "target", "target NodeId")?,
-        }),
-        "MoveNode" => {
-            // Legacy `newPosition` accepted and ignored — see InsertChild above.
-            let target = req_string(path, fields, "target", "target NodeId")?;
-            let new_parent_id = req_string(path, fields, "newParentId", "new parent NodeId")?;
-            Ok(TreeOp::MoveNode {
-                target,
-                new_parent_id,
-            })
-        }
-        "ReorderChildren" => {
-            let parent_id = req_string(path, fields, "parentId", "parent NodeId")?;
-            let order_j = req(path, fields, "newOrder", "NodeId list")?;
-            let arr = as_arr(&format!("{path}.newOrder"), order_j)?;
-            let mut new_order = Vec::with_capacity(arr.len());
-            for (i, item) in arr.iter().enumerate() {
-                new_order.push(as_str(&format!("{path}.newOrder[{i}]"), item)?.to_string());
-            }
-            Ok(TreeOp::ReorderChildren {
-                parent_id,
-                new_order,
-            })
-        }
-        "ReplaceRoot" => {
-            let node_j = req(path, fields, "node", "root Node object")?;
-            let node = decode_node_ast(&format!("{path}.node"), node_j)?;
-            Ok(TreeOp::ReplaceRoot { node })
-        }
-        "Batch" => {
-            let ops_j = req(path, fields, "ops", "Batch inner-op list")?;
-            let arr = as_arr(&format!("{path}.ops"), ops_j)?;
-            let mut ops = Vec::with_capacity(arr.len());
-            for (i, item) in arr.iter().enumerate() {
-                ops.push(decode_tree_op_ast(&format!("{path}.ops[{i}]"), item)?);
-            }
-            Ok(TreeOp::Batch(ops))
-        }
-        other => Err(unknown_du_case(
-            path,
-            other,
-            "EditNode | UpdateProp | ReplaceBinding | UpdateStyle | UpdateState | InsertChild | RemoveNode | MoveNode | ReorderChildren | ReplaceRoot | Batch",
-        )),
+    let tag = disc(path, fields)?;
+    if let Some(r) = decode_tree_op_ast_g0(tag, path, j, fields) {
+        return r;
     }
+    if let Some(r) = decode_tree_op_ast_g1(tag, path, j, fields) {
+        return r;
+    }
+    if let Some(r) = decode_tree_op_ast_g2(tag, path, j, fields) {
+        return r;
+    }
+    let other = tag;
+    Err(unknown_du_case(
+        path,
+        other,
+        "EditNode | UpdateProp | ReplaceBinding | UpdateStyle | UpdateState | InsertChild | RemoveNode | MoveNode | ReorderChildren | ReplaceRoot | Batch",
+    ))
+}
+
+/// One group of the `TreeOp` dispatch — see `decode_tree_op_ast`.
+fn decode_tree_op_ast_g0(
+    tag: &str,
+    path: &str,
+    j: &JVal,
+    fields: &Fields,
+) -> Option<DResult<TreeOp>> {
+    let _ = (j, fields);
+    Some(match tag {
+        "EditNode" => (|| -> DResult<TreeOp> {
+            {
+                let target = req_string(path, fields, "target", "target NodeId")?;
+                let kind_j = req(path, fields, "newKind", "NodeKind object")?;
+                let new_kind = decode_node_kind(&format!("{path}.newKind"), kind_j)?;
+                Ok(TreeOp::EditNode { target, new_kind })
+            }
+        })(),
+        "UpdateProp" => (|| -> DResult<TreeOp> {
+            {
+                let target = req_string(path, fields, "target", "target NodeId")?;
+                let prop_path = req_string(path, fields, "path", "dot-separated path string")?;
+                let value_j = req(path, fields, "value", "JsonValue payload")?;
+                let value = decode_jval(&format!("{path}.value"), value_j)?;
+                Ok(TreeOp::UpdateProp {
+                    target,
+                    path: prop_path,
+                    value,
+                })
+            }
+        })(),
+        "ReplaceBinding" => (|| -> DResult<TreeOp> {
+            {
+                let target = req_string(path, fields, "target", "target NodeId")?;
+                let slot = req_string(path, fields, "slot", "slot name string")?;
+                let binding = req_binding(path, fields, "binding", "Binding object")?;
+                Ok(TreeOp::ReplaceBinding {
+                    target,
+                    slot,
+                    binding,
+                })
+            }
+        })(),
+        "UpdateStyle" => (|| -> DResult<TreeOp> {
+            {
+                let target = req_string(path, fields, "target", "target NodeId")?;
+                let style_j = req(path, fields, "style", "SemanticStyle object")?;
+                let style = decode_semantic_style(&format!("{path}.style"), style_j)?;
+                Ok(TreeOp::UpdateStyle { target, style })
+            }
+        })(),
+        _ => return None,
+    })
+}
+
+/// One group of the `TreeOp` dispatch — see `decode_tree_op_ast`.
+fn decode_tree_op_ast_g1(
+    tag: &str,
+    path: &str,
+    j: &JVal,
+    fields: &Fields,
+) -> Option<DResult<TreeOp>> {
+    let _ = (j, fields);
+    Some(match tag {
+        "UpdateState" => (|| -> DResult<TreeOp> {
+            {
+                let target = req_string(path, fields, "target", "target NodeId")?;
+                let state_j = req(path, fields, "state", "StateBehaviour object")?;
+                let state = decode_state_behaviour(&format!("{path}.state"), state_j)?;
+                Ok(TreeOp::UpdateState { target, state })
+            }
+        })(),
+        "InsertChild" => (|| -> DResult<TreeOp> {
+            {
+                let parent_id = req_string(path, fields, "parentId", "parent NodeId")?;
+                // A legacy `position` is ACCEPTED AND IGNORED for the migration
+                // window: a stored v1 emission must still apply, as an append,
+                // because order is now ReorderChildren's. This decoder reads named
+                // fields and ignores the rest, so not reading it IS the tolerance.
+                let child_j = req(path, fields, "child", "child Node object")?;
+                let child = decode_node_ast(&format!("{path}.child"), child_j)?;
+                Ok(TreeOp::InsertChild { parent_id, child })
+            }
+        })(),
+        "RemoveNode" => (|| -> DResult<TreeOp> {
+            Ok(TreeOp::RemoveNode {
+                target: req_string(path, fields, "target", "target NodeId")?,
+            })
+        })(),
+        "MoveNode" => (|| -> DResult<TreeOp> {
+            {
+                // Legacy `newPosition` accepted and ignored — see InsertChild above.
+                let target = req_string(path, fields, "target", "target NodeId")?;
+                let new_parent_id = req_string(path, fields, "newParentId", "new parent NodeId")?;
+                Ok(TreeOp::MoveNode {
+                    target,
+                    new_parent_id,
+                })
+            }
+        })(),
+        _ => return None,
+    })
+}
+
+/// One group of the `TreeOp` dispatch — see `decode_tree_op_ast`.
+fn decode_tree_op_ast_g2(
+    tag: &str,
+    path: &str,
+    j: &JVal,
+    fields: &Fields,
+) -> Option<DResult<TreeOp>> {
+    let _ = (j, fields);
+    Some(match tag {
+        "ReorderChildren" => (|| -> DResult<TreeOp> {
+            {
+                let parent_id = req_string(path, fields, "parentId", "parent NodeId")?;
+                let order_j = req(path, fields, "newOrder", "NodeId list")?;
+                let arr = as_arr(&format!("{path}.newOrder"), order_j)?;
+                let mut new_order = Vec::with_capacity(arr.len());
+                for (i, item) in arr.iter().enumerate() {
+                    new_order.push(as_str(&format!("{path}.newOrder[{i}]"), item)?.to_string());
+                }
+                Ok(TreeOp::ReorderChildren {
+                    parent_id,
+                    new_order,
+                })
+            }
+        })(),
+        "ReplaceRoot" => (|| -> DResult<TreeOp> {
+            {
+                let node_j = req(path, fields, "node", "root Node object")?;
+                let node = decode_node_ast(&format!("{path}.node"), node_j)?;
+                Ok(TreeOp::ReplaceRoot { node })
+            }
+        })(),
+        "Batch" => (|| -> DResult<TreeOp> {
+            {
+                let ops_j = req(path, fields, "ops", "Batch inner-op list")?;
+                let arr = as_arr(&format!("{path}.ops"), ops_j)?;
+                let mut ops = Vec::with_capacity(arr.len());
+                for (i, item) in arr.iter().enumerate() {
+                    ops.push(decode_tree_op_ast(&format!("{path}.ops[{i}]"), item)?);
+                }
+                Ok(TreeOp::Batch(ops))
+            }
+        })(),
+        _ => return None,
+    })
 }
 
 // ─── Public surface ──────────────────────────────────────────────────────────
@@ -4272,19 +4525,55 @@ fn invalid_json(parse_message: &str) -> DecodeError {
     )
 }
 
+/// Turn a parse failure into a decode error, honouring §21.2 rule 2: a resource
+/// limit breach is `LIMIT_EXCEEDED`, never `INVALID_JSON`. Only the parser knows
+/// which of the two happened, so it flags the distinction rather than leaving it
+/// to be re-derived from a message string.
+fn parse_failure(e: &crate::canonical::ParseError) -> DecodeError {
+    if e.limit {
+        make_error(
+            DecodeErrorCode::LimitExceeded,
+            "$".to_string(),
+            e.message.clone(),
+            Some(format!(
+                "a document nesting no more than {} levels deep",
+                crate::limits::MAX_JSON_DEPTH
+            )),
+        )
+    } else {
+        invalid_json(&e.message)
+    }
+}
+
+/// A §21 walk-bound refusal at `path`.
+fn limit_error(path: &str, breach: crate::limits::LimitBreach) -> DecodeError {
+    make_error(
+        DecodeErrorCode::LimitExceeded,
+        path.to_string(),
+        breach.message(),
+        Some(breach.expected()),
+    )
+}
+
 /// Decode a canonical-JSON `Node` payload into the storage-shape typed tree.
 pub fn decode_node(json: &str) -> Result<Node, DecodeError> {
     match parse(json) {
-        Ok(ast) => decode_node_ast("$", &ast),
-        Err(e) => Err(invalid_json(&e.message)),
+        Ok(ast) => {
+            crate::limits::reset_walk();
+            decode_node_ast("$", &ast)
+        }
+        Err(e) => Err(parse_failure(&e)),
     }
 }
 
 /// Decode a canonical-JSON `TreeOp` payload into the storage-shape typed op.
 pub fn decode_op(json: &str) -> Result<TreeOp, DecodeError> {
     match parse(json) {
-        Ok(ast) => decode_tree_op_ast("$", &ast),
-        Err(e) => Err(invalid_json(&e.message)),
+        Ok(ast) => {
+            crate::limits::reset_walk();
+            decode_tree_op_ast("$", &ast)
+        }
+        Err(e) => Err(parse_failure(&e)),
     }
 }
 

@@ -13,6 +13,12 @@ pub enum DecodeErrorCode {
     UnknownDuCase,
     WrongNodeKind,
     EmptyNodeId,
+    /// A `WIRE_FORMAT.md` §21 resource limit was exceeded — the document is
+    /// well-formed and merely too large to walk. Deliberately distinct from
+    /// `InvalidJson`, which §21.2 rule 2 forbids using for this: calling a
+    /// well-formed document malformed sends the author to repair the wrong
+    /// thing.
+    LimitExceeded,
 }
 
 impl DecodeErrorCode {
@@ -21,6 +27,7 @@ impl DecodeErrorCode {
     /// mapping here.
     pub fn as_str(self) -> &'static str {
         match self {
+            DecodeErrorCode::LimitExceeded => "LIMIT_EXCEEDED",
             DecodeErrorCode::InvalidJson => "INVALID_JSON",
             DecodeErrorCode::MissingField => "MISSING_FIELD",
             DecodeErrorCode::WrongType => "WRONG_TYPE",
