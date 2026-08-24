@@ -24,6 +24,14 @@
 # referenced by a moving branch name rather than a released version, and this
 # repo parses untrusted input — an unpinned third-party action in its gate is
 # the wrong trade.
+#
+# ── Reporting ────────────────────────────────────────────────────────────────
+# Do NOT set `CARGO_TERM_COLOR: always`, and pass `--color never` to any step
+# that greps cargo's output. Colour embeds ANSI escapes ahead of every
+# `test result:` line, which silently defeated an anchored grep here once — the
+# summary came out EMPTY on its first run while the job stayed green. A
+# reporting step that cannot fail is exactly the kind that goes unnoticed when
+# it stops reporting.
 
 name: CI
 
@@ -35,40 +43,6 @@ on:
 
 permissions:
   contents: read
-
-env:
-  # NOT `CARGO_TERM_COLOR: always`. Colour is a nicety; it also embeds ANSI escapes
-  # ahead of every `test result:` line, which silently defeated the anchored grep the
-  # drift summary below uses to report failures — the summary came out EMPTY on the
-  # first run while the job stayed green. A reporting step that cannot fail is exactly
-  # the kind that goes unnoticed when it stops reporting.
-  # ── QUARANTINE ─────────────────────────────────────────────────────────────
-  # These tests fail on a clean tree TODAY, and are excluded from the blocking
-  # gate so that a NEW regression is caught while this existing drift stays
-  # visible. They are not a judgement that the tests are wrong — they are a
-  # record of known, understood, outstanding work.
-  #
-  # Single root cause: the shared corpus has moved ahead of this decoder. Three
-  # fixtures — form-toggle, now-environment-binding, switch-on-selection — carry
-  # vocabulary the decoder does not yet model (a `Toggle` form-field kind, a
-  # `Now` binding, and a required `stateKey` on `Switch`).
-  #
-  # NOTE THE COST, which is larger here than on the other hosts: each of these
-  # tests loops the whole corpus internally and accumulates failures, so there
-  # is no per-fixture granularity to exclude. Quarantining
-  # `corpus_round_trips_byte_identical` therefore drops the entire byte-parity
-  # round-trip leg, not merely three fixtures. What still gates: the reject-code
-  # leg and the remaining conformance tests, plus apply, render, validator,
-  # op-stream, diff, DAG, FFI and the rest of the suite.
-  #
-  # This list SHRINKS TO EMPTY when the decoder models that vocabulary. Delete
-  # entries as they start passing; do not add to it to make a red build green —
-  # a new failure here is the regression this gate exists to catch.
-  QUARANTINE: >-
-    --skip corpus_round_trips_byte_identical
-    --skip corpus_control_kinds_are_all_recognised
-    --skip form_field_kind_set_matches_manifest
-    --skip emitted_class_vocabulary_matches_the_reference_renderer
 
 jobs:
   build:
@@ -109,58 +83,44 @@ jobs:
       - name: Build
         run: cargo build
 
-      # Print what this gate does NOT cover, on every run. A cap nobody can see
+      # Print what this gate does NOT assert, on every run. A cap nobody can see
       # reads as "covered everything".
-      - name: Report the conformance quarantine
+      #
+      # These legs resolve an artefact this workflow deliberately does not check
+      # out, so each returns early and asserts NOTHING here. They are NOT-RUN,
+      # not failing — an env-gated posture, not a quarantine. Both omissions are
+      # deliberate: this workflow runs THIS host's own suite, and this host takes
+      # no dependency on a sibling. Cross-host parity is covered by the
+      # cross-implementation gate that a push here dispatches, and the driver
+      # scenario corpus is a separate artefact this repository does not vendor.
+      #
+      # Keep this list in step with the early-return sites in `tests/` — the
+      # whole value of a disclosure is that it is complete.
+      - name: Report what this gate does not assert
         run: |
-          echo "The blocking gate below EXCLUDES these known-failing tests:"
-          echo "$QUARANTINE" | tr ' ' '\n' | grep -v '^--skip$' | sed 's/^/  - /'
-          echo "NOTE: corpus_round_trips_byte_identical loops the whole corpus internally,"
-          echo "so excluding it drops the byte-parity round-trip leg entirely, not three fixtures."
-          echo
-          echo "ALSO NOT GATED HERE — inert rather than quarantined:"
-          echo "  - emitted_class_vocabulary_matches_the_reference_renderer reads the reference"
-          echo "    renderer's source from a sibling checkout that this workflow does not make,"
-          echo "    so it returns early and asserts NOTHING in CI. It fails on a full local"
-          echo "    workspace, which is why it also appears in the quarantine above; here it"
-          echo "    would neither pass nor fail. Cross-host parity is covered by the scheduled"
-          echo "    cross-implementation run, not by this gate."
           {
-            echo "### Conformance quarantine (excluded from the blocking gate)"
+            echo "### Legs that assert nothing in CI (NOT RUN, not failing)"
             echo
-            echo "Cause: the shared corpus carries vocabulary this decoder does not yet model"
-            echo "(\`Toggle\` form-field kind, \`Now\` binding, required \`Switch.stateKey\`)."
+            echo "No reference-host checkout — \`reference_host_root()\` finds nothing:"
+            echo "  - \`emitted_class_vocabulary_matches_the_reference_renderer\` (tests/render.rs)"
+            echo "  - \`form_control_class_vocabulary_matches_the_reference_renderer\` (tests/render.rs)"
+            echo "  - \`reference_css_byte_copy_matches_the_reference_artefact\` (tests/render.rs)"
+            echo "    These three run, and pass, wherever the reference host sits beside this repo."
             echo
-            echo '```'
-            echo "$QUARANTINE" | tr ' ' '\n' | grep -v '^--skip$'
-            echo '```'
+            echo "No driver scenario corpus — neither \`FUARAN_PROGRAM_SPEC\` nor a checkout beside this repo:"
+            echo "  - \`the_loop_reproduces_every_scenario_the_corpus_enumerates\` (tests/driver_semantics.rs)"
+            echo "  - \`a_mutated_trace_makes_this_harness_go_red\` (tests/driver_semantics.rs)"
+            echo "    Operator-invoked (\`run.ps1 -DriverSemantics\`). A corpus that is CLAIMED and"
+            echo "    unreadable FAILS this pair rather than skipping it — only an unclaimed one is NOT RUN."
             echo
-            echo "\`corpus_round_trips_byte_identical\` loops the whole corpus internally, so"
-            echo "excluding it drops the byte-parity round-trip leg entirely, not three fixtures."
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "Everything else in the suite is gated below, with no exclusions."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
-      # Non-blocking: runs the FULL suite so the size of the existing drift is
-      # measured on every run rather than inferred from the quarantine list.
-      # --no-fail-fast is load-bearing: without it cargo stops at the first
-      # failing test binary and under-reports the drift.
-      - name: Conformance drift (reported, non-blocking)
-        continue-on-error: true
-        run: |
-          set +e
-          cargo test --no-fail-fast --color never > drift.log 2>&1
-          tail -40 drift.log
-          {
-            echo "### Full suite, including quarantined tests (non-blocking)"
-            echo
-            echo '```'
-            grep -E '^test result: FAILED' drift.log || echo "(no failing test binaries)"
-            grep -E '^error: [0-9]+ target' drift.log
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 0
-
-      # THE GATE. Everything the suite currently passes, including every
-      # conformance test outside the quarantine above. --no-fail-fast so one
-      # failing binary does not hide the state of the rest.
+      # THE GATE — the whole suite, no exclusions. --no-fail-fast so one failing
+      # binary does not hide the state of the rest.
+      #
+      # There is deliberately no skip list here. A failure is a regression: fix
+      # it, or revert. Excluding a test to make a red build green retires the
+      # coverage silently, and a gate nobody trusts to be complete is not a gate.
       - name: Test (gated)
-        run: cargo test --no-fail-fast -- $QUARANTINE
+        run: cargo test --no-fail-fast
