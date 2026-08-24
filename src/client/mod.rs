@@ -34,14 +34,26 @@ use crate::canonical::{JVal, parse, render_canonical};
 use crate::ops::{ApplyError, apply};
 use crate::render::BindingSources;
 use crate::render::bindings::{ResolvedRows, resolve_rows};
-use crate::render::server::render_to_html;
+use crate::render::egress::{EgressPolicy, deny_non_local_egress};
+use crate::render::server::render_to_html_with_egress;
 use crate::wire::{DecodeError, Node, NodeKind, decode_node, decode_op};
 
 /// A live client session over one wire tree. Holds the current tree + binding
-/// sources; renders, applies ops, and writes reactive state.
+/// sources + the ambient destination policy; renders, applies ops, and writes
+/// reactive state.
 pub struct ClientSession {
     tree: Node,
     sources: BindingSources,
+    /// The AMBIENT destination policy every render performed by this session is
+    /// checked against (`WIRE_FORMAT.md` §14.1).
+    ///
+    /// A session holds a tree that arrived over the wire — the case the
+    /// deny default exists for — so [`ClientSession::new`] takes
+    /// [`deny_non_local_egress`] and a host widens it BY NAME through
+    /// [`with_egress_policy`](ClientSession::with_egress_policy). The C-ABI
+    /// surface declares nothing, so every FFI-driven session (the browser
+    /// module included) renders under the deny default.
+    egress: EgressPolicy,
 }
 
 impl ClientSession {
@@ -54,7 +66,22 @@ impl ClientSession {
         Ok(ClientSession {
             tree,
             sources: BindingSources::default(),
+            egress: deny_non_local_egress(),
         })
+    }
+
+    /// Declare this session's destination policy (builder-style). Named rather
+    /// than defaulted, so a host that widened its egress says so in its own
+    /// source — a grep for `permissive` finds every one that did.
+    #[must_use]
+    pub fn with_egress_policy(mut self, policy: EgressPolicy) -> Self {
+        self.egress = policy;
+        self
+    }
+
+    /// The destination policy this session renders under.
+    pub fn egress_policy(&self) -> &EgressPolicy {
+        &self.egress
     }
 
     /// The current tree, re-encoded to canonical wire JSON — the round-trip
@@ -83,7 +110,7 @@ impl ClientSession {
     /// produce byte-identical markup for the same tree + sources — the
     /// hydration-parity contract).
     pub fn render(&self) -> String {
-        render_to_html(&self.tree, &self.sources)
+        render_to_html_with_egress(&self.egress, &self.tree, &self.sources)
     }
 
     /// The **resolved rows** of one row-bearing node (`DataGrid` / `Chart` /

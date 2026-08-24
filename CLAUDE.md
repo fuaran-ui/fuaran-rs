@@ -125,39 +125,81 @@ canonical error code + `$`-rooted path prefix (the harness locates
 skips when absent). The **lenient-accept**, **envelope**, and **elicitation**
 families certify the same way — the full corpus enumeration runs, none skipped.
 
-### Destination policy at the markdown link / image seam (`src/render/egress.rs`)
+### Destination policy — AMBIENT on the render context (`src/render/egress.rs`)
 
 `WIRE_FORMAT.md` §14.1. The scheme floor (`src/render/sanitize.rs`) answers *is this
 URL safe to have*; the policy answers *is this destination one the composition
 declared*, which is the question that closes exfiltration — an image `src` is
-contacted by rendering alone, with no user act. `markdown::to_html_with_egress` takes
-a host-constructed `EgressPolicy` and checks every link (`Hyperlink`) and image
-(`Media`) destination; a refusal renders the inert
-`about:blank#fuaran-egress-refused` plus a trailing `data-fuaran-egress-refused`
-marker naming the class and the host.
+contacted by rendering alone, with no user act. `egress::sanitize_url_for_egress` is
+the one-call render seam: it returns the URL to emit plus the attributes that record a
+refusal, and an emission site adopts it by replacing its `sanitize_url_or_blank` call
+and splicing the returned list. A refusal renders the inert
+`about:blank#fuaran-egress-refused` plus a `data-fuaran-egress-refused` marker naming
+the class and the host.
 
-**Four things about it are load-bearing and easy to undo by accident.**
+**The policy is AMBIENT, not merely available.** It is a field on the per-render `Ctx`
+that every walk already threads, so every `href` (`Hyperlink`), `src` (`Media`), grid
+link (`Hyperlink`) and markdown body this host emits consults it with **no caller
+opt-in**. Every convenience entry point — `render_to_html`, `render_hydratable`,
+`render_with_islands`, `ClientSession::new` — defaults to `deny_non_local_egress()`,
+and each has a `_with_egress` twin (`ClientSession::with_egress_policy`) a host reaches
+BY NAME, so `grep permissive` finds every host that opted back out. The C-ABI declares
+nothing, so every FFI-driven session including the browser module renders under the
+deny default.
 
-- **`to_html` IS the permissive case**, byte-for-byte, and the corpus gate asserts
-  the equivalence rather than assuming it. Flipping the pure function's default would
-  rewrite existing fixtures in every host in one act, and a mass churn is where a real
-  divergence hides. A host rendering a *decoded* body reaches
-  `to_html_with_egress` deliberately.
-- **The scheme floor's own answer is unchanged.** A URL the floor rejects still
-  renders the bare `about:blank`, with **no** marker — a different fact from a policy
-  refusal, and one the `sanitization/` corpus already pins.
+**Six things about it are load-bearing and easy to undo by accident.**
+
+- **`markdown::to_html` IS the permissive case**, byte-for-byte, and the corpus gate
+  asserts the equivalence rather than assuming it. Flipping the pure function's default
+  would rewrite existing fixtures in every host in one act, and a mass churn is where a
+  real divergence hides. A *renderer* entry point defaults the other way because it
+  walks a DECODED tree, and the renderer never reaches the pure form.
+- **The scheme floor's own answer is unchanged** — `sanitize_url_or_blank` still
+  returns the bare `about:blank`, and the `sanitization/` corpus still pins it. What
+  changed at the EMISSION sites is that a floor rejection now renders the refusal shape
+  with the `unsafe-url` marker: once a site consults the policy, "this destination was
+  refused" is one fact with one rendering, and splitting it by which gate refused would
+  make the more dangerous case render as an ordinary blank. A local test that pinned the
+  bare `about:blank` at a call site was updated deliberately.
+- **A `download` anchor is `Hyperlink`, not `Download`.** The class names the sink the
+  browser reaches; scoping it separately would let a policy that denied hyperlinks admit
+  the same destination by flipping one boolean on the tree.
 - **A refusal marker carries the class and the host or scheme, NEVER the path or the
   query.** The query string of a refused exfiltration attempt is the payload itself,
   so a refusal record that quoted it would become the disclosure it exists to prevent.
 - **The policy is threaded as a borrowed parameter**, never a `static mut` or a
   thread-local: two renders under two different policies may run concurrently.
+- **`render::email` is a plain-TEXT digest and emits no URL at all**, so the reference
+  host's deliberate omission of the refusal marker from its email HTML projection has
+  nothing to attach to here. Do not "restore" a marker rule to a projection that emits
+  no attributes.
 
-`tests/markdown.rs` maps a fixture's optional `policy` name to a policy it
-**constructs** — the corpus never carries one as data — and an unrecognised name
-**fails**: a silent fallback to permissive would report a fixture the host cannot
-evaluate as one it passed. A guard also asserts the corpus still carries a
-non-permissive fixture, without which the whole gate could run on the permissive path
-and stay green on a host that never implemented §14.1.
+**One decision, two seams — do not mint a second policy.** `egress::refuse_classified`
+answers "does this policy permit this class to reach this destination" for BOTH the
+renderer and `bounded::EffectPolicy`'s destination floor; `EgressFloor::Declared(policy)`
+takes the renderer's own `EgressPolicy` value and judges each client-effect arm under
+the class §14.1 already scopes rules to (`Navigate`/`PushState` → `Route`, `Download` →
+`Download`, `ReadFileBody` → `FileRead`). The coarse `AnyOrigin` / `LocalOnly` arms are
+unchanged, so the driver-semantics corpus is untouched. What stays seam-local is the
+RECORD, not the decision: a renderer refusal is a URL plus a marker attribute, a loop
+refusal is a `Denial::GateRefused` naming the origin.
+
+`Action::Navigate` in `src/bounded/actions.rs` therefore still applies the scheme floor
+and only the scheme floor — the interpreter's predicate is fixed by the program wire
+specification, and a step must still REPORT an effect it reached even when the host
+declines it. The route's destination policy is consulted one step later at the performer
+seam, deliberately not twice.
+
+`tests/markdown.rs` runs the corpus TWICE: once through `to_html_with_egress` (the seam
+assertion — the function honours a policy it is handed) and once through the renderer on
+a `Markdown` node, with the `denyNonLocal` fixtures rendered by the DEFAULT-constructed
+entry point and no policy named anywhere. The second leg is what proves the policy is
+ambient; if a caller has to opt in, it goes red. Both legs map a fixture's optional
+`policy` name to a policy this host **constructs** — the corpus never carries one as
+data — and an unrecognised name **fails**: a silent fallback to permissive would report
+a fixture the host cannot evaluate as one it passed. A guard also asserts the corpus
+still carries a non-permissive fixture, without which the whole gate could run on the
+permissive path and stay green on a host that never implemented §14.1.
 
 ## The bounded program loop + its conformance leg (`src/bounded/`)
 

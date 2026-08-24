@@ -276,6 +276,18 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
         // emits no markup for the floor's own rejection rule to govern. A host
         // whose policy is stricter than the floor must declare the divergence;
         // `sanitize_url` is exactly the floor and no more.
+        //
+        // So the §14.1 DESTINATION policy for a route is consulted one step
+        // later, at the performer seam (`EffectPolicy::decide`, whose
+        // `EgressFloor` judges a `Navigate` under `EgressClass::Route`), and
+        // deliberately not here. Two reasons, and neither is convenience. The
+        // interpreter's predicate is fixed by the specification above, and a
+        // host that narrowed it here would fold differently from every other
+        // conformant host on a scenario the corpus pins. And a step must still
+        // REPORT an effect it reached even when the host declines it — a
+        // declined effect dropped in the fold is indistinguishable from one that
+        // was never reached, which is the one thing the denial record exists to
+        // tell apart.
         Action::Navigate { route } => match sanitize_url(route) {
             Some(safe) => emitted(
                 store,

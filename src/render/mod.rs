@@ -20,4 +20,7 @@ pub mod server;
 
 pub use bindings::BindingSources;
 pub use project::project_resolved;
-pub use server::{render_hydratable, render_to_html, render_with_islands};
+pub use server::{
+    render_hydratable, render_hydratable_with_egress, render_to_html, render_to_html_with_egress,
+    render_with_islands, render_with_islands_with_egress,
+};

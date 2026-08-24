@@ -5,6 +5,7 @@
 
 use fuaran_rs::canonical::JVal;
 use fuaran_rs::client::{ClientError, ClientSession, RowsOutcome};
+use fuaran_rs::render::egress::permissive_egress;
 
 const TREE: &str = r#"{"id":"root","kind":{"$type":"Box","children":[
     {"id":"title","kind":{"$type":"Heading","level":1,"text":{"$type":"Literal","text":"Live"},"variant":"Standard"}},
@@ -193,4 +194,29 @@ fn an_unresolvable_source_is_not_flattened_to_zero_rows() {
     let mut s = s;
     s.set_query("shipments", "[]").expect("seeds");
     assert_eq!(s.resolved_rows("g"), RowsOutcome::Rows(vec![]));
+}
+
+#[test]
+fn a_session_renders_under_the_deny_default_and_widens_by_name() {
+    // A session holds a tree that arrived over the wire — the case the deny
+    // default exists for — so a browser client that declares nothing gets it.
+    // The C-ABI surface declares nothing at all, so this is what every
+    // FFI-driven session renders under, the browser module included.
+    const IMG: &str = r#"{"id":"i","kind":{"$type":"Image","alt":{"$type":"Literal","text":"Alt"},"src":{"$type":"Static","value":"https://collector.example/p.png?s=secret"},"variant":"Default"}}"#;
+
+    let s = ClientSession::new(IMG).expect("decodes");
+    let html = s.render();
+    assert!(html.contains("src=\"about:blank#fuaran-egress-refused\""));
+    assert!(html.contains("data-fuaran-egress-refused=\"media:collector.example\""));
+    assert!(!html.contains("secret"), "the payload leaked: {html}");
+
+    // …and the named widening reaches the destination. Both directions, so
+    // neither a host that refuses everything nor one that refuses nothing
+    // passes this.
+    let s = ClientSession::new(IMG)
+        .expect("decodes")
+        .with_egress_policy(permissive_egress());
+    let html = s.render();
+    assert!(html.contains("src=\"https://collector.example/p.png?s=secret\""));
+    assert!(!html.contains("fuaran-egress-refused"));
 }

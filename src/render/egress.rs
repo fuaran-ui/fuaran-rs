@@ -349,37 +349,50 @@ pub fn classify_destination(url: &str) -> Destination {
     }
 }
 
+/// The POLICY half of [`check_destination`], over an ALREADY-CLASSIFIED
+/// destination: `None` when the policy permits it, `Some(verdict)` — never
+/// [`EgressVerdict::Allowed`] — when it does not.
+///
+/// Split out so a seam that has already classified its destination reuses this
+/// decision rather than restating it. The client-effect performer floor is the
+/// second such seam: it classifies once per effect (an arm carrying no URL
+/// resolves to [`Destination::Local`] rather than being invented one), so it
+/// cannot re-enter through the URL-taking entry point above without throwing
+/// that classification away.
+#[must_use]
+pub fn refuse_classified(
+    policy: &EgressPolicy,
+    class: EgressClass,
+    destination: &Destination,
+) -> Option<EgressVerdict> {
+    match destination {
+        Destination::Rejected => Some(EgressVerdict::UnsafeUrl),
+        Destination::Local => (!policy.allow_local).then_some(EgressVerdict::LocalDenied { class }),
+        Destination::NonNetwork(scheme) => {
+            (!policy.allow_non_network).then(|| EgressVerdict::NonNetworkDenied {
+                scheme: scheme.clone(),
+                class,
+            })
+        }
+        Destination::Remote(host) => {
+            (!policy.is_declared_origin(class, host)).then(|| EgressVerdict::UndeclaredOrigin {
+                host: host.clone(),
+                class,
+            })
+        }
+    }
+}
+
 /// The whole check: scheme floor, then destination policy, for one class.
 #[must_use]
 pub fn check_destination(policy: &EgressPolicy, class: EgressClass, url: &str) -> EgressVerdict {
-    let normalised = || {
-        sanitize_url(url)
-            .map(|c| c.into_owned())
-            .unwrap_or_default()
-    };
-    match classify_destination(url) {
-        Destination::Rejected => EgressVerdict::UnsafeUrl,
-        Destination::Local => {
-            if policy.allow_local {
-                EgressVerdict::Allowed(normalised())
-            } else {
-                EgressVerdict::LocalDenied { class }
-            }
-        }
-        Destination::NonNetwork(scheme) => {
-            if policy.allow_non_network {
-                EgressVerdict::Allowed(normalised())
-            } else {
-                EgressVerdict::NonNetworkDenied { scheme, class }
-            }
-        }
-        Destination::Remote(host) => {
-            if policy.is_declared_origin(class, &host) {
-                EgressVerdict::Allowed(normalised())
-            } else {
-                EgressVerdict::UndeclaredOrigin { host, class }
-            }
-        }
+    match refuse_classified(policy, class, &classify_destination(url)) {
+        Some(refusal) => refusal,
+        None => EgressVerdict::Allowed(
+            sanitize_url(url)
+                .map(|c| c.into_owned())
+                .unwrap_or_default(),
+        ),
     }
 }
 
@@ -410,6 +423,36 @@ pub fn egress_refusal_marker(verdict: &EgressVerdict) -> Option<(&'static str, S
         EgressVerdict::NonNetworkDenied { scheme, class } => format!("{}:{scheme}", class.name()),
     };
     Some((EGRESS_REFUSAL_ATTRIBUTE, value))
+}
+
+/// The one-call render seam: the URL to emit, plus the attributes that record a
+/// refusal in the document itself.
+///
+/// An emission site adopts this by replacing its
+/// [`super::sanitize::sanitize_url_or_blank`] call and splicing the returned
+/// attribute list onto the element that carries the URL — which is the whole
+/// adoption, per call site. The returned attributes are empty on an allow, so a
+/// permitted destination emits byte-identically to the pre-policy renderer.
+///
+/// The UNSAFE-URL verdict returns the refusal shape too, not the bare
+/// `about:blank` the scheme floor emits on its own. That is a deliberate change
+/// of what a call site emits for a floor rejection: once a site consults the
+/// policy, "this destination was refused" is one fact with one rendering, and
+/// splitting it by *which* gate refused would make the more dangerous case —
+/// the `javascript:` URL — the one that renders as an ordinary blank.
+#[must_use]
+pub fn sanitize_url_for_egress(
+    policy: &EgressPolicy,
+    class: EgressClass,
+    url: &str,
+) -> (String, Vec<(&'static str, String)>) {
+    match check_destination(policy, class, url) {
+        EgressVerdict::Allowed(safe) => (safe, Vec::new()),
+        refused => (
+            EGRESS_REFUSAL_URL.to_string(),
+            egress_refusal_marker(&refused).into_iter().collect(),
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -629,6 +672,60 @@ mod tests {
             )),
             None
         );
+    }
+
+    #[test]
+    fn the_one_call_seam_pairs_the_url_with_the_marker() {
+        // Allowed: the normalised URL, and NO attribute — so an emission site
+        // that adopts the seam is byte-identical on every permitted destination.
+        let (url, attrs) = sanitize_url_for_egress(
+            &permissive_egress(),
+            EgressClass::Hyperlink,
+            "https://docs.example/guide?q=1",
+        );
+        assert_eq!(url, "https://docs.example/guide?q=1");
+        assert!(attrs.is_empty());
+
+        // Refused by policy: the refusal URL plus the class:host marker, and the
+        // query — the payload — appears in neither.
+        let (url, attrs) = sanitize_url_for_egress(
+            &deny_non_local_egress(),
+            EgressClass::Media,
+            "https://collector.example/p.png?s=secret",
+        );
+        assert_eq!(url, EGRESS_REFUSAL_URL);
+        assert_eq!(
+            attrs,
+            vec![(
+                EGRESS_REFUSAL_ATTRIBUTE,
+                "media:collector.example".to_string()
+            )]
+        );
+        assert!(!url.contains("secret"));
+        assert!(!attrs[0].1.contains("secret"));
+
+        // The UNSAFE-URL verdict takes the refusal shape too — not the bare
+        // `about:blank` the floor alone emits.
+        let (url, attrs) = sanitize_url_for_egress(
+            &permissive_egress(),
+            EgressClass::Hyperlink,
+            "javascript:alert(1)",
+        );
+        assert_eq!(url, EGRESS_REFUSAL_URL);
+        assert_eq!(
+            attrs,
+            vec![(EGRESS_REFUSAL_ATTRIBUTE, "unsafe-url".to_string())]
+        );
+
+        // Same-origin is allowed under the deny default — it denies leaving,
+        // not linking.
+        let (url, attrs) = sanitize_url_for_egress(
+            &deny_non_local_egress(),
+            EgressClass::Hyperlink,
+            "/guide#top",
+        );
+        assert_eq!(url, "/guide#top");
+        assert!(attrs.is_empty());
     }
 
     #[test]

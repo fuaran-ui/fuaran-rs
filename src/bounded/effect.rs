@@ -213,7 +213,7 @@ impl Denial {
 /// are both `GateRefused`, and only the second one has an origin to name. Folded
 /// into the gate they would be indistinguishable in the denial, which is the one
 /// place the difference is read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EgressFloor {
     /// Every destination permitted. The named opt-in, paired with a permissive
     /// gate: a host that believes it permitted everything and quietly kept a
@@ -226,6 +226,26 @@ pub enum EgressFloor {
     /// the discriminator gate is the whole policy for those, and inventing a
     /// destination for one would only make the record dishonest.
     LocalOnly,
+    /// The **renderer's** typed allowlist ([`crate::render::egress::EgressPolicy`]),
+    /// applied to the performer seam.
+    ///
+    /// The two coarse arms above are a binary "has this left the origin"; a
+    /// declared policy is class-scoped, so a host can permit exactly the
+    /// destinations it declared and no others. It is the SAME policy value the
+    /// render context carries, not a second vocabulary — a host that declares
+    /// one policy hands it to both seams and gets one answer, and the class each
+    /// arm is judged under ([`ClientEffect::Navigate`] and
+    /// [`ClientEffect::PushState`] as `Route`, [`ClientEffect::Download`] as
+    /// `Download`, [`ClientEffect::ReadFileBody`] as `FileRead`) is exactly the
+    /// vocabulary `WIRE_FORMAT.md` §14.1 already scopes rules to.
+    ///
+    /// The DECISION is reused rather than restated:
+    /// [`crate::render::egress::refuse_classified`] is the one that answers it
+    /// for both seams. What stays local to this one is the RECORD — a refusal
+    /// here is a [`Denial::GateRefused`] naming the origin, where the renderer's
+    /// is a refusal URL plus a marker attribute, because a loop emits no markup
+    /// for a marker to ride on.
+    Declared(crate::render::egress::EgressPolicy),
 }
 
 pub struct EffectPolicy {
@@ -234,21 +254,46 @@ pub struct EffectPolicy {
     egress: EgressFloor,
 }
 
-/// The destination an arm sends its payload to.
+/// The destination an arm sends its payload to, and the §14.1 class it is
+/// judged under. One match returning both, so an arm can never be paired with
+/// another arm's class.
 ///
 /// `ReadFileBody` is local rather than absent, and the distinction is the honest
 /// one rather than a convenience: the arm carries a node id, not a URL, so there
 /// is no origin to allowlist — but the body it reads travels back to the host
 /// driving the loop, which is the local origin by construction.
-fn destination_of(effect: &ClientEffect) -> Option<crate::render::egress::Destination> {
-    use crate::render::egress::{Destination, classify_destination};
+fn destination_of(
+    effect: &ClientEffect,
+) -> Option<(
+    crate::render::egress::EgressClass,
+    crate::render::egress::Destination,
+)> {
+    use crate::render::egress::{Destination, EgressClass, classify_destination};
     match effect {
         ClientEffect::Navigate { route } | ClientEffect::PushState { route } => {
-            Some(classify_destination(route))
+            Some((EgressClass::Route, classify_destination(route)))
         }
-        ClientEffect::Download { url, .. } => Some(classify_destination(url)),
-        ClientEffect::ReadFileBody { .. } => Some(Destination::Local),
+        ClientEffect::Download { url, .. } => {
+            Some((EgressClass::Download, classify_destination(url)))
+        }
+        ClientEffect::ReadFileBody { .. } => Some((EgressClass::FileRead, Destination::Local)),
         ClientEffect::WriteToClipboard { .. } | ClientEffect::Focus { .. } => None,
+    }
+}
+
+/// The origin a denial records for a refused destination — the origin, and
+/// never the URL: a denial record outlives the session that produced it, and
+/// the query string of a refused exfiltration attempt IS the payload.
+fn origin_of(destination: &crate::render::egress::Destination) -> String {
+    use crate::render::egress::Destination;
+    match destination {
+        Destination::Remote(host) => host.clone(),
+        Destination::NonNetwork(scheme) => format!("{scheme}:"),
+        Destination::Rejected => "unparseable".to_string(),
+        // Reachable only under a declared policy that denies local egress; the
+        // coarse floors return before they get here. Spelled as the refusal
+        // marker's own vocabulary spells it (`<class>:local`).
+        Destination::Local => "local".to_string(),
     }
 }
 
@@ -362,7 +407,7 @@ impl EffectPolicy {
     /// absent `origin` mean *no destination was consulted* rather than *the
     /// destination was fine*.
     pub fn decide(&self, effect: &ClientEffect) -> Option<Denial> {
-        use crate::render::egress::Destination;
+        use crate::render::egress::{Destination, refuse_classified};
         let capability = effect.capability().to_string();
         if !self.registered.contains(&capability) {
             return Some(Denial::Unregistered { capability });
@@ -373,17 +418,24 @@ impl EffectPolicy {
                 origin: None,
             });
         }
-        if self.egress == EgressFloor::AnyOrigin {
-            return None;
-        }
-        // The origin, and never the URL: a denial record outlives the session
-        // that produced it, and the query string of a refused exfiltration
-        // attempt IS the payload.
-        let origin = match destination_of(effect) {
-            None | Some(Destination::Local) => return None,
-            Some(Destination::Remote(host)) => host,
-            Some(Destination::NonNetwork(scheme)) => format!("{scheme}:"),
-            Some(Destination::Rejected) => "unparseable".to_string(),
+        let origin = match &self.egress {
+            EgressFloor::AnyOrigin => return None,
+            EgressFloor::LocalOnly => match destination_of(effect) {
+                None | Some((_, Destination::Local)) => return None,
+                Some((_, destination)) => origin_of(&destination),
+            },
+            // The renderer's own decision, not a second one: an effect naming no
+            // destination is unaffected here exactly as it is under the coarse
+            // floors, and everything else is answered by `refuse_classified`.
+            EgressFloor::Declared(policy) => match destination_of(effect) {
+                None => return None,
+                Some((class, destination)) => {
+                    match refuse_classified(policy, class, &destination) {
+                        None => return None,
+                        Some(_) => origin_of(&destination),
+                    }
+                }
+            },
         };
         Some(Denial::GateRefused {
             capability,
@@ -526,6 +578,59 @@ mod tests {
         assert_eq!(
             policy.decide(&ClientEffect::WriteToClipboard {
                 text: "https://exfil.example/collect".into()
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn a_declared_policy_is_the_renderers_own_and_is_class_scoped() {
+        use crate::render::egress::{
+            EgressClass, EgressOrigin, deny_non_local_egress, permissive_egress,
+        };
+
+        // ONE policy value, handed to both seams: the renderer checks what it
+        // EMITS against it, this floor checks what a performer would REACH.
+        // Declared for `Route` only — so a navigation to that host is permitted
+        // and a download from the same host is not, which is precisely what a
+        // coarse local-only floor cannot express.
+        let declared = deny_non_local_egress().allow_origin(
+            EgressOrigin::ExactHost("app.example".to_string()),
+            &[EgressClass::Route],
+        );
+        let policy = EffectPolicy::permissive().with_egress(EgressFloor::Declared(declared));
+
+        assert_eq!(
+            policy.decide(&ClientEffect::Navigate {
+                route: "https://app.example/orders".into()
+            }),
+            None
+        );
+        assert_eq!(
+            policy.decide(&ClientEffect::Download {
+                url: "https://app.example/report.csv?token=secret".into(),
+                name: "report.csv".into(),
+            }),
+            Some(Denial::GateRefused {
+                capability: "Download".into(),
+                origin: Some("app.example".into())
+            })
+        );
+        // An arm naming no destination is unaffected here exactly as it is
+        // under the coarse floors.
+        assert_eq!(
+            policy.decide(&ClientEffect::Focus {
+                node_id: "n".into()
+            }),
+            None
+        );
+        // And the two coarse arms are still the coarse arms — a declared
+        // permissive policy decides as `AnyOrigin` does.
+        let wide =
+            EffectPolicy::permissive().with_egress(EgressFloor::Declared(permissive_egress()));
+        assert_eq!(
+            wide.decide(&ClientEffect::Navigate {
+                route: "https://anywhere.example/x".into()
             }),
             None
         );

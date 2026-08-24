@@ -7,8 +7,12 @@ use std::path::PathBuf;
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::client::ClientSession;
+use fuaran_rs::render::egress::permissive_egress;
 use fuaran_rs::render::server::{hydrate_script_id, island_script_id};
-use fuaran_rs::render::{BindingSources, render_hydratable, render_to_html, render_with_islands};
+use fuaran_rs::render::{
+    BindingSources, render_hydratable, render_to_html, render_to_html_with_egress,
+    render_with_islands,
+};
 use fuaran_rs::wire::{Node, NodeKind, decode_node, encode_node};
 
 fn node(json: &str) -> Node {
@@ -17,6 +21,20 @@ fn node(json: &str) -> Node {
 
 fn render(json: &str) -> String {
     render_to_html(&node(json), &BindingSources::default())
+}
+
+/// Render with the destination policy widened BY NAME.
+///
+/// The convenience entry point above is ambiently deny-non-local (Phase 1037),
+/// which is the posture a decoded tree gets. A test whose subject is something
+/// else — the scheme floor, the protected-email emission, a11y placement —
+/// reaches this one so the thing under test is the only thing that can fail.
+fn render_permissive(json: &str) -> String {
+    render_to_html_with_egress(
+        &permissive_egress(),
+        &node(json),
+        &BindingSources::default(),
+    )
 }
 
 #[test]
@@ -48,14 +66,23 @@ fn button_renders_inert_with_unwired_hint() {
 
 #[test]
 fn link_href_is_sanitised() {
-    let html = render(
+    // Rendered PERMISSIVE, so the scheme floor is the only thing that can be
+    // refusing. Its rejection renders as a refusal rather than the bare
+    // `about:blank` this pinned before Phase 1037: once a call site consults the
+    // policy, "this destination was refused" is one fact with one rendering, and
+    // splitting it by which gate refused would make the `javascript:` URL — the
+    // more dangerous case — the one that renders as an ordinary blank.
+    let html = render_permissive(
         r#"{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"javascript:alert(1)"},"label":{"$type":"Literal","text":"Docs"}}}"#,
     );
-    assert!(html.contains("href=\"about:blank\""));
-    let ok = render(
+    assert!(html.contains("href=\"about:blank#fuaran-egress-refused\""));
+    assert!(html.contains("data-fuaran-egress-refused=\"unsafe-url\""));
+    assert!(!html.contains("javascript:"));
+    let ok = render_permissive(
         r#"{"id":"l","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"https://x.dev/docs"},"label":{"$type":"Literal","text":"Docs"}}}"#,
     );
     assert!(ok.contains("href=\"https://x.dev/docs\""));
+    assert!(!ok.contains("fuaran-egress-refused"));
 }
 
 #[test]
@@ -63,7 +90,13 @@ fn link_protected_email_emits_no_plaintext_address() {
     // The protected emission: wrapper span + protected anchor with every
     // href/label character a decimal entity; no plaintext address or scheme
     // anywhere in the output.
-    let html = render(
+    //
+    // PERMISSIVE, because `mailto:` is a hostless scheme and the ambient default
+    // refuses those (Phase 1037: an egress channel with no host for a rule to
+    // name can only be permitted wholesale). Under the default this arm is not
+    // reached at all — the href is the refusal URL, which does not start
+    // `mailto:` — and that behaviour is pinned by the ambient test below.
+    let html = render_permissive(
         r#"{"id":"plk","kind":{"$type":"Link","download":false,"href":{"$type":"Static","value":"mailto:contact@example.com"},"label":{"$type":"Literal","text":"Email us"},"protection":"email"}}"#,
     );
     assert!(html.contains("<span class=\"fuaran-link-protected-wrap\">"));
@@ -288,7 +321,9 @@ fn accessibility_projects_onto_the_semantic_element() {
 /// arm owns in every tier. A stated limit, pinned so it stays deliberate.
 #[test]
 fn protected_email_link_projects_onto_the_wrap_span() {
-    let html = render(&format!(
+    // Permissive for the same reason as the emission test above: the subject is
+    // WHERE the projection lands, not whether `mailto:` is permitted.
+    let html = render_permissive(&format!(
         r#"{{"id":"plk","kind":{{"$type":"Link","download":false,"href":{{"$type":"Static","value":"mailto:u@e.com"}},"label":{{"$type":"Literal","text":"u@e.com"}},"protection":"email"}},{A11Y}}}"#
     ));
     assert!(!wrapper_tag(&html).contains("aria-label"));

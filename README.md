@@ -130,6 +130,95 @@ Beyond this tier: the lenient-profile / envelope / elicitation conformance
 families, dataframe (`Binding.Transform`) evaluation, and a host-locale seam
 for `Binding.Format`.
 
+## Destination policy — ambient, not available
+
+`WIRE_FORMAT.md` §14.1. The scheme floor (`render::sanitize`) answers *is this
+URL safe to have*; the destination policy answers *is this destination one the
+composition declared*, which is the question that closes exfiltration — an image
+`src` is contacted by rendering alone, with no user act at all.
+
+The policy is **ambient on the render context**: every `href`, `src`, markdown
+destination and grid link the renderer emits is checked, with no caller opt-in
+anywhere on the path. A guarantee that holds where it is remembered is not a
+guarantee, so the policy is a field on the context every render already threads
+rather than a parameter on the emission helpers.
+
+```rust
+// Nothing declared ⇒ deny_non_local_egress(). This IS the ambient default.
+let html = render_to_html(&tree, &sources);
+
+// A host widens it BY NAME — so `grep permissive` finds every host that did.
+let policy = deny_non_local_egress()
+    .allow_origin(EgressOrigin::HostSuffix("cdn.example".into()), &[EgressClass::Media]);
+let html = render_to_html_with_egress(&policy, &tree, &sources);
+```
+
+Every convenience entry point — `render_to_html`, `render_hydratable`,
+`render_with_islands`, and `ClientSession::new` (hence every FFI-driven session,
+the browser module included) — defaults to `deny_non_local_egress()`, and each
+has a `_with_egress` twin (`ClientSession::with_egress_policy`) a host reaches by
+name. The default denies **leaving**, not linking: same-origin destinations
+render unchanged, while a hostless scheme (`mailto:`, `tel:`) is refused, having
+no host for a rule to name and so being permittable only wholesale.
+
+A refused destination RENDERS as a refusal — `about:blank#fuaran-egress-refused`
+plus a `data-fuaran-egress-refused` attribute naming the class and the host —
+never as a silent neuter: "nothing happened" and "this was refused" are different
+facts, and only one of them is debuggable. The marker carries the class and the
+host or scheme and **never the path or query**, which is exactly where the
+payload of a refused exfiltration attempt would be sitting.
+
+**Three things about it are load-bearing and easy to undo by accident.**
+
+- **A `download` anchor is `Hyperlink`, not `Download`.** The class names the
+  sink the browser reaches, and a download anchor is still a hyperlink the reader
+  must act on. Scoping it separately would let a policy that denied hyperlinks
+  admit the same destination by flipping one boolean on the tree.
+- **The pure `markdown::to_html` is still the permissive case**, byte-for-byte,
+  and the corpus gate asserts the equivalence rather than assuming it. A
+  *renderer* entry point defaults the other way because it walks a DECODED tree,
+  where the author is not the trust boundary. The renderer never reaches the pure
+  form — a decoded markdown body's destinations are as ambient as an `href`.
+- **The policy is threaded as a borrowed parameter**, never a `static mut` or a
+  thread-local: two renders under two different policies may run concurrently.
+
+**Two deliberate divergences from the reference host, stated rather than
+discovered.**
+
+- **A floor rejection now renders as a refusal too.** Before the call sites
+  consulted the policy, a `javascript:` URL emitted the bare `about:blank` the
+  floor returns. Once a site consults the policy, "this destination was refused"
+  is one fact with one rendering, and splitting it by *which* gate refused would
+  make the more dangerous case the one that renders as an ordinary blank. The
+  marker value for it is `unsafe-url`. `render::sanitize`'s own answer is
+  unchanged — the floor still returns `about:blank`, and the `sanitization/`
+  corpus still pins that; what changed is what an emission site does with it.
+- **This host has no email HTML projection**, so the reference host's deliberate
+  omission of the refusal marker in that projection (`data-*` attributes do not
+  survive the sanitisers most mail clients run) has nothing to attach to here.
+  `render::email` is a plain-TEXT digest that emits no `href` or `src` at all: a
+  link contributes its label, and the destination never reaches the output.
+
+**How this relates to the bounded loop's destination floor.** They are the same
+decision at two seams, not two policies. `render::egress::refuse_classified` is
+the single function that answers "does this policy permit this class to reach
+this destination", and both the renderer and `bounded::EffectPolicy`'s
+`EgressFloor` call it. A host that has one `EgressPolicy` hands the same value to
+both — `EgressFloor::Declared(policy)` — and gets one answer, with each
+client-effect arm judged under the class §14.1 already scopes rules to
+(`Navigate` / `PushState` as `Route`, `Download` as `Download`, `ReadFileBody` as
+`FileRead`). What stays seam-local is the RECORD: a renderer refusal is a refusal
+URL plus a marker attribute, and a loop refusal is a `Denial::GateRefused` naming
+the origin, because a loop emits no markup for a marker to ride on.
+
+That is also why `Action::Navigate` in the interpreter still applies the scheme
+floor and only the scheme floor. The interpreter's predicate is fixed by the
+program wire specification (§10.5 governs the *response* to a rejection, not the
+predicate), and a step must still REPORT an effect it reached even when the host
+declines it — a declined effect dropped in the fold is indistinguishable from one
+that was never reached. So the route's destination policy is consulted one step
+later, at the performer seam, and deliberately not twice.
+
 ## Bounded program loop — the conformance declaration
 
 The **program wire specification** governs behaviour carried as data: the
