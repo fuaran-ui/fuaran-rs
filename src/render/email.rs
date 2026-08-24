@@ -55,9 +55,8 @@ fn node_lines(node: &Node) -> Vec<String> {
             .collect(),
         NodeKind::Link(s) => {
             // A link's label carries the meaning; the href is inert text.
-            literal(&s.label)
-                .map(|l| vec![format!("{l}")])
-                .unwrap_or_default()
+            // The label IS the line — no prefix, so it moves rather than formats.
+            literal(&s.label).map(|l| vec![l]).unwrap_or_default()
         }
         NodeKind::CodeBlock(s) if !s.code.trim().is_empty() => {
             vec![format!("```\n{}\n```", s.code)]
