@@ -8,7 +8,8 @@
 //! the resolved tree **semantically** (decoded and re-encoded through this
 //! host's own codec, so this host is measured against its own bytes), the
 //! client effects **byte-for-byte** in their as-emitted envelope, the refusal
-//! exactly — and the **first** divergence is reported with its step index and
+//! exactly, and the **denials** by decoding them into this host's own
+//! vocabulary — and the **first** divergence is reported with its step index and
 //! the member that differed.
 //!
 //! The bounded-path declaration this family presumes is in
@@ -40,8 +41,12 @@
 //!   — the manifest is the authoritative enumeration, never a directory listing
 //!   and never a count written down in prose; and
 //! * **a mutated trace makes this harness go red** — proved on every run against
-//!   a perturbed copy of a real scenario, in both the tree and the effects,
-//!   because a comparison that cannot fail certifies nothing.
+//!   a perturbed copy of a real scenario, in the tree, in the effects, and in
+//!   the denials, because a comparison that cannot fail certifies nothing. The
+//!   denials probe is staged twice and deliberately: once as a host that
+//!   *performs* what the scenario's policy declines, and once as a host that
+//!   declines correctly and fails to *record* it. Only the first is what a
+//!   security claim is about; only the second is what a regression looks like.
 
 use std::path::{Path, PathBuf};
 
@@ -98,6 +103,12 @@ struct ScenarioEntry {
     events: String,
     expectation: String,
     steps: usize,
+    /// The host-policy NAME the scenario presumes, where it names one. It lives
+    /// in the manifest rather than in the three files because a denial is a fact
+    /// about a policy, and a corpus carrying the policy as data would be
+    /// specifying it — so the index names it and this host constructs what the
+    /// name denotes.
+    host_policy: Option<String>,
 }
 
 fn string_at(value: &JVal, key: &str) -> String {
@@ -160,6 +171,11 @@ fn enumerated(fixtures: &Path) -> Vec<ScenarioEntry> {
                 events: string_at(files, "events"),
                 expectation: string_at(files, "expectation"),
                 steps,
+                host_policy: match e.field("hostPolicy") {
+                    None => None,
+                    Some(JVal::Str(s)) => Some(s.clone()),
+                    Some(other) => panic!("the entry carries a non-string hostPolicy ({other:?})"),
+                },
             }
         })
         .collect()
@@ -181,6 +197,7 @@ struct Scenario {
     tree_json: String,
     events: Vec<fuaran_rs::bounded::LiveEvent>,
     recorded: Vec<StepObservation>,
+    host_policy: Option<String>,
 }
 
 fn load(fixtures: &Path, entry: &ScenarioEntry) -> Scenario {
@@ -212,14 +229,19 @@ fn load(fixtures: &Path, entry: &ScenarioEntry) -> Scenario {
         tree_json: read(fixtures, &entry.tree),
         events,
         recorded,
+        host_policy: entry.host_policy.clone(),
     }
 }
 
 /// Drive one scenario and compare it against its recorded trace, returning the
 /// first divergence as a report.
 fn check(scenario: &Scenario) -> Result<(), String> {
-    let observed = run_scenario(&scenario.tree_json, &scenario.events)
-        .map_err(|e| format!("{}: {e}", scenario.name))?;
+    let observed = run_scenario(
+        &scenario.tree_json,
+        &scenario.events,
+        scenario.host_policy.as_deref(),
+    )
+    .map_err(|e| format!("{}: {e}", scenario.name))?;
     let expected = normalise_expectation(&scenario.name, &scenario.recorded)?;
     match first_divergence(&scenario.name, &expected, &observed) {
         None => Ok(()),
@@ -319,6 +341,7 @@ fn a_mutated_trace_makes_this_harness_go_red() {
         tree_json: scenario.tree_json.clone(),
         events: scenario.events.clone(),
         recorded: scenario.recorded.clone(),
+        host_policy: scenario.host_policy.clone(),
     };
     perturbed_tree.recorded = perturbed_tree
         .recorded
@@ -347,6 +370,7 @@ fn a_mutated_trace_makes_this_harness_go_red() {
         tree_json: scenario.tree_json.clone(),
         events: scenario.events.clone(),
         recorded: scenario.recorded.clone(),
+        host_policy: scenario.host_policy.clone(),
     };
     let last = perturbed_effects.recorded.len() - 1;
     perturbed_effects.recorded[last]
@@ -356,5 +380,109 @@ fn a_mutated_trace_makes_this_harness_go_red() {
     assert!(
         report.contains("on effects"),
         "and named as an effects divergence: {report}"
+    );
+}
+
+#[test]
+fn a_host_that_performs_the_denied_effect_fails_exactly_the_scenario_that_records_it() {
+    // The go-red proof for the denials member, measured rather than asserted —
+    // and staged as a HOST rather than as a fixture, because the claim under
+    // test is about a host that sends the effect where the scenario's policy
+    // forbids. Replacing the scenario's policy with none is exactly that host:
+    // `run_scenario` then runs permissive, which performs what the recorded
+    // trace says was declined.
+    let Some(fixtures) = fixtures_root() else {
+        return;
+    };
+    let entries = enumerated(&fixtures);
+    let Some(entry) = entries.iter().find(|e| e.host_policy.is_some()) else {
+        panic!(
+            "no scenario declares a hostPolicy, so this probe stages nothing and the denials \
+             member is unexercised by this host"
+        );
+    };
+    let scenario = load(&fixtures, entry);
+    check(&scenario).expect("the unperturbed scenario passes, or the probe below proves nothing");
+
+    let permissive_host = Scenario {
+        name: scenario.name.clone(),
+        tree_json: scenario.tree_json.clone(),
+        events: scenario.events.clone(),
+        recorded: scenario.recorded.clone(),
+        host_policy: None,
+    };
+    let observed_declining = run_scenario(
+        &scenario.tree_json,
+        &scenario.events,
+        scenario.host_policy.as_deref(),
+    )
+    .expect("the declining host runs");
+    let observed_performing =
+        run_scenario(&permissive_host.tree_json, &permissive_host.events, None)
+            .expect("the performing host runs");
+
+    // The finding, made executable: the two hosts fold IDENTICALLY in every
+    // other member. That is why this failure was invisible before the denials
+    // member existed, and it is what makes the divergence below meaningful
+    // rather than incidental.
+    let strip = |steps: &[StepObservation]| -> Vec<StepObservation> {
+        steps
+            .iter()
+            .map(|s| StepObservation {
+                denials: None,
+                ..s.clone()
+            })
+            .collect()
+    };
+    assert!(
+        first_divergence(
+            &scenario.name,
+            &strip(&observed_declining),
+            &strip(&observed_performing)
+        )
+        .is_none(),
+        "the declining and performing hosts must agree on tree, effects and refusal — that \
+         agreement is the finding this member exists to answer"
+    );
+
+    // And with the seam in view, they must not — on `denials` and nothing else.
+    let observed_performing_seam: Vec<StepObservation> = observed_performing
+        .iter()
+        .map(|s| StepObservation {
+            denials: Some(Vec::new()),
+            ..s.clone()
+        })
+        .collect();
+    let divergence = first_divergence(
+        &scenario.name,
+        &observed_declining,
+        &observed_performing_seam,
+    )
+    .expect("a host that performed the denied effect must be caught");
+    assert_eq!(
+        divergence.member,
+        "denials",
+        "and named as a denials divergence: {}",
+        divergence.describe()
+    );
+
+    // The other half of the pair: a host that DECLINES correctly but fails to
+    // RECORD it. The recorded trace loses its denial while every other member
+    // stays exactly right — the shape a regression really takes.
+    let mut silent = scenario.recorded.clone();
+    for step in &mut silent {
+        step.denials = Some(Vec::new());
+    }
+    assert_ne!(
+        silent, scenario.recorded,
+        "the perturbation changed the trace"
+    );
+    let expected = normalise_expectation(&scenario.name, &silent).expect("it normalises");
+    let report = first_divergence(&scenario.name, &expected, &observed_declining)
+        .expect("a host that declined in silence must be caught")
+        .describe();
+    assert!(
+        report.contains("on denials"),
+        "and named as a denials divergence: {report}"
     );
 }

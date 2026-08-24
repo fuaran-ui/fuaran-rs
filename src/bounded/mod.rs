@@ -49,6 +49,15 @@
 //! derived capability, never dropped, because in a record of what a program did
 //! a silently-dropped effect and a performed one are indistinguishable.
 //!
+//! **That last sentence is now falsifiable rather than merely stated.** A step
+//! trace can record what the performer seam declined, so the two hosts it
+//! distinguishes — one that drops an effect in silence, one that declines it
+//! audibly — no longer produce the same trace. A scenario asking that question
+//! names the policy it presumes, by name; this host constructs what the name
+//! denotes ([`EffectPolicy::named`]) and refuses one it does not recognise,
+//! because falling back to its own default would report a scenario it could not
+//! evaluate as one it passed.
+//!
 //! # Two invariants, and neither is a matter of care
 //!
 //! **No foreign code.** The wire cannot carry a closure and the decoder erases
@@ -73,7 +82,7 @@ pub mod validate;
 
 pub use actions::{BoundedDiagnostic, BoundedOutcome, run_bounded_action};
 pub use budget::InteractionBudget;
-pub use effect::{CLIENT_EFFECT_ARMS, ClientEffect, Denial, EffectPolicy};
+pub use effect::{CLIENT_EFFECT_ARMS, ClientEffect, Denial, EffectPolicy, EgressFloor};
 pub use program::{BoundedProgram, ProgramReject, StepOutput};
 pub use resolve::resolve_tree;
 pub use trace::{

@@ -152,10 +152,12 @@ it names both halves.
 > corpus.** Every scenario the corpus enumerates is driven through this loop and
 > compared step by step — the resolved tree semantically, through this host's own
 > decoder and encoder; the client effects byte-for-byte in their as-emitted
-> envelope; the refusal exactly — and the first divergence is reported with its
-> step index and the member that differed. The claim is certified on **both**
-> targets this host ships: natively, and on `wasm32` by executing the same
-> comparison inside the module.
+> envelope; the refusal exactly; and, where a scenario names the host policy it
+> presumes, the denials its performer seam produced, decoded into this host's own
+> denial vocabulary — and the first divergence is reported with its step index
+> and the member that differed. The claim is certified on **both** targets this
+> host ships: natively, and on `wasm32` by executing the same comparison inside
+> the module.
 
 The claim covers the **client** placement. Running host-registered handlers is a
 separate obligation this host does not declare, so a call action resolves to the
@@ -168,6 +170,15 @@ reached — performance is host-defined, and a host that declines every effect i
 conformant, because both vocabularies default to deny. What is not conformant is
 silence: a declined effect is reported as a denial carrying the derived
 capability, never dropped.
+
+That last sentence is checked rather than merely stated, because a scenario can
+record what the seam declined. Where it does, it names the policy it presumes and
+this host **constructs** what the name denotes — refusing a name it does not
+recognise, since falling back to its own default would report a scenario it could
+not evaluate as one it passed. A denial names the capability and, where the
+refusal's ground was the destination, that destination's **origin**: the host, or
+the class of destination where there is none. Never the path and never the query,
+which is exactly where the payload of a refused exfiltration attempt would be.
 
 ### Running it
 

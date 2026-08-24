@@ -161,6 +161,11 @@ for (const scenario of scenarios) {
     tree: readFileSync(join(fixtures, scenario.files.tree), 'utf8'),
     events: readFileSync(join(fixtures, scenario.files.events), 'utf8'),
     expectation: readFileSync(join(fixtures, scenario.files.expectation), 'utf8'),
+    // The performer-seam policy the scenario presumes, passed through by NAME.
+    // The module constructs what the name denotes and refuses one it does not
+    // recognise — this script decides nothing about it, which is the same rule
+    // that keeps the comparison itself out of here.
+    ...(scenario.hostPolicy === undefined ? {} : { hostPolicy: scenario.hostPolicy }),
   };
   ran.push(scenario.name);
   const verdict = checkScenario(x, request);
@@ -183,6 +188,7 @@ const probe = {
   name: `${probeSource.name} (probe)`,
   tree: readFileSync(join(fixtures, probeSource.files.tree), 'utf8'),
   events: readFileSync(join(fixtures, probeSource.files.events), 'utf8'),
+  ...(probeSource.hostPolicy === undefined ? {} : { hostPolicy: probeSource.hostPolicy }),
   // A change the decoder ACCEPTS — renaming a node, rather than naming a case
   // that does not exist. A perturbation that failed to decode would be caught by
   // the decoder, which is a different check passing under this one's name.
@@ -196,6 +202,46 @@ if (probeVerdict.divergence === undefined) {
   failures.push(
     'the probe passed: this leg could not detect a mutated trace, so its green means nothing.',
   );
+}
+
+// (3) The same obligation for the member the tree probe above cannot reach.
+//     The perturbation is the shape a regression really takes: a host that
+//     declines correctly and fails to RECORD it, so the trace loses its denials
+//     while every other member stays exactly right. Note the policy name is
+//     KEPT — dropping it would stage an unobserved seam instead, which diverges
+//     at step 0 for a different reason and would let this probe pass without
+//     ever comparing a denial's content.
+const seamSource = scenarios.find((s) => s.hostPolicy !== undefined);
+if (seamSource === undefined) {
+  failures.push(
+    'no scenario declares a hostPolicy, so this target never exercises the denials member.',
+  );
+} else {
+  const recorded = readFileSync(join(fixtures, seamSource.files.expectation), 'utf8');
+  const silent = recorded.replace(/"denials": \[[^\]]*\]/g, '"denials": []');
+  if (silent === recorded) {
+    failures.push(
+      `${seamSource.name}: the denials perturbation changed nothing, so this probe proves nothing.`,
+    );
+  } else {
+    const verdict = checkScenario(x, {
+      name: `${seamSource.name} (silent host)`,
+      tree: readFileSync(join(fixtures, seamSource.files.tree), 'utf8'),
+      events: readFileSync(join(fixtures, seamSource.files.events), 'utf8'),
+      expectation: silent,
+      hostPolicy: seamSource.hostPolicy,
+    });
+    if (verdict.divergence === undefined) {
+      failures.push(
+        'a trace that lost its denials passed on wasm32: this target cannot detect the thing the ' +
+          'denials member exists to detect.',
+      );
+    } else if (!verdict.divergence.includes('on denials')) {
+      failures.push(
+        `the silent-host probe went red for something other than the denials: ${verdict.divergence}`,
+      );
+    }
+  }
 }
 
 console.error(

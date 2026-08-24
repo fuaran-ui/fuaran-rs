@@ -107,33 +107,92 @@ impl ClientEffect {
     }
 }
 
-/// Why an effect did not run. A denial carries the **capability** and nothing
-/// else — never the route, the text, the node id or the filename, every one of
-/// which comes off an untrusted wire.
+/// Why an effect did not run. A denial carries the **capability**, and — where
+/// the refusal's ground was a destination — that destination's **origin**. Never
+/// the route, the text, the node id or the filename, every one of which comes
+/// off an untrusted wire; and never the URL, only the host or the class of
+/// destination where there is no host.
 ///
 /// The two arms are kept apart because they say different things and only one is
 /// resolvable by changing policy: `Unregistered` says *this host does not have
 /// that capability*, `GateRefused` says *this host has it and refused this use
 /// of it*. Collapsing them loses the more useful fact.
+///
+/// **`origin` is a member rather than a third arm, deliberately.** A refusal on
+/// the ground of the destination is still the host having the capability and
+/// refusing this use of it — `GateRefused`'s own sentence — and what was missing
+/// was *which use*. A third arm would have been a breaking change to a closed
+/// vocabulary for a fact one of its existing arms already carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Denial {
-    Unregistered { capability: String },
-    GateRefused { capability: String },
+    Unregistered {
+        capability: String,
+    },
+    GateRefused {
+        capability: String,
+        /// Present only where the ground of the refusal was the destination the
+        /// effect named. Its ABSENCE is not a claim that the destination was
+        /// permitted — it is the statement that no destination was consulted,
+        /// which the ordering in [`EffectPolicy::decide`] is what makes true.
+        origin: Option<String>,
+    },
 }
 
 impl Denial {
-    /// The denial's canonical encoding — `$type` first, then `capability`, which
-    /// is Ordinal order as well as declaration order.
+    /// The denial's canonical encoding — `$type`, `capability`, then `origin`
+    /// where there is one, which is Ordinal order as well as declaration order
+    /// (`$` U+0024 < `c` < `o`).
     pub fn encode(&self) -> String {
         match self {
             Denial::Unregistered { capability } => format!(
                 "{{\"$type\":\"Unregistered\",\"capability\":{}}}",
                 quoted(capability)
             ),
-            Denial::GateRefused { capability } => format!(
+            Denial::GateRefused {
+                capability,
+                origin: None,
+            } => format!(
                 "{{\"$type\":\"GateRefused\",\"capability\":{}}}",
                 quoted(capability)
             ),
+            Denial::GateRefused {
+                capability,
+                origin: Some(origin),
+            } => format!(
+                "{{\"$type\":\"GateRefused\",\"capability\":{},\"origin\":{}}}",
+                quoted(capability),
+                quoted(origin)
+            ),
+        }
+    }
+
+    /// Read a denial back from the three positions the specification declares.
+    ///
+    /// **Reading rather than diffing bytes is the point.** A harness holding a
+    /// recorded denial's bytes beside its own would compare two strings and
+    /// assert nothing about whether this host RECOGNISES the vocabulary — so an
+    /// arm outside it, or an `origin` on an arm that never consulted a
+    /// destination, fails here rather than passing through as an opaque value
+    /// somebody expected to be honoured.
+    pub fn from_wire(
+        arm: &str,
+        capability: &str,
+        origin: Option<String>,
+    ) -> Result<Denial, String> {
+        match (arm, origin) {
+            ("Unregistered", None) => Ok(Denial::Unregistered {
+                capability: capability.to_string(),
+            }),
+            ("Unregistered", Some(_)) => Err(
+                "an Unregistered denial carries an origin: the capability was never reachable, so \
+                 no destination was ever consulted"
+                    .to_string(),
+            ),
+            ("GateRefused", origin) => Ok(Denial::GateRefused {
+                capability: capability.to_string(),
+                origin,
+            }),
+            (other, _) => Err(format!("'{other}' is not an arm of the denial vocabulary")),
         }
     }
 }
@@ -145,9 +204,52 @@ impl Denial {
 /// unregistered arm is unreachable however permissive the policy, and a
 /// registered one is still subject to the gate. Both default to deny — a host
 /// that has enabled nothing declines everything, audibly.
+/// Where a host will let an effect send its payload — the SECOND question,
+/// consulted after the discriminator gate has answered the first.
+///
+/// The gate sees the effect and can therefore see its payload, so a host could
+/// in principle express this as a gate closure. It must not, and the reason is
+/// the record rather than the decision: a gate refusal and a destination refusal
+/// are both `GateRefused`, and only the second one has an origin to name. Folded
+/// into the gate they would be indistinguishable in the denial, which is the one
+/// place the difference is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EgressFloor {
+    /// Every destination permitted. The named opt-in, paired with a permissive
+    /// gate: a host that believes it permitted everything and quietly kept a
+    /// local-only floor would be wrong about itself.
+    AnyOrigin,
+    /// Only destinations that have not left this host's own origin. A relative
+    /// route or a fragment has not left; an absolute network destination has,
+    /// and so has a hostless scheme, which is an egress channel with no host for
+    /// a rule to name. An effect naming no destination at all is unaffected —
+    /// the discriminator gate is the whole policy for those, and inventing a
+    /// destination for one would only make the record dishonest.
+    LocalOnly,
+}
+
 pub struct EffectPolicy {
     registered: BTreeSet<String>,
     gate: Box<dyn Fn(&ClientEffect) -> bool>,
+    egress: EgressFloor,
+}
+
+/// The destination an arm sends its payload to.
+///
+/// `ReadFileBody` is local rather than absent, and the distinction is the honest
+/// one rather than a convenience: the arm carries a node id, not a URL, so there
+/// is no origin to allowlist — but the body it reads travels back to the host
+/// driving the loop, which is the local origin by construction.
+fn destination_of(effect: &ClientEffect) -> Option<crate::render::egress::Destination> {
+    use crate::render::egress::{Destination, classify_destination};
+    match effect {
+        ClientEffect::Navigate { route } | ClientEffect::PushState { route } => {
+            Some(classify_destination(route))
+        }
+        ClientEffect::Download { url, .. } => Some(classify_destination(url)),
+        ClientEffect::ReadFileBody { .. } => Some(Destination::Local),
+        ClientEffect::WriteToClipboard { .. } | ClientEffect::Focus { .. } => None,
+    }
 }
 
 impl std::fmt::Debug for EffectPolicy {
@@ -165,6 +267,7 @@ impl Default for EffectPolicy {
         EffectPolicy {
             registered: BTreeSet::new(),
             gate: Box::new(|_| false),
+            egress: EgressFloor::LocalOnly,
         }
     }
 }
@@ -192,7 +295,48 @@ impl EffectPolicy {
         EffectPolicy {
             registered: CLIENT_EFFECT_ARMS.iter().map(|s| s.to_string()).collect(),
             gate: Box::new(|_| true),
+            egress: EgressFloor::AnyOrigin,
         }
+    }
+
+    /// **The named host policy the scenario corpus's `local-egress-only`
+    /// denotes**: every arm registered and permitted by the discriminator gate,
+    /// and a destination that leaves this host's own origin declined.
+    ///
+    /// Constructed here rather than carried by a fixture. A denial is a fact
+    /// about a policy, and a corpus that carried the policy as data would be
+    /// specifying one — so the corpus names it and every host builds what the
+    /// name denotes.
+    pub fn local_egress_only() -> Self {
+        EffectPolicy {
+            egress: EgressFloor::LocalOnly,
+            ..EffectPolicy::permissive()
+        }
+    }
+
+    /// Construct the policy a scenario's declared host-policy name denotes, or
+    /// `None` for a scenario that names none.
+    ///
+    /// **An unrecognised name is an error, never a fallback.** Falling back to
+    /// this host's own default would report a scenario this host could not
+    /// evaluate as one it passed — the vacuous green every other obligation in
+    /// the conformance family is shaped to refuse, arriving on precisely the
+    /// scenarios whose whole content is what a policy declines.
+    pub fn named(name: Option<&str>) -> Result<Self, String> {
+        match name {
+            None => Ok(EffectPolicy::permissive()),
+            Some("local-egress-only") => Ok(EffectPolicy::local_egress_only()),
+            Some(other) => Err(format!(
+                "'{other}' is not a host policy this implementation constructs; a scenario naming                  one it cannot build is out of scope, not passed"
+            )),
+        }
+    }
+
+    /// Replace the destination floor (builder-style).
+    #[must_use]
+    pub fn with_egress(mut self, egress: EgressFloor) -> Self {
+        self.egress = egress;
+        self
     }
 
     /// Replace the policy gate (builder-style). Registration is unaffected — the
@@ -210,15 +354,41 @@ impl EffectPolicy {
     /// Decide one effect. `None` permits it; `Some(denial)` declines it and says
     /// which capability was declined — the reporting half of "refusal is
     /// conformant, silence is not".
+    /// The ordering is load-bearing at two points, and both are decisions.
+    /// Registration before the gate, so an unregistered arm is unreachable
+    /// however permissive the policy; and the DISCRIMINATOR gate before the
+    /// DESTINATION floor, so an effect this host does not perform at all is
+    /// refused before its payload is ever parsed — which is what makes an
+    /// absent `origin` mean *no destination was consulted* rather than *the
+    /// destination was fine*.
     pub fn decide(&self, effect: &ClientEffect) -> Option<Denial> {
+        use crate::render::egress::Destination;
         let capability = effect.capability().to_string();
         if !self.registered.contains(&capability) {
             return Some(Denial::Unregistered { capability });
         }
         if !(self.gate)(effect) {
-            return Some(Denial::GateRefused { capability });
+            return Some(Denial::GateRefused {
+                capability,
+                origin: None,
+            });
         }
-        None
+        if self.egress == EgressFloor::AnyOrigin {
+            return None;
+        }
+        // The origin, and never the URL: a denial record outlives the session
+        // that produced it, and the query string of a refused exfiltration
+        // attempt IS the payload.
+        let origin = match destination_of(effect) {
+            None | Some(Destination::Local) => return None,
+            Some(Destination::Remote(host)) => host,
+            Some(Destination::NonNetwork(scheme)) => format!("{scheme}:"),
+            Some(Destination::Rejected) => "unparseable".to_string(),
+        };
+        Some(Denial::GateRefused {
+            capability,
+            origin: Some(origin),
+        })
     }
 }
 
@@ -302,8 +472,10 @@ mod tests {
         assert_eq!(
             gated.decide(&effect),
             Some(Denial::GateRefused {
-                capability: "Navigate".into()
-            })
+                capability: "Navigate".into(),
+                origin: None
+            }),
+            "a gate refusal names no origin: it declined the ARM, before any payload was parsed"
         );
 
         // Permissive registers and permits; the gate alone cannot reach an
@@ -321,5 +493,98 @@ mod tests {
     #[test]
     fn a_host_cannot_widen_the_closed_vocabulary_by_registering_a_new_arm() {
         assert!(EffectPolicy::default().register("LaunchMissiles").is_err());
+    }
+
+    #[test]
+    fn the_destination_floor_declines_a_non_local_route_and_names_its_origin_only() {
+        let policy = EffectPolicy::local_egress_only();
+
+        // A route that has not left the origin passes the floor untouched.
+        assert_eq!(
+            policy.decide(&ClientEffect::Navigate {
+                route: "/orders".into()
+            }),
+            None
+        );
+
+        // One that has is declined, and the record carries the HOST — not the
+        // path and not the query, which is where the payload of an
+        // exfiltration attempt would be sitting.
+        assert_eq!(
+            policy.decide(&ClientEffect::Navigate {
+                route: "https://exfil.example/collect?session=secret".into()
+            }),
+            Some(Denial::GateRefused {
+                capability: "Navigate".into(),
+                origin: Some("exfil.example".into())
+            })
+        );
+
+        // An arm with no destination at all is unaffected: the discriminator
+        // gate is the whole policy for those, and inventing a destination
+        // would only make the record dishonest.
+        assert_eq!(
+            policy.decide(&ClientEffect::WriteToClipboard {
+                text: "https://exfil.example/collect".into()
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn the_two_refusal_grounds_are_distinguishable_in_the_record() {
+        // The whole reason the floor is a second dimension rather than a gate
+        // closure: both refusals are GateRefused, and only one has an origin.
+        let effect = ClientEffect::Navigate {
+            route: "https://exfil.example/x".into(),
+        };
+        let by_gate = EffectPolicy::permissive().with_gate(|_| false);
+        let by_destination = EffectPolicy::local_egress_only();
+        assert_ne!(by_gate.decide(&effect), by_destination.decide(&effect));
+    }
+
+    #[test]
+    fn a_recorded_denial_round_trips_and_an_ill_formed_one_does_not_load() {
+        for denial in [
+            Denial::Unregistered {
+                capability: "Focus".into(),
+            },
+            Denial::GateRefused {
+                capability: "Navigate".into(),
+                origin: None,
+            },
+            Denial::GateRefused {
+                capability: "Download".into(),
+                origin: Some("cdn.example".into()),
+            },
+        ] {
+            let (arm, capability, origin) = match &denial {
+                Denial::Unregistered { capability } => ("Unregistered", capability.clone(), None),
+                Denial::GateRefused { capability, origin } => {
+                    ("GateRefused", capability.clone(), origin.clone())
+                }
+            };
+            assert_eq!(
+                Denial::from_wire(arm, &capability, origin),
+                Ok(denial.clone()),
+                "{}",
+                denial.encode()
+            );
+        }
+
+        // An origin on the arm that consulted no destination is a member that
+        // cannot describe the fact beside it.
+        assert!(Denial::from_wire("Unregistered", "Navigate", Some("x.example".into())).is_err());
+        assert!(Denial::from_wire("DestinationRefused", "Navigate", None).is_err());
+    }
+
+    #[test]
+    fn an_unrecognised_host_policy_name_is_refused_rather_than_defaulted() {
+        assert!(EffectPolicy::named(None).is_ok());
+        assert!(EffectPolicy::named(Some("local-egress-only")).is_ok());
+        assert!(
+            EffectPolicy::named(Some("anything-goes")).is_err(),
+            "a fallback would report a scenario this host could not evaluate as one it passed"
+        );
     }
 }

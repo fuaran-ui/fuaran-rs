@@ -41,7 +41,7 @@ use crate::canonical::{JVal, parse, render_canonical};
 use crate::render::BindingSources;
 use crate::wire::{decode_node, encode_node};
 
-use super::effect::EffectPolicy;
+use super::effect::{Denial, EffectPolicy};
 use super::program::BoundedProgram;
 use super::validate::{LiveEvent, LiveValue};
 
@@ -59,11 +59,20 @@ use std::collections::BTreeMap;
 /// effect, in order. Not merely the arm names: a trace recording only the arm
 /// could not tell a navigation to one route from a navigation to another, and
 /// computing the wrong route is exactly the fold defect worth catching.
+/// `denials` is what this host's performer seam declined, and it is an `Option`
+/// because its absence and its emptiness are different facts: `None` means the
+/// seam was not consulted — the scenario named no policy, so anything a default
+/// declined would be a fact about a policy the corpus never named — while
+/// `Some(vec![])` is the positive claim that it was consulted and declined
+/// nothing. Everywhere else on this wire an omitted array and an empty one are
+/// two spellings of one fact; here they are two spellings of different ones, and
+/// a reader that defaulted the member would turn a silence into a claim.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StepObservation {
     pub tree_json: String,
     pub effects: Vec<String>,
     pub refused: bool,
+    pub denials: Option<Vec<Denial>>,
 }
 
 /// Where two traces stopped agreeing.
@@ -86,26 +95,39 @@ impl Divergence {
     }
 }
 
-/// Drive a tree through an event script and observe every step.
+/// Drive a tree through an event script and observe every step, under the host
+/// policy the scenario names.
 ///
-/// The host is constructed **permissive** — every effect arm registered and
-/// permitted, every dispatch allowed — because a recorded trace is about whether
-/// the fold agrees, not about whether a particular host's policy declines. The
-/// policy seam has its own tests, and a declined effect does not change the fold
-/// in any case.
-pub fn run_scenario(tree_json: &str, events: &[LiveEvent]) -> Result<Vec<StepObservation>, String> {
+/// `host_policy` is `None` for a scenario that names none, and the host is then
+/// **permissive** — every effect arm registered and permitted, every dispatch
+/// allowed — because a scenario about the FOLD is not about whether a particular
+/// host's policy declines, and a declined effect does not change the fold in any
+/// case. Its denials are not recorded either: they would be a fact about a
+/// policy the corpus never named.
+///
+/// A scenario that DOES name one is asking the other question, and it is the one
+/// a trace could not previously record at all: `effects` is what the fold
+/// emitted, so a host that dropped an effect in silence and one that declined it
+/// audibly produced identical traces.
+pub fn run_scenario(
+    tree_json: &str,
+    events: &[LiveEvent],
+    host_policy: Option<&str>,
+) -> Result<Vec<StepObservation>, String> {
     let tree =
         decode_node(tree_json).map_err(|e| format!("the scenario's tree does not decode: {e}"))?;
+    let observe = host_policy.is_some();
     let mut program = BoundedProgram::new(tree)
         .with_store(BindingSources::default())
         .with_dispatch_gate(|_| true)
-        .with_effect_policy(EffectPolicy::permissive());
+        .with_effect_policy(EffectPolicy::named(host_policy)?);
 
     // Step 0: the state before any event.
     let mut observations = vec![StepObservation {
         tree_json: encode_node(program.resolved()),
         effects: Vec::new(),
         refused: false,
+        denials: if observe { Some(Vec::new()) } else { None },
     }];
 
     for event in events {
@@ -114,6 +136,7 @@ pub fn run_scenario(tree_json: &str, events: &[LiveEvent]) -> Result<Vec<StepObs
             tree_json: encode_node(&step.resolved),
             effects: step.effects.iter().map(|e| e.encode()).collect(),
             refused: step.rejected.is_some(),
+            denials: if observe { Some(step.denials) } else { None },
         });
     }
     Ok(observations)
@@ -187,6 +210,21 @@ pub fn first_divergence(
                 )
             } else if want.refused != got.refused {
                 at("refused", want.refused.to_string(), got.refused.to_string())
+            } else if want.denials != got.denials {
+                // Last, on the same argument the other three make: a divergence
+                // in the fold explains one at the seam below it, so reporting
+                // the seam first would name the symptom and hide the cause.
+                let describe = |d: &Option<Vec<Denial>>| match d {
+                    None => "(unobserved)".to_string(),
+                    Some(list) => format!(
+                        "[{}]",
+                        list.iter()
+                            .map(Denial::encode)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                };
+                at("denials", describe(&want.denials), describe(&got.denials))
             } else {
                 None
             }
@@ -262,7 +300,7 @@ pub fn parse_expectation(json: &str) -> Result<Vec<StepObservation>, String> {
                 return Err(format!("step {index} is not an object"));
             };
             for (key, _) in fields {
-                if !matches!(key.as_str(), "tree" | "effects" | "refused") {
+                if !matches!(key.as_str(), "tree" | "effects" | "refused" | "denials") {
                     return Err(format!("step {index} carries an undeclared member '{key}'"));
                 }
             }
@@ -287,6 +325,43 @@ pub fn parse_expectation(json: &str) -> Result<Vec<StepObservation>, String> {
                     )),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            // A denial is a document THIS specification owns, so unlike an
+            // effect it is embedded as an object, and unlike a tree it has no
+            // host encoder to respect. It is READ into this host's own
+            // vocabulary rather than carried as bytes, which is what makes the
+            // comparison assert that this host recognises the vocabulary: an
+            // arm outside it, or an origin on one that consulted no
+            // destination, fails to load rather than travelling on as a value
+            // somebody expected to be honoured.
+            let denials = match entry.field("denials") {
+                None => None,
+                Some(JVal::Arr(items)) => Some(
+                    items
+                        .iter()
+                        .enumerate()
+                        .map(|(j, d)| {
+                            let string_at = |key: &str| match d.field(key) {
+                                Some(JVal::Str(s)) => Ok(Some(s.clone())),
+                                None => Ok(None),
+                                Some(_) => Err(format!(
+                                    "step {index} denial {j} carries a non-string '{key}'"
+                                )),
+                            };
+                            let arm = string_at("$type")?.ok_or_else(|| {
+                                format!("step {index} denial {j} carries no '$type'")
+                            })?;
+                            let capability = string_at("capability")?.ok_or_else(|| {
+                                format!("step {index} denial {j} carries no 'capability'")
+                            })?;
+                            Denial::from_wire(&arm, &capability, string_at("origin")?)
+                                .map_err(|e| format!("step {index} denial {j}: {e}"))
+                        })
+                        .collect::<Result<Vec<_>, String>>()?,
+                ),
+                Some(_) => {
+                    return Err(format!("step {index} records a non-array 'denials'"));
+                }
+            };
             Ok(StepObservation {
                 // The tree is an embedded document. Rendering it back through
                 // this host's own writer hands the decoder a document with the
@@ -295,6 +370,7 @@ pub fn parse_expectation(json: &str) -> Result<Vec<StepObservation>, String> {
                 tree_json: render_canonical(tree),
                 effects,
                 refused: *refused,
+                denials,
             })
         })
         .collect()
@@ -309,7 +385,7 @@ mod tests {
     fn run() -> Vec<StepObservation> {
         let events = parse_events(r#"[{"nodeId":"set","event":"click","payload":{}}]"#)
             .expect("the script parses");
-        run_scenario(TREE, &events).expect("the scenario runs")
+        run_scenario(TREE, &events, None).expect("the scenario runs")
     }
 
     #[test]
@@ -340,6 +416,7 @@ mod tests {
             tree_json: "{}".into(),
             effects: vec![],
             refused: false,
+            denials: None,
         };
         let mut middle = same.clone();
         middle.tree_json = "{\"a\":1}".into();

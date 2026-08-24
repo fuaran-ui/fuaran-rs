@@ -184,7 +184,20 @@ trust boundary (`validate.rs`), and the loop that orders them (`program.rs`).
 - **`trace.rs` does no IO**, so the identical comparison compiles for `wasm32`. The
   tree is compared **semantically** (decoded and re-encoded through this host's own
   codec — this host is measured against its own bytes) and the effects
-  **byte-for-byte**; normalising the effects would erase the exception above.
+  **byte-for-byte**; normalising the effects would erase the exception above. A
+  step's **denials** are neither: their envelope is canonical with no exception, so
+  they are embedded as objects and **decoded** into `Denial` before comparison —
+  which is what makes the comparison assert that this host recognises the
+  vocabulary rather than that two strings matched. Their absence and their
+  emptiness are different facts (unobserved vs observed-and-nothing-declined),
+  which is the one place on this wire where an omitted array is not the same as an
+  empty one; a reader that defaulted the member would turn a silence into a claim.
+- **A scenario's host policy arrives as a NAME, and an unrecognised one fails.**
+  `EffectPolicy::named` constructs what the name denotes — the corpus never carries
+  a policy as data, because a corpus that did would be specifying one. This is the
+  same arrangement `tests/markdown.rs` already uses for the egress fixtures, and
+  for the same reason: a silent fallback to permissive would report a scenario this
+  host could not evaluate as one it passed.
 - **The conformance leg is LOCAL and operator-invoked.** The scenario corpus is a
   separate artefact this repository does not vendor and its public workflow does not
   check out, so `tests/driver_semantics.rs` runs when the corpus is present locally

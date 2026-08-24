@@ -53,6 +53,15 @@ fn check(request: &str) -> Result<Option<String>, String> {
     let tree = string_member(&document, "tree")?;
     let events = string_member(&document, "events")?;
     let expectation = string_member(&document, "expectation")?;
+    // OPTIONAL: the §10.3 host-policy NAME a scenario declares, absent for a
+    // scenario that presumes nothing about the performer seam. A name rather
+    // than a policy — the corpus never carries a policy as data — and an
+    // unrecognised one is refused by `run_scenario` rather than defaulted.
+    let host_policy = match document.field("hostPolicy") {
+        None => None,
+        Some(JVal::Str(s)) => Some(s.clone()),
+        Some(_) => return Err("the request carries a non-string 'hostPolicy'".to_string()),
+    };
 
     let events = parse_events(&events)?;
     let recorded = parse_expectation(&expectation)?;
@@ -61,13 +70,14 @@ fn check(request: &str) -> Result<Option<String>, String> {
             "{name}: a trace carries one entry per step, index 0 being the state before any event"
         ));
     }
-    let observed = run_scenario(&tree, &events)?;
+    let observed = run_scenario(&tree, &events, host_policy.as_deref())?;
     let expected = normalise_expectation(&name, &recorded)?;
     Ok(first_divergence(&name, &expected, &observed).map(|d| d.describe()))
 }
 
 /// Check one scenario, given its three documents as the strings
-/// `{"name":…,"tree":…,"events":…,"expectation":…}`.
+/// `{"name":…,"tree":…,"events":…,"expectation":…}`, plus an optional
+/// `"hostPolicy"` naming the performer-seam policy the scenario presumes.
 ///
 /// Returns `{"ok":""}` when the loop reproduces the recorded trace,
 /// `{"divergence":"…"}` naming the first divergence when it does not, or
