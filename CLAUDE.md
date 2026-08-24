@@ -67,7 +67,8 @@ fuaran-rs/
 ├── src/ops/             # tree-op apply engine — total reducer + ApplyError envelope + can_apply dry-run
 ├── src/validator/       # pre-emit structural validator — canonical FUARAN### defect codes
 ├── src/render/          # emission tier — server.rs (HTML walk + islands) + markdown.rs (corpus-certified)
-│                        #   + sanitize.rs (injection floor) + bindings.rs / class_names.rs / html.rs
+│                        #   + sanitize.rs (injection floor) + egress.rs (destination policy, §14.1)
+│                        #   + bindings.rs / class_names.rs / html.rs
 ├── src/bounded/         # the bounded program loop (client placement) — actions.rs (the one evaluating
 │                        #   match) + budget.rs + effect.rs + resolve.rs + validate.rs + program.rs
 │                        #   + trace.rs (the IO-free scenario runner + first-divergence comparison)
@@ -123,6 +124,40 @@ canonical error code + `$`-rooted path prefix (the harness locates
 `../wire-format-fixtures/` via `manifest.json` — the authoritative enumeration — and
 skips when absent). The **lenient-accept**, **envelope**, and **elicitation**
 families certify the same way — the full corpus enumeration runs, none skipped.
+
+### Destination policy at the markdown link / image seam (`src/render/egress.rs`)
+
+`WIRE_FORMAT.md` §14.1. The scheme floor (`src/render/sanitize.rs`) answers *is this
+URL safe to have*; the policy answers *is this destination one the composition
+declared*, which is the question that closes exfiltration — an image `src` is
+contacted by rendering alone, with no user act. `markdown::to_html_with_egress` takes
+a host-constructed `EgressPolicy` and checks every link (`Hyperlink`) and image
+(`Media`) destination; a refusal renders the inert
+`about:blank#fuaran-egress-refused` plus a trailing `data-fuaran-egress-refused`
+marker naming the class and the host.
+
+**Four things about it are load-bearing and easy to undo by accident.**
+
+- **`to_html` IS the permissive case**, byte-for-byte, and the corpus gate asserts
+  the equivalence rather than assuming it. Flipping the pure function's default would
+  rewrite existing fixtures in every host in one act, and a mass churn is where a real
+  divergence hides. A host rendering a *decoded* body reaches
+  `to_html_with_egress` deliberately.
+- **The scheme floor's own answer is unchanged.** A URL the floor rejects still
+  renders the bare `about:blank`, with **no** marker — a different fact from a policy
+  refusal, and one the `sanitization/` corpus already pins.
+- **A refusal marker carries the class and the host or scheme, NEVER the path or the
+  query.** The query string of a refused exfiltration attempt is the payload itself,
+  so a refusal record that quoted it would become the disclosure it exists to prevent.
+- **The policy is threaded as a borrowed parameter**, never a `static mut` or a
+  thread-local: two renders under two different policies may run concurrently.
+
+`tests/markdown.rs` maps a fixture's optional `policy` name to a policy it
+**constructs** — the corpus never carries one as data — and an unrecognised name
+**fails**: a silent fallback to permissive would report a fixture the host cannot
+evaluate as one it passed. A guard also asserts the corpus still carries a
+non-permissive fixture, without which the whole gate could run on the permissive path
+and stay green on a host that never implemented §14.1.
 
 ## The bounded program loop + its conformance leg (`src/bounded/`)
 

@@ -18,7 +18,11 @@ const REJECTED_URL_SCHEMES: &[&str] = &["javascript", "vbscript", "file"];
 /// `?`, or `#` has no scheme (relative / fragment). ASCII whitespace + C0
 /// controls are stripped from the candidate so `java\tscript:` classifies as
 /// `javascript`.
-fn extract_scheme(url: &str) -> Option<String> {
+///
+/// Crate-visible so [`super::egress`] classifies a floor-accepted URL against
+/// the SAME scheme reading the floor used — a second, private spelling of this
+/// is exactly how two gates come to disagree about what a URL is.
+pub(crate) fn extract_scheme(url: &str) -> Option<String> {
     let mut colon_idx = None;
     for (i, ch) in url.char_indices() {
         match ch {

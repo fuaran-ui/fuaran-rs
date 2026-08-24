@@ -5,16 +5,52 @@
 //! HTML escaped (no passthrough); DEFERRED — emoji, footnotes, anchors,
 //! sub-sup, definition lists, the full named-entity table.
 //!
-//! Escapes by construction (no raw-HTML passthrough; URLs via
-//! [`super::sanitize::sanitize_url_or_blank`]); the result still passes
-//! through [`super::sanitize::sanitize_markdown_html`] as defence in depth.
+//! Escapes by construction (no raw-HTML passthrough; URLs via the
+//! [`super::sanitize`] scheme floor); the result still passes through
+//! [`super::sanitize::sanitize_markdown_html`] as defence in depth.
 //!
 //! Host-parity primitives are explicit ASCII classes (not Unicode `is_*`
 //! methods) so every host classifies identically at the edges.
+//!
+//! # Destination policy (`WIRE_FORMAT.md` §14.1)
+//!
+//! The scheme floor answers "is this URL safe to have"; it does not answer "is
+//! this destination one the composition declared". [`to_html_with_egress`]
+//! consults a [`super::egress::EgressPolicy`] for every link
+//! ([`EgressClass::Hyperlink`]) and image ([`EgressClass::Media`]) destination,
+//! and a refused one renders the inert `about:blank#fuaran-egress-refused`
+//! href plus a `data-fuaran-egress-refused` marker naming the class and the
+//! host — never the path or the query.
+//!
+//! **[`to_html`] SURVIVES AS THE PERMISSIVE CASE** — `to_html_with_egress`
+//! under [`permissive_egress`], byte-for-byte. Three reasons, and they are the
+//! same reasons every other posture inversion here is reached BY NAME: the
+//! corpus is a cross-host byte-parity contract, so flipping the pure
+//! function's default would rewrite existing fixtures in five hosts in one act
+//! — a mass churn is exactly where a real divergence hides; `to_html` is
+//! published surface on an Apache-2.0 crate, and a host author who wants the
+//! pure function should reach it deliberately rather than meet a silent
+//! behaviour swap; and keeping it named makes an unpolicied markdown render
+//! greppable, which is the property the refusal shape exists to give.
+//!
+//! **The scheme floor's own answer is unchanged.** A URL the floor rejects
+//! (`javascript:`, an unknown scheme, a protocol-relative reference) still
+//! renders the bare `about:blank` it always has, with **no** marker — see
+//! [`markdown_destination`] for why that is a decision rather than an
+//! inconsistency.
+//!
+//! The policy is threaded as a borrowed parameter, never a global or a
+//! thread-local: two renders under two different policies may run
+//! concurrently, and an ambient policy is one a concurrent render can observe
+//! halfway through being swapped.
 
 use std::collections::HashMap;
 
-use super::sanitize::{sanitize_markdown_html, sanitize_url_or_blank};
+use super::egress::{
+    EGRESS_REFUSAL_URL, EgressClass, EgressPolicy, EgressVerdict, check_destination,
+    egress_refusal_marker, permissive_egress,
+};
+use super::sanitize::sanitize_markdown_html;
 
 // ─── Host-parity primitives ──────────────────────────────────────────────────
 
@@ -145,6 +181,56 @@ enum Inline {
 
 type Refs = HashMap<String, (String, Option<String>)>;
 
+// ─── Destination policy at the link / image seam ─────────────────────────────
+
+/// Everything a render pass carries that is not the markdown itself: the
+/// link-reference table and the destination policy. Borrowed rather than owned
+/// and passed rather than ambient — see the module header.
+#[derive(Clone, Copy)]
+struct Ctx<'a> {
+    refs: &'a Refs,
+    policy: &'a EgressPolicy,
+}
+
+/// The `href` / `src` a markdown destination emits under `policy`, plus the
+/// trailing attribute string that records a refusal in the document itself.
+///
+/// Three verdict groups, and the middle one is a deliberate decision rather
+/// than an oversight:
+///
+/// - **Allowed** — the normalised URL, no marker. Identical to what the bare
+///   scheme floor returned before this seam existed, so a permissive render is
+///   byte-for-byte what it always was.
+/// - **Unsafe (the SCHEME FLOOR refused)** — the bare `about:blank`, no marker.
+///   The floor's answer is a different fact from a policy refusal: it says
+///   "this URL is not safe to render at all", it has said it in that exact
+///   spelling in every conformant host since the renderer was cut, and it is
+///   pinned by the shared sanitization corpus. Re-spelling it here would churn
+///   that corpus inside a change about EGRESS — mixing two decisions into one
+///   set of bytes, which is where a genuine divergence hides.
+/// - **Refused by policy** — the inert `about:blank#fuaran-egress-refused` plus
+///   a marker naming the class and, where there is one, the host. Never the
+///   path or the query: the query string of a refused exfiltration attempt is
+///   the payload itself.
+fn markdown_destination(policy: &EgressPolicy, class: EgressClass, url: &str) -> (String, String) {
+    let verdict = check_destination(policy, class, url);
+    match &verdict {
+        EgressVerdict::Allowed(safe) => (safe.clone(), String::new()),
+        EgressVerdict::UnsafeUrl => ("about:blank".to_string(), String::new()),
+        refused => (EGRESS_REFUSAL_URL.to_string(), egress_attrs(refused)),
+    }
+}
+
+/// Render a verdict's refusal marker as a trailing HTML attribute. Emitted LAST
+/// on the element so an adopting host's diff against the pre-policy bytes is a
+/// pure suffix — every attribute that was there is still where it was.
+fn egress_attrs(verdict: &EgressVerdict) -> String {
+    match egress_refusal_marker(verdict) {
+        None => String::new(),
+        Some((key, value)) => format!(" {key}=\"{}\"", escape_html(&value)),
+    }
+}
+
 /// ASCII-only case fold — the cross-host reference-label contract.
 fn ascii_lower(c: char) -> char {
     c.to_ascii_lowercase()
@@ -211,7 +297,7 @@ fn is_scheme_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '+' || c == '.' || c == '-'
 }
 
-fn scan_autolink(text: &[char], i: usize) -> Option<(Inline, usize)> {
+fn scan_autolink(policy: &EgressPolicy, text: &[char], i: usize) -> Option<(Inline, usize)> {
     let close = (i..text.len()).find(|&k| text[k] == '>')?;
     let body: String = text[i + 1..close].iter().collect();
     if body.is_empty() || body.contains(' ') || body.contains('<') {
@@ -226,24 +312,36 @@ fn scan_autolink(text: &[char], i: usize) -> Option<(Inline, usize)> {
     let looks_email =
         !looks_uri && body.contains('@') && !body.contains(':') && !body.starts_with('@');
     if looks_uri {
-        let safe = sanitize_url_or_blank(&body);
+        let (safe, attrs) = markdown_destination(policy, EgressClass::Hyperlink, &body);
         Some((
             Inline::Raw(format!(
-                "<a href=\"{}\">{}</a>",
+                "<a href=\"{}\"{attrs}>{}</a>",
                 escape_html(&safe),
                 escape_html(&body)
             )),
             close + 1,
         ))
     } else if looks_email {
-        Some((
-            Inline::Raw(format!(
+        // An email autolink has no URL of its own — the `mailto:` is the
+        // renderer's, so the policy is asked about the destination the renderer
+        // is about to emit. On acceptance the ORIGINAL bytes are emitted rather
+        // than the normalised form, so a permissive render is unchanged to the
+        // byte.
+        let verdict = check_destination(policy, EgressClass::Hyperlink, &format!("mailto:{body}"));
+        let html = match verdict {
+            EgressVerdict::Allowed(_) => format!(
                 "<a href=\"mailto:{}\">{}</a>",
                 escape_html(&body),
                 escape_html(&body)
-            )),
-            close + 1,
-        ))
+            ),
+            refused => format!(
+                "<a href=\"{}\"{}>{}</a>",
+                escape_html(EGRESS_REFUSAL_URL),
+                egress_attrs(&refused),
+                escape_html(&body)
+            ),
+        };
+        Some((Inline::Raw(html), close + 1))
     } else {
         None
     }
@@ -384,7 +482,7 @@ fn plain_text(nodes: &[Inline]) -> String {
     out
 }
 
-fn scan_bare_autolink(text: &[char], i: usize) -> Option<(Inline, usize)> {
+fn scan_bare_autolink(policy: &EgressPolicy, text: &[char], i: usize) -> Option<(Inline, usize)> {
     let n = text.len();
     let starts = |p: &str| -> bool {
         let pc: Vec<char> = p.chars().collect();
@@ -409,10 +507,10 @@ fn scan_bare_autolink(text: &[char], i: usize) -> Option<(Inline, usize)> {
     } else {
         raw.clone()
     };
-    let safe = sanitize_url_or_blank(&href);
+    let (safe, attrs) = markdown_destination(policy, EgressClass::Hyperlink, &href);
     Some((
         Inline::Raw(format!(
-            "<a href=\"{}\">{}</a>",
+            "<a href=\"{}\"{attrs}>{}</a>",
             escape_html(&safe),
             escape_html(&raw)
         )),
@@ -432,7 +530,7 @@ enum Tok {
 }
 
 #[allow(clippy::too_many_lines)]
-fn tokenize(refs: &Refs, text: &[char]) -> Vec<Tok> {
+fn tokenize(ctx: Ctx<'_>, text: &[char]) -> Vec<Tok> {
     let mut toks: Vec<Tok> = Vec::new();
     let n = text.len();
     let mut i = 0;
@@ -475,7 +573,7 @@ fn tokenize(refs: &Refs, text: &[char]) -> Vec<Tok> {
                 i += 1;
             }
         } else if c == '<' {
-            if let Some((node, next)) = scan_autolink(text, i) {
+            if let Some((node, next)) = scan_autolink(ctx.policy, text, i) {
                 flush!();
                 toks.push(Tok::Node(node));
                 i = next;
@@ -508,7 +606,7 @@ fn tokenize(refs: &Refs, text: &[char]) -> Vec<Tok> {
                                 consumed_to = r2 + 1;
                             }
                         }
-                        if let Some((url, title)) = refs.get(&norm_label(&ref_label)) {
+                        if let Some((url, title)) = ctx.refs.get(&norm_label(&ref_label)) {
                             resolved = Some((url.clone(), title.clone(), consumed_to));
                         }
                     }
@@ -520,25 +618,27 @@ fn tokenize(refs: &Refs, text: &[char]) -> Vec<Tok> {
                         Some((url, title, next)) => {
                             flush!();
                             let label_chars: Vec<char> = label_text.chars().collect();
-                            let safe = sanitize_url_or_blank(&url);
+                            let class = if is_image {
+                                EgressClass::Media
+                            } else {
+                                EgressClass::Hyperlink
+                            };
+                            let (safe, attrs) = markdown_destination(ctx.policy, class, &url);
                             let title_attr = title
                                 .map(|t| format!(" title=\"{}\"", escape_html(&t)))
                                 .unwrap_or_default();
                             let html = if is_image {
-                                let alt = plain_text(&parse_inlines(refs, &label_chars));
+                                let alt = plain_text(&parse_inlines(ctx, &label_chars));
                                 format!(
-                                    "<img src=\"{}\" alt=\"{}\"{} />",
+                                    "<img src=\"{}\" alt=\"{}\"{title_attr}{attrs} />",
                                     escape_html(&safe),
                                     escape_html(&alt),
-                                    title_attr
                                 )
                             } else {
-                                let inner = render_inlines(&parse_inlines(refs, &label_chars));
+                                let inner = render_inlines(&parse_inlines(ctx, &label_chars));
                                 format!(
-                                    "<a href=\"{}\"{}>{}</a>",
+                                    "<a href=\"{}\"{title_attr}{attrs}>{inner}</a>",
                                     escape_html(&safe),
-                                    title_attr,
-                                    inner
                                 )
                             };
                             toks.push(Tok::Node(Inline::Raw(html)));
@@ -591,7 +691,7 @@ fn tokenize(refs: &Refs, text: &[char]) -> Vec<Tok> {
         } else if (c == 'h' || c == 'w')
             && (i == 0 || is_ws(prev_char(i)) || "(*_~".contains(prev_char(i)))
         {
-            if let Some((node, next)) = scan_bare_autolink(text, i) {
+            if let Some((node, next)) = scan_bare_autolink(ctx.policy, text, i) {
                 flush!();
                 toks.push(Tok::Node(node));
                 i = next;
@@ -720,13 +820,13 @@ fn process_emphasis(mut toks: Vec<Tok>) -> Vec<Inline> {
     result
 }
 
-fn parse_inlines(refs: &Refs, text: &[char]) -> Vec<Inline> {
-    process_emphasis(tokenize(refs, text))
+fn parse_inlines(ctx: Ctx<'_>, text: &[char]) -> Vec<Inline> {
+    process_emphasis(tokenize(ctx, text))
 }
 
-fn render_inline(refs: &Refs, text: &str) -> String {
+fn render_inline(ctx: Ctx<'_>, text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
-    render_inlines(&parse_inlines(refs, &chars))
+    render_inlines(&parse_inlines(ctx, &chars))
 }
 
 // ─── Block parsing ───────────────────────────────────────────────────────────
@@ -1222,17 +1322,17 @@ fn align_attr(a: &str) -> &'static str {
     }
 }
 
-fn render_blocks(refs: &Refs, blocks: &[Block]) -> String {
-    blocks.iter().map(|b| render_block(refs, b)).collect()
+fn render_blocks(ctx: Ctx<'_>, blocks: &[Block]) -> String {
+    blocks.iter().map(|b| render_block(ctx, b)).collect()
 }
 
-fn render_block(refs: &Refs, b: &Block) -> String {
+fn render_block(ctx: Ctx<'_>, b: &Block) -> String {
     match b {
         Block::Hr => "<hr />\n".to_string(),
         Block::Heading { level, text } => {
-            format!("<h{level}>{}</h{level}>\n", render_inline(refs, text))
+            format!("<h{level}>{}</h{level}>\n", render_inline(ctx, text))
         }
-        Block::Paragraph { text } => format!("<p>{}</p>\n", render_inline(refs, text)),
+        Block::Paragraph { text } => format!("<p>{}</p>\n", render_inline(ctx, text)),
         Block::Fenced { lang, content } => {
             let cls = if lang.is_empty() {
                 String::new()
@@ -1247,7 +1347,7 @@ fn render_block(refs: &Refs, b: &Block) -> String {
         Block::Blockquote { blocks } => {
             format!(
                 "<blockquote>\n{}</blockquote>\n",
-                render_blocks(refs, blocks)
+                render_blocks(ctx, blocks)
             )
         }
         Block::Table {
@@ -1261,7 +1361,7 @@ fn render_block(refs: &Refs, b: &Block) -> String {
                 out.push_str(&format!(
                     "<th class=\"fuaran-table-header\"{}>{}</th>",
                     align_attr(a),
-                    render_inline(refs, h)
+                    render_inline(ctx, h)
                 ));
             }
             out.push_str("</tr></thead><tbody>");
@@ -1273,7 +1373,7 @@ fn render_block(refs: &Refs, b: &Block) -> String {
                     out.push_str(&format!(
                         "<td class=\"fuaran-table-cell\"{}>{}</td>",
                         align_attr(a),
-                        render_inline(refs, cell)
+                        render_inline(ctx, cell)
                     ));
                 }
                 out.push_str("</tr>");
@@ -1282,7 +1382,7 @@ fn render_block(refs: &Refs, b: &Block) -> String {
             out
         }
         Block::Bullet { tight, items } => {
-            format!("<ul>\n{}</ul>\n", render_items(refs, *tight, items))
+            format!("<ul>\n{}</ul>\n", render_items(ctx, *tight, items))
         }
         Block::Ordered {
             start,
@@ -1296,13 +1396,13 @@ fn render_block(refs: &Refs, b: &Block) -> String {
             };
             format!(
                 "<ol{start_attr}>\n{}</ol>\n",
-                render_items(refs, *tight, items)
+                render_items(ctx, *tight, items)
             )
         }
     }
 }
 
-fn render_items(refs: &Refs, tight: bool, items: &[ListItem]) -> String {
+fn render_items(ctx: Ctx<'_>, tight: bool, items: &[ListItem]) -> String {
     let mut out = String::new();
     for item in items {
         let checkbox = match item.task {
@@ -1323,30 +1423,35 @@ fn render_items(refs: &Refs, tight: bool, items: &[ListItem]) -> String {
             let mut inner = String::new();
             for blk in &item.blocks {
                 if let Block::Paragraph { text } = blk {
-                    inner.push_str(&render_inline(refs, text));
+                    inner.push_str(&render_inline(ctx, text));
                 } else {
                     inner.push('\n');
-                    inner.push_str(&render_block(refs, blk));
+                    inner.push_str(&render_block(ctx, blk));
                 }
             }
             out.push_str(&format!("<li{li_class}>{checkbox}{inner}</li>\n"));
         } else {
             out.push_str(&format!(
                 "<li{li_class}>\n{checkbox}{}</li>\n",
-                render_blocks(refs, &item.blocks)
+                render_blocks(ctx, &item.blocks)
             ));
         }
     }
     out
 }
 
-// ─── Public entry point ──────────────────────────────────────────────────────
+// ─── Public entry points ─────────────────────────────────────────────────────
 
-/// Render GFM markdown `source` to deterministic, cross-host HTML —
-/// byte-identical to the sibling hosts (verified against the shared markdown
-/// corpus). Escaped by construction; the result still passes through the
-/// markdown-HTML sanitiser.
-pub fn to_html(source: &str) -> String {
+/// Render GFM markdown `source` to deterministic, cross-host HTML under a
+/// destination policy (`WIRE_FORMAT.md` §14.1) — byte-identical to the sibling
+/// hosts (verified against the shared markdown corpus). Every link and image
+/// destination is checked against `policy`; a refused one renders the inert
+/// refusal href plus a `data-fuaran-egress-refused` marker naming the class and
+/// the host.
+///
+/// Escaped by construction; the result still passes through the markdown-HTML
+/// sanitiser.
+pub fn to_html_with_egress(policy: &EgressPolicy, source: &str) -> String {
     if source.is_empty() {
         return String::new();
     }
@@ -1354,6 +1459,23 @@ pub fn to_html(source: &str) -> String {
     let raw_lines: Vec<String> = normalized.split('\n').map(str::to_string).collect();
     let (refs, lines) = extract_ref_defs(raw_lines);
     let blocks = parse_blocks(&lines);
-    let html = render_blocks(&refs, &blocks);
+    let ctx = Ctx {
+        refs: &refs,
+        policy,
+    };
+    let html = render_blocks(ctx, &blocks);
     sanitize_markdown_html(&html)
+}
+
+/// Render GFM markdown `source` with **every destination permitted** — the pure
+/// `source → html` function this renderer has always been, unchanged to the
+/// byte.
+///
+/// This is [`to_html_with_egress`] under [`permissive_egress`], and the
+/// equivalence is asserted by the corpus gate rather than merely intended. A
+/// host rendering a **decoded (wire)** body wants
+/// [`to_html_with_egress`] with a policy it constructed — an emission cannot
+/// declare its own egress, so absent a host's declaration it should get none.
+pub fn to_html(source: &str) -> String {
+    to_html_with_egress(&permissive_egress(), source)
 }
