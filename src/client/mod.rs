@@ -169,9 +169,36 @@ impl ClientSession {
     /// `Result` mirrors the headless host's apply surface.
     pub fn apply_op(&mut self, op_json: &str) -> Result<(), ClientError> {
         let op = decode_op(op_json).map_err(ClientError::Decode)?;
-        let outcome = apply(&self.tree, &op).map_err(ClientError::Apply)?;
+        self.apply_decoded(&op).map_err(ClientError::Apply)
+    }
+
+    /// Apply an already-decoded op. The crate-internal half of
+    /// [`apply_op`](Self::apply_op), for a caller that decoded the op for its own
+    /// reasons — the [`edge`](crate::edge) tier journals the typed op before
+    /// applying it — and needs the tree to move without paying for a second
+    /// decode. Same total apply engine, same all-or-nothing guarantee.
+    pub(crate) fn apply_decoded(&mut self, op: &crate::wire::TreeOp) -> Result<(), ApplyError> {
+        let outcome = apply(&self.tree, op)?;
         self.tree = outcome.new_tree;
         Ok(())
+    }
+
+    /// The held tree. The in-memory companion to
+    /// [`tree_json`](Self::tree_json), which already exposes the same value —
+    /// crate-internal because a *consumer* holding a `&Node` would be reading
+    /// this session's interior rather than its wire form, and the wire form is
+    /// the contract.
+    pub(crate) fn tree(&self) -> &Node {
+        &self.tree
+    }
+
+    /// Adopt a tree a caller computed through **this crate's own apply engine**.
+    /// Crate-internal by construction: it is the write half of
+    /// [`tree`](Self::tree), it bypasses no validation that `apply_op` performs
+    /// (there is none — `apply` is where the refusals live), and exposing it
+    /// would let a host substitute a tree that never came from an op.
+    pub(crate) fn adopt_tree(&mut self, tree: Node) {
+        self.tree = tree;
     }
 
     /// Write a reactive `$state.<key>` slot from a JSON value (the write-back

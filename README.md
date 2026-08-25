@@ -314,6 +314,40 @@ reactive stores and re-rendering — exactly the wire's *write-back default*. Th
 three delivery modes (WASM client, static + partial hydration, server-driven)
 all build on this session; `js/index.html` demonstrates the client loop.
 
+## Edge hosting — a session that can be evicted
+
+A worker runtime evicts a session between requests by design, so a session hosted
+there is a thing that must be able to disappear and come back. `src/edge/` is that
+half of the client tier: an `EdgeSession` that **owns** its store (so one activation
+per handle is the compiler's guarantee, not a review comment), journals each
+applied `TreeOp` to a durable store **before** the held tree moves, and rehydrates
+from that journal — newest checkpoint plus suffix — on the next activation, having
+verified the chain first.
+
+**It names obligations, not a platform.** `DurableSessionStore` is a four-method
+trait with no vendor in it: acquire an activation, read the journal, append a
+record durably, record a snapshot. `InMemoryDurableStore` is the reference
+implementation and implements the fence fully, so the protocol is exercised by
+`tests/edge.rs` rather than merely described; a real host writes its own against
+the same four sentences and links nothing here. The trait is synchronous for the
+same reason `OpStreamSink` is — the contract is about *ordering*, and a platform
+whose storage is asynchronous meets it by awaiting inside its own implementation.
+
+**What the tier honestly claims.** A record is durable before the tree moves, so a
+crash between the two replays to the same tree — apply is a total function of the
+tree and the op and reads nothing else, and nothing in the module reads a clock,
+allocates an id, or touches a filesystem. A **superseded activation is refused**
+(`StoreError::NotOwner`) rather than interleaved: ownership cannot reach a second
+*process* opening the same session id, so the store carries a monotonic
+`ActivationToken` and every write presents it. A **refused op journals nothing** —
+the journal is the applied history, and a record whose op does not apply would make
+replay fail on its own evidence. And **reactive slots are not journaled**: `$state`
+/ `$filters` / `$queries` are a view's live inputs rather than authored history, so
+they do not survive an eviction and a host re-seeds them on activation.
+
+The whole module compiles for `wasm32` with no target-specific code, which is what
+makes the browser module and an edge worker the same session type.
+
 ## Chart-lowering posture — lower-in-host
 
 A resolved `Drawing` node renders as first-party inline SVG on every host. A raw
@@ -355,7 +389,8 @@ fuaran-rs/
 │   ├── validator/       # pre-emit structural validator (FUARAN### codes)
 │   ├── render/          # server-HTML renderer + islands + markdown + sanitise floor
 │   ├── bounded/         # the bounded program loop — interpreter, budget, effects, re-resolve
-│   └── client/          # wasm32 client — ClientSession (mod.rs) + C-ABI shim (wasm.rs)
+│   ├── client/          # wasm32 client — ClientSession (mod.rs) + C-ABI shim (wasm.rs)
+│   └── edge/            # edge hosting — EdgeSession + the DurableSessionStore obligations
 ├── css/
 │   └── fuaran.css       # byte-copy of the reference stylesheet (parity-tested)
 ├── js/
@@ -369,6 +404,7 @@ fuaran-rs/
 │   ├── markdown.rs      # markdown corpus certification (byte-for-byte)
 │   ├── render.rs        # renderer behaviour + islands laws + CSS byte-parity
 │   ├── client.rs        # client-session decode → render → drive loop
+│   ├── edge.rs          # the durability protocol — fencing, kill points, rehydration
 │   └── driver_semantics.rs # bounded-loop conformance against the scenario corpus
 ├── run.ps1              # cargo fmt --check -> clippy -> build -> test -> wasm build
 ├── LICENSE              # Apache-2.0

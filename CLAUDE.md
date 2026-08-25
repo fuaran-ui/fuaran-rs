@@ -74,6 +74,8 @@ fuaran-rs/
 │                        #   + trace.rs (the IO-free scenario runner + first-divergence comparison)
 ├── src/ffi/             # target-neutral C-ABI (Phase 537) — fuaran_* over an opaque ClientSession, all targets
 ├── src/client/          # mod.rs (ClientSession, target-agnostic) + wasm.rs (wasm32 re-export of src/ffi/)
+├── src/edge/            # edge hosting — EdgeSession (single-owner, journal-before-adopt, rehydrate)
+│                        #   + the DurableSessionStore obligations + an in-memory reference store
 ├── include/fuaran.h     # hand-written C header for src/ffi/ — the native binding surface + ownership/threading contract
 ├── css/fuaran.css       # byte-copy of the reference stylesheet (parity-tested against the reference artefact)
 ├── js/                  # thin hand-written WASM loader (fuaran-loader.js) + client-loop demo (index.html)
@@ -286,6 +288,53 @@ locked render carries no per-control slot attribute, so **event → store auto-w
 is app-specific** — the loader stays generic and leaves that mapping to the app.
 Adding a `data-*` slot hint to auto-wire would be a renderer-vocabulary change and
 therefore a cross-host parity change — do not add one unilaterally.
+
+## Edge hosting (`src/edge/`)
+
+The durability half of the client tier: a session a worker runtime may evict between
+requests and re-activate later. `EdgeSession` **owns** its store, journals each applied
+`TreeOp` durably **before** the held tree moves, and rehydrates from the journal —
+newest checkpoint plus suffix, chain verified first — on the next activation.
+
+**Five things about it are load-bearing and easy to undo by accident.**
+
+- **`DurableSessionStore` names obligations, never a platform.** Four methods, no
+  vendor, no async, nothing linked. A synchronous trait for the reason `OpStreamSink`
+  is one: the contract is about *ordering*, and putting the await in the trait would
+  make the ordering the caller's responsibility, which is the one thing this tier
+  exists to take away. `InMemoryDurableStore` is the *reference* rather than a toy —
+  it implements the fence — so `tests/edge.rs` exercises the protocol instead of
+  describing it. Do not add a vendor-shaped method (a lease TTL, an alarm, a
+  transaction handle) to make one platform's API fit; those are a host's, and a
+  method only one platform can implement stops being an obligation.
+- **Single-owner is the type system's, and the fence is the platform's.** The store is
+  moved into the session, so two sessions over one handle will not compile; that says
+  nothing about a second *process* opening the same session id, which is the failure a
+  distributed runtime actually has. Hence the monotonic `ActivationToken`: every write
+  presents it and a superseded one is refused as `StoreError::NotOwner`, never
+  interleaved. Both halves are needed and neither substitutes for the other.
+- **Write-ahead is an ORDER, and the order is the claim.** Decode → prove it applies →
+  append durably → adopt. A store failure leaves the held tree exactly where the
+  journal says it is; a crash between the last two steps loses nothing, because apply
+  is total in the tree and the op and reads nothing else. `ClientSession` gained
+  `tree` / `adopt_tree` / `apply_decoded` as `pub(crate)` for precisely this, so the op
+  is decoded once and the tree moves once — keep them crate-internal, since a consumer
+  that could substitute a tree could put one in that no op produced.
+- **A refused op journals nothing, and reactive slots are never journaled.** The
+  journal is the applied history: a record whose op does not apply would make the next
+  replay fail on its own evidence. `$state` / `$filters` / `$queries` are a view's live
+  inputs rather than authored history, so they do not survive an eviction — a stated
+  limit with a test, not an omission, and journaling them would put a query result in a
+  provenance chain.
+- **A checkpoint is an optimisation and never a source of truth.** Dropping every
+  snapshot a store holds changes no rehydrated tree, only how long rehydration takes.
+  `tests/edge.rs` carries the pair that proves the distinction is live: an
+  agree-either-way test passes on a host that ignores checkpoints entirely, so a second
+  test substitutes a snapshot the journal prefix does not fold to and separates the two.
+
+Nothing in the module reads a clock, allocates an id, or touches a filesystem, and it
+compiles for `wasm32` with no target-specific code — which is what makes the browser
+module and an edge worker the same session type.
 
 ## Native C-ABI surface (`src/ffi/` + `include/fuaran.h`)
 

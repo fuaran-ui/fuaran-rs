@@ -23,6 +23,12 @@ pub mod canonical;
 pub mod client;
 pub mod dag;
 pub mod diff;
+/// Edge hosting of the certified core — a single-owner session whose op-stream
+/// is journaled to the platform's durable store before its held tree moves, and
+/// which rehydrates from that journal after an eviction. The store is a trait
+/// with a reference implementation, so the tier names obligations rather than a
+/// platform.
+pub mod edge;
 pub mod elicitation;
 pub mod envelope;
 /// The target-neutral C-ABI export surface (Phase 537) — `extern "C"`
