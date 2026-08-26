@@ -1259,3 +1259,145 @@ fn drawing_root_escapes_hostile_text_inside_the_aria_label_attribute() {
     );
     assert!(!html.contains("<script>"));
 }
+
+// ─── The a11y projection, driven by the SHARED CORPUS (Phase 956) ────────────
+//
+// `accessibility_projects_onto_the_semantic_element` above asserts WHERE the
+// projection lands, but every node in it is hand-built in this file — so it
+// measures this host against this host's own idea of the trait. The Phase-955
+// fixture family is the oracle every host answers to: all six slots, both role
+// classes (a named lower-case `region` and a deliberately-cased custom
+// `doc-pageFooter`), both binding forms (Static and State), all three
+// `liveRegion` tokens, and both placement shapes.
+//
+// Placement-sensitive, for the reason recorded above the placement block.
+
+/// One fixture's expectation: the element carrying the projection (`None` for
+/// the wrapper), what its own open tag must contain, and what must not appear.
+struct A11yCorpusCase {
+    fixture: &'static str,
+    element: Option<&'static str>,
+    want: &'static [&'static str],
+    absent_from_carrier: &'static [&'static str],
+}
+
+const A11Y_CORPUS: &[A11yCorpusCase] = &[
+    // All six slots at once on an ordinary wrapper kind. `hidden` is an
+    // explicit Static FALSE — distinct on the wire from omitted, and it must
+    // emit nothing (`aria-hidden` is not a tri-state).
+    A11yCorpusCase {
+        fixture: "a11y-wrapper-all-slots",
+        element: None,
+        want: &[
+            r#"aria-label="Channel performance summary""#,
+            r#"aria-labelledby="a11y-wrapper-heading""#,
+            r#"aria-describedby="a11y-wrapper-note""#,
+            r#"role="region""#,
+            r#"aria-live="polite""#,
+        ],
+        absent_from_carrier: &["aria-hidden"],
+    },
+    // The State forms. `label` resolves through its declared `defaultValue`
+    // with no host sources (the reference host's default law); the custom
+    // role's CASE is carried verbatim — the exact spelling a fold bug once
+    // rewrote — and `off` is a real `liveRegion` token, not an absence.
+    A11yCorpusCase {
+        fixture: "a11y-wrapper-state-bound",
+        element: None,
+        want: &[
+            r#"aria-label="Site footer""#,
+            r#"role="doc-pageFooter""#,
+            r#"aria-live="off""#,
+        ],
+        absent_from_carrier: &["aria-hidden"],
+    },
+    A11yCorpusCase {
+        fixture: "a11y-alert-assertive",
+        element: None,
+        want: &[r#"role="alert""#, r#"aria-live="assertive""#],
+        absent_from_carrier: &[],
+    },
+    // D4 forwarding: the body IS the semantic element. The accessible name
+    // OVERRIDES the visible "Read more".
+    A11yCorpusCase {
+        fixture: "a11y-link-labelled",
+        element: Some("a"),
+        want: &[r#"aria-label="Read the 2026 annual report (PDF)""#],
+        absent_from_carrier: &[],
+    },
+    A11yCorpusCase {
+        fixture: "a11y-button-named",
+        element: Some("button"),
+        want: &[
+            r#"aria-label="Refresh revenue figures""#,
+            r#"role="button""#,
+        ],
+        absent_from_carrier: &[],
+    },
+    // The decorative shape: empty alt + `hidden` Static TRUE — the slot two
+    // hosts dropped entirely before the Phase 951 port.
+    A11yCorpusCase {
+        fixture: "a11y-image-decorative",
+        element: Some("img"),
+        want: &[r#"aria-hidden="true""#],
+        absent_from_carrier: &[],
+    },
+];
+
+#[test]
+fn a11y_corpus_projection_lands_on_the_right_element() {
+    if corpus_nodes_dir().is_none() {
+        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        return;
+    }
+    // A table-driven leg that silently enumerated nothing would be a gate that
+    // checked nothing.
+    assert_eq!(
+        A11Y_CORPUS.len(),
+        6,
+        "the Phase 955 node family is six fixtures"
+    );
+
+    for case in A11Y_CORPUS {
+        let tree = load_fixture(case.fixture).expect("the corpus is present");
+        let html = render_to_html(&tree, &BindingSources::default());
+        let wrapper = wrapper_tag(&html);
+        let carrier = match case.element {
+            None => wrapper,
+            Some(tag) => open_tag(&html, tag),
+        };
+
+        for want in case.want {
+            assert!(
+                carrier.contains(want),
+                "{}: carrier missing {want}: {carrier}",
+                case.fixture
+            );
+        }
+        for absent in case.absent_from_carrier {
+            assert!(
+                !carrier.contains(absent),
+                "{}: carrier must not emit {absent}: {carrier}",
+                case.fixture
+            );
+        }
+        // A forwarding kind must not leave the projection behind.
+        if case.element.is_some() {
+            for want in case.want {
+                let attr = &want[..want.find('=').expect("an attribute assertion")];
+                assert!(
+                    !wrapper.contains(attr),
+                    "{}: {attr} leaked onto the wrapper: {wrapper}",
+                    case.fixture
+                );
+            }
+        }
+        // The wrapper keeps the node's ADDRESS whichever element carries the
+        // projection.
+        assert!(
+            wrapper.contains(&format!(r#"data-fuaran-node-id="{}""#, tree.id)),
+            "{}: the wrapper must keep the node address: {wrapper}",
+            case.fixture
+        );
+    }
+}
