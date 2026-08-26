@@ -467,6 +467,8 @@ decode_bare_enum!(decode_image_variant, ImageVariant, "ImageVariant");
 decode_bare_enum!(decode_link_protection, LinkProtection, "LinkProtection");
 decode_bare_enum!(decode_math_display, MathDisplay, "MathDisplay");
 decode_bare_enum!(decode_date_variant, DateVariant, "DateVariant");
+decode_bare_enum!(decode_text_format, TextFormat, "TextFormat");
+decode_bare_enum!(decode_compare_op, CompareOp, "CompareOp");
 decode_bare_enum!(
     decode_file_read_encoding,
     FileReadEncoding,
@@ -2677,8 +2679,99 @@ fn decode_form_field_kind(
     }
 }
 
+/// The rule slot's rejected spellings. Small and enumerated for the same reason
+/// the grid's set is: tolerance of unknown keys is right for a field a future
+/// profile may add and wrong for a near miss of one that exists, because the tree
+/// then decodes and renders while constraining nothing.
+const FORM_FIELD_NEAR_MISSES: &[(&str, &str)] = &[
+    ("validation", "rule"),
+    ("constraints", "rule"),
+    ("validate", "rule"),
+];
+
+fn decode_compare_rule(path: &str, j: &JVal) -> DResult<CompareRule> {
+    let fields = as_obj(path, j)?;
+    let op = decode_compare_op(&format!("{path}.op"), req(path, fields, "op", "CompareOp")?)?;
+    let against = req_binding(path, fields, "against", "against Binding")?;
+    Ok(CompareRule { op, against })
+}
+
+/// A field's declared constraint. Every slot is optional structurally, and two
+/// shapes are refused here as POLICY:
+///
+/// - a rule with every slot absent. A rule that constrains nothing is a defect,
+///   not a no-op: it decodes, validates and renders while declaring nothing,
+///   which is the fake-affordance shape the near-miss table also forecloses,
+///   arriving through an empty object instead of a wrong key. `message` alone does
+///   not rescue it — the message is the prose shown when some OTHER slot is unmet,
+///   so a message-only rule is the help-text failure wearing the new vocabulary's
+///   clothes.
+/// - `minLength` above `maxLength`. The ordered-pair rule applied to a length
+///   pair: an inverted bound admits no value at all, so the field can never be
+///   submitted and the form is dead on arrival.
+///
+/// Neither is a shape — both are relations BETWEEN slots — which is why they live
+/// here rather than in the structural layer.
+fn decode_field_rule(path: &str, j: &JVal) -> DResult<FieldRule> {
+    let fields = as_obj(path, j)?;
+    let format = match get(fields, "format") {
+        Some(v) => Some(decode_text_format(&format!("{path}.format"), v)?),
+        None => None,
+    };
+    let pattern = opt_string(path, fields, "pattern")?;
+    let min_length = opt_int(path, fields, "minLength")?;
+    let max_length = opt_int(path, fields, "maxLength")?;
+    let compare = match get(fields, "compare") {
+        Some(v) => Some(decode_compare_rule(&format!("{path}.compare"), v)?),
+        None => None,
+    };
+    let message = opt_text_source(path, fields, "message")?;
+
+    if format.is_none()
+        && pattern.is_none()
+        && min_length.is_none()
+        && max_length.is_none()
+        && compare.is_none()
+    {
+        return Err(make_error(
+            DecodeErrorCode::WrongType,
+            path.to_string(),
+            "a rule that constrains nothing is a defect, not a no-op — declare at least one of \
+             format / pattern / minLength / maxLength / compare, or omit 'rule' entirely"
+                .to_string(),
+            Some("FieldRule with at least one constraint slot".to_string()),
+        ));
+    }
+
+    if let (Some(lo), Some(hi)) = (min_length, max_length)
+        && lo > hi
+    {
+        return Err(make_error(
+            DecodeErrorCode::WrongType,
+            path.to_string(),
+            format!(
+                "minLength {lo} is above maxLength {hi} — an inverted length bound admits no value \
+                 at all, so the field could never be submitted"
+            ),
+            Some("minLength <= maxLength".to_string()),
+        ));
+    }
+
+    Ok(FieldRule {
+        format,
+        pattern,
+        min_length,
+        max_length,
+        compare,
+        message,
+    })
+}
+
 fn decode_form_field(path: &str, j: &JVal) -> DResult<FormField> {
     let fields = as_obj(path, j)?;
+    // The near-miss check runs BEFORE the rule decode, so a field carrying both
+    // `validation` and a well-formed `rule` still names the ignored key.
+    check_near_misses_in(path, fields, FORM_FIELD_NEAR_MISSES, "form field")?;
     // Field alias: name → id. Id decodes first so the form context's
     // auto-bind can use it (Phase 596).
     let id = req_string_aliased(path, fields, "id", &["name"], "form field id string")?;
@@ -2691,12 +2784,17 @@ fn decode_form_field(path: &str, j: &JVal) -> DResult<FormField> {
     let label = req_text_source(path, fields, "label", "field label TextSource")?;
     let required = req_bool(path, fields, "required", "required bool")?;
     let help = opt_text_source(path, fields, "help")?;
+    let rule = match get(fields, "rule") {
+        Some(v) => Some(decode_field_rule(&format!("{path}.rule"), v)?),
+        None => None,
+    };
     Ok(FormField {
         id,
         kind,
         label,
         required,
         help,
+        rule,
     })
 }
 
@@ -2974,13 +3072,26 @@ fn retired_positional_field(path: &str, fields: &Fields, name: &str, op_kind: &s
 }
 
 fn check_near_misses(path: &str, fields: &Fields, candidates: &[(&str, &str)]) -> DResult<()> {
+    check_near_misses_in(path, fields, candidates, "grid")
+}
+
+/// The near-miss check, with the vocabulary NAMED. The message says which
+/// vocabulary the key is not part of, so a form field's near miss does not report
+/// itself against the grid's — the refusal is didactic, and a didactic message
+/// that names the wrong vocabulary sends the author to the wrong document.
+fn check_near_misses_in(
+    path: &str,
+    fields: &Fields,
+    candidates: &[(&str, &str)],
+    vocabulary: &str,
+) -> DResult<()> {
     for (found, canonical) in candidates {
         if get(fields, found).is_some() {
             return Err(make_error(
                 DecodeErrorCode::WrongType,
                 format!("{path}.{found}"),
                 format!(
-                    "'{found}' is not part of the grid vocabulary — it would be ignored, not honoured"
+                    "'{found}' is not part of the {vocabulary} vocabulary — it would be ignored, not honoured"
                 ),
                 Some((*canonical).to_string()),
             ));

@@ -914,34 +914,6 @@ fn real_subjects() -> Vec<Subject> {
     vec![node_subject(), op_subject()]
 }
 
-/// The ONE observed-and-excluded defect class, named rather than numbered so a
-/// reader meets the reason at the point of the exclusion.
-///
-/// The wire specification's §5 requires every host to EMIT the quoted `"NaN"` /
-/// `"Infinity"` / `"-Infinity"` sentinels for a non-finite number, and its §7
-/// requires a decoder to ACCEPT them at a float slot. Not every host accepts them
-/// at every such slot, so `decode -> encode -> decode` does not close on a
-/// document carrying a non-finite number. The specification already records this
-/// as a §7 conformance defect rather than an open question.
-///
-/// Excluded here, not because it is unimportant, but because it spans more than
-/// one host: fixing it in one alone would manufacture a new divergence of exactly
-/// the kind the cross-host parity work exists to close. It is COUNTED and PRINTED
-/// on every run, and it disappears on its own the moment the decoder accepts what
-/// it emits.
-///
-/// Keyed on the CAUSE — a sentinel in the canonical form — never on a fixture id
-/// or an iteration number: the seed pool is the shared corpus, so the generated
-/// stream renumbers whenever the corpus moves, and an exclusion keyed to an
-/// iteration would silence a different defect next week.
-const KNOWN_NONFINITE_HOLE: &str = "known-nonfinite-roundtrip-hole";
-
-fn is_known_nonfinite_hole(canonical: &str) -> bool {
-    canonical.contains(r#""NaN""#)
-        || canonical.contains(r#""Infinity""#)
-        || canonical.contains(r#""-Infinity""#)
-}
-
 /// `kind` is the coarse class; `detail` is for the report. `rejected` and `clean`
 /// are both PASSES — a fuzz harness that treated refusal as failure would be
 /// asserting the opposite of the claim under test.
@@ -953,7 +925,7 @@ struct Verdict {
 
 impl Verdict {
     fn is_counterexample(&self) -> bool {
-        self.kind != "rejected" && self.kind != "clean" && self.kind != KNOWN_NONFINITE_HOLE
+        self.kind != "rejected" && self.kind != "clean"
     }
 }
 
@@ -1062,13 +1034,8 @@ fn check(subject: &Subject, budgets: Budgets, input: &str) -> Measured {
         return at("rejected", code);
     }
     if let Some(code) = result.re_decoded_code {
-        let kind = if is_known_nonfinite_hole(&result.canonical) {
-            KNOWN_NONFINITE_HOLE
-        } else {
-            "canonical-refused"
-        };
         return at(
-            kind,
+            "canonical-refused",
             format!("the decoder's own output re-decodes as {code}"),
         );
     }
@@ -1140,9 +1107,6 @@ struct RunStats {
     corpus_seeds: usize,
     reject_codes: Vec<(String, usize)>,
     accepted: usize,
-    /// The one EXCLUDED defect class, counted and published rather than dropped:
-    /// an exclusion nobody can see reads as "found nothing".
-    known_nonfinite_holes: usize,
     max_decode_ms: f64,
     max_alloc_bytes: usize,
     max_alloc_ratio: f64,
@@ -1194,7 +1158,6 @@ fn run(
             match m.verdict.kind.as_str() {
                 "rejected" => stats.bump_code(&m.verdict.detail),
                 "clean" => stats.accepted += 1,
-                k if k == KNOWN_NONFINITE_HOLE => stats.known_nonfinite_holes += 1,
                 _ => stats.counterexamples.push(Counterexample {
                     subject: subject.name,
                     iteration: i,
@@ -1224,7 +1187,7 @@ fn summarise(stats: &RunStats) -> String {
     let per_iteration = stats.inputs.checked_div(stats.iterations).unwrap_or(0);
     format!(
         "{} inputs ({} iterations x {per_iteration} entry points) in {:.1} s — accepted {}, \
-         refused [{}], {} counterexamples, {} known non-finite round-trip holes (§7, EXCLUDED); \
+         refused [{}], {} counterexamples; \
          max decode {:.0} ms; alloc peak {} bytes ({:.0} x)",
         stats.inputs,
         stats.iterations,
@@ -1232,7 +1195,6 @@ fn summarise(stats: &RunStats) -> String {
         stats.accepted,
         codes.join(" "),
         stats.counterexamples.len(),
-        stats.known_nonfinite_holes,
         stats.max_decode_ms,
         stats.max_alloc_bytes,
         stats.max_alloc_ratio
@@ -1265,7 +1227,7 @@ fn evidence_json(stats: &RunStats, cfg: Config, seed: u64, corpus_present: bool)
         "{{\n  \"host\": \"fuaran-rs\",\n  \"entryPoints\": [\"decode_node\", \"decode_op\"],\n  \
          \"config\": \"{}\",\n  \"seed\": \"{seed}\",\n  \"iterations\": {},\n  \"inputs\": {},\n  \
          \"corpusSeeds\": {},\n  \"corpusPresent\": {corpus_present},\n  \"accepted\": {},\n  \
-         \"rejectCodes\": {{\n{}\n  }},\n  \"counterexamples\": {},\n  \"knownNonFiniteRoundTripHoles\": {},\n  \"maxDecodeMs\": {:.3},\n  \
+         \"rejectCodes\": {{\n{}\n  }},\n  \"counterexamples\": {},\n  \"maxDecodeMs\": {:.3},\n  \
          \"maxAllocBytes\": {},\n  \"maxAllocRatio\": {:.3},\n  \"elapsedSeconds\": {:.3}\n}}\n",
         cfg.name,
         stats.iterations,
@@ -1274,7 +1236,6 @@ fn evidence_json(stats: &RunStats, cfg: Config, seed: u64, corpus_present: bool)
         stats.accepted,
         codes.join(",\n"),
         stats.counterexamples.len(),
-        stats.known_nonfinite_holes,
         stats.max_decode_ms,
         stats.max_alloc_bytes,
         stats.max_alloc_ratio,

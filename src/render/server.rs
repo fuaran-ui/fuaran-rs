@@ -2400,6 +2400,10 @@ fn render_filter(ctx: &Ctx<'_>, spec: &FilterSpec) -> String {
                 label: spec.label.clone(),
                 required: false,
                 help: None,
+                // A synthetic field standing in for a filter control: it carries
+                // no authored rule, and inventing one here would render a
+                // constraint the tree never declared.
+                rule: None,
             };
             render_form_control(ctx, &synthetic)
         }

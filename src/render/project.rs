@@ -283,6 +283,11 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
                     label: map_text(sources, &f.label),
                     required: f.required,
                     help: map_opt_text(sources, &f.help),
+                    // The rule's `message` is a TextSource, but a source
+                    // projection maps only the text a reader SEES; a constraint's
+                    // prose is shown on violation, which this projection does not
+                    // model. Carried through unchanged rather than silently mapped.
+                    rule: f.rule.clone(),
                 })
                 .collect(),
             on_submit: spec.on_submit.clone(),

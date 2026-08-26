@@ -1508,6 +1508,36 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
     }
 }
 
+fn compare_rule(c: &CompareRule) -> String {
+    obj(vec![
+        field("against", binding(&c.against)),
+        field("op", s(c.op.as_str())),
+    ])
+}
+
+fn field_rule(r: &FieldRule) -> String {
+    let mut fields = Vec::new();
+    if let Some(format) = &r.format {
+        fields.push(field("format", s(format.as_str())));
+    }
+    if let Some(pattern) = &r.pattern {
+        fields.push(field("pattern", s(pattern)));
+    }
+    if let Some(min) = r.min_length {
+        fields.push(field("minLength", int(min)));
+    }
+    if let Some(max) = r.max_length {
+        fields.push(field("maxLength", int(max)));
+    }
+    if let Some(compare) = &r.compare {
+        fields.push(field("compare", compare_rule(compare)));
+    }
+    if let Some(message) = &r.message {
+        fields.push(field("message", text_source(message)));
+    }
+    obj(fields)
+}
+
 fn form_field(f: &FormField) -> String {
     let mut fields = vec![
         field("id", s(&f.id)),
@@ -1520,6 +1550,9 @@ fn form_field(f: &FormField) -> String {
     ];
     if let Some(help) = &f.help {
         fields.push(field("help", text_source(help)));
+    }
+    if let Some(rule) = &f.rule {
+        fields.push(field("rule", field_rule(rule)));
     }
     obj(fields)
 }

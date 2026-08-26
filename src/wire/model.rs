@@ -105,6 +105,11 @@ bare_enum!(LinkProtection { Email => "email" });
 bare_enum!(MathDisplay { Inline => "Inline", Block => "Block" });
 bare_enum!(DateVariant { Date => "Date", Time => "Time", DateTime => "DateTime" });
 bare_enum!(FileReadEncoding { Text => "Text", Base64 => "Base64", DataUrl => "DataUrl" });
+// `FormFieldKind` names the CONTROL; `FormField.rule` names the ACCEPTED SET.
+bare_enum!(TextFormat { Email => "email", Url => "url", Tel => "tel" });
+bare_enum!(CompareOp {
+    Eq => "eq", Neq => "neq", Lt => "lt", Lte => "lte", Gt => "gt", Gte => "gte"
+});
 bare_enum!(LiveRegionKind { Polite => "polite", Assertive => "assertive", Off => "off" });
 // Phase 801 — the closed sort direction on `staticRows.defaultSort`. Lower-case on
 // the wire, like `LiveRegionKind` and unlike most enums here.
@@ -828,6 +833,31 @@ pub enum FormFieldKind {
     },
 }
 
+/// The cross-field operand. `against` is a `Binding`, and that IS the cross-field
+/// mechanism rather than an accident of typing: any read slot may take a Binding,
+/// and the auto-bind rule already puts every form field's value in State under the
+/// field's own id, so `{"$type":"State","key":"<sibling id>"}` reads the sibling
+/// with no coordination vocabulary at all.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompareRule {
+    pub op: CompareOp,
+    pub against: Binding,
+}
+
+/// A field's declared constraint — the ACCEPTED SET, where `FormFieldKind` names
+/// the control. Every slot is optional structurally; the two well-formedness
+/// refusals are relations BETWEEN slots and so live in the decoder's policy layer
+/// rather than in this shape.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldRule {
+    pub format: Option<TextFormat>,
+    pub pattern: Option<String>,
+    pub min_length: Option<i64>,
+    pub max_length: Option<i64>,
+    pub compare: Option<CompareRule>,
+    pub message: Option<TextSource>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FormField {
     pub id: String,
@@ -835,6 +865,7 @@ pub struct FormField {
     pub label: TextSource,
     pub required: bool,
     pub help: Option<TextSource>,
+    pub rule: Option<FieldRule>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
