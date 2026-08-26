@@ -127,6 +127,49 @@ canonical error code + `$`-rooted path prefix (the harness locates
 skips when absent). The **lenient-accept**, **envelope**, and **elicitation**
 families certify the same way — the full corpus enumeration runs, none skipped.
 
+### Decoder robustness fuzz (`tests/decoder_fuzz.rs`)
+
+The refusal contract — decoding is TOTAL, so a malformed or hostile input yields a structured typed
+error, never a panic and never a hang — asserted against **generated** hostile input rather than
+against the curated reject corpus alone. A curated corpus is evidence about the author's imagination.
+
+**Hand-written, not `cargo-fuzz`, and the reason is a constraint rather than a preference.** This
+crate declares no third-party dependencies, and `cargo-fuzz` additionally wants a nightly toolchain
+and a sanitizer runtime the CI gate does not carry — a leg reachable only under a toolchain the gate
+does not run is a leg the gate does not have. What is kept is the deterministic replayable generator
+(SplitMix64) over the five named input families, plus a minimiser; what is lost is coverage-guided
+mutation, and the file says so rather than leaving it to be assumed.
+
+- **The bounded run IS the PR gate** — `cargo test --no-fail-fast` already runs it.
+- **The long run + its machine-readable record:** `FUARAN_FUZZ_LONG=1
+  FUARAN_FUZZ_ITERATIONS=250000 FUARAN_FUZZ_EVIDENCE=<file> cargo test --test decoder_fuzz --
+  --nocapture`.
+- **This is the one host where the reference allocation invariant ports EXACTLY.** The test binary
+  installs a counting `#[global_allocator]`, so "bytes allocated per input byte" is measured rather
+  than proxied. The counter is **per thread** — `const`-initialised `thread_local!`, accessed through
+  `try_with` — and that is the design, not a detail: a process-wide `AtomicUsize` was the first shape
+  here, and `cargo test`'s parallelism let a sibling test's 16 MiB string land inside the fuzz run's
+  measurement window and produce a run of phantom `over-allocated` counterexamples.
+  `the_allocation_counter_is_per_thread` is the pin on that; do not delete it as redundant.
+- **The soft time budget scales with the profile** (`soft_time_budget_ms`). `cargo test` builds
+  debug, where this crate's hand-written JSON layer costs about an order of magnitude more, and a
+  budget that is flaky gets raised in a hurry by whoever it blocks with nobody recording why.
+- **`catch_unwind` is meaningful in the test profile only.** The release profile sets `panic =
+  "abort"`, under which nothing is catchable — which is why the CI long run stays in debug and takes
+  a smaller sample rather than going faster and losing the ability to report.
+- **`&str` is guaranteed well-formed UTF-8, so the lone-surrogate inputs the reference host fuzzes
+  cannot reach this decoder at all.** The type system removes the case; the harness does not decline
+  to test it. Stated in the alphabet's comment rather than smoothed over.
+- **The `duplicate-key` mutator and the `NaN` / `Infinity` / `1e999` / `+1` tokens are generated
+  deliberately, and nothing here asserts which answer is right.** Those are §20 "Decode
+  determinism", landed PROPOSED and not yet ratified; crash-freedom on them is in scope, agreement
+  is not.
+
+`examples/refusal_report.rs` is the companion emitter: this host's refusal class for every reject
+fixture, as JSON, for a cross-host runner that compares the hosts to each other rather than each to
+the corpus in isolation. An **example** rather than a `[[bin]]`, so a published crate does not grow
+an installable binary for the sake of a CI step.
+
 ### Destination policy — AMBIENT on the render context (`src/render/egress.rs`)
 
 `WIRE_FORMAT.md` §14.1. The scheme floor (`src/render/sanitize.rs`) answers *is this
