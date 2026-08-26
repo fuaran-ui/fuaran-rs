@@ -255,17 +255,6 @@ fn req_string_aliased(
     Ok(as_str(&format!("{path}.{canonical}"), v)?.to_string())
 }
 
-fn req_binding_aliased(
-    path: &str,
-    fields: &Fields,
-    canonical: &str,
-    aliases: &[&str],
-    expected: &str,
-) -> DResult<Binding> {
-    let v = req_aliased(path, fields, canonical, aliases, expected)?;
-    decode_binding(&format!("{path}.{canonical}"), v)
-}
-
 fn req_binding_slot_aliased(
     path: &str,
     fields: &Fields,
@@ -1262,6 +1251,18 @@ enum StaticSlot {
     Str,
     /// A `Binding<bool>` slot — the `Str` reasoning at the other scalar type.
     Bool,
+    /// A `Binding<float>` slot. §7's float admission is `{ JSON number } ∪
+    /// { "NaN", "Infinity", "-Infinity" }` — those three tokens EXACTLY and
+    /// case-sensitively, which is why the sentinel-bearing round-trip fixtures
+    /// keep decoding while `"nan"` and `"lots"` do not. The parsed payload
+    /// still rides as `StaticValue::Ast`, preserving the sentinel STRING so
+    /// re-encode is byte-identical; what the slot adds is the type check the
+    /// reference host has always applied (`bindingGeneric<float> requireFloat`).
+    Float,
+    /// A `Binding<int>` slot. §7 admits `{ JSON number }` ONLY, truncating via
+    /// integer cast — an integer slot has no non-finite form, so `"NaN"` here
+    /// is `WRONG_TYPE` where at a `Float` slot it is the sentinel.
+    Int,
     Options,
     StringOpt,
     StringList,
@@ -1285,6 +1286,10 @@ impl StaticSlot {
             // absent `State.defaultValue` at a scalar slot agrees byte-for-byte.
             StaticSlot::Str => StaticValue::Ast(JVal::Str(String::new())),
             StaticSlot::Bool => StaticValue::Ast(JVal::Bool(false)),
+            // The reference host's typed numeric fallbacks (`0.0` / `0`). This
+            // host carries one numeric AST node, and the canonical number form
+            // renders both as `0`, so the two agree byte-for-byte on the wire.
+            StaticSlot::Float | StaticSlot::Int => StaticValue::Ast(JVal::Num(0.0)),
             StaticSlot::Options => StaticValue::Options(vec![SelectOption {
                 value: OPAQUE.to_string(),
                 label: TextSource::Literal(OPAQUE.to_string()),
@@ -1311,6 +1316,19 @@ impl StaticSlot {
             }
             StaticSlot::Bool => {
                 as_bool(path, v)?;
+                Ok(StaticValue::Ast(unwrap_static_envelope(v).clone()))
+            }
+            // `as_float` / `as_int` ARE §7's admission rules, and they already
+            // unwrap a `Static` envelope found at a plain-scalar position — so
+            // both arms §3.6 sanctions (the envelope and the bare scalar) reach
+            // the same typed test. The unwrapped node is cloned rather than the
+            // parsed `f64` re-boxed, so a sentinel string round-trips as itself.
+            StaticSlot::Float => {
+                as_float(path, v)?;
+                Ok(StaticValue::Ast(unwrap_static_envelope(v).clone()))
+            }
+            StaticSlot::Int => {
+                as_int(path, v)?;
                 Ok(StaticValue::Ast(unwrap_static_envelope(v).clone()))
             }
             StaticSlot::Options => match v {
@@ -2025,13 +2043,6 @@ fn req_binding_slot(
     decode_binding_slot(&format!("{path}.{key}"), v, slot)
 }
 
-fn opt_binding(path: &str, fields: &Fields, key: &str) -> DResult<Option<Binding>> {
-    match get(fields, key) {
-        None => Ok(None),
-        Some(v) => Ok(Some(decode_binding(&format!("{path}.{key}"), v)?)),
-    }
-}
-
 fn opt_binding_slot(
     path: &str,
     fields: &Fields,
@@ -2236,13 +2247,20 @@ fn decode_metric_spec(path: &str, j: &JVal) -> DResult<MetricSpec> {
     // 0.2.0 rename law — scalar displayed value ⇒ `value`; the retired
     // `source` spelling is a hard error (clean break), the web-prior `data`
     // alias remains (§3.6).
-    let value = req_binding_aliased(path, fields, "value", &["data"], "Metric value binding")?;
+    let value = req_binding_slot_aliased(
+        path,
+        fields,
+        "value",
+        &["data"],
+        "Metric value binding",
+        StaticSlot::Float,
+    )?;
     // Phase 460 — the stylistic fields are omitted-when-default on the wire.
     let format = opt_cell_format_default(path, fields, "format")?;
     let tone = opt_tone_default(path, fields, "tone")?;
     let weight = opt_weight_default(path, fields, "weight")?;
     let emphasis = opt_emphasis_default(path, fields, "emphasis")?;
-    let trend = opt_binding(path, fields, "trend")?;
+    let trend = opt_binding_slot(path, fields, "trend", StaticSlot::Float)?;
     let trend_format = match get(fields, "trendFormat") {
         None => None,
         Some(v) => Some(decode_cell_format(&format!("{path}.trendFormat"), v)?),
@@ -2280,7 +2298,14 @@ fn decode_label_value_row_spec(path: &str, j: &JVal) -> DResult<LabelValueRowSpe
     let fields = as_obj(path, j)?;
     let label = req_text_source(path, fields, "label", "row TextSource label")?;
     // 0.2.0 rename law — scalar displayed value ⇒ `value` (`data` alias kept).
-    let value = req_binding_aliased(path, fields, "value", &["data"], "row Binding<float> value")?;
+    let value = req_binding_slot_aliased(
+        path,
+        fields,
+        "value",
+        &["data"],
+        "row Binding<float> value",
+        StaticSlot::Float,
+    )?;
     // Phase 460 — `format` omitted-when-default. The `emphasis` here is the
     // behavioural bool (not the `Emphasis` style DU): 0.2.2 omitted-when-false,
     // cross-vocab coerced when a model writes the enum spelling.
@@ -2498,7 +2523,13 @@ fn decode_callout_spec(path: &str, j: &JVal) -> DResult<CalloutSpec> {
 
 fn decode_progress_spec(path: &str, j: &JVal) -> DResult<ProgressSpec> {
     let fields = as_obj(path, j)?;
-    let fraction = req_binding(path, fields, "fraction", "Progress fraction binding")?;
+    let fraction = req_binding_slot(
+        path,
+        fields,
+        "fraction",
+        "Progress fraction binding",
+        StaticSlot::Float,
+    )?;
     // 0.2.0 — omitted-when-default (false).
     let indeterminate = opt_bool(path, fields, "indeterminate")?.unwrap_or(false);
     let tone = opt_tone_default(path, fields, "tone")?;
@@ -2595,7 +2626,7 @@ fn decode_form_field_kind(
             on_change,
         }),
         "Number" => Ok(FormFieldKind::Number {
-            value: value_or(StaticSlot::Untyped, control_value_defaults::number())?,
+            value: value_or(StaticSlot::Float, control_value_defaults::number())?,
             on_change,
         }),
         "Checkbox" => Ok(FormFieldKind::Checkbox {
@@ -2642,7 +2673,7 @@ fn decode_form_field_kind(
             on_change,
         }),
         "RangedNumber" => Ok(FormFieldKind::RangedNumber {
-            value: value_or(StaticSlot::Untyped, control_value_defaults::number())?,
+            value: value_or(StaticSlot::Float, control_value_defaults::number())?,
             min: opt_float(path, fields, "min")?,
             max: opt_float(path, fields, "max")?,
             step: opt_float(path, fields, "step")?,
@@ -3509,8 +3540,8 @@ fn decode_draw_style(path: &str, j: &JVal) -> DResult<DrawStyle> {
     Ok(DrawStyle {
         fill: opt_binding_slot(path, fields, "fill", StaticSlot::Str)?,
         stroke: opt_binding_slot(path, fields, "stroke", StaticSlot::Str)?,
-        stroke_width: opt_binding(path, fields, "strokeWidth")?,
-        opacity: opt_binding(path, fields, "opacity")?,
+        stroke_width: opt_binding_slot(path, fields, "strokeWidth", StaticSlot::Float)?,
+        opacity: opt_binding_slot(path, fields, "opacity", StaticSlot::Float)?,
         text_anchor,
         font_size: opt_float(path, fields, "fontSize")?,
         emphasis,
@@ -3783,7 +3814,7 @@ fn decode_tabs_spec(path: &str, j: &JVal) -> DResult<TabsSpec> {
         None => Binding::Static {
             value: StaticValue::Ast(JVal::Num(0.0)),
         },
-        Some(v) => decode_binding(&format!("{path}.activeIndex"), v)?,
+        Some(v) => decode_binding_slot(&format!("{path}.activeIndex"), v, StaticSlot::Int)?,
     };
     Ok(TabsSpec {
         children,
@@ -3799,7 +3830,13 @@ fn decode_tabs_spec(path: &str, j: &JVal) -> DResult<TabsSpec> {
 
 fn decode_stepper_spec(path: &str, j: &JVal) -> DResult<StepperSpec> {
     let fields = as_obj(path, j)?;
-    let active_step = req_binding(path, fields, "activeStep", "activeStep binding")?;
+    let active_step = req_binding_slot(
+        path,
+        fields,
+        "activeStep",
+        "activeStep binding",
+        StaticSlot::Int,
+    )?;
     let children = decode_children(path, fields)?;
     Ok(StepperSpec {
         active_step,
