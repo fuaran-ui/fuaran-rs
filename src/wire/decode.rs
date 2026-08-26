@@ -1252,6 +1252,16 @@ fn decode_invoke_args(path: &str, j: &JVal) -> DResult<Vec<InvokeArg>> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StaticSlot {
     Untyped,
+    /// A `Binding<string>` slot. The parsed payload still rides as
+    /// `StaticValue::Ast`, so nothing downstream and no encoded byte changes —
+    /// what the slot adds is the TYPE CHECK the reference host has always
+    /// applied (`bindingGeneric<string> path requireString ""`). §3.6's
+    /// bare-scalar coercion is about SHAPE; the slot's own `'T` still governs
+    /// the value, which is why `"hidden": "yes"` must be refused even though
+    /// `"label": "Home"` is sanctioned shorthand.
+    Str,
+    /// A `Binding<bool>` slot — the `Str` reasoning at the other scalar type.
+    Bool,
     Options,
     StringOpt,
     StringList,
@@ -1271,6 +1281,10 @@ impl StaticSlot {
     fn placeholder(self) -> StaticValue {
         match self {
             StaticSlot::Untyped => StaticValue::Ast(JVal::Str(OPAQUE.to_string())),
+            // The reference host's typed fallbacks (`""` / `false`), so an
+            // absent `State.defaultValue` at a scalar slot agrees byte-for-byte.
+            StaticSlot::Str => StaticValue::Ast(JVal::Str(String::new())),
+            StaticSlot::Bool => StaticValue::Ast(JVal::Bool(false)),
             StaticSlot::Options => StaticValue::Options(vec![SelectOption {
                 value: OPAQUE.to_string(),
                 label: TextSource::Literal(OPAQUE.to_string()),
@@ -1291,6 +1305,14 @@ impl StaticSlot {
     fn parse(self, path: &str, v: &JVal) -> DResult<StaticValue> {
         match self {
             StaticSlot::Untyped => Ok(StaticValue::Ast(v.clone())),
+            StaticSlot::Str => {
+                as_str(path, v)?;
+                Ok(StaticValue::Ast(unwrap_static_envelope(v).clone()))
+            }
+            StaticSlot::Bool => {
+                as_bool(path, v)?;
+                Ok(StaticValue::Ast(unwrap_static_envelope(v).clone()))
+            }
             StaticSlot::Options => match v {
                 JVal::Null => Ok(StaticValue::Options(vec![])),
                 JVal::Str(s) if s == OPAQUE => Ok(self.placeholder()),
@@ -2010,6 +2032,22 @@ fn opt_binding(path: &str, fields: &Fields, key: &str) -> DResult<Option<Binding
     }
 }
 
+fn opt_binding_slot(
+    path: &str,
+    fields: &Fields,
+    key: &str,
+    slot: StaticSlot,
+) -> DResult<Option<Binding>> {
+    match get(fields, key) {
+        None => Ok(None),
+        Some(v) => Ok(Some(decode_binding_slot(
+            &format!("{path}.{key}"),
+            v,
+            slot,
+        )?)),
+    }
+}
+
 // ─── TextSource ──────────────────────────────────────────────────────────────
 
 fn decode_text_source(path: &str, j: &JVal) -> DResult<TextSource> {
@@ -2298,7 +2336,13 @@ fn decode_badge_spec(path: &str, j: &JVal) -> DResult<BadgeSpec> {
 
 fn decode_link_spec(path: &str, j: &JVal) -> DResult<LinkSpec> {
     let fields = as_obj(path, j)?;
-    let href = req_binding(path, fields, "href", "link Binding<string> Href")?;
+    let href = req_binding_slot(
+        path,
+        fields,
+        "href",
+        "link Binding<string> Href",
+        StaticSlot::Str,
+    )?;
     let label = req_text_source(path, fields, "label", "link label TextSource")?;
     let download = req_bool(path, fields, "download", "download bool")?;
     let rel = opt_string(path, fields, "rel")?;
@@ -2322,7 +2366,13 @@ fn decode_link_spec(path: &str, j: &JVal) -> DResult<LinkSpec> {
 fn decode_image_spec(path: &str, j: &JVal) -> DResult<ImageSpec> {
     let fields = as_obj(path, j)?;
     let alt = req_text_source(path, fields, "alt", "Image alt TextSource")?;
-    let src = req_binding(path, fields, "src", "Image Binding<string> Src")?;
+    let src = req_binding_slot(
+        path,
+        fields,
+        "src",
+        "Image Binding<string> Src",
+        StaticSlot::Str,
+    )?;
     let variant_j = req(path, fields, "variant", "ImageVariant")?;
     let variant = decode_image_variant(&format!("{path}.variant"), variant_j)?;
     Ok(ImageSpec { alt, src, variant })
@@ -2344,7 +2394,7 @@ fn decode_toast_spec(path: &str, j: &JVal) -> DResult<ToastSpec> {
     let fields = as_obj(path, j)?;
     let message = req_text_source(path, fields, "message", "Toast message TextSource")?;
     let tone = opt_tone_default(path, fields, "tone")?;
-    let open = req_binding(path, fields, "open", "Toast open binding")?;
+    let open = req_binding_slot(path, fields, "open", "Toast open binding", StaticSlot::Bool)?;
     // 0.2.0 — omitted-when-TRUE (a toast is dismissable unless said otherwise;
     // the one inverted default in §3.6's table).
     let dismissable = opt_bool(path, fields, "dismissable")?.unwrap_or(true);
@@ -2541,7 +2591,7 @@ fn decode_form_field_kind(
     };
     match disc(path, fields)? {
         "Text" => Ok(FormFieldKind::Text {
-            value: value_or(StaticSlot::Untyped, control_value_defaults::text())?,
+            value: value_or(StaticSlot::Str, control_value_defaults::text())?,
             on_change,
         }),
         "Number" => Ok(FormFieldKind::Number {
@@ -2549,13 +2599,13 @@ fn decode_form_field_kind(
             on_change,
         }),
         "Checkbox" => Ok(FormFieldKind::Checkbox {
-            value: value_or(StaticSlot::Untyped, control_value_defaults::checkbox())?,
+            value: value_or(StaticSlot::Bool, control_value_defaults::checkbox())?,
             on_toggle,
         }),
         // Phase 766 — the switch affordance: Checkbox's mechanics under a
         // distinct tag.
         "Toggle" => Ok(FormFieldKind::Toggle {
-            value: value_or(StaticSlot::Untyped, control_value_defaults::checkbox())?,
+            value: value_or(StaticSlot::Bool, control_value_defaults::checkbox())?,
             on_toggle,
         }),
         "Choice" => Ok(FormFieldKind::Choice {
@@ -2623,11 +2673,11 @@ fn decode_form_field_kind(
         }
         "TextArea" => Ok(FormFieldKind::TextArea {
             rows: req_int(path, fields, "rows", "textarea row count integer")?,
-            value: value_or(StaticSlot::Untyped, control_value_defaults::text())?,
+            value: value_or(StaticSlot::Str, control_value_defaults::text())?,
             on_change,
         }),
         "Date" => {
-            let value = value_or(StaticSlot::Untyped, control_value_defaults::date())?;
+            let value = value_or(StaticSlot::Str, control_value_defaults::date())?;
             let variant_j = req(path, fields, "variant", "DateVariant")?;
             let variant = decode_date_variant(&format!("{path}.variant"), variant_j)?;
             Ok(FormFieldKind::Date {
@@ -2808,7 +2858,7 @@ fn decode_form_spec(path: &str, j: &JVal) -> DResult<FormSpec> {
     }
     let on_submit = req_action(path, obj, "onSubmit", "onSubmit Action")?;
     let submit_label = req_text_source(path, obj, "submitLabel", "submitLabel TextSource")?;
-    let disabled = opt_binding(path, obj, "disabled")?;
+    let disabled = opt_binding_slot(path, obj, "disabled", StaticSlot::Bool)?;
     Ok(FormSpec {
         fields: form_fields,
         on_submit,
@@ -2840,7 +2890,7 @@ fn decode_button_spec(path: &str, j: &JVal) -> DResult<ButtonSpec> {
     let variant_j = req(path, fields, "variant", "ButtonVariant")?;
     let variant = decode_button_variant(&format!("{path}.variant"), variant_j)?;
     let icon = opt_string(path, fields, "icon")?;
-    let disabled = opt_binding(path, fields, "disabled")?;
+    let disabled = opt_binding_slot(path, fields, "disabled", StaticSlot::Bool)?;
     Ok(ButtonSpec {
         label,
         on_click,
@@ -2870,7 +2920,7 @@ fn decode_select_spec(path: &str, j: &JVal) -> DResult<SelectSpec> {
         StaticSlot::StringOpt,
     )?;
     let placeholder = opt_text_source(path, fields, "placeholder")?;
-    let disabled = opt_binding(path, fields, "disabled")?;
+    let disabled = opt_binding_slot(path, fields, "disabled", StaticSlot::Bool)?;
     let multiple = opt_bool(path, fields, "multiple")?;
     let values = match get(fields, "values") {
         None => None,
@@ -2903,7 +2953,7 @@ fn decode_file_upload_spec(path: &str, j: &JVal) -> DResult<FileUploadSpec> {
     }
     let label = req_text_source(path, fields, "label", "FileUpload label TextSource")?;
     let multiple = req_bool(path, fields, "multiple", "multiple bool")?;
-    let disabled = opt_binding(path, fields, "disabled")?;
+    let disabled = opt_binding_slot(path, fields, "disabled", StaticSlot::Bool)?;
     Ok(FileUploadSpec {
         accept,
         label,
@@ -3457,8 +3507,8 @@ fn decode_draw_style(path: &str, j: &JVal) -> DResult<DrawStyle> {
         Some(v) => Some(decode_emphasis(&format!("{path}.emphasis"), v)?),
     };
     Ok(DrawStyle {
-        fill: opt_binding(path, fields, "fill")?,
-        stroke: opt_binding(path, fields, "stroke")?,
+        fill: opt_binding_slot(path, fields, "fill", StaticSlot::Str)?,
+        stroke: opt_binding_slot(path, fields, "stroke", StaticSlot::Str)?,
         stroke_width: opt_binding(path, fields, "strokeWidth")?,
         opacity: opt_binding(path, fields, "opacity")?,
         text_anchor,
@@ -3689,7 +3739,7 @@ fn decode_tab_header(path: &str, j: &JVal) -> DResult<TabHeader> {
     let fields = as_obj(path, j)?;
     let label = req_text_source(path, fields, "label", "tab header label TextSource")?;
     let icon = opt_string(path, fields, "icon")?;
-    let disabled = opt_binding(path, fields, "disabled")?;
+    let disabled = opt_binding_slot(path, fields, "disabled", StaticSlot::Bool)?;
     Ok(TabHeader {
         label,
         icon,
@@ -3727,7 +3777,7 @@ fn decode_tabs_spec(path: &str, j: &JVal) -> DResult<TabsSpec> {
             Some(tags)
         }
     };
-    let active_tag = opt_binding(path, fields, "activeTag")?;
+    let active_tag = opt_binding_slot(path, fields, "activeTag", StaticSlot::Str)?;
     // `activeIndex` round-trips; absent (legacy wire) defaults to Static 0.
     let active_index = match get(fields, "activeIndex") {
         None => Binding::Static {
@@ -3777,7 +3827,7 @@ fn decode_disclosure_spec(path: &str, j: &JVal) -> DResult<DisclosureSpec> {
         &["title"],
         "Disclosure heading TextSource",
     )?;
-    let open = req_binding(path, fields, "open", "open binding")?;
+    let open = req_binding_slot(path, fields, "open", "open binding", StaticSlot::Bool)?;
     Ok(DisclosureSpec {
         children,
         default_open,
@@ -3795,7 +3845,7 @@ fn decode_modal_spec(path: &str, j: &JVal) -> DResult<ModalSpec> {
         None => None,
         Some(v) => Some(decode_action(&format!("{path}.onDismiss"), v)?),
     };
-    let open = req_binding(path, fields, "open", "open binding")?;
+    let open = req_binding_slot(path, fields, "open", "open binding", StaticSlot::Bool)?;
     // Field alias: title → heading.
     let heading = opt_text_source_aliased(path, fields, "heading", &["title"])?;
     Ok(ModalSpec {
@@ -4410,7 +4460,7 @@ fn decode_semantic_style(path: &str, j: &JVal) -> DResult<SemanticStyle> {
 
 fn decode_accessibility(path: &str, j: &JVal) -> DResult<Accessibility> {
     let fields = as_obj(path, j)?;
-    let label = opt_binding(path, fields, "label")?;
+    let label = opt_binding_slot(path, fields, "label", StaticSlot::Str)?;
     let labelled_by = opt_string(path, fields, "labelledBy")?;
     let described_by = opt_string(path, fields, "describedBy")?;
     // Any string is accepted — named ARIA roles and the custom raw escape both
@@ -4420,7 +4470,7 @@ fn decode_accessibility(path: &str, j: &JVal) -> DResult<Accessibility> {
         None => None,
         Some(v) => Some(decode_live_region(&format!("{path}.liveRegion"), v)?),
     };
-    let hidden = opt_binding(path, fields, "hidden")?;
+    let hidden = opt_binding_slot(path, fields, "hidden", StaticSlot::Bool)?;
     Ok(Accessibility {
         label,
         labelled_by,
