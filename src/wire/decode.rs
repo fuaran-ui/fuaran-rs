@@ -2942,6 +2942,37 @@ fn decode_cell_kind_erased(path: &str, j: &JVal) -> DResult<CellKindErased> {
 /// fake-affordance failure in a new guise, and tolerance is what hid it. The
 /// narrowing is an ENUMERATED set with an unambiguous canonical form each; rule
 /// 2 holds for everything else.
+/// The RETIRED positional slot on `InsertChild` / `MoveNode` (Phase 687, closing
+/// the window Phase 681 opened).
+///
+/// Phase 681 removed the field and every host then ACCEPTED AND IGNORED it so
+/// each could adopt independently. Silence was the whole mechanism: this decoder
+/// reads named fields and ignores the rest, so *not reading it* was the
+/// tolerance. That is also why closing the window cannot be done by deletion —
+/// there was never a read to delete, and the field would go on decoding silently
+/// forever. The close is an explicit refusal BY NAME, on the `check_near_misses`
+/// pattern and for its reason: a key that no-ops is worse than one that fails,
+/// because the op decodes, applies, and puts the node somewhere other than where
+/// the ordinal asked.
+///
+/// Called BEFORE the required-field reads, mirroring the `FormField` near-miss
+/// ordering, so an op carrying both a retired ordinal and some other defect names
+/// the ordinal. The ordering is identical in all five hosts, so which defect
+/// surfaces first is deterministic.
+fn retired_positional_field(path: &str, fields: &Fields, name: &str, op_kind: &str) -> DResult<()> {
+    if get(fields, name).is_some() {
+        return Err(make_error(
+            DecodeErrorCode::WrongType,
+            format!("{path}.{name}"),
+            format!(
+                "'{name}' was removed from the wire format — {op_kind} appends, and order is stated by naming ids with ReorderChildren"
+            ),
+            Some("a Batch of the structural op followed by ReorderChildren".to_string()),
+        ));
+    }
+    Ok(())
+}
+
 fn check_near_misses(path: &str, fields: &Fields, candidates: &[(&str, &str)]) -> DResult<()> {
     for (found, canonical) in candidates {
         if get(fields, found).is_some() {
@@ -4438,11 +4469,11 @@ fn decode_tree_op_ast_g1(
         })(),
         "InsertChild" => (|| -> DResult<TreeOp> {
             {
+                // Phase 687 CLOSED the migration window Phase 681 opened: a
+                // legacy `position` is a decode error. Checked BEFORE the
+                // required-field reads — see `retired_positional_field`.
+                retired_positional_field(path, fields, "position", "InsertChild")?;
                 let parent_id = req_string(path, fields, "parentId", "parent NodeId")?;
-                // A legacy `position` is ACCEPTED AND IGNORED for the migration
-                // window: a stored v1 emission must still apply, as an append,
-                // because order is now ReorderChildren's. This decoder reads named
-                // fields and ignores the rest, so not reading it IS the tolerance.
                 let child_j = req(path, fields, "child", "child Node object")?;
                 let child = decode_node_ast(&format!("{path}.child"), child_j)?;
                 Ok(TreeOp::InsertChild { parent_id, child })
@@ -4455,7 +4486,8 @@ fn decode_tree_op_ast_g1(
         })(),
         "MoveNode" => (|| -> DResult<TreeOp> {
             {
-                // Legacy `newPosition` accepted and ignored — see InsertChild above.
+                // Legacy `newPosition` is a decode error — see InsertChild above.
+                retired_positional_field(path, fields, "newPosition", "MoveNode")?;
                 let target = req_string(path, fields, "target", "target NodeId")?;
                 let new_parent_id = req_string(path, fields, "newParentId", "new parent NodeId")?;
                 Ok(TreeOp::MoveNode {

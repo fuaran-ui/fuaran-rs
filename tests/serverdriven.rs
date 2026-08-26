@@ -87,7 +87,7 @@ fn an_illegitimate_event_is_rejected() {
 fn mount_handler() -> fuaran_rs::serverdriven::Handler {
     Box::new(|_tree: &Node, _ev: &Event| {
         Ok(vec![op(
-            r#"{"$type":"InsertChild","child":{"id":"m1","kind":{"$type":"Mount","capabilities":["fs.write"],"channel":{"direction":"OutOnly"},"scopeId":"s1"}},"parentId":"root","position":1}"#,
+            r#"{"$type":"InsertChild","child":{"id":"m1","kind":{"$type":"Mount","capabilities":["fs.write"],"channel":{"direction":"OutOnly"},"scopeId":"s1"}},"parentId":"root"}"#,
         )])
     })
 }

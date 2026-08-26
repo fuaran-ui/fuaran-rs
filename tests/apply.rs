@@ -4,7 +4,9 @@
 //! host's own codec — the same artefacts a driving service would hold.
 
 use fuaran_rs::ops::{ApplyErrorCode, apply, can_apply};
-use fuaran_rs::wire::{Node, TreeOp, decode_node, decode_op, encode_node, encode_op};
+use fuaran_rs::wire::{
+    DecodeErrorCode, Node, TreeOp, decode_node, decode_op, encode_node, encode_op,
+};
 
 fn node(json: &str) -> Node {
     decode_node(json).expect("test tree decodes")
@@ -189,27 +191,26 @@ fn update_style_and_state() {
 }
 
 #[test]
-fn insert_child_appends_and_ignores_a_legacy_position() {
+fn insert_child_appends_and_the_retired_position_never_reaches_apply() {
     // 0.4.0: InsertChild APPENDS. There is no ordinal and so no out-of-range
-    // rejection left to assert. A legacy `position` on the wire is accepted and
-    // ignored for the migration window, so a stored v1 op still applies — as an
-    // append, wherever its ordinal used to point.
-    let ins = |pos: i64| {
-        op(&format!(
-            r#"{{"$type":"InsertChild","child":{{"id":"new-1","kind":{{"$type":"Markdown","text":{{"$type":"Literal","text":"n"}}}}}},"parentId":"root","position":{pos}}}"#
-        ))
-    };
+    // rejection left to assert. Phase 687 closed the migration window during
+    // which a legacy `position` was accepted and ignored, so the field is now
+    // refused at DECODE — it never reaches this apply engine at all.
+    //
+    // That is the assertion worth making here rather than in the decoder tests:
+    // the apply engine has no ordinal handling left to exercise, and the reason
+    // it needs none is that the wire cannot express one.
     for pos in [0_i64, 3, 4, -1] {
-        let out = apply(&sample_tree(), &ins(pos)).expect("a legacy position never rejects");
-        let ids = child_ids_of(&out.new_tree, "root");
-        assert_eq!(
-            ids,
-            vec!["h1", "md", "inner", "new-1"],
-            "legacy position {pos} must be ignored and the child appended"
+        let raw = format!(
+            r#"{{"$type":"InsertChild","child":{{"id":"new-1","kind":{{"$type":"Markdown","text":{{"$type":"Literal","text":"n"}}}}}},"parentId":"root","position":{pos}}}"#
         );
+        let err = decode_op(&raw)
+            .expect_err("the retired `position` was accepted — the migration window is closed");
+        assert_eq!(err.code, DecodeErrorCode::WrongType, "position {pos}");
+        assert_eq!(err.path, "$.position", "the error names the retired field");
     }
 
-    // The canonical, positionless form does the same thing.
+    // The canonical, positionless form applies as an append.
     let canonical = op(
         r#"{"$type":"InsertChild","child":{"id":"new-1","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"n"}}},"parentId":"root"}"#,
     );
@@ -247,7 +248,7 @@ fn reorder_that_is_not_an_exact_permutation_is_refused() {
 #[test]
 fn insert_child_duplicate_id_refused() {
     let ins = op(
-        r#"{"$type":"InsertChild","child":{"id":"m1","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"n"}}},"parentId":"root","position":0}"#,
+        r#"{"$type":"InsertChild","child":{"id":"m1","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"n"}}},"parentId":"root"}"#,
     );
     assert_code(apply(&sample_tree(), &ins), ApplyErrorCode::DuplicateNodeId);
 }
@@ -255,7 +256,7 @@ fn insert_child_duplicate_id_refused() {
 #[test]
 fn insert_child_into_childless_kind_refused() {
     let ins = op(
-        r#"{"$type":"InsertChild","child":{"id":"new-1","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"n"}}},"parentId":"md","position":0}"#,
+        r#"{"$type":"InsertChild","child":{"id":"new-1","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"n"}}},"parentId":"md"}"#,
     );
     assert_code(apply(&sample_tree(), &ins), ApplyErrorCode::ChildlessKind);
 }
@@ -275,7 +276,7 @@ fn remove_node_and_root_guard() {
 
 #[test]
 fn move_node_reparents_and_refuses_cycles() {
-    let mv = op(r#"{"$type":"MoveNode","newParentId":"inner","newPosition":0,"target":"md"}"#);
+    let mv = op(r#"{"$type":"MoveNode","newParentId":"inner","target":"md"}"#);
     let out = apply(&sample_tree(), &mv).expect("applies");
     let encoded = encode_node(&out.new_tree);
     // md now precedes m1 inside `inner`.
@@ -283,14 +284,13 @@ fn move_node_reparents_and_refuses_cycles() {
     let md_pos = encoded.find("\"id\":\"md\"").unwrap();
     assert!(md_pos > inner_pos);
 
-    let self_mv =
-        op(r#"{"$type":"MoveNode","newParentId":"inner","newPosition":0,"target":"inner"}"#);
+    let self_mv = op(r#"{"$type":"MoveNode","newParentId":"inner","target":"inner"}"#);
     assert_code(
         apply(&sample_tree(), &self_mv),
         ApplyErrorCode::KindMismatch,
     );
 
-    let cycle = op(r#"{"$type":"MoveNode","newParentId":"inner","newPosition":0,"target":"root"}"#);
+    let cycle = op(r#"{"$type":"MoveNode","newParentId":"inner","target":"root"}"#);
     assert_code(apply(&sample_tree(), &cycle), ApplyErrorCode::KindMismatch);
 }
 
@@ -350,7 +350,7 @@ fn can_apply_agrees_with_apply() {
         r#"{"$type":"RemoveNode","target":"root"}"#,
         r#"{"$type":"RemoveNode","target":"md"}"#,
         r#"{"$type":"ReorderChildren","newOrder":["h1"],"parentId":"root"}"#,
-        r#"{"$type":"InsertChild","child":{"id":"m1","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"n"}}},"parentId":"root","position":0}"#,
+        r#"{"$type":"InsertChild","child":{"id":"m1","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"n"}}},"parentId":"root"}"#,
     ];
     for case in cases {
         let o = op(case);

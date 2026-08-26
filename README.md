@@ -376,6 +376,36 @@ cubic-approximated wedges); every data-bearing shape carries a derivation-based
 `markId` (emitted as `data-fuaran-mark` in the SVG) for object constancy.
 `Heatmap` yields an empty (but titled) drawing region, never a silent blank.
 
+## Retired wire vocabulary — the positional slot on `InsertChild` / `MoveNode`
+
+`InsertChild` and `MoveNode` both **append**; `ReorderChildren` states order by naming
+child ids. The integer `position` / `newPosition` these two ops once carried was removed
+from the wire format, and this host **REFUSES** it: `WrongType` at `$.position` /
+`$.newPosition`, with a message naming `ReorderChildren`. Placing a node anywhere but
+last is `Batch [InsertChild …, ReorderChildren …]`.
+
+There was a migration window during which every host accepted and ignored the field so
+the hosts could adopt independently. It is **closed**. How it closed is worth knowing,
+because it is not the obvious thing: this decoder reads named fields and ignores the
+rest, so *not reading* the ordinal **was** the tolerance — there was never a read to
+delete. Closing the window therefore meant ADDING a refusal, not removing an acceptance;
+a host that merely stopped mentioning the field would have gone on accepting it forever,
+indistinguishable from one that had never adopted.
+
+The refusal is **by name** and is the enumerated-near-miss narrowing of §2 rule 2: a
+genuinely unknown key is still tolerated, because a slot a future profile may add must
+stay addable. It is checked **before** the required-field reads, so an op carrying both a
+retired ordinal and another defect names the ordinal — identically ordered in every host,
+so which defect surfaces first is deterministic.
+
+**The apply engine has no ordinal handling left, and the reason it needs none is that the
+wire cannot express one** — the field never reaches it. Certified by the corpus fixtures
+`reject-op-insertchild-retired-position` / `reject-op-movenode-retired-newposition` and
+pinned by `tests/retired_position.rs`.
+
+This host declares no stability policy yet (pre-1.0, `0.0.1-alpha.1`), so the change is
+recorded here rather than in a `STABILITY.md` it does not have.
+
 ## Layout
 
 ```

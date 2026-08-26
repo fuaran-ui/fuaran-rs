@@ -239,7 +239,7 @@ fn scenario_stream() -> OpStream {
     let ops = [
         r#"{"$type":"RemoveNode","target":"c2"}"#,
         r#"{"$type":"UpdateStyle","style":{"emphasis":"Loud","tone":"Brand","weight":"Standard"},"target":"root"}"#,
-        r#"{"$type":"InsertChild","child":{"id":"c3","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"c"}}},"parentId":"root","position":1}"#,
+        r#"{"$type":"InsertChild","child":{"id":"c3","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"c"}}},"parentId":"root"}"#,
     ];
     let mut stream = OpStream::new();
     for (i, op) in ops.iter().enumerate() {
