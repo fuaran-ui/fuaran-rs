@@ -122,6 +122,27 @@ bare_enum!(DurationUnit { Seconds => "Seconds", Minutes => "Minutes", Hours => "
 bare_enum!(DurationStyle { Compact => "Compact", Clock => "Clock", Long => "Long" });
 // Phase 821 — the standalone `Icon` display kind's size modifier.
 bare_enum!(IconSize { Small => "Small", Medium => "Medium", Large => "Large" });
+// Phase 867 — which way a `Metric`'s quantity IMPROVES (WIRE_FORMAT.md §3.6.1).
+// Distinct from `tone`, which says how the reading STANDS: a host derives neither
+// from the other, and nothing here ever writes back to `tone`. A renderer
+// composes `sentiment = sign(trend) × polarity` and paints the TREND ELEMENT
+// alone; the numeric text, sign included, is untouched. Absent means
+// `HigherIsBetter`, so every pre-867 `Metric` is byte-identical on the wire.
+//
+// `Neutral` IS RESERVED AND IS DELIBERATELY NOT A CASE, and its absence is the
+// whole reason this slot is an enum rather than `inverted: bool` — a later
+// admission is then a bare-string ADDITION, not a type replacement. Modelling
+// the reservation as absence (rather than as a case the decoder refuses) is what
+// keeps that promise honest in this host specifically: the case set IS the
+// accepted wire set, so `"Neutral"` fails `UNKNOWN_DU_CASE` against the two
+// canonical spellings, `WIRE_NAMES` cannot advertise a spelling the format does
+// not accept, and no `match` anywhere in the crate carries a dead arm waiting for
+// a case the wire will not produce. Admitting it later is one line here and a
+// compiler error at every site that must then decide what it means — which is
+// exactly the exhaustiveness property this host exists to demonstrate.
+// NO alias arm is registered for it: an alias would ACCEPT the reserved spelling
+// under a canonical case, silently deciding the question the reservation holds open.
+bare_enum!(TrendPolarity { HigherIsBetter => "HigherIsBetter", LowerIsBetter => "LowerIsBetter" });
 bare_enum!(HashStrictness { StrictReplay => "StrictReplay", AdvisoryWarning => "AdvisoryWarning", Enforced => "Enforced" });
 bare_enum!(BoxRole { Group => "Group", Card => "Card", Dashboard => "Dashboard", Separator => "Separator" });
 bare_enum!(HostEffect { Pure => "Pure", ReadsHost => "ReadsHost", WritesHost => "WritesHost" });
@@ -630,6 +651,15 @@ pub struct MetricSpec {
     pub emphasis: Emphasis,
     pub trend: Option<Binding>,
     pub trend_format: Option<CellFormat>,
+    /// Phase 867 — which way this quantity IMPROVES (§3.6.1). Omitted-when-
+    /// `HigherIsBetter` on the wire, like the other stylistic slots above, so
+    /// the field is a total `TrendPolarity` rather than an `Option`: the wire's
+    /// "absent means `HigherIsBetter`" is a DEFAULT, not a third state, and
+    /// modelling it as `None` would put a decision back into every reader.
+    ///
+    /// The slot is inert without `trend` — a `Metric` that declares a polarity
+    /// and carries no trend is legal and says nothing (§3.6.1 clause 4).
+    pub trend_polarity: TrendPolarity,
     pub icon: Option<String>,
     pub subtext: Option<TextSource>,
 }

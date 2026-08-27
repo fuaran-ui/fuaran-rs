@@ -20,7 +20,7 @@ use crate::canonical::{self, JVal};
 use crate::wire::{
     Binding, BoxLayout, BoxRole, BoxSpec, CellFormat, Emphasis, MetricSpec, Node, NodeKind,
     Orientation, SemanticStyle, StateBehaviour, StaticValue, StyleWeight, TextSource, ToneVariant,
-    encode_node,
+    TrendPolarity, encode_node,
 };
 
 /// The six typed holes that parameterise the exemplar — the only data that
@@ -60,6 +60,9 @@ fn metric(id: &str, label: &str, value: f64) -> Node {
             emphasis: Emphasis::Normal,
             trend: None,
             trend_format: None,
+            // Phase 867 — the omitted-when-default value, keeping this node's
+            // "round-trips minimal" property (no `trendPolarity` is emitted).
+            trend_polarity: TrendPolarity::HigherIsBetter,
             icon: None,
             subtext: None,
         }),

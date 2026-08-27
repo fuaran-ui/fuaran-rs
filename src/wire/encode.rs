@@ -795,6 +795,13 @@ fn metric_spec(spec: &MetricSpec) -> String {
     if let Some(trend_format) = &spec.trend_format {
         fields.push(field("trendFormat", cell_format(trend_format)));
     }
+    // Phase 867 — omitted-when-`HigherIsBetter` (§3.6.1), which is what makes
+    // every pre-867 `Metric` byte-unchanged by construction rather than by
+    // inspection. Emitted independently of `trend`: a legal inert declaration
+    // round-trips rather than being silently dropped on re-encode.
+    if spec.trend_polarity != TrendPolarity::HigherIsBetter {
+        fields.push(field("trendPolarity", s(spec.trend_polarity.as_str())));
+    }
     if let Some(icon) = &spec.icon {
         fields.push(field("icon", s(icon)));
     }

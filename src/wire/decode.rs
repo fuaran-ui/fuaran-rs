@@ -324,6 +324,15 @@ fn opt_emphasis_default(path: &str, fields: &Fields, key: &str) -> DResult<Empha
     }
 }
 
+/// Phase 867 — `Metric.trendPolarity`, omitted-when-`HigherIsBetter` (§3.6.1
+/// clause 4: an absent declaration means the ordinary reading, up is good).
+fn opt_trend_polarity_default(path: &str, fields: &Fields, key: &str) -> DResult<TrendPolarity> {
+    match get(fields, key) {
+        None => Ok(TrendPolarity::HigherIsBetter),
+        Some(v) => decode_trend_polarity(&format!("{path}.{key}"), v),
+    }
+}
+
 fn opt_column_width_default(path: &str, fields: &Fields, key: &str) -> DResult<ColumnWidth> {
     match get(fields, key) {
         None => Ok(ColumnWidth::Auto),
@@ -396,6 +405,16 @@ decode_bare_enum!(decode_tone, ToneVariant, "ToneVariant", aliases: {
 // `StyleWeight` is deliberately NOT aliased — Bold/Heavy is font-weight intent,
 // but the language means layout density (Compact|Standard|Spacious).
 decode_bare_enum!(decode_weight, StyleWeight, "StyleWeight");
+// Phase 867 — `TrendPolarity` is deliberately NOT aliased, and the omission is
+// load-bearing rather than an oversight. The obvious candidates are exactly the
+// spellings that must NOT be accepted: `"Neutral"` is the RESERVED case (see
+// `TrendPolarity`), so aliasing it onto either canonical case would silently
+// decide the question the reservation holds open and make a later admission a
+// breaking re-meaning of already-emitted bytes rather than an addition; and
+// `"Inverted"` / `"Descending"` would resurrect the boolean spelling §3.6.1
+// refuses. An unknown spelling therefore fails `UNKNOWN_DU_CASE` naming only the
+// two the format accepts.
+decode_bare_enum!(decode_trend_polarity, TrendPolarity, "TrendPolarity");
 // Prominence intent survives: Strong/Bold→Loud, Subtle/Muted→Quiet. The
 // `emphasis` name is a same-name cross-vocabulary collision (style ENUM here
 // vs behavioural BOOL on Fact/LabelValueRow) and models cross it in both
@@ -2265,6 +2284,10 @@ fn decode_metric_spec(path: &str, j: &JVal) -> DResult<MetricSpec> {
         None => None,
         Some(v) => Some(decode_cell_format(&format!("{path}.trendFormat"), v)?),
     };
+    // Phase 867 — the polarity declaration (§3.6.1). Decoded UNCONDITIONALLY,
+    // not gated on `trend` being present: the slot is inert without a trend but
+    // it is legal, and refusing it would reject a document the format admits.
+    let trend_polarity = opt_trend_polarity_default(path, fields, "trendPolarity")?;
     let icon = opt_string(path, fields, "icon")?;
     let subtext = opt_text_source(path, fields, "subtext")?;
     Ok(MetricSpec {
@@ -2276,6 +2299,7 @@ fn decode_metric_spec(path: &str, j: &JVal) -> DResult<MetricSpec> {
         emphasis,
         trend,
         trend_format,
+        trend_polarity,
         icon,
         subtext,
     })

@@ -193,6 +193,13 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             emphasis: spec.emphasis,
             trend: map_opt_scalar_number(sources, &spec.trend),
             trend_format: spec.trend_format.clone(),
+            // Phase 867 — carried through UNRESOLVED, like `format` and `tone`.
+            // The projection resolves BINDINGS to literals; a polarity is a
+            // static declaration about what the number means, not a value to
+            // resolve, and the consuming surface still owes the composition
+            // rule (§3.6.1). Projecting it away would hand a native surface a
+            // trend it could only read one way.
+            trend_polarity: spec.trend_polarity,
             icon: spec.icon.clone(),
             subtext: map_opt_text(sources, &spec.subtext),
         }),
