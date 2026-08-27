@@ -581,7 +581,17 @@ fn mutate_once(rng: &mut Rng, vocab: &[String], cfg: Config, s: &str) -> (&'stat
             format!("{}{}{}", &s[..at], &s[i..to], &s[at..])
         }
         "truncate" if n > 1 => s[..b[rng.next(b.len() - 1)]].to_string(),
-        "transpose" if n > 2 => {
+        // The guard counts BOUNDARIES, not bytes, and that is the whole of it.
+        // `b` is the char-start set plus `s.len()`, so `b.len() > 2` means "at
+        // least two characters" — exactly what the two `it.next()` calls below
+        // require, and what `rng.next(b.len() - 2)` assumes when it picks a
+        // start with two chars still after it. The byte-length guard it replaces
+        // (`n > 2`) is satisfied by a THREE-BYTE SINGLE CHARACTER, at which
+        // point the second `next()` is `None` and the harness panics inside the
+        // generator rather than reporting on the decoder. The corpus is the
+        // generator's seed set, so which inputs reach this mutator moves
+        // whenever the corpus grows — the defect is latent, not corpus-specific.
+        "transpose" if b.len() > 2 => {
             let i = b[rng.next(b.len() - 2)];
             let mut it = s[i..].chars();
             let a = it.next().unwrap();
