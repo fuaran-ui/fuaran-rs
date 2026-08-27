@@ -1953,9 +1953,30 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                     // binding's defaultValue re-encodes faithfully.
                     let b =
                         decode_binding_slot(&format!("{path}.source"), src_j, StaticSlot::Rows)?;
-                    let has_carried =
-                        matches!(src_j, JVal::Obj(sf) if get(sf, "defaultValue").is_some());
-                    if tag == "State" && !has_carried {
+                    let carried = match src_j {
+                        JVal::Obj(sf) => get(sf, "defaultValue"),
+                        _ => None,
+                    };
+                    let has_carried = carried.is_some();
+                    // §24.4 (slot seeding) — an EMPTY carried array carries no
+                    // ROWS, and that is a live source with an empty initial
+                    // snapshot, not a malformed document. A declared default
+                    // fills the SLOT, so a reader may legitimately declare
+                    // `defaultValue: []` and be seeded by a sibling that
+                    // declares the rows. Sending it through the columnar decode
+                    // instead accuses it: a bare `[]` has no first row to take a
+                    // key set from, so it does not transpose and surfaces as
+                    // `WRONG_TYPE … expected object, got array` against a
+                    // document the reference hosts decode. This is the same
+                    // empty-table start the Selection / Query branch below
+                    // already takes, on the one input where State needs it too.
+                    let empty_carried = matches!(carried, Some(JVal::Arr(rows)) if rows.is_empty());
+                    if tag == "State" && empty_carried {
+                        TransformSource::Live {
+                            binding: Box::new(b),
+                            initial: empty_embedded_source(),
+                        }
+                    } else if tag == "State" && !has_carried {
                         // No carried data — surface the columnar codec's own
                         // missing-field didactic (byte-identical to pre-818).
                         let src_n = normalise_transform_source(src_j);
