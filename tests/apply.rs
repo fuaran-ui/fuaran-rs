@@ -393,3 +393,61 @@ fn child_ids_of(tree: &Node, parent_id: &str) -> Vec<String> {
     }
     find(tree, parent_id).expect("parent is a Box in the sample tree")
 }
+
+// ─── Phase 867: UpdateProp over `Metric.TrendPolarity` ───────────────────────
+
+/// A `Metric` carrying no polarity — the omitted-when-default state an op must
+/// be able to move off, and move back to.
+const POLARITY_TREE: &str = r#"{"id":"m","kind":{"$type":"Metric","label":"Avg wait","trend":{"$type":"Static","value":-0.0734},"value":{"$type":"Static","value":80}}}"#;
+
+#[test]
+fn update_prop_sets_trend_polarity_in_parity_with_the_reference() {
+    // The reference carries this arm (`Fuaran.UI.Ops/Apply.fs`) and lists the
+    // field in its introspection surface, so a host that answered FieldNotFound
+    // here would refuse an op the reference accepts. The struct-update spread
+    // meant the compiler could not force the arm — the field rode through
+    // untouched — so this is asserted rather than assumed.
+    let tree = node(POLARITY_TREE);
+    let up =
+        op(r#"{"$type":"UpdateProp","path":"TrendPolarity","target":"m","value":"LowerIsBetter"}"#);
+    assert!(can_apply(&tree, &up), "the field must be updatable");
+    let out = apply(&tree, &up).expect("the op applies");
+    assert!(
+        encode_node(&out.new_tree).contains(r#""trendPolarity":"LowerIsBetter""#),
+        "{}",
+        encode_node(&out.new_tree)
+    );
+}
+
+#[test]
+fn update_prop_back_to_the_default_re_encodes_to_nothing() {
+    // Setting the DEFAULT is not the same as never having set it on the type,
+    // but it must be on the wire — otherwise a round-trip through an op would
+    // leave a document that no longer round-trips minimally.
+    let tree = node(POLARITY_TREE);
+    let set =
+        op(r#"{"$type":"UpdateProp","path":"TrendPolarity","target":"m","value":"LowerIsBetter"}"#);
+    let unset = op(
+        r#"{"$type":"UpdateProp","path":"TrendPolarity","target":"m","value":"HigherIsBetter"}"#,
+    );
+    let inverted = apply(&tree, &set).expect("applies").new_tree;
+    let back = apply(&inverted, &unset).expect("applies").new_tree;
+    assert_eq!(
+        encode_node(&back),
+        POLARITY_TREE,
+        "returning to the default returns to the original bytes"
+    );
+}
+
+#[test]
+fn update_prop_refuses_the_reserved_polarity_case() {
+    // A tree the codec would not accept must not be reachable by mutating one
+    // it did — the coercion routes through the same decode function, so the
+    // reservation holds at apply time too.
+    let tree = node(POLARITY_TREE);
+    let up = op(r#"{"$type":"UpdateProp","path":"TrendPolarity","target":"m","value":"Neutral"}"#);
+    let err = apply(&tree, &up).expect_err("`Neutral` is RESERVED");
+    assert_eq!(err.code, ApplyErrorCode::KindMismatch, "{err:?}");
+    // The apply envelope law holds across the refusal.
+    assert!(!can_apply(&tree, &up), "can_apply agrees with apply");
+}

@@ -4908,6 +4908,14 @@ pub(crate) mod coerce {
         via(v, decode_emphasis)
     }
 
+    /// Phase 867 — `Metric.trendPolarity` for `UpdateProp`. Routed through the
+    /// decode function, so an op naming the RESERVED `Neutral` is refused at
+    /// apply time exactly as it is at decode: a tree the codec would not accept
+    /// must not be reachable by mutating one it did.
+    pub fn trend_polarity(v: &JVal) -> C<TrendPolarity> {
+        via(v, decode_trend_polarity)
+    }
+
     /// The behavioural `emphasis` BOOL (Fact / LabelValueRow) — cross-vocab
     /// coerced exactly as at decode.
     pub fn emphasis_flag(v: &JVal) -> C<bool> {

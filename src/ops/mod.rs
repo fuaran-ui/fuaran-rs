@@ -455,6 +455,21 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
                     ..s.clone()
                 })
             }),
+            // Phase 867 — rejection parity with the reference, which carries
+            // this arm (`Fuaran.UI.Ops/Apply.fs`) and lists the field in its
+            // introspection surface. The struct-update spread meant the
+            // compiler did NOT force this arm when the field landed: the field
+            // rode through untouched and `UpdateProp "TrendPolarity"` fell to
+            // `UnknownField`, so this host would have refused an op the
+            // reference accepts. Found by comparing the tables, not by a
+            // failing build — the one place in this adoption where the
+            // exhaustiveness property does not do the work for us.
+            "TrendPolarity" => patch(coerce::trend_polarity(value), |x| {
+                NodeKind::Metric(crate::wire::MetricSpec {
+                    trend_polarity: x,
+                    ..s.clone()
+                })
+            }),
             "Icon" => patch(coerce::icon_source(value), |x| {
                 NodeKind::Metric(crate::wire::MetricSpec {
                     icon: Some(x),
