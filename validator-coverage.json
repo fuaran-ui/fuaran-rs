@@ -20,7 +20,9 @@
     "FUARAN097"
   ],
   "abstentionDefault": "Not ported. This is an honest 'not yet', not a principled exclusion: the set above is whichever rules this host happened to need, and an unported rule is a gap.",
-  "abstained": {},
+  "abstained": {
+    "FUARAN105": "Not ported, and named here rather than left to the default because Phase 870 considered it against this host's actual validator and declined on evidence. The rule reasons from the ABSENCE of a writer ANYWHERE IN THE TREE ('nothing in the tree writes the key'), which needs two projections this host does not have: a tree-wide State-WRITE set, and a binding traversal that descends a Transform's own source slot. This validator is a single-pass node walker — `Walker` carries findings and a duplicate-id count and nothing else — and inspects bindings only where a named rule reaches into a named slot. That is not an accident of coverage: FUARAN098 (SetStateNoReader) is the rule whose adoption would have BUILT the write projection, and it is unported here too, so there is nothing to reuse. Porting FUARAN105 without it would not merely under-report — with no write projection every key reads as unwritten, so the rule would fire on every tree that legitimately writes one, which is a false accusation on an idiomatic shape. The prerequisite is the cross-tree binding walk, which is its own work. Same conclusion, same reason and the same 669 mechanism as fuaran-ts's declared abstention; note the 865 ship recorded a related latent gap on the reference side (its `usesOfBinding` does not descend a Transform's source slot either), so the projection a port would need is not fully settled upstream."
+  },
   "otherFamilies": {
     "ast-walker": [
       "FUARAN001",

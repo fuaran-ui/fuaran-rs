@@ -195,6 +195,64 @@ fn native_c_abi_carries_the_toned_pill_case() {
     unsafe { fuaran_session_free(session) };
 }
 
+/// Phase 867's `Metric.trendPolarity` across the raw ABI — the Phase 745 check,
+/// performed rather than assumed, and RECORDED EITHER WAY.
+///
+/// The boundary is JSON-bytes-in / JSON-bytes-out, so pure VOCABULARY passes
+/// through opaquely and only new *verbs* need exposure. `trendPolarity` is
+/// vocabulary: a static declaration on a spec record, with no gesture attached.
+/// So the finding this test pins is a NEGATIVE one — **nothing is owed at the
+/// C-ABI** for it, no entry point was added, and `include/fuaran.h` is
+/// unchanged. What the native surfaces need is that the field actually crosses,
+/// and nothing else in this repo would notice if it stopped: the Swift and
+/// Kotlin tiers are decode-only render projections whose whole contract is "the
+/// Rust core owns truth", so the declaration reaching them at all depends on
+/// this boundary carrying it.
+///
+/// BOTH tree-JSON entry points are asserted, because a native projection may
+/// read either and they fold differently: `tree_json` re-encodes the held tree,
+/// and `project_resolved` folds bindings to literals — where a polarity must
+/// survive UNFOLDED, since it is a declaration about what a number means rather
+/// than a value to resolve. A projection handed a resolved trend with its
+/// polarity projected away could only ever read the number one way.
+const TREND_POLARITY_TREE: &str = r#"{"id":"m","kind":{"$type":"Metric","format":{"$type":"Percent","decimals":2},"label":"Avg wait","tone":"Warning","trend":{"$type":"Static","value":-0.0734},"trendPolarity":"LowerIsBetter","value":{"$type":"Static","value":80}}}"#;
+
+#[test]
+fn native_c_abi_carries_the_trend_polarity_declaration() {
+    let (tp, tl) = input(TREND_POLARITY_TREE);
+    let session = unsafe { fuaran_session_new(tp, tl) };
+    unsafe { fuaran_dealloc(tp, tl) };
+    assert!(
+        !session.is_null(),
+        "a trendPolarity tree decodes to a live handle"
+    );
+
+    let json = take_buf(unsafe { fuaran_session_tree_json(session) });
+    assert!(
+        json.contains(r#""trendPolarity":"LowerIsBetter""#),
+        "tree_json did not carry the polarity declaration:\n{json}"
+    );
+
+    let projected = take_buf(unsafe { fuaran_session_project_resolved(session) });
+    assert!(
+        projected.contains(r#""trendPolarity":"LowerIsBetter""#),
+        "the resolved projection dropped the polarity — a native surface would \
+         then read the trend the wrong way round:\n{projected}"
+    );
+    // `tone` is untouched by both, which is the composition rule crossing the
+    // boundary as well as the field (§3.6.1 clause 1).
+    assert!(projected.contains(r#""tone":"Warning""#), "{projected}");
+
+    // And the core's own rendering of it, for the surfaces that mount the HTML.
+    let html = take_buf(unsafe { fuaran_session_render(session) });
+    assert!(
+        html.contains("fuaran-metric-trend-improving"),
+        "the core resolved the sentiment before the boundary:\n{html}"
+    );
+
+    unsafe { fuaran_session_free(session) };
+}
+
 /// The resolved-rows hand-off across the raw ABI — the call the Swift and Kotlin
 /// grid renderers will make once they have a row loop. Driven here exactly as a
 /// native binding drives it: `fuaran_alloc` the node id, read the packed buffer,
