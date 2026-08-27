@@ -271,3 +271,92 @@ fn client_recomputes_trend_sentiment_on_every_state_write() {
         );
     }
 }
+
+// ─── The declared-behaviour render legs, driven client-side ──────────────────
+//
+// Phase 870's render task asks for the declared behaviour on BOTH legs. In this
+// host they are ONE code path rather than two: `ClientSession::render` calls
+// the same `render::server` walk the headless host does, and the `wasm32` tier
+// is a marshalling shim over this very type (`src/client/wasm.rs`). So the
+// server leg's coverage is the client leg's coverage for anything STATIC.
+//
+// What is NOT shared, and is therefore what these cover, is the DRIVING: on the
+// server a descriptor is whatever the host seeded once before rendering, while
+// a client writes it through `set_state` and re-renders. That write path is the
+// client tier's whole job, and nothing else in the suite exercises the declared
+// grid vocabulary through it.
+
+/// A `sortStateKey` grid (Phase 818) over three rows in authored order.
+const SORTABLE_GRID: &str = r#"{"id":"g","kind":{"$type":"DataGrid","columns":[{"field":"name","kind":{"$type":"Text","field":"name"},"label":"Name"},{"field":"score","kind":{"$type":"Text","field":"score"},"label":"Score"}],"rowKeyField":"name","sortStateKey":"grid-sort","source":{"$type":"Transform","pipeline":[],"source":{"columns":{"name":{"values":["Beta","Alpha","Gamma"]},"score":{"values":[1,2,3]}},"schema":[{"name":"name","type":"string"},{"name":"score","type":"int"}]}}}}"#;
+
+/// The document order of the three row labels, as they appear in the emitted
+/// table — the only thing these tests are about.
+fn row_order(html: &str) -> Vec<&'static str> {
+    let mut named: Vec<(usize, &'static str)> = ["Alpha", "Beta", "Gamma"]
+        .into_iter()
+        .map(|n| {
+            (
+                html.find(n)
+                    .unwrap_or_else(|| panic!("{n} missing from {html}")),
+                n,
+            )
+        })
+        .collect();
+    named.sort_unstable();
+    named.into_iter().map(|(_, n)| n).collect()
+}
+
+#[test]
+fn client_applies_a_declared_sort_written_through_the_session() {
+    let mut s = ClientSession::new(SORTABLE_GRID).expect("tree decodes");
+
+    // Unseeded: the authored order stands (the SSR default).
+    assert_eq!(
+        row_order(&s.render()),
+        vec!["Beta", "Alpha", "Gamma"],
+        "no descriptor leaves the authored order alone"
+    );
+
+    // The client writes the descriptor and re-renders — the leg a headless host
+    // never performs.
+    s.set_state("grid-sort", r#"{"column":0,"direction":"asc"}"#)
+        .expect("state write");
+    assert_eq!(
+        row_order(&s.render()),
+        vec!["Alpha", "Beta", "Gamma"],
+        "ascending by name"
+    );
+
+    // And flips it, in place, on the same session.
+    s.set_state("grid-sort", r#"{"column":1,"direction":"desc"}"#)
+        .expect("state write");
+    // Deliberately a different order from BOTH the authored one and the
+    // name sort, so the assertion cannot pass on a renderer that ignored the
+    // second write and left the first sort standing.
+    assert_eq!(
+        row_order(&s.render()),
+        vec!["Gamma", "Alpha", "Beta"],
+        "descending by score: Gamma(3), Alpha(2), Beta(1)"
+    );
+}
+
+#[test]
+fn client_leaves_the_order_alone_on_a_malformed_descriptor() {
+    // A client can write anything into a store, so the renderer's "malformed
+    // descriptor leaves the authored order standing" rule is reachable HERE in
+    // a way it is not on the server, where the host seeds it deliberately.
+    let mut s = ClientSession::new(SORTABLE_GRID).expect("tree decodes");
+    for bad in [
+        r#"{"column":9,"direction":"asc"}"#,      // out of range
+        r#"{"column":0,"direction":"sideways"}"#, // unknown direction
+        r#"{"column":"name","direction":"asc"}"#, // wrong column type
+        r#""grid-sort""#,                         // not a descriptor at all
+    ] {
+        s.set_state("grid-sort", bad).expect("state write");
+        assert_eq!(
+            row_order(&s.render()),
+            vec!["Beta", "Alpha", "Gamma"],
+            "malformed descriptor {bad} must leave the authored order standing"
+        );
+    }
+}
