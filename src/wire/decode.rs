@@ -501,6 +501,14 @@ decode_bare_enum!(
 decode_bare_enum!(decode_chart_data_labels, ChartDataLabels, "ChartDataLabels");
 decode_bare_enum!(decode_chart_x_scale, ChartXScale, "ChartXScale");
 decode_bare_enum!(decode_image_variant, ImageVariant, "ImageVariant");
+// Phase 1077 — the three `Image` presentation vocabularies (§3.6.2). BARE
+// enums, so `reject/reject-unknown-image-aspect` reports at `$.kind.aspectRatio`
+// with no `.$type` suffix (the Phase 1073 ruling) — the CSS ratio spelling
+// `"16/9"` is refused rather than parsed, because admitting a numeric pair
+// would reintroduce the free-form escape the tokens exist to close.
+decode_bare_enum!(decode_image_fit, ImageFit, "ImageFit");
+decode_bare_enum!(decode_image_aspect, ImageAspect, "ImageAspect");
+decode_bare_enum!(decode_image_loading, ImageLoading, "ImageLoading");
 decode_bare_enum!(decode_link_protection, LinkProtection, "LinkProtection");
 decode_bare_enum!(decode_math_display, MathDisplay, "MathDisplay");
 decode_bare_enum!(decode_date_variant, DateVariant, "DateVariant");
@@ -2462,6 +2470,36 @@ fn decode_link_spec(path: &str, j: &JVal) -> DResult<LinkSpec> {
     })
 }
 
+/// Phase 1080 — one `srcSet` candidate (§3.6.4). `width` is the intrinsic pixel
+/// width of this rendition and MUST be a POSITIVE INTEGER; zero and negative
+/// values are a `WRONG_TYPE` at `<path>.width`, which is what the published
+/// schema's `minimum: 1` says too, so the two expressions of the contract
+/// agree. Zero is refused as firmly as a negative and that is the interesting
+/// half: a `0w` descriptor is not a small image, it is a candidate a client can
+/// never select, so admitting it would let the wire carry a rendition no host
+/// can use.
+fn decode_src_set_entry(path: &str, j: &JVal) -> DResult<SrcSetEntry> {
+    let fields = as_obj(path, j)?;
+    let src = req_binding_slot(
+        path,
+        fields,
+        "src",
+        "srcSet entry Binding<string> src",
+        StaticSlot::Str,
+    )?;
+    let width_j = req(path, fields, "width", "positive intrinsic pixel width")?;
+    match width_j {
+        JVal::Num(n) if *n > 0.0 && n.fract() == 0.0 => Ok(SrcSetEntry {
+            src,
+            width: *n as i64,
+        }),
+        _ => Err(wrong_type(
+            &format!("{path}.width"),
+            "JSON number (positive integer pixel width)",
+        )),
+    }
+}
+
 fn decode_image_spec(path: &str, j: &JVal) -> DResult<ImageSpec> {
     let fields = as_obj(path, j)?;
     let alt = req_text_source(path, fields, "alt", "Image alt TextSource")?;
@@ -2474,7 +2512,121 @@ fn decode_image_spec(path: &str, j: &JVal) -> DResult<ImageSpec> {
     )?;
     let variant_j = req(path, fields, "variant", "ImageVariant")?;
     let variant = decode_image_variant(&format!("{path}.variant"), variant_j)?;
-    Ok(ImageSpec { alt, src, variant })
+    // Phase 1077 — omitted-when-default on both boundaries; an absent slot
+    // restores today's behaviour, which is what keeps every pre-phase document
+    // decoding unchanged and re-encoding to the bytes it already had.
+    let fit = match get(fields, "fit") {
+        None => ImageFit::Natural,
+        Some(v) => decode_image_fit(&format!("{path}.fit"), v)?,
+    };
+    let aspect_ratio = match get(fields, "aspectRatio") {
+        None => ImageAspect::Natural,
+        Some(v) => decode_image_aspect(&format!("{path}.aspectRatio"), v)?,
+    };
+    let loading = match get(fields, "loading") {
+        None => ImageLoading::Eager,
+        Some(v) => decode_image_loading(&format!("{path}.loading"), v)?,
+    };
+    // Phase 1078 — `caption` is optional CONTENT, so absent means ABSENT
+    // (rule 4), not absent-means-a-default. `opt_text_source` is the same
+    // decoder `alt` reaches through, which is what lets the §16 bare-string
+    // shorthand and every `TextSource` case reach the slot with no
+    // caption-specific rule.
+    let caption = opt_text_source(path, fields, "caption")?;
+    // Phase 1080 — the MISSING-LIST-FIELD decode class, and the one branch in
+    // this decoder most worth reading. An ABSENT `srcSet` IS the empty list:
+    // not `None`, not `null`, not an error. A PRESENT `null` is refused
+    // (`WRONG_TYPE` at `$.kind.srcSet`) rather than read as absence — absence
+    // already has a spelling, and admitting a second lets two conformant hosts
+    // emit different canonical bytes for the same document. The authored ORDER
+    // is preserved: a JSON array is ordered data, canonicalisation sorts object
+    // KEYS only, and a codec that re-sorted here would emit bytes it did not
+    // decode.
+    let src_set = match get(fields, "srcSet") {
+        None => Vec::new(),
+        Some(v) => {
+            let arr = as_arr(&format!("{path}.srcSet"), v)?;
+            let mut entries = Vec::with_capacity(arr.len());
+            for (i, entry) in arr.iter().enumerate() {
+                entries.push(decode_src_set_entry(&format!("{path}.srcSet[{i}]"), entry)?);
+            }
+            entries
+        }
+    };
+    // Phase 1079 — an ordinary omit-at-default bool: absent is `false`, and a
+    // present non-boolean is a `WRONG_TYPE` rather than a truthiness coercion.
+    // `"expandable":"true"` is an emitter guessing, and a decoder that guessed
+    // back would have to rule on `"false"` and `""` as well — at which point
+    // two conformant hosts can disagree about whether the document declares an
+    // affordance at all.
+    let expandable = opt_bool(path, fields, "expandable")?.unwrap_or(false);
+    Ok(ImageSpec {
+        alt,
+        src,
+        variant,
+        fit,
+        aspect_ratio,
+        loading,
+        caption,
+        src_set,
+        expandable,
+    })
+}
+
+/// Phase 1076 — which media surface this is (§3.6.6). A `$type`-DISCRIMINATED
+/// union, so an unknown case reports at `<path>.$type` (the `Binding` /
+/// `TextSource` position) rather than at the bare slot, and the case set is
+/// CLOSED at `Video | Audio` — admitting a third surface later is an addition,
+/// never a re-meaning of shipped bytes.
+///
+/// `Audio` reads no field and refuses none either. What matters is that there
+/// is no autoplay slot to read: `{"$type":"Audio","autoplay":true}` decodes to
+/// an audio surface that does not autoplay, because the value has nowhere to
+/// land.
+fn decode_media_kind(path: &str, j: &JVal) -> DResult<MediaKind> {
+    let fields = as_obj(path, j)?;
+    match disc(path, fields)? {
+        "Video" => {
+            // Omit-at-default bool, refused rather than coerced when present
+            // and non-boolean — the `Image.expandable` ruling, on the slot
+            // where getting it wrong starts playing a video the document says
+            // not to.
+            let autoplay = opt_bool(path, fields, "autoplay")?.unwrap_or(false);
+            let poster = opt_binding_slot(path, fields, "poster", StaticSlot::Str)?;
+            Ok(MediaKind::Video { autoplay, poster })
+        }
+        "Audio" => Ok(MediaKind::Audio),
+        other => Err(unknown_du_case(path, other, "Video | Audio")),
+    }
+}
+
+/// Phase 1076 — the media spec (§3.6.6). `label` is REQUIRED, which is the a11y
+/// floor expressed where a decoder can enforce it: a transport has no
+/// decorative case, and there is no value to default to that would not be a
+/// fabricated name for someone else's recording. `controls` is the second
+/// omit-at-TRUE slot in the vocabulary, so an absent key is the ACCESSIBLE
+/// value and a document only spends a key to take the transport away.
+fn decode_media_spec(path: &str, j: &JVal) -> DResult<MediaSpec> {
+    let fields = as_obj(path, j)?;
+    let src = req_binding_slot(
+        path,
+        fields,
+        "src",
+        "Media Binding<string> Src",
+        StaticSlot::Str,
+    )?;
+    let label = req_text_source(path, fields, "label", "Media accessible label TextSource")?;
+    let kind_j = req(path, fields, "kind", "MediaKind (Video | Audio)")?;
+    let kind = decode_media_kind(&format!("{path}.kind"), kind_j)?;
+    let controls = opt_bool(path, fields, "controls")?.unwrap_or(true);
+    let r#loop = opt_bool(path, fields, "loop")?.unwrap_or(false);
+    Ok(MediaSpec {
+        src,
+        label,
+        controls,
+        r#loop,
+        kind,
+    })
 }
 
 fn decode_list_spec(path: &str, j: &JVal) -> DResult<ListSpec> {
@@ -4296,6 +4448,7 @@ fn decode_node_kind_g2(
         })(),
         "Link" => (|| -> DResult<NodeKind> { Ok(NodeKind::Link(decode_link_spec(path, j)?)) })(),
         "Image" => (|| -> DResult<NodeKind> { Ok(NodeKind::Image(decode_image_spec(path, j)?)) })(),
+        "Media" => (|| -> DResult<NodeKind> { Ok(NodeKind::Media(decode_media_spec(path, j)?)) })(),
         "List" => (|| -> DResult<NodeKind> { Ok(NodeKind::List(decode_list_spec(path, j)?)) })(),
         "Toast" => (|| -> DResult<NodeKind> { Ok(NodeKind::Toast(decode_toast_spec(path, j)?)) })(),
         "CodeBlock" => {

@@ -2071,6 +2071,178 @@ html[data-fuaran-disconnected]::before {
   border-radius: var(--fuaran-radius-lg, 8px);
 }
 
+/* ── Image presentation (Phase 1077) ──────────────────────────────
+   `fit` and `aspectRatio` are closed token vocabularies mapped to classes —
+   no value from the tree ever reaches a style attribute. `Natural` emits no
+   class on either axis, so the rules below are strictly additive and a
+   pre-phase image is untouched.
+
+   `aspect-ratio` is the cumulative-layout-shift fix: the box is reserved in
+   the FIRST layout pass, before the image bytes arrive, so nothing below it
+   moves when they do. It works with CSS alone — no script, no measurement,
+   and therefore identically in the server-rendered output.
+
+   The width rule is load-bearing. `.fuaran-image` ships `height: auto`, which
+   would otherwise win over the reserved ratio for a loaded image; pinning the
+   height to the ratio box and letting the width fill the container is what
+   makes the reservation survive the load. */
+.fuaran-image-aspect-square,
+.fuaran-image-aspect-four-three,
+.fuaran-image-aspect-three-two,
+.fuaran-image-aspect-sixteen-nine {
+  width: 100%;
+  height: auto;
+}
+
+.fuaran-image-aspect-square {
+  aspect-ratio: 1 / 1;
+}
+
+.fuaran-image-aspect-four-three {
+  aspect-ratio: 4 / 3;
+}
+
+.fuaran-image-aspect-three-two {
+  aspect-ratio: 3 / 2;
+}
+
+.fuaran-image-aspect-sixteen-nine {
+  aspect-ratio: 16 / 9;
+}
+
+/* `Cover` fills the reserved box and crops; `Contain` fits the whole image
+   inside it and letterboxes. Neither says anything without a box to fill,
+   which is why they read as a pair with `aspectRatio` — but each is
+   independently declarable, because a host stylesheet may size the element
+   some other way. */
+.fuaran-image-fit-cover {
+  object-fit: cover;
+}
+
+.fuaran-image-fit-contain {
+  object-fit: contain;
+}
+
+/* ── Image figure / caption (Phase 1078) ─────────────────────────
+   Present only when the image declares a `caption`; an uncaptioned image emits
+   no `<figure>` at all, so these rules cannot reach it. The reset is the
+   load-bearing part: a UA stylesheet gives `<figure>` a 1em block margin and a
+   40px inline margin, which would silently indent every captioned image
+   relative to the uncaptioned one beside it. Zeroing it makes the wrapper
+   semantic rather than visual — the caption is the only thing that appears. */
+.fuaran-image-figure {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-image-figure-caption {
+  font-size: var(--fuaran-text-sm, 13px);
+  line-height: var(--fuaran-line-height-normal, 1.5);
+  color: var(--fuaran-tone-muted-fg, #6b7280);
+}
+
+/* ── Expandable image (Phase 1079) ───────────────────────────────
+   The anchor is emitted by BOTH renderers and is a real link to the full-size
+   asset — the no-JS path. `display: block` and the zeroed line box are the
+   whole visual contribution: an inline anchor around an `<img>` inherits the
+   text baseline and adds a descender's worth of space under the picture, which
+   would make a captioned expandable image sit differently from a captioned
+   plain one. The link is deliberately NOT underlined or recoloured — the
+   picture is the affordance, and a blue box around a photograph is chrome the
+   author did not ask for. */
+.fuaran-image-expand {
+  display: block;
+  line-height: 0;
+  color: inherit;
+  text-decoration: none;
+  cursor: zoom-in;
+}
+
+.fuaran-image-expand:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: var(--fuaran-focus-ring-offset, 2px);
+}
+
+/* The overlay is CLIENT-ONLY: no renderer emits it, so it appears in no parity
+   comparison. These rules exist here rather than in the enhancement script for
+   the reason every other class in this file exists — a consumer that retires
+   the typed library keeps the class vocabulary, and an enhancement that wrote
+   its own inline styles could not be themed by the tokens around it. The
+   structure mirrors `.fuaran-modal-overlay` / `.fuaran-modal-dialog`
+   deliberately: it IS a dialog, and it should stack, centre and dim exactly as
+   the declarative one does. */
+.fuaran-image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: var(--fuaran-z-modal, 1000);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--fuaran-space-md, 12px);
+  padding: var(--fuaran-space-lg, 16px);
+  background: var(--fuaran-modal-backdrop, rgba(0, 0, 0, 0.5));
+}
+
+.fuaran-image-lightbox[hidden] {
+  display: none;
+}
+
+.fuaran-image-lightbox-image {
+  max-width: 100%;
+  max-height: 85%;
+  object-fit: contain;
+  border-radius: var(--fuaran-radius-lg, 8px);
+  box-shadow: var(--fuaran-shadow-xl, 0 20px 25px -5px rgba(0, 0, 0, 0.1));
+}
+
+.fuaran-image-lightbox-caption {
+  margin: 0;
+  max-width: 60ch;
+  text-align: center;
+  font-size: var(--fuaran-text-sm, 13px);
+  line-height: var(--fuaran-line-height-normal, 1.5);
+  color: #f9fafb;
+}
+
+.fuaran-image-lightbox-close {
+  position: absolute;
+  top: var(--fuaran-space-md, 12px);
+  right: var(--fuaran-space-md, 12px);
+}
+
+/* ── Media (Phase 1076) ────────────────────────────────────────────
+   Deliberately minimal. A `<video>` / `<audio>` with `controls` is drawn by the
+   browser's own player chrome, which is the one control surface a user already
+   knows how to operate and which follows their platform's accessibility
+   settings; restyling it means replacing it, and a replaced transport is a
+   custom control this vocabulary explicitly does not ship.
+
+   So the rules here do exactly two things: make the element behave like the
+   block-level media it is (`display: block`, never overflowing its column), and
+   give `<audio>` a full-width default, because a UA `<audio>` sits at an
+   arbitrary intrinsic width that looks accidental beside anything else.
+
+   The shared `.fuaran-media` class carries the layout; the per-variant classes
+   exist so a host stylesheet can target one surface without targeting both —
+   the same reason `.fuaran-image-avatar` sits beside `.fuaran-image`. */
+.fuaran-media {
+  display: block;
+  max-width: 100%;
+}
+
+.fuaran-media-video {
+  height: auto;
+  border-radius: var(--fuaran-radius-md, 6px);
+}
+
+.fuaran-media-audio {
+  width: 100%;
+}
+
 /* ── List (Phase 287) ──────────────────────────────────────────── */
 .fuaran-list {
   margin: 0;

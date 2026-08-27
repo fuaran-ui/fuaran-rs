@@ -142,6 +142,7 @@ pub fn kind_class(kind: &NodeKind) -> String {
         NodeKind::Fact(_) => "fuaran-kind-fact".to_string(),
         NodeKind::Link(_) => "fuaran-kind-link".to_string(),
         NodeKind::Image(_) => "fuaran-kind-image".to_string(),
+        NodeKind::Media(_) => "fuaran-kind-media".to_string(),
         NodeKind::List(_) => "fuaran-kind-list".to_string(),
         NodeKind::Toast(_) => "fuaran-kind-toast".to_string(),
         NodeKind::CodeBlock(_) => "fuaran-kind-code-block".to_string(),

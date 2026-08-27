@@ -35,9 +35,10 @@ use crate::canonical::JVal;
 use crate::wire::{
     Action, Binding, BoxLayout, BoxRole, BoxSpec, CellFormat, CellKindErased, ChartSpec,
     ColumnErased, DisclosureSpec, FilterSpec, FormField, FormFieldKind, FormSpec, GridSpec,
-    HeadingVariant, ImageVariant, MapSpec, MathDisplay, ModalSpec, Node, NodeKind, Orientation,
-    ScrollAreaSpec, ScrollOrientation, SelectOption, SelectSpec, StateBehaviour, StaticRows,
-    StaticValue, TabsSpec, TextSource, ToneVariant, encode_node,
+    HeadingVariant, ImageAspect, ImageFit, ImageLoading, ImageVariant, MapSpec, MathDisplay,
+    MediaKind, ModalSpec, Node, NodeKind, Orientation, ScrollAreaSpec, ScrollOrientation,
+    SelectOption, SelectSpec, SrcSetEntry, StateBehaviour, StaticRows, StaticValue, TabsSpec,
+    TextSource, ToneVariant, encode_node,
 };
 
 use super::bindings::{
@@ -125,6 +126,7 @@ fn collect_fragments<'a>(acc: &mut HashMap<String, &'a Node>, node: &'a Node) {
         | NodeKind::Fact(_)
         | NodeKind::Link(_)
         | NodeKind::Image(_)
+        | NodeKind::Media(_)
         | NodeKind::List(_)
         | NodeKind::Toast(_)
         | NodeKind::CodeBlock(_)
@@ -251,9 +253,16 @@ fn render_node(ctx: &Ctx<'_>, node: &Node) -> String {
 /// a runtime branch (the protected-email `Link`), the arm owns placement within
 /// its own body.
 fn forwards_to_semantic_element(kind: &NodeKind) -> bool {
+    // Phase 1076 — `Media` satisfies all three on the same reading `Image`
+    // does: the `<video>` / `<audio>` IS the body root, it carries native
+    // interactive semantics (a transport a reader focuses and operates), and
+    // nothing else in the body competes for the accessible name. A node-level
+    // `Accessibility.Label` therefore overrides the spec's own `label`, which is
+    // the right precedence — the node-level slot is the author saying this
+    // particular instance is named something else.
     matches!(
         kind,
-        NodeKind::Link(_) | NodeKind::Button(_) | NodeKind::Image(_)
+        NodeKind::Link(_) | NodeKind::Button(_) | NodeKind::Image(_) | NodeKind::Media(_)
     )
 }
 
@@ -805,15 +814,236 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
                 ImageVariant::Rounded => "fuaran-image fuaran-image-rounded",
                 ImageVariant::Default => "fuaran-image",
             };
+            // Phase 1077 — the presentation tokens map to CLASSES and nothing
+            // else: no value from the tree ever reaches a style attribute.
+            // `Natural` emits no class on either axis, so a pre-phase tree's
+            // class attribute is byte-identical to what it was.
+            let fit_class = match spec.fit {
+                ImageFit::Natural => "",
+                ImageFit::Cover => " fuaran-image-fit-cover",
+                ImageFit::Contain => " fuaran-image-fit-contain",
+            };
+            let aspect_class = match spec.aspect_ratio {
+                ImageAspect::Natural => "",
+                ImageAspect::Square => " fuaran-image-aspect-square",
+                ImageAspect::FourThree => " fuaran-image-aspect-four-three",
+                ImageAspect::ThreeTwo => " fuaran-image-aspect-three-two",
+                ImageAspect::SixteenNine => " fuaran-image-aspect-sixteen-nine",
+            };
             // The a11y projection lands on the `<img>` itself.
             let mut attrs: Vec<Attr> = vec![
-                ("class", s(variant_class)),
-                ("src", s(src)),
+                (
+                    "class",
+                    s(format!("{variant_class}{fit_class}{aspect_class}")),
+                ),
+                ("src", s(src.clone())),
                 ("alt", s(render_text(ctx.sources, &spec.alt))),
             ];
+            // Phase 1080 — the responsive candidate list. Three properties,
+            // each load-bearing:
+            //
+            // SANITISED PER ENTRY, through the SAME `Media`-class seam the
+            // primary `src` uses. A candidate is a URL the browser fetches with
+            // no user act — exactly what the floor exists for — so routing only
+            // the primary through it would make `srcSet` a documented way
+            // around the one rule this node has.
+            //
+            // A FAILING ENTRY IS DROPPED, not neutered. The `<img>`'s `src` must
+            // exist, so it collapses to the refusal URL; a candidate has no such
+            // obligation, and `about:blank 400w` would offer the browser a
+            // rendition guaranteed to fail. The refusal is read from the seam's
+            // own marker list rather than by string-comparing the URL it
+            // substitutes, so a later change to that substitute cannot silently
+            // turn a dropped candidate into a served one.
+            //
+            // ASCENDING BY WIDTH, sorted HERE. The wire preserves authored array
+            // order, so canonical output is the RENDERER's obligation, not the
+            // codec's. `sort_by_key` is stable, so two entries declaring the
+            // same width keep their authored order rather than swapping on a
+            // re-render.
+            let mut candidates: Vec<&SrcSetEntry> = spec.src_set.iter().collect();
+            candidates.sort_by_key(|e| e.width);
+            let served: Vec<String> = candidates
+                .iter()
+                .filter_map(|entry| {
+                    let (safe, refusal) = sanitize_url_for_egress(
+                        ctx.policy,
+                        EgressClass::Media,
+                        &try_string(ctx.sources, &entry.src).unwrap_or_default(),
+                    );
+                    if safe.is_empty() || !refusal.is_empty() {
+                        None
+                    } else {
+                        Some(format!("{safe} {}w", entry.width))
+                    }
+                })
+                .collect();
+            if !served.is_empty() {
+                attrs.push(("srcset", s(served.join(", "))));
+                // `sizes` is BOUNDED, and `100vw` is the only value the tree can
+                // justify: nothing in the document says how wide this element
+                // will be laid out, and the language has no media-query slot for
+                // an author to say so. Stated rather than left to the HTML
+                // default so the candidate arithmetic is visible in the markup.
+                attrs.push(("sizes", s("100vw")));
+            }
+            // Phase 1077 — `Eager` emits no attribute at all (the browser's own
+            // default); only `Lazy` is a declaration.
+            if spec.loading == ImageLoading::Lazy {
+                attrs.push(("loading", s("lazy")));
+            }
+            attrs.extend_from_slice(semantic_attrs);
+            let refused_src = !egress_attrs.is_empty();
+            push_egress_attrs(&mut attrs, egress_attrs);
+            let img = void_el("img", &attrs);
+
+            // Phase 1079 — the expansion affordance. THE BASELINE IS A REAL
+            // LINK, not a marked-up control waiting for script: a reader with no
+            // JavaScript — a crawler, a text browser, a locked-down client, a
+            // hydration that has not finished — clicks the thumbnail and gets
+            // the full-size asset in the browser's own viewer. The
+            // `data-fuaran-expandable` marker is what an enhancement tier reads;
+            // it is a marker on a WORKING link, never the mechanism. It is
+            // VALUELESS because the slot is a bool whose `false` is the absence
+            // of the attribute.
+            //
+            // A REFUSED `src` EMITS NO ANCHOR — the srcSet rule turned on the
+            // affordance. A link to the refusal URL is exactly the dead control
+            // this design exists to avoid; the image still renders, carrying its
+            // refusal marker, and the reader is simply not offered an expansion
+            // that could not work.
+            //
+            // NOTHING CROSSES THE DISPATCH GATE: no `Action`, no handler, no
+            // `onclick`. The wire declares the asset reachable, the anchor makes
+            // it reachable, and where it opens is a rendering choice.
+            let expandable = if spec.expandable && !src.is_empty() && !refused_src {
+                el(
+                    "a",
+                    &[
+                        ("class", s("fuaran-image-expand")),
+                        ("href", s(src)),
+                        ("data-fuaran-expandable", AttrVal::Flag(true)),
+                    ],
+                    &img,
+                )
+            } else {
+                img
+            };
+
+            // Phase 1078 — the caption. `None` returns the emission UNTOUCHED,
+            // which is the acceptance criterion expressed as control flow rather
+            // than as a claim: there is no wrapper to be byte-identical to,
+            // because there is no wrapper. `Some` wraps it in the semantic pair,
+            // which is the whole point — an ad-hoc sibling text node carried the
+            // same pixels and no binding, so assistive technology read it as the
+            // next paragraph. Nothing moves onto the `<figure>`: the a11y
+            // projection, the egress marker and the sanitised `src` all stay on
+            // the element they describe.
+            //
+            // Phase 1079 — the NESTING: `<figure>` wraps `<a>` wraps `<img>`.
+            // The caption sits OUTSIDE the link target, deliberately. A
+            // `<figcaption>` inside the anchor would make the caption's own
+            // prose a click target for the expansion, and would put interactive
+            // content inside the element whose job is to LABEL the image.
+            match &spec.caption {
+                None => expandable,
+                Some(caption) => el(
+                    "figure",
+                    &[("class", s("fuaran-image-figure"))],
+                    &format!(
+                        "{expandable}{}",
+                        text_el(
+                            "figcaption",
+                            &[("class", s("fuaran-image-figure-caption"))],
+                            &render_text(ctx.sources, caption),
+                        )
+                    ),
+                ),
+            }
+        }
+        // Phase 1076 — the media transport (§3.6.6). Deterministic, script-free
+        // markup: a real `<video>` / `<audio>` a browser plays with no runtime,
+        // exactly as `Image` emits a real `<img>`. Nothing is attached — no
+        // observer, no handler. A `<video controls>` is already a complete
+        // interactive control in every browser, and the point of a declarative
+        // media node is that the deterministic floor and the hydrated render are
+        // the same element; there is no enhancement tier here as there is for
+        // `Image.expandable`, because there is nothing an enhancement would add.
+        //
+        // Four things below are CONTRACT rather than choice, and each is
+        // normative in the wire spec because a host that got any of them wrong
+        // would still round-trip the bytes perfectly:
+        //
+        //   * `aria-label` ALWAYS. The label is mandatory on the wire and has no
+        //     decorative case, so unlike `Image`'s `alt` there is no branch.
+        //   * `autoplay` NEVER WITHOUT `muted`. The pairing is not a default a
+        //     caller overrides — it is what the declaration MEANS, which is why
+        //     the wire carries no separate `muted` slot to fall out of step with
+        //     it. Every mainstream browser blocks unmuted autoplay anyway, so an
+        //     unmuted emission would produce a player that silently never
+        //     starts: the declaration would be a lie and the failure invisible.
+        //   * NO AUTOPLAY PATHWAY ON AUDIO, at all. Not "off by default" — the
+        //     `MediaKind::Audio` case carries no slot to read, so this arm has
+        //     nothing to branch on and cannot acquire one by a later edit here.
+        //   * BOTH URLS THROUGH THE EGRESS FLOOR. `src` and `poster` are each
+        //     fetched with no user act. They differ in what a REFUSAL means: an
+        //     element must have a source, so `src` collapses to the refusal URL
+        //     and carries the marker, while a poster simply leaves — a `<video>`
+        //     with no poster shows its first frame, which is a working
+        //     rendering, whereas a poster pointing at the refusal URL is a
+        //     broken image painted over the player.
+        NodeKind::Media(spec) => {
+            let (src, egress_attrs) = sanitize_url_for_egress(
+                ctx.policy,
+                EgressClass::Media,
+                &try_string(ctx.sources, &spec.src).unwrap_or_default(),
+            );
+            let (tag, variant_class) = match spec.kind {
+                MediaKind::Video { .. } => ("video", "fuaran-media fuaran-media-video"),
+                MediaKind::Audio => ("audio", "fuaran-media fuaran-media-audio"),
+            };
+            let mut attrs: Vec<Attr> = vec![("class", s(variant_class)), ("src", s(src))];
+            // The accessible name, always — but emitted ONCE. A node-level
+            // `Accessibility.Label` rides `semantic_attrs` as its own
+            // `aria-label`, and it takes precedence: the node-level slot is the
+            // author saying this particular instance is named something else,
+            // which is the same precedence `Image`'s node-level label has over
+            // `alt`. This host serialises attributes to text, where a duplicate
+            // resolves FIRST-wins rather than by a props merge, so emitting both
+            // would silently invert that precedence instead of overriding it.
+            if !semantic_attrs.iter().any(|(name, _)| *name == "aria-label") {
+                attrs.push(("aria-label", s(render_text(ctx.sources, &spec.label))));
+            }
+            if spec.controls {
+                attrs.push(("controls", AttrVal::Flag(true)));
+            }
+            if spec.r#loop {
+                attrs.push(("loop", AttrVal::Flag(true)));
+            }
+            if let MediaKind::Video { autoplay, poster } = &spec.kind {
+                if let Some(poster) = poster {
+                    let (safe, refusal) = sanitize_url_for_egress(
+                        ctx.policy,
+                        EgressClass::Media,
+                        &try_string(ctx.sources, poster).unwrap_or_default(),
+                    );
+                    // Read the refusal from the seam's own verdict, not by
+                    // comparing against whatever URL it substitutes — the
+                    // srcSet-candidate rule, applied to the one other URL this
+                    // vocabulary fetches unprompted.
+                    if !safe.is_empty() && refusal.is_empty() {
+                        attrs.push(("poster", s(safe)));
+                    }
+                }
+                // The pairing, on the tier where it governs playback.
+                if *autoplay {
+                    attrs.push(("autoplay", AttrVal::Flag(true)));
+                    attrs.push(("muted", AttrVal::Flag(true)));
+                }
+            }
             attrs.extend_from_slice(semantic_attrs);
             push_egress_attrs(&mut attrs, egress_attrs);
-            void_el("img", &attrs)
+            el(tag, &attrs, "")
         }
         NodeKind::List(spec) => {
             let items: String = spec

@@ -141,6 +141,13 @@ pub fn legitimate_events(kind: &NodeKind) -> &'static [&'static str] {
         | NodeKind::Fact(_)
         | NodeKind::Link(_)
         | NodeKind::Image(_)
+        // Phase 1076 — `Media` accepts NO event, and that is a decision rather
+        // than an omission. A `<video controls>` is a complete interactive
+        // control the browser owns: play, pause and seek are the transport's,
+        // not a dispatch site's. The kind declares no handler slot and reaches
+        // no closure-bearing position (§4), so there is nothing an inbound
+        // event could legitimately be addressed to.
+        | NodeKind::Media(_)
         | NodeKind::List(_)
         | NodeKind::Toast(_)
         | NodeKind::CodeBlock(_)

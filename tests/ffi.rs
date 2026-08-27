@@ -287,3 +287,82 @@ fn native_c_abi_hands_over_resolved_rows() {
 
     unsafe { fuaran_session_free(session) };
 }
+
+/// Phase 1076/1077–1080's media vocabulary across the raw ABI — the Phase 745
+/// check, performed rather than assumed, and RECORDED EITHER WAY.
+///
+/// The boundary is JSON-bytes-in / JSON-bytes-out, so pure VOCABULARY passes
+/// through opaquely and only new *verbs* need exposure. The whole media
+/// change-set is vocabulary — a new kind, a nested variant, and five slots on
+/// an existing spec record, none of them carrying a gesture — so the finding
+/// pinned here is a NEGATIVE one: **nothing is owed at the C-ABI**, no entry
+/// point was added, and `include/fuaran.h` is unchanged.
+///
+/// What the native surfaces need is that the vocabulary actually CROSSES, and
+/// nothing else in this repo would notice if it stopped: the Swift and Kotlin
+/// tiers are decode-only render projections whose whole contract is "the Rust
+/// core owns truth", so a media node reaching them at all depends on this
+/// boundary carrying it.
+///
+/// BOTH tree-JSON entry points are asserted, because a native projection may
+/// read either and they fold differently: `tree_json` re-encodes the held tree,
+/// and `project_resolved` folds bindings to literals — where the presentation
+/// tokens, the expansion declaration and the media variant must all survive
+/// UNFOLDED, since each is a declaration about how something is presented
+/// rather than a value to resolve. A projection handed a resolved image with
+/// its `expandable` projected away could only ever render a dead thumbnail.
+const MEDIA_TREE: &str = r#"{"id":"root","kind":{"$type":"Box","children":[
+    {"id":"clip","kind":{"$type":"Media","controls":false,"kind":{"$type":"Video","autoplay":true,"poster":{"$type":"Static","value":"/poster.jpg"}},"label":"Studio walkthrough","loop":true,"src":{"$type":"Static","value":"/walkthrough.mp4"}}},
+    {"id":"shot","kind":{"$type":"Image","alt":"Boats","aspectRatio":"FourThree","caption":"The harbour at dawn, 1908.","expandable":true,"fit":"Cover","loading":"Lazy","src":{"$type":"Static","value":"/harbour.jpg"},"srcSet":[{"src":{"$type":"Static","value":"/harbour-400.jpg"},"width":400}],"variant":"Default"}}
+],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}"#;
+
+#[test]
+fn native_c_abi_carries_the_media_vocabulary() {
+    let (tp, tl) = input(MEDIA_TREE);
+    let session = unsafe { fuaran_session_new(tp, tl) };
+    unsafe { fuaran_dealloc(tp, tl) };
+    assert!(!session.is_null(), "a media tree decodes to a live handle");
+
+    // Every declaration in the change-set, on both readings. The `$type`-nested
+    // variant is asserted whole rather than by its members, because the nesting
+    // at `kind.kind` IS the thing a binding tier has to find.
+    let declarations = [
+        r#""$type":"Media""#,
+        r#""kind":{"$type":"Video","autoplay":true,"poster":"#,
+        r#""controls":false"#,
+        r#""loop":true"#,
+        r#""aspectRatio":"FourThree""#,
+        r#""fit":"Cover""#,
+        r#""loading":"Lazy""#,
+        r#""caption":"The harbour at dawn, 1908.""#,
+        r#""expandable":true"#,
+        r#""srcSet":["#,
+        r#""width":400"#,
+    ];
+
+    let json = take_buf(unsafe { fuaran_session_tree_json(session) });
+    for want in declarations {
+        assert!(
+            json.contains(want),
+            "tree_json did not carry {want}:\n{json}"
+        );
+    }
+
+    let projected = take_buf(unsafe { fuaran_session_project_resolved(session) });
+    for want in declarations {
+        assert!(
+            projected.contains(want),
+            "the resolved projection dropped {want} — a native surface would \
+             then render the wrong thing:\n{projected}"
+        );
+    }
+
+    // The rendered leg crosses too, which is what a projection tier that
+    // renders through the core (rather than reading the tree) receives.
+    let html = take_buf(unsafe { fuaran_session_render(session) });
+    assert!(html.contains("<video "), "{html}");
+    assert!(html.contains("fuaran-media-video"), "{html}");
+    assert!(html.contains("data-fuaran-expandable"), "{html}");
+
+    unsafe { fuaran_session_free(session) };
+}

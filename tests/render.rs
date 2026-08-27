@@ -1582,3 +1582,298 @@ fn a11y_corpus_projection_lands_on_the_right_element() {
         );
     }
 }
+
+// ─── Media-vocabulary render obligations (§3.6.2–§3.6.6) ─────────────────────
+//
+// These are the claims a host can satisfy the BYTES of and still get wrong.
+// Every one of them is stated NORMATIVELY in the wire specification precisely
+// because a codec-conformant host that broke it would round-trip the corpus
+// perfectly — so the corpus cannot be the oracle for any of them, and this is
+// where they are pinned instead.
+
+/// §3.6.6 — `aria-label` ALWAYS. The label is mandatory on the wire and has no
+/// decorative case, so unlike `Image`'s `alt` there is no branch to take.
+#[test]
+fn media_always_carries_an_accessible_name() {
+    for json in [
+        r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"Studio walkthrough","src":{"$type":"Static","value":"/w.mp4"}}}"#,
+        r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Audio"},"label":"Curator commentary","src":{"$type":"Static","value":"/c.mp3"}}}"#,
+    ] {
+        let html = render(json);
+        assert!(
+            html.contains(r#"aria-label=""#),
+            "a transport is never decorative: {html}"
+        );
+    }
+    // A node-level a11y label OVERRIDES the spec's own, and the element carries
+    // exactly ONE accessible name — this host serialises attributes to text,
+    // where a duplicate resolves first-wins rather than by a props merge, so
+    // emitting both would silently invert that precedence instead of applying
+    // it.
+    let overridden = render(&format!(
+        r#"{{"id":"m","kind":{{"$type":"Media","kind":{{"$type":"Audio"}},"label":"Spec name","src":{{"$type":"Static","value":"/c.mp3"}}}},{A11Y}}}"#
+    ));
+    let tag = open_tag(&overridden, "audio");
+    assert!(tag.contains(r#"aria-label="Home""#), "{tag}");
+    assert!(
+        !tag.contains("Spec name"),
+        "one accessible name only: {tag}"
+    );
+    assert_eq!(tag.matches("aria-label").count(), 1, "{tag}");
+}
+
+/// §3.6.6 — `autoplay` NEVER without `muted`, and never `muted` without
+/// `autoplay`. The pairing is not a default a caller overrides; it is what the
+/// declaration MEANS, which is why the wire carries no separate `muted` slot to
+/// fall out of step with it. Every mainstream browser blocks unmuted autoplay,
+/// so an unmuted emission would produce a player that silently never starts —
+/// the declaration would be a lie and the failure would be invisible.
+#[test]
+fn autoplay_is_never_emitted_without_muted() {
+    let declared = render(
+        r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video","autoplay":true},"label":"Ambient loop","src":{"$type":"Static","value":"/a.mp4"}}}"#,
+    );
+    let tag = open_tag(&declared, "video");
+    assert!(tag.contains(" autoplay"), "{tag}");
+    assert!(tag.contains(" muted"), "autoplay without muted: {tag}");
+
+    // The converse holds too: muting a video the reader pressed play on is a
+    // defect of the same family in the other direction.
+    let undeclared = render(
+        r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"Studio walkthrough","src":{"$type":"Static","value":"/w.mp4"}}}"#,
+    );
+    let tag = open_tag(&undeclared, "video");
+    assert!(!tag.contains(" autoplay"), "{tag}");
+    assert!(!tag.contains(" muted"), "muted without autoplay: {tag}");
+}
+
+/// §3.6.6 — `Audio` has NO autoplay pathway: in the type, on the wire, or in
+/// the emission. Stronger than a default of `false` — a slot that defaults to
+/// off is one a document can switch on, and there is no document this format
+/// wants to be able to state in which a page begins making sound unbidden. The
+/// `Audio` case declares no such slot, so an `autoplay` member on the wire has
+/// nowhere to land.
+#[test]
+fn audio_has_no_autoplay_pathway_even_when_the_wire_states_one() {
+    let json = r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Audio","autoplay":true},"label":"Commentary","src":{"$type":"Static","value":"/c.mp3"}}}"#;
+    let html = render(json);
+    assert!(!html.contains("autoplay"), "{html}");
+    assert!(!html.contains("muted"), "{html}");
+    // And it does not survive the round trip either — there is no slot for it,
+    // so re-encoding drops it rather than preserving a declaration no renderer
+    // will honour.
+    assert!(!encode_node(&node(json)).contains("autoplay"));
+}
+
+/// §3.6.6 — both URLs cross the destination floor, and they differ in what a
+/// REFUSAL means. An element must have a source, so `src` collapses to the
+/// refusal URL and carries its marker; a poster simply leaves, because a
+/// `<video>` with no poster shows its first frame — a working rendering —
+/// whereas a poster pointing at the refusal URL is a broken image painted over
+/// the player.
+#[test]
+fn a_refused_poster_is_dropped_where_a_refused_src_collapses() {
+    let html = render(
+        r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video","poster":{"$type":"Static","value":"https://collector.example/p.jpg"}},"label":"Walkthrough","src":{"$type":"Static","value":"https://collector.example/w.mp4"}}}"#,
+    );
+    assert!(
+        html.contains(r#"src="about:blank#fuaran-egress-refused""#),
+        "{html}"
+    );
+    assert!(html.contains("data-fuaran-egress-refused"), "{html}");
+    assert!(
+        !html.contains("poster="),
+        "a refused poster is dropped: {html}"
+    );
+
+    // Permitted, the poster is emitted normally — so the assertion above is
+    // about the refusal, not about posters never being emitted at all.
+    let allowed = render_permissive(
+        r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video","poster":{"$type":"Static","value":"https://cdn.example/p.jpg"}},"label":"Walkthrough","src":{"$type":"Static","value":"https://cdn.example/w.mp4"}}}"#,
+    );
+    assert!(
+        allowed.contains(r#"poster="https://cdn.example/p.jpg""#),
+        "{allowed}"
+    );
+}
+
+/// §3.6.6 — `controls` omits at TRUE and `loop` at `false`, the two opposite
+/// polarities, and this is the RENDERED side of that pair: a document that says
+/// nothing gets the accessible setting, and only taking the transport away
+/// costs a key.
+#[test]
+fn media_transport_defaults_to_present_controls() {
+    let quiet = render(
+        r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Audio"},"label":"Commentary","src":{"$type":"Static","value":"/c.mp3"}}}"#,
+    );
+    let tag = open_tag(&quiet, "audio");
+    assert!(tag.contains(" controls"), "{tag}");
+    assert!(!tag.contains(" loop"), "{tag}");
+
+    let stated = render(
+        r#"{"id":"m","kind":{"$type":"Media","controls":false,"kind":{"$type":"Audio"},"label":"Commentary","loop":true,"src":{"$type":"Static","value":"/c.mp3"}}}"#,
+    );
+    let tag = open_tag(&stated, "audio");
+    assert!(!tag.contains(" controls"), "{tag}");
+    assert!(tag.contains(" loop"), "{tag}");
+}
+
+/// §3.6.2 — the presentation tokens map to CLASSES and nothing else: no value
+/// from the tree ever reaches a style attribute, which is the free-form escape
+/// the token vocabularies exist to close. `Natural` emits no class on either
+/// axis, so a pre-phase image's class attribute is unchanged.
+#[test]
+fn image_presentation_tokens_map_to_classes_never_to_styles() {
+    let html = render(
+        r#"{"id":"i","kind":{"$type":"Image","alt":"Hero","aspectRatio":"SixteenNine","fit":"Cover","loading":"Lazy","src":{"$type":"Static","value":"/hero.jpg"},"variant":"Default"}}"#,
+    );
+    let tag = open_tag(&html, "img");
+    assert!(
+        tag.contains("fuaran-image fuaran-image-fit-cover fuaran-image-aspect-sixteen-nine"),
+        "{tag}"
+    );
+    assert!(tag.contains(r#"loading="lazy""#), "{tag}");
+    assert!(
+        !tag.contains("style="),
+        "no token reaches a style attribute: {tag}"
+    );
+
+    // The identity defaults emit nothing at all — `Eager` leaves the browser's
+    // own default in place rather than declaring it, because deferring an
+    // above-the-fold image is a regression and only the author knows.
+    let plain = render(
+        r#"{"id":"i","kind":{"$type":"Image","alt":"Hero","src":{"$type":"Static","value":"/hero.jpg"},"variant":"Default"}}"#,
+    );
+    let tag = open_tag(&plain, "img");
+    assert!(tag.contains(r#"class="fuaran-image""#), "{tag}");
+    assert!(!tag.contains("loading="), "{tag}");
+    assert!(!tag.contains("aspect"), "{tag}");
+}
+
+/// §3.6.4 — the wire keeps the AUTHORED order and the renderer canonicalises
+/// ASCENDING BY WIDTH. The two rules answer different questions, and putting
+/// the sort in the renderer is what lets both be true — so this fixture, which
+/// is authored DESCENDING, must re-encode descending and render ascending.
+#[test]
+fn srcset_renders_ascending_while_the_wire_keeps_authored_order() {
+    let json = r#"{"id":"i","kind":{"$type":"Image","alt":"Boats","src":{"$type":"Static","value":"/h.jpg"},"srcSet":[{"src":{"$type":"Static","value":"/h-1600.jpg"},"width":1600},{"src":{"$type":"Static","value":"/h-800.jpg"},"width":800},{"src":{"$type":"Static","value":"/h-400.jpg"},"width":400}],"variant":"Default"}}"#;
+    assert_eq!(encode_node(&node(json)), json, "the codec must not re-sort");
+    let html = render(json);
+    let tag = open_tag(&html, "img");
+    assert!(
+        tag.contains(r#"srcset="/h-400.jpg 400w, /h-800.jpg 800w, /h-1600.jpg 1600w""#),
+        "{tag}"
+    );
+    assert!(tag.contains(r#"sizes="100vw""#), "{tag}");
+}
+
+/// §3.6.4 — a candidate that fails the floor is DROPPED rather than emitted in
+/// neutered form. The primary `src` must exist so it collapses to the refusal
+/// URL; a candidate has no such obligation, and offering a client a rendition
+/// guaranteed to fail is worse than offering it one fewer.
+#[test]
+fn a_refused_srcset_candidate_is_dropped_not_neutered() {
+    // The ambient deny-non-local policy: the local candidate is served, the
+    // remote one refused.
+    let html = render(
+        r#"{"id":"i","kind":{"$type":"Image","alt":"Boats","src":{"$type":"Static","value":"/h.jpg"},"srcSet":[{"src":{"$type":"Static","value":"/h-400.jpg"},"width":400},{"src":{"$type":"Static","value":"https://collector.example/h-800.jpg"},"width":800}],"variant":"Default"}}"#,
+    );
+    let tag = open_tag(&html, "img");
+    assert!(tag.contains(r#"src="/h.jpg""#), "{tag}");
+    assert!(tag.contains("/h-400.jpg 400w"), "{tag}");
+    assert!(!tag.contains("collector.example"), "{tag}");
+    assert!(
+        !tag.contains("about:blank"),
+        "a dropped candidate must not be emitted in neutered form: {tag}"
+    );
+}
+
+/// §3.6.5 — the rendered baseline is a REAL LINK, marked for an enhancement
+/// tier. A host that emitted a scripted control instead, or a marked-up element
+/// with no navigable target, would be conformant to nothing: the declaration
+/// would render as a dead affordance for every reader without JavaScript. The
+/// marker is VALUELESS, because the slot is a bool whose `false` is the absence
+/// of the attribute.
+#[test]
+fn expandable_emits_a_real_anchor_around_the_image() {
+    let html = render(
+        r#"{"id":"i","kind":{"$type":"Image","alt":"Boats","expandable":true,"src":{"$type":"Static","value":"/h.jpg"},"variant":"Default"}}"#,
+    );
+    let anchor = open_tag(&html, "a");
+    assert!(
+        anchor.contains(r#"class="fuaran-image-expand""#),
+        "{anchor}"
+    );
+    assert!(anchor.contains(r#"href="/h.jpg""#), "{anchor}");
+    assert!(anchor.contains("data-fuaran-expandable"), "{anchor}");
+    assert!(
+        !anchor.contains(r#"data-fuaran-expandable=""#),
+        "the marker is valueless: {anchor}"
+    );
+    assert!(
+        !html.contains("onclick"),
+        "nothing crosses the dispatch gate: {html}"
+    );
+    // The anchor WRAPS the image.
+    assert!(html.contains("</a>"), "{html}");
+    assert!(
+        html.find("<a ").expect("the anchor") < html.find("<img").expect("the image"),
+        "{html}"
+    );
+}
+
+/// §3.6.5 — a `src` the render-time URL floor refused emits NO anchor. This is
+/// the dropped-candidate rule turned on the affordance: a link to the refusal
+/// URL is exactly the dead control the design exists to avoid. The image still
+/// renders, carrying its refusal marker, and the reader is simply not offered
+/// an expansion that could not work.
+#[test]
+fn a_refused_src_offers_no_expansion() {
+    let html = render(
+        r#"{"id":"i","kind":{"$type":"Image","alt":"Boats","expandable":true,"src":{"$type":"Static","value":"https://collector.example/h.jpg"},"variant":"Default"}}"#,
+    );
+    assert!(
+        !html.contains("<a "),
+        "no anchor over a refused src: {html}"
+    );
+    assert!(
+        !html.contains("data-fuaran-expandable"),
+        "and no marker: {html}"
+    );
+    assert!(html.contains("data-fuaran-egress-refused"), "{html}");
+    assert!(html.contains("<img"), "the image still renders: {html}");
+}
+
+/// §3.6.3 + §3.6.5 — the composition: `<figure>` wraps `<a>` wraps `<img>`,
+/// with the `<figcaption>` OUTSIDE the link target. A caption is prose a reader
+/// selects, quotes and reads, not a second click surface, and putting
+/// interactive content inside the element whose job is to LABEL the image
+/// inverts the relationship `<figure>` / `<figcaption>` exists to express.
+#[test]
+fn a_captioned_expandable_image_nests_figure_anchor_image() {
+    let html = render(
+        r#"{"id":"i","kind":{"$type":"Image","alt":"Boats","caption":"The harbour at dawn, 1908.","expandable":true,"src":{"$type":"Static","value":"/h.jpg"},"variant":"Default"}}"#,
+    );
+    let figure = html.find("<figure").expect("the figure");
+    let anchor = html.find("<a ").expect("the anchor");
+    let img = html.find("<img").expect("the image");
+    let caption = html.find("<figcaption").expect("the caption");
+    let anchor_end = html.find("</a>").expect("the anchor close");
+    assert!(figure < anchor && anchor < img, "{html}");
+    assert!(
+        anchor_end < caption,
+        "the caption sits outside the link target: {html}"
+    );
+    assert!(
+        html.contains(r#"<figcaption class="fuaran-image-figure-caption">"#),
+        "{html}"
+    );
+
+    // Absent, there is NO wrapper at all — not an empty `<figure>`, not a
+    // wrapper with an empty caption. The bare `<img>` a pre-1078 document
+    // always produced.
+    let uncaptioned = render(
+        r#"{"id":"i","kind":{"$type":"Image","alt":"Boats","src":{"$type":"Static","value":"/h.jpg"},"variant":"Default"}}"#,
+    );
+    assert!(!uncaptioned.contains("figure"), "{uncaptioned}");
+}

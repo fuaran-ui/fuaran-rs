@@ -126,6 +126,7 @@ fn layout_children(n: &Node) -> Option<&Vec<Node>> {
         | NodeKind::Fact(_)
         | NodeKind::Link(_)
         | NodeKind::Image(_)
+        | NodeKind::Media(_)
         | NodeKind::List(_)
         | NodeKind::Toast(_)
         | NodeKind::CodeBlock(_)
@@ -208,6 +209,7 @@ fn child_nodes(n: &Node) -> Vec<&Node> {
         | NodeKind::Fact(_)
         | NodeKind::Link(_)
         | NodeKind::Image(_)
+        | NodeKind::Media(_)
         | NodeKind::List(_)
         | NodeKind::Toast(_)
         | NodeKind::CodeBlock(_)
@@ -734,6 +736,7 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
         NodeKind::Sparkline(_) => NotSupported,
         // Remaining Display kinds carry no field-level surface yet.
         NodeKind::Image(_)
+        | NodeKind::Media(_)
         | NodeKind::List(_)
         | NodeKind::Toast(_)
         | NodeKind::CodeBlock(_)

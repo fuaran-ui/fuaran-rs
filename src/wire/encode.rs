@@ -890,12 +890,95 @@ fn link_spec(spec: &LinkSpec) -> String {
     obj(fields)
 }
 
-fn image_spec(spec: &ImageSpec) -> String {
+/// Phase 1080 — one `srcSet` candidate. `obj` sorts the members, so `src`
+/// precedes `width` on the wire whatever order they are pushed in here.
+fn src_set_entry(entry: &SrcSetEntry) -> String {
     obj(vec![
+        field("src", binding(&entry.src)),
+        field("width", int(entry.width)),
+    ])
+}
+
+fn image_spec(spec: &ImageSpec) -> String {
+    let mut fields = vec![
         field("alt", text_source(&spec.alt)),
         field("src", binding(&spec.src)),
         field("variant", s(spec.variant.as_str())),
-    ])
+    ];
+    // Phase 1077 — omitted at the identity default. `Natural` / `Natural` /
+    // `Eager` ARE today's behaviour, so a default-presentation image emits
+    // exactly the pre-phase three fields.
+    if spec.fit != ImageFit::Natural {
+        fields.push(field("fit", s(spec.fit.as_str())));
+    }
+    if spec.aspect_ratio != ImageAspect::Natural {
+        fields.push(field("aspectRatio", s(spec.aspect_ratio.as_str())));
+    }
+    if spec.loading != ImageLoading::Eager {
+        fields.push(field("loading", s(spec.loading.as_str())));
+    }
+    // Phase 1078 — omitted when ABSENT (rule 4), not at a default. `obj` sorts,
+    // so the key lands in its canonical position wherever it is pushed.
+    if let Some(caption) = &spec.caption {
+        fields.push(field("caption", text_source(caption)));
+    }
+    // Phase 1080 — omitted when EMPTY, the encode half of the missing-list-field
+    // rule: an image with no alternate renditions and one with an empty list are
+    // the same document, so both emit no key. The candidate ORDER is the
+    // author's and is emitted verbatim — re-sorting here would make this encoder
+    // produce bytes it did not decode. Ascending-by-width is the RENDERER's
+    // canonicalisation.
+    if !spec.src_set.is_empty() {
+        fields.push(field(
+            "srcSet",
+            arr(spec.src_set.iter().map(src_set_entry).collect()),
+        ));
+    }
+    // Phase 1079 — omitted at `false`, the plainest instance of the same law:
+    // not declaring an expansion and declaring that there is none are the same
+    // document, so only `true` costs a key.
+    if spec.expandable {
+        fields.push(field("expandable", boolean(true)));
+    }
+    obj(fields)
+}
+
+/// Phase 1076 — the media variant. `Video`'s two slots take the two ordinary
+/// shapes: `autoplay` omitted at `false`, `poster` omitted when absent. `Audio`
+/// is the bare discriminator, and has no autoplay key to omit because the case
+/// declares no such slot.
+fn media_kind(kind: &MediaKind) -> String {
+    match kind {
+        MediaKind::Audio => case_obj("Audio", vec![]),
+        MediaKind::Video { autoplay, poster } => {
+            let mut fields = vec![];
+            if *autoplay {
+                fields.push(field("autoplay", boolean(true)));
+            }
+            if let Some(poster) = poster {
+                fields.push(field("poster", binding(poster)));
+            }
+            case_obj("Video", fields)
+        }
+    }
+}
+
+/// Phase 1076 — the media spec, including the two OPPOSITE omit polarities:
+/// `controls` omits at TRUE (the accessible value is the free one), `loop` at
+/// `false`. `obj` sorts, so the keys land canonically wherever they are pushed.
+fn media_spec(spec: &MediaSpec) -> String {
+    let mut fields = vec![
+        field("kind", media_kind(&spec.kind)),
+        field("label", text_source(&spec.label)),
+        field("src", binding(&spec.src)),
+    ];
+    if !spec.controls {
+        fields.push(field("controls", boolean(false)));
+    }
+    if spec.r#loop {
+        fields.push(field("loop", boolean(true)));
+    }
+    obj(fields)
 }
 
 fn list_spec(spec: &ListSpec) -> String {
@@ -2183,6 +2266,7 @@ fn node_kind(k: &NodeKind) -> String {
         }
         NodeKind::Link(spec) => case_obj_hoisted("Link", link_spec(spec)),
         NodeKind::Image(spec) => case_obj_hoisted("Image", image_spec(spec)),
+        NodeKind::Media(spec) => case_obj_hoisted("Media", media_spec(spec)),
         NodeKind::List(spec) => case_obj_hoisted("List", list_spec(spec)),
         NodeKind::Toast(spec) => case_obj_hoisted("Toast", toast_spec(spec)),
         NodeKind::CodeBlock(spec) => case_obj_hoisted("CodeBlock", code_block_spec(spec)),

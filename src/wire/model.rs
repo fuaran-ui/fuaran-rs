@@ -98,6 +98,29 @@ bare_enum!(ChartDataLabels { Off => "Off", Ends => "Ends" });
 // picture.
 bare_enum!(ChartXScale { Category => "Category", Temporal => "Temporal" });
 bare_enum!(ImageVariant { Default => "Default", Avatar => "Avatar", Rounded => "Rounded" });
+// Phase 1077 — the three `Image` presentation slots (WIRE_FORMAT.md §3.6.2).
+// TOKENS, never CSS values: `aspectRatio` names one of four ratios and cannot
+// carry `"16 / 9"`, a pair, or a number, which is the free-form escape this
+// format does not have. Each is omitted at its identity default on BOTH
+// boundaries, so a pre-1077 document decodes to today's behaviour and
+// re-encodes to the bytes it already had.
+//
+// `fit` says how the decoded pixels fill the box; `aspectRatio` says what box
+// is RESERVED before the bytes land. Neither is derived from the other — a host
+// stylesheet may size the element some other way — which is why they are two
+// independently-declarable slots rather than one.
+bare_enum!(ImageFit { Natural => "Natural", Cover => "Cover", Contain => "Contain" });
+bare_enum!(ImageAspect {
+    Natural => "Natural", Square => "Square", FourThree => "FourThree",
+    ThreeTwo => "ThreeTwo", SixteenNine => "SixteenNine"
+});
+// `Eager` is the default DELIBERATELY, and it is not the "unoptimised" value:
+// deferring an above-the-fold image delays the largest contentful paint rather
+// than helping it, and only the author knows where the image sits. So `Eager`
+// emits no attribute at all and leaves the browser's own default in place,
+// while `Lazy` is a positive declaration. A host MUST NOT infer laziness from
+// position, viewport, or anything else the tree does not say.
+bare_enum!(ImageLoading { Eager => "Eager", Lazy => "Lazy" });
 // Anti-scraper render strategy for a `Link` — `email` marks a `mailto:` link
 // whose address must not appear in plaintext in emitted markup (the renderers
 // own the emission strategy). Lower-case on the wire, like `SortDirection`.
@@ -746,11 +769,96 @@ pub struct LinkSpec {
     pub protection: Option<LinkProtection>,
 }
 
+/// Phase 1080 — one `srcSet` candidate (§3.6.4): an alternate rendition of the
+/// SAME picture at a declared intrinsic pixel width. Both members are required
+/// *within* the entry, and `width` is a POSITIVE integer — the `w` descriptor a
+/// client selects on, so `0` is refused as firmly as a negative: a `0w`
+/// candidate is not a small image, it is one a client can never select.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SrcSetEntry {
+    pub src: Binding,
+    pub width: i64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImageSpec {
     pub alt: TextSource,
     pub src: Binding,
     pub variant: ImageVariant,
+    /// Phase 1077 (§3.6.2) — omitted at `Natural` on both boundaries.
+    pub fit: ImageFit,
+    /// Phase 1077 (§3.6.2) — omitted at `Natural` on both boundaries.
+    pub aspect_ratio: ImageAspect,
+    /// Phase 1077 (§3.6.2) — omitted at `Eager` on both boundaries.
+    pub loading: ImageLoading,
+    /// Phase 1078 (§3.6.3) — optional CONTENT, not an identity default, so it
+    /// takes the ordinary optional-field posture: omitted when absent. It is a
+    /// full [`TextSource`] and not a string, which is the rule a second host is
+    /// most likely to break — narrowing the slot costs nothing until somebody
+    /// needs a locale.
+    pub caption: Option<TextSource>,
+    /// Phase 1080 (§3.6.4) — the missing-list-field decode class: an ABSENT
+    /// `srcSet` IS the empty list, never `None`, and a present `null` is
+    /// refused. Absence already has a spelling, and a second one would let two
+    /// conformant hosts emit different canonical bytes for one document. The
+    /// AUTHORED ORDER is preserved here and on encode; ascending-by-width is
+    /// the RENDERER's canonicalisation, not the codec's.
+    pub src_set: Vec<SrcSetEntry>,
+    /// Phase 1079 (§3.6.5) — omitted at `false`. Declares that the full-size
+    /// asset is REACHABLE from the rendered image (a real anchor), not that a
+    /// lightbox appears; nothing here crosses the dispatch gate.
+    pub expandable: bool,
+}
+
+/// Phase 1076 — which media surface a [`MediaSpec`] is (§3.6.6). A
+/// `$type`-DISCRIMINATED union nested at `kind.kind`, so an unknown case
+/// reports at `$.kind.kind.$type` rather than at the bare slot.
+///
+/// **`Audio` has no autoplay pathway — in the type, on the wire, or in the
+/// emission.** That is stronger than a default of `false`: a slot defaulting to
+/// off is one a document can switch on, and there is no document this format
+/// wants to be able to state in which a page begins making sound unbidden. The
+/// case declares no such field, so `{"$type":"Audio","autoplay":true}` decodes
+/// to an audio surface that does not autoplay — the value has nowhere to land,
+/// and no renderer arm below can acquire a branch for it by a later edit.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MediaKind {
+    Video {
+        /// A DECLARATION whose rendering is constrained: a host that honours it
+        /// MUST emit it together with a muted attribute (§3.6.6). There is
+        /// deliberately no separate `muted` slot on the wire — a second knob
+        /// free to disagree with the first would add only the combination no
+        /// host may render.
+        autoplay: bool,
+        /// A second URL through the §19 floor; a REFUSED one is dropped rather
+        /// than neutered (a `<video>` with no poster shows its first frame,
+        /// which is a working rendering).
+        poster: Option<Binding>,
+    },
+    Audio,
+}
+
+/// Phase 1076 — the playback surface (§3.6.6). ONE kind, two variants: every
+/// slot a video surface and an audio surface share is stated once here, and
+/// only the genuinely-differing slots live in the [`MediaKind`] variant.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaSpec {
+    pub src: Binding,
+    /// REQUIRED, and the one place the media contract differs from `Image`'s.
+    /// An image can honestly be decorative and say so with an empty `alt`; a
+    /// media element is a TRANSPORT — a control a reader focuses, plays, pauses
+    /// and seeks — so it is never decorative, and a document omitting it is
+    /// refused rather than defaulted to a fabricated name.
+    pub label: TextSource,
+    /// Omitted at TRUE on the wire (the second such slot in the vocabulary,
+    /// after `Toast.dismissable`): a media element without a transport cannot
+    /// be paused, seeked or muted by a keyboard user at all, so the accessible
+    /// setting is what a document gets for free.
+    pub controls: bool,
+    /// Ordinary polarity — omitted at `false`. Named `r#loop` so the field and
+    /// the wire key are the same word.
+    pub r#loop: bool,
+    pub kind: MediaKind,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1548,6 +1656,7 @@ pub enum NodeKind {
     Fact(FactSpec),
     Link(LinkSpec),
     Image(ImageSpec),
+    Media(MediaSpec),
     List(ListSpec),
     Toast(ToastSpec),
     CodeBlock(CodeBlockSpec),
@@ -1610,6 +1719,7 @@ impl NodeKind {
             NodeKind::Fact(_) => "Fact",
             NodeKind::Link(_) => "Link",
             NodeKind::Image(_) => "Image",
+            NodeKind::Media(_) => "Media",
             NodeKind::List(_) => "List",
             NodeKind::Toast(_) => "Toast",
             NodeKind::CodeBlock(_) => "CodeBlock",
@@ -1656,6 +1766,7 @@ impl NodeKind {
             | NodeKind::Fact(_)
             | NodeKind::Link(_)
             | NodeKind::Image(_)
+            | NodeKind::Media(_)
             | NodeKind::List(_)
             | NodeKind::Toast(_)
             | NodeKind::CodeBlock(_)
@@ -1712,6 +1823,7 @@ pub const CANONICAL_NODE_KINDS: &[&str] = &[
     "Fact",
     "Link",
     "Image",
+    "Media",
     "List",
     "Toast",
     "CodeBlock",

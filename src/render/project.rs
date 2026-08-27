@@ -255,6 +255,28 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             alt: map_text(sources, &spec.alt),
             src: spec.src.clone(),
             variant: spec.variant,
+            // Phase 1077/1079 — presentation tokens and the expansion
+            // declaration carry no binding, so there is nothing to resolve.
+            fit: spec.fit,
+            aspect_ratio: spec.aspect_ratio,
+            loading: spec.loading,
+            // Phase 1078 — the caption IS a TextSource, so a `Bound` one
+            // resolves here exactly as `alt` does.
+            caption: map_opt_text(sources, &spec.caption),
+            // Phase 1080 — each candidate's `src` is a Binding, left unresolved
+            // for the same reason the primary `src` is: the render projection
+            // hands a native surface the URL slot, not a fetched asset.
+            src_set: spec.src_set.clone(),
+            expandable: spec.expandable,
+        }),
+        // Phase 1076 — the label is the only TextSource on the record; `src`
+        // and the variant's `poster` are Bindings, left as the primary `src` is.
+        NodeKind::Media(spec) => NodeKind::Media(crate::wire::MediaSpec {
+            src: spec.src.clone(),
+            label: map_text(sources, &spec.label),
+            controls: spec.controls,
+            r#loop: spec.r#loop,
+            kind: spec.kind.clone(),
         }),
         NodeKind::List(spec) => NodeKind::List(ListSpec {
             items: spec.items.iter().map(|t| map_text(sources, t)).collect(),

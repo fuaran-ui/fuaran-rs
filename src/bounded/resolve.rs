@@ -268,6 +268,11 @@ fn resolve_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
         | NodeKind::Icon(_)
         | NodeKind::Fact(_)
         | NodeKind::Image(_)
+        // Phase 1076 — `Media` sits beside `Image` for the same reason: it
+        // carries reactive bindings (`src`, and `Video`'s `poster`) and no
+        // structural child list, so a state write inside one is not yet
+        // visible. Same recorded negative result, same remedy if it moves.
+        | NodeKind::Media(_)
         | NodeKind::List(_)
         | NodeKind::Toast(_)
         | NodeKind::CodeBlock(_)

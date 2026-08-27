@@ -209,3 +209,34 @@ fn chart_schema_grounding_family_fuaran086_089() {
     let query = r#"{"id":"c","kind":{"$type":"Chart","kind":"Bar","source":{"$type":"Query","name":"rows"},"stacked":false,"xField":"ghost","yFields":["also-ghost"]}}"#;
     assert!(codes(query).is_empty());
 }
+
+/// FUARAN108 (Phase 1076) — `ImageSpec.alt`'s a11y floor WITHOUT the decorative
+/// escape, and the absence of that escape is the whole of the rule. An image
+/// can honestly declare `alt=""`; a media element is a TRANSPORT a reader
+/// focuses, plays, pauses and seeks, so it is never decorative, and an unnamed
+/// one is announced as "video" or "audio" and nothing more.
+///
+/// Error rather than Warning because there is no legitimate shape it refuses.
+#[test]
+fn empty_media_label_is_fuaran108() {
+    let unnamed = r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"","src":{"$type":"Static","value":"/w.mp4"}}}"#;
+    assert_eq!(codes(unnamed), vec!["FUARAN108"]);
+    assert!(matches!(
+        validate(&decode_node(unnamed).expect("decodes")).as_slice(),
+        [f] if f.severity == Severity::Error
+    ));
+
+    // Whitespace is not a name either — an author who typed a space has not
+    // told a listener what the recording is.
+    let blank = r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Audio"},"label":"   ","src":{"$type":"Static","value":"/c.mp3"}}}"#;
+    assert_eq!(codes(blank), vec!["FUARAN108"]);
+
+    // A named transport passes, and so does one whose name is DEFERRED: a
+    // `Bound` or `I18n` label resolves at render time, and refusing one on the
+    // evidence available pre-emit would accuse a document that names its
+    // transport perfectly well.
+    let named = r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"Studio walkthrough","src":{"$type":"Static","value":"/w.mp4"}}}"#;
+    assert!(codes(named).is_empty());
+    let deferred = r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Audio"},"label":{"$type":"I18n","args":{},"key":"clip.name"},"src":{"$type":"Static","value":"/c.mp3"}}}"#;
+    assert!(codes(deferred).is_empty());
+}

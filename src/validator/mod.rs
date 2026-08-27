@@ -31,10 +31,13 @@
 //! | `FUARAN088` | Error | Pie with other than exactly one `yFields` series (the lowering refuses; Phase 638/640) |
 //! | `FUARAN089` | Warning | `stacked` on a kind where stacking is meaningless (Line/Scatter/Pie; Phase 637/640) |
 //! | `FUARAN097` | Error | a declared TEMPORAL x-axis over a grounded non-date column (Phase 882) |
+//! | `FUARAN108` | Error | a `Media` node with an empty literal label — a transport has no decorative case (Phase 1076) |
 //! | `FUARAN084` | Warning / Error | `Binding.Computed` — host-only, erases on the wire (Error in orchestrated runs) |
 
 use crate::canonical::JVal;
-use crate::wire::{Action, Binding, FormFieldKind, Node, NodeKind, StaticValue, TreeOp};
+use crate::wire::{
+    Action, Binding, FormFieldKind, MediaKind, Node, NodeKind, StaticValue, TextSource, TreeOp,
+};
 
 /// Finding severity, matching the sibling validators' two-level surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -313,6 +316,55 @@ impl Walker {
             NodeKind::Image(s) => {
                 self.check_binding(id, &s.src);
                 self.check_text(id, &s.alt);
+                // Phase 1078/1080 — the caption is a TextSource and every
+                // srcSet candidate's `src` is a Binding, so both carry the same
+                // lints the primary slots do.
+                if let Some(caption) = &s.caption {
+                    self.check_text(id, caption);
+                }
+                for entry in &s.src_set {
+                    self.check_binding(id, &entry.src);
+                }
+            }
+            NodeKind::Media(s) => {
+                // **FUARAN108 (Error)**. A `Media` node whose label resolves to
+                // nothing. This is `ImageSpec.alt`'s a11y floor WITHOUT the
+                // decorative escape, and the absence of that escape is the whole
+                // of the rule: an image can honestly declare `alt=""` — a
+                // spacer, a rule, a background texture adds nothing a
+                // screen-reader user needs — whereas a media element is a
+                // TRANSPORT a reader focuses, plays, pauses and seeks, so it is
+                // never decorative, and an unnamed one is announced as "video"
+                // or "audio" and nothing else.
+                //
+                // Error rather than Warning because there is no legitimate shape
+                // it refuses. Every other reading of an empty label is a defect:
+                // an author who filled the source and not the name, an emitter
+                // that dropped a slot, a translation key that resolved empty. A
+                // Warning would be advice about a document that cannot be used,
+                // which is what the pre-emit gate exists to stop.
+                //
+                // Only a LITERAL empty label is judged: a `Bound` or `I18n`
+                // label resolves at render time, and refusing one on the
+                // evidence available here would accuse a document that names its
+                // transport perfectly well.
+                if matches!(&s.label, TextSource::Literal(text) if text.trim().is_empty()) {
+                    self.push(
+                        Severity::Error,
+                        "FUARAN108",
+                        id,
+                        "media node has an EMPTY label — a media element is a transport, not a picture, so it is never decorative and there is no honest empty case the way there is for an image's alt; without a name it is announced to a screen reader as \"video\" or \"audio\" and nothing more, telling the reader that a player exists and not what it plays. Give 'label' the text a listener needs to decide whether to play it.".to_string(),
+                    );
+                }
+                self.check_binding(id, &s.src);
+                self.check_text(id, &s.label);
+                if let MediaKind::Video {
+                    poster: Some(poster),
+                    ..
+                } = &s.kind
+                {
+                    self.check_binding(id, poster);
+                }
             }
             NodeKind::Toast(s) => {
                 self.check_binding(id, &s.open);
@@ -722,6 +774,7 @@ fn child_nodes(n: &Node) -> Vec<&Node> {
         | NodeKind::Fact(_)
         | NodeKind::Link(_)
         | NodeKind::Image(_)
+        | NodeKind::Media(_)
         | NodeKind::List(_)
         | NodeKind::Toast(_)
         | NodeKind::CodeBlock(_)
