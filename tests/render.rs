@@ -7,13 +7,14 @@ use std::path::PathBuf;
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::client::ClientSession;
+use fuaran_rs::render::class_names::trend_sentiment;
 use fuaran_rs::render::egress::permissive_egress;
 use fuaran_rs::render::server::{hydrate_script_id, island_script_id};
 use fuaran_rs::render::{
     BindingSources, render_hydratable, render_to_html, render_to_html_with_egress,
     render_with_islands,
 };
-use fuaran_rs::wire::{Node, NodeKind, decode_node, encode_node};
+use fuaran_rs::wire::{Node, NodeKind, TrendPolarity, decode_node, encode_node};
 
 fn node(json: &str) -> Node {
     decode_node(json).expect("test tree decodes")
@@ -155,6 +156,186 @@ fn metric_resolves_state_binding_and_loading_slot() {
     };
     let resolved = render_to_html(&tree, &sources);
     assert!(resolved.contains("fuaran-metric-value\">42.5<"));
+}
+
+// ─── Phase 867: trend sentiment (WIRE_FORMAT.md §3.6.1) ──────────────────────
+//
+// Sentiment = sign(trend) × polarity, rendered on the TREND ELEMENT alone. The
+// pair these assertions exist for is one falling number read two ways: the same
+// −0.0734 is a regression under the default polarity and an improvement under
+// `LowerIsBetter`, and NEITHER reading touches `tone` or the printed sign.
+
+/// Walks up from the crate directory looking for the shared corpus, matching
+/// `tests/conformance.rs`'s locator. `None` keeps the repo standalone-testable.
+fn corpus_root() -> Option<PathBuf> {
+    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
+    loop {
+        let root = dir.join("wire-format-fixtures");
+        if root.join("manifest.json").is_file() {
+            return Some(root);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+/// One `Metric` with a resolvable static trend. `polarity` is spliced verbatim
+/// so a test can pass the reserved spelling and watch the decode refuse it.
+fn metric_with_trend(polarity_member: &str) -> String {
+    format!(
+        r#"{{"id":"m","kind":{{"$type":"Metric","format":{{"$type":"Duration","style":"Compact","unit":"Minutes"}},"label":"Avg wait","tone":"Warning","trend":{{"$type":"Static","value":-0.0734}},"trendFormat":{{"$type":"Percent","decimals":2}}{polarity_member},"value":{{"$type":"Static","value":80}}}}}}"#
+    )
+}
+
+#[test]
+fn the_sentiment_composition_is_sign_times_polarity() {
+    // The §3.6.1 table, in full — the reason the slot is not `tone` and not a
+    // sign test: BOTH inputs matter, and neither alone determines the answer.
+    for (polarity, trend, want) in [
+        (TrendPolarity::HigherIsBetter, 1.5, "improving"),
+        (TrendPolarity::HigherIsBetter, -1.5, "regressing"),
+        (TrendPolarity::HigherIsBetter, 0.0, "unchanged"),
+        (TrendPolarity::LowerIsBetter, 1.5, "regressing"),
+        (TrendPolarity::LowerIsBetter, -1.5, "improving"),
+        (TrendPolarity::LowerIsBetter, 0.0, "unchanged"),
+    ] {
+        let (sentiment, _glyph) = trend_sentiment(polarity, trend);
+        assert_eq!(sentiment, want, "{polarity:?} × {trend}");
+    }
+    // Every sentiment carries a DISTINCT glyph — the non-colour channel is only
+    // a channel if the three cases are distinguishable without colour.
+    let glyphs: Vec<&str> = [
+        (TrendPolarity::HigherIsBetter, 1.0),
+        (TrendPolarity::HigherIsBetter, -1.0),
+        (TrendPolarity::HigherIsBetter, 0.0),
+    ]
+    .into_iter()
+    .map(|(p, t)| trend_sentiment(p, t).1)
+    .collect();
+    assert_eq!(glyphs, vec!["\u{25B2}", "\u{25BC}", "\u{2192}"]);
+}
+
+#[test]
+fn metric_trend_without_polarity_reads_a_fall_as_a_regression() {
+    let html = render(&metric_with_trend(""));
+    assert!(
+        html.contains(
+            r#"<div class="fuaran-metric-trend fuaran-metric-trend-regressing"><span class="fuaran-metric-trend-glyph" role="img" aria-label="regressing">\u{25BC}</span>-7.34%</div>"#
+                .replace("\\u{25BC}", "\u{25BC}")
+                .as_str()
+        ),
+        "absent polarity means HigherIsBetter, so a fall is a regression: {html}"
+    );
+    // The defect this phase closes: the trend used to carry ONE class, painted
+    // success unconditionally, so a falling number read as good on every host.
+    assert!(
+        !html.contains(r#"class="fuaran-metric-trend""#),
+        "a resolved trend must never emit the bare unconditional class: {html}"
+    );
+}
+
+#[test]
+fn metric_trend_polarity_inverts_the_sentiment_without_touching_sign_or_tone() {
+    let html = render(&metric_with_trend(r#","trendPolarity":"LowerIsBetter""#));
+    assert!(
+        html.contains(r#"fuaran-metric-trend fuaran-metric-trend-improving"#),
+        "sign(−) × LowerIsBetter(−1) is positive ⇒ improving: {html}"
+    );
+    // Clause 3 — polarity changes how the number READS, never what it SAYS.
+    assert!(
+        html.contains("-7.34%"),
+        "the numeric text keeps its minus sign: {html}"
+    );
+    // Clause 2 / the composition rule — `tone` is never written to. The tile
+    // stays Warning even though the trend now reads as an improvement, which is
+    // the pair a single `tone` slot could never have expressed.
+    assert!(
+        html.contains("fuaran-metric fuaran-metric-warning"),
+        "tone still colours the tile and is untouched by polarity: {html}"
+    );
+    // The glyph deliberately DISAGREES with the sign — that disagreement is the
+    // visible evidence the declaration was honoured.
+    assert!(
+        html.contains(&format!(
+            r#"<span class="fuaran-metric-trend-glyph" role="img" aria-label="improving">{}</span>"#,
+            '\u{25B2}'
+        )),
+        "the up-triangle carries the sentiment on a non-colour channel: {html}"
+    );
+}
+
+#[test]
+fn metric_trend_of_zero_is_unchanged_under_either_polarity() {
+    for member in ["", r#","trendPolarity":"LowerIsBetter""#] {
+        let html = render(&metric_with_trend(member).replace(r#""value":-0.0734"#, r#""value":0"#));
+        assert!(
+            html.contains(&format!(
+                r#"fuaran-metric-trend-unchanged"><span class="fuaran-metric-trend-glyph" role="img" aria-label="unchanged">{}</span>"#,
+                '\u{2192}'
+            )),
+            "a zero trend is neither an improvement nor a regression ({member}): {html}"
+        );
+    }
+}
+
+#[test]
+fn metric_trend_that_cannot_resolve_keeps_its_bare_div() {
+    // No sentiment is computable, so none is claimed — emitting `unchanged`
+    // would assert a fact about a number the renderer does not have.
+    let html = render(
+        r#"{"id":"m","kind":{"$type":"Metric","label":"Avg wait","trend":{"$type":"Query","accessor":"<closure>","name":"missing"},"trendPolarity":"LowerIsBetter","value":{"$type":"Static","value":80}}}"#,
+    );
+    assert!(
+        html.contains(r#"<div class="fuaran-metric-trend"></div>"#),
+        "an unresolved trend keeps its bare div byte-for-byte: {html}"
+    );
+    assert!(
+        !html.contains("fuaran-metric-trend-glyph"),
+        "no glyph without a resolved number: {html}"
+    );
+}
+
+#[test]
+fn metric_trend_polarity_is_inert_without_a_trend() {
+    // §3.6.1 clause 4 — legal, and says nothing.
+    let html = render(
+        r#"{"id":"m","kind":{"$type":"Metric","label":"Avg wait","trendPolarity":"LowerIsBetter","value":{"$type":"Static","value":80}}}"#,
+    );
+    assert!(!html.contains("fuaran-metric-trend"), "{html}");
+    assert!(html.contains("fuaran-metric-value"), "{html}");
+}
+
+#[test]
+fn metric_trend_sentiment_markup_matches_the_corpus_fixture() {
+    // The fixture the wave added to gate exactly this: a `"tone":"Warning"` tile
+    // whose falling −7.34% reads as an IMPROVEMENT. Asserted as one whole
+    // string, because the parity claim is about the emitted bytes rather than
+    // about a set of substrings that happen to be present.
+    let Some(root) = corpus_root() else {
+        eprintln!("corpus absent; skipping the fixture-parity leg (standalone checkout)");
+        return;
+    };
+    let fixture = root.join("nodes").join("metric-inverted-polarity.json");
+    let json = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("corpus located but {fixture:?} unreadable: {e}"));
+    let html = render(&json);
+    let expected = format!(
+        concat!(
+            r#"<div class="fuaran-metric-trend fuaran-metric-trend-improving">"#,
+            r#"<span class="fuaran-metric-trend-glyph" role="img" aria-label="improving">{}</span>"#,
+            r#"-7.34%</div>"#
+        ),
+        '\u{25B2}'
+    );
+    assert!(
+        html.contains(&expected),
+        "corpus-fixture trend markup diverged.\n  expected: {expected}\n  in: {html}"
+    );
+    eprintln!(
+        "trend-sentiment corpus parity EXECUTED against {}",
+        fixture.display()
+    );
 }
 
 #[test]

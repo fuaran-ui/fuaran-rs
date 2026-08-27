@@ -781,10 +781,35 @@ body {
   margin-top: var(--fuaran-space-xs, 4px);
 }
 
+/* The trend element carried ONE class and this rule painted it
+   `--fuaran-tone-success-fg` unconditionally, so every trend read as an
+   improvement in both directions on every host. The base rule is now neutral
+   and the sentiment modifier below carries the colour: sentiment is a function
+   of the resolved trend's sign and the metric's declared `trendPolarity`, never
+   of `tone` (which colours the tile and says how the reading stands). */
 .fuaran-metric-trend {
   font-size: var(--fuaran-text-sm, 13px);
-  color: var(--fuaran-tone-success-fg, #047857);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
   margin-top: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-metric-trend-improving {
+  color: var(--fuaran-tone-success-fg, #047857);
+}
+
+.fuaran-metric-trend-regressing {
+  color: var(--fuaran-tone-critical-fg, #b91c1c);
+}
+
+.fuaran-metric-trend-unchanged {
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+/* The non-colour half of the sentiment channel (WCAG 1.4.1). The glyph is
+   rendered content, not a background image, and carries its own `aria-label` —
+   so it survives a stylesheet that never loads. */
+.fuaran-metric-trend-glyph {
+  margin-right: 0.35em;
 }
 
 .fuaran-metric-subtext {

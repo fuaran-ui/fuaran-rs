@@ -46,9 +46,9 @@ use super::bindings::{
     resolve_number, resolve_options, resolve_rows, resolve_scalar_number, resolve_string_pair,
     static_display_string, try_bool, try_number, try_scalar_number, try_string,
 };
-use super::class_names::{icon_size_class, node_class_name, tone_var};
+use super::class_names::{icon_size_class, node_class_name, tone_var, trend_sentiment};
 use super::egress::{EgressClass, EgressPolicy, deny_non_local_egress, sanitize_url_for_egress};
-use super::html::{Attr, AttrVal, el, entity_encode, escape_attr, text_el, void_el};
+use super::html::{Attr, AttrVal, el, entity_encode, escape_attr, escape_text, text_el, void_el};
 use super::markdown::to_html_with_egress as markdown_to_html_with_egress;
 
 fn s(v: impl Into<String>) -> AttrVal {
@@ -416,16 +416,51 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
                 ),
             ];
             if let Some(trend) = &spec.trend {
-                let trend_text = try_scalar_number(ctx.sources, trend)
-                    .map(|t| {
-                        format_number(spec.trend_format.as_ref().unwrap_or(&CellFormat::None), t)
-                    })
-                    .unwrap_or_default();
-                parts.push(text_el(
-                    "div",
-                    &[("class", s("fuaran-metric-trend"))],
-                    &trend_text,
-                ));
+                // Phase 867 — the trend element carries a SENTIMENT, not a
+                // constant. `tone` above still colours the tile; this says which
+                // way the quantity moved, and nothing derives one from the
+                // other. The numeric text — sign included — is unchanged: a
+                // −7.34% trend prints −7.34% under either declaration.
+                //
+                // Mirrors the reference SSR renderer byte-for-byte, glyph span
+                // included. The `aria-label` sits on the GLYPH rather than the
+                // trend div on purpose: on the div it would OVERRIDE the
+                // element's text, so assistive technology would hear
+                // "improving" and lose the number entirely, where on the glyph
+                // it hears "improving −7.34%".
+                match try_scalar_number(ctx.sources, trend) {
+                    Some(t) => {
+                        let (sentiment, glyph) = trend_sentiment(spec.trend_polarity, t);
+                        let glyph_span = text_el(
+                            "span",
+                            &[
+                                ("class", s("fuaran-metric-trend-glyph")),
+                                ("role", s("img")),
+                                ("aria-label", s(sentiment)),
+                            ],
+                            glyph,
+                        );
+                        let trend_text = escape_text(&format_number(
+                            spec.trend_format.as_ref().unwrap_or(&CellFormat::None),
+                            t,
+                        ));
+                        parts.push(el(
+                            "div",
+                            &[(
+                                "class",
+                                s(format!(
+                                    "fuaran-metric-trend fuaran-metric-trend-{sentiment}"
+                                )),
+                            )],
+                            &format!("{glyph_span}{trend_text}"),
+                        ));
+                    }
+                    // An UNRESOLVED trend keeps its bare div byte-for-byte: no
+                    // sentiment is computable, so none is claimed — emitting
+                    // `unchanged` here would assert a fact about a number the
+                    // renderer does not have.
+                    None => parts.push(text_el("div", &[("class", s("fuaran-metric-trend"))], "")),
+                }
             }
             if let Some(subtext) = &spec.subtext {
                 parts.push(text_el(

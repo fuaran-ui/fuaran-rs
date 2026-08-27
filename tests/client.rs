@@ -220,3 +220,54 @@ fn a_session_renders_under_the_deny_default_and_widens_by_name() {
     assert!(html.contains("src=\"https://collector.example/p.png?s=secret\""));
     assert!(!html.contains("fuaran-egress-refused"));
 }
+
+// ─── Phase 867: trend sentiment on the client tier ───────────────────────────
+
+/// The WASM client's trend, driven REACTIVELY — the leg that distinguishes this
+/// tier from the server one. The server resolves a trend once at render time;
+/// the client re-resolves it on every store write, so the sentiment has to be
+/// recomputed per render rather than decided at decode. A polarity read once
+/// and cached on the first render would pass every server-side test and be
+/// wrong here the moment the number crosses zero.
+const TREND_TREE: &str = r#"{"id":"m","kind":{"$type":"Metric","format":{"$type":"Percent","decimals":2},"label":"Error rate","tone":"Warning","trend":{"$type":"State","defaultValue":-0.0734,"key":"delta"},"trendFormat":{"$type":"Percent","decimals":2},"trendPolarity":"LowerIsBetter","value":{"$type":"Static","value":80}}}"#;
+
+#[test]
+fn client_recomputes_trend_sentiment_on_every_state_write() {
+    let mut s = ClientSession::new(TREND_TREE).expect("tree decodes");
+
+    // The seeded default: a FALL, under LowerIsBetter ⇒ improving.
+    let html = s.render();
+    assert!(
+        html.contains("fuaran-metric-trend-improving"),
+        "a falling error rate is an improvement: {html}"
+    );
+    assert!(html.contains("-7.34%"), "the sign is untouched: {html}");
+
+    // Drive it across zero — the same tree, the same polarity, a new reading.
+    s.set_state("delta", "0.021").expect("state write");
+    let risen = s.render();
+    assert!(
+        risen.contains("fuaran-metric-trend-regressing"),
+        "a RISING error rate is a regression under LowerIsBetter: {risen}"
+    );
+    assert!(
+        !risen.contains("fuaran-metric-trend-improving"),
+        "the previous sentiment must not survive the re-render: {risen}"
+    );
+
+    // And to exactly zero — neither.
+    s.set_state("delta", "0").expect("state write");
+    let flat = s.render();
+    assert!(
+        flat.contains("fuaran-metric-trend-unchanged"),
+        "a zero trend is neither: {flat}"
+    );
+
+    // `tone` is never written to, at any reading (§3.6.1 clause 1).
+    for h in [&html, &risen, &flat] {
+        assert!(
+            h.contains("fuaran-metric fuaran-metric-warning"),
+            "the tile's tone is untouched by the sentiment: {h}"
+        );
+    }
+}

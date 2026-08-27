@@ -4,7 +4,7 @@
 
 use crate::wire::{
     BoxLayout, BoxRole, BoxSpec, Emphasis, FontVoice, IconSize, NodeKind, SemanticStyle, StyleRole,
-    StyleWeight, ToneVariant,
+    StyleWeight, ToneVariant, TrendPolarity,
 };
 
 /// Map a `ToneVariant` to its CSS-variable name root.
@@ -171,4 +171,50 @@ pub fn kind_class(kind: &NodeKind) -> String {
 /// Compose the full className for a node: kind class + semantic style.
 pub fn node_class_name(kind: &NodeKind, style: &SemanticStyle) -> String {
     format!("{} {}", kind_class(kind), style_class_name(style))
+}
+
+/// Phase 867 — the `Metric` trend's SENTIMENT and its glyph, composed from the
+/// resolved trend and the declared polarity per `WIRE_FORMAT.md` §3.6.1:
+/// `sentiment = sign(trend) × polarity`.
+///
+/// Returns `(sentiment, glyph)` — the sentiment names the
+/// `fuaran-metric-trend-<sentiment>` modifier class AND the glyph's
+/// `aria-label`, so a renderer cannot emit one without the other.
+///
+/// `tone` IS NOT AN INPUT AND IS NEVER AN OUTPUT. It colours the tile and says
+/// how the reading STANDS; this says which way the quantity MOVED, and a host
+/// derives neither from the other. A renderer that inferred "improving ⇒ the
+/// tile is `Success`" would re-create in the render the exact conflation the
+/// wire slot was added to remove, and would override an emitter's deliberate
+/// `Critical` on a metric improving from a bad place.
+///
+/// The glyph tracks the SENTIMENT, not the number's direction: under
+/// `LowerIsBetter` the triangle deliberately disagrees with the sign, and that
+/// disagreement is the visible evidence the declaration was honoured. The
+/// numeric text — sign included — is never touched by this function.
+///
+/// Glyphs are U+25B2 BLACK UP-POINTING TRIANGLE, U+25BC BLACK DOWN-POINTING
+/// TRIANGLE and U+2192 RIGHTWARDS ARROW, named here so a mojibake in this file
+/// is a diff a reviewer can catch rather than a rendered byte nobody pinned.
+/// They carry the sentiment on a NON-COLOUR channel (WCAG 1.4.1 — colour alone
+/// fails), which is why this returns the label as well as the class fragment.
+///
+/// Parity-locked to the reference renderers' shared helper: both emitted
+/// strings are cross-host contract, never a local naming choice.
+pub fn trend_sentiment(polarity: TrendPolarity, trend: f64) -> (&'static str, &'static str) {
+    let direction = match polarity {
+        TrendPolarity::HigherIsBetter => 1.0,
+        TrendPolarity::LowerIsBetter => -1.0,
+    };
+    let sentiment = trend * direction;
+    // Ordered `> 0` / `< 0` / else, so a NaN trend (which compares false against
+    // both) lands on `unchanged` rather than on whichever branch a total
+    // ordering would have picked — matching the reference's `if/elif/else`.
+    if sentiment > 0.0 {
+        ("improving", "\u{25B2}")
+    } else if sentiment < 0.0 {
+        ("regressing", "\u{25BC}")
+    } else {
+        ("unchanged", "\u{2192}")
+    }
 }
