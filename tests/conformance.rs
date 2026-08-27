@@ -371,6 +371,25 @@ fn corpus_rejects_surface_canonical_code_and_path() {
                         "{}: wrong path — expected prefix {expected_path}, got {}",
                         fixture.id, e.path
                     ));
+                } else if !expected_path.ends_with(".$type") && e.path.ends_with(".$type") {
+                    // Phase 1073 — the ruled bare-enum reject-path spelling, pinned.
+                    //
+                    // The prefix check above cannot catch a spurious `.$type`: this host
+                    // reported `$.style.tone.$type` where the corpus says `$.style.tone`
+                    // for the corpus's whole life and passed every time. Prefix matching
+                    // stays (six fixtures name a position legitimately deeper than the
+                    // corpus's stated slot), so this is the guard that makes the ruling
+                    // enforceable.
+                    //
+                    // WIRE_FORMAT.md §6: `$type` appears in a path only when the
+                    // DISCRIMINATOR is at fault. A bare enum carries none on the wire, so
+                    // the suffix named a JSON member the document does not contain. Use
+                    // `unknown_enum_case`, not `unknown_du_case`.
+                    failures.push(format!(
+                        "{}: spurious `.$type` — corpus expects {expected_path} (a bare-enum \
+                         position, no discriminator on the wire), got {}",
+                        fixture.id, e.path
+                    ));
                 }
             }
         }

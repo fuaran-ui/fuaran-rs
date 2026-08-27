@@ -54,10 +54,35 @@ fn wrong_type(path: &str, expected: &str) -> DecodeError {
     )
 }
 
+/// An unrecognised case at a `$type`-DISCRIMINATED position: the document carries a
+/// literal `"$type"` member and its value is not a known case. WIRE_FORMAT.md §6 —
+/// "`$type` appears literally in the path when the discriminator is at fault" — so the
+/// reported path names that member.
 fn unknown_du_case(path: &str, got: &str, expected: &str) -> DecodeError {
     make_error(
         DecodeErrorCode::UnknownDuCase,
         format!("{path}.$type"),
+        format!("unknown discriminator '{got}'"),
+        Some(expected.to_string()),
+    )
+}
+
+/// An unrecognised case at a BARE ENUM position: a plain JSON string in a named field,
+/// with no `$type` member anywhere in the document (`style.tone`, `kind.trendPolarity`,
+/// `accessibility.liveRegion`, …). Same code — §6's `UNKNOWN_DU_CASE` covers "a `$type`
+/// discriminator (or bare-enum string)" — but the path is the FIELD's own, no suffix.
+///
+/// Phase 1073: this helper did not exist, so `decode_bare_enum!` routed every bare enum
+/// through `unknown_du_case` and reported `$.style.tone.$type`, naming a JSON member the
+/// document does not contain and cannot be repaired at. It survived because the
+/// conformance harness prefix-matches `expectedPath`. Note `channel.direction` was
+/// already bare here — written out longhand rather than through the macro — so this host
+/// was internally inconsistent as well as divergent. Do not route a bare enum through
+/// `unknown_du_case`.
+fn unknown_enum_case(path: &str, got: &str, expected: &str) -> DecodeError {
+    make_error(
+        DecodeErrorCode::UnknownDuCase,
+        path,
         format!("unknown discriminator '{got}'"),
         Some(expected.to_string()),
     )
@@ -349,7 +374,7 @@ macro_rules! decode_bare_enum {
                 JVal::Str(s) => s,
                 _ => return Err(wrong_type(path, concat!("JSON string (", $label, ")"))),
             };
-            $ty::from_wire(s).ok_or_else(|| unknown_du_case(path, s, &$ty::WIRE_NAMES.join(" | ")))
+            $ty::from_wire(s).ok_or_else(|| unknown_enum_case(path, s, &$ty::WIRE_NAMES.join(" | ")))
         }
     };
     // Lenient-ingest alias arm (decode-only; WIRE_FORMAT.md §3.6). Canonical wire
@@ -368,7 +393,7 @@ macro_rules! decode_bare_enum {
             }
             match s.as_str() {
                 $($alias => Ok($ty::$case),)+
-                _ => Err(unknown_du_case(path, s, &$ty::WIRE_NAMES.join(" | "))),
+                _ => Err(unknown_enum_case(path, s, &$ty::WIRE_NAMES.join(" | "))),
             }
         }
     };
@@ -433,7 +458,11 @@ fn decode_emphasis(path: &str, j: &JVal) -> DResult<Emphasis> {
     match s.as_str() {
         "Strong" | "Bold" => Ok(Emphasis::Loud),
         "Subtle" | "Muted" => Ok(Emphasis::Quiet),
-        _ => Err(unknown_du_case(path, s, &Emphasis::WIRE_NAMES.join(" | "))),
+        _ => Err(unknown_enum_case(
+            path,
+            s,
+            &Emphasis::WIRE_NAMES.join(" | "),
+        )),
     }
 }
 
@@ -3763,7 +3792,7 @@ fn decode_box_layout(path: &str, j: &JVal) -> DResult<BoxLayout> {
 fn decode_box_role(path: &str, j: &JVal) -> DResult<BoxRole> {
     let s = as_str(path, j)?;
     BoxRole::from_wire(s)
-        .ok_or_else(|| unknown_du_case(path, s, "Group | Card | Dashboard | Separator"))
+        .ok_or_else(|| unknown_enum_case(path, s, "Group | Card | Dashboard | Separator"))
 }
 
 fn decode_box_spec(path: &str, j: &JVal) -> DResult<BoxSpec> {
@@ -3944,7 +3973,7 @@ fn decode_content_hash(path: &str, j: &JVal) -> DResult<ContentHash> {
         "'StrictReplay' | 'AdvisoryWarning' | 'Enforced'",
     )?;
     let strictness = HashStrictness::from_wire(&strictness).ok_or_else(|| {
-        unknown_du_case(
+        unknown_enum_case(
             &format!("{path}.strictness"),
             &strictness,
             "StrictReplay | AdvisoryWarning | Enforced",
@@ -4056,7 +4085,7 @@ fn decode_effect_class(path: &str, j: &JVal) -> DResult<EffectClass> {
     let fields = as_obj(path, j)?;
     let host = req_string(path, fields, "hostEffect", "EffectClass hostEffect")?;
     let host_effect = HostEffect::from_wire(&host).ok_or_else(|| {
-        unknown_du_case(
+        unknown_enum_case(
             &format!("{path}.hostEffect"),
             &host,
             "Pure | ReadsHost | WritesHost",
@@ -4064,7 +4093,7 @@ fn decode_effect_class(path: &str, j: &JVal) -> DResult<EffectClass> {
     })?;
     let det = req_string(path, fields, "determinism", "EffectClass determinism")?;
     let determinism = DeterminismSource::from_wire(&det).ok_or_else(|| {
-        unknown_du_case(
+        unknown_enum_case(
             &format!("{path}.determinism"),
             &det,
             "Deterministic | Clock | Random | Network",

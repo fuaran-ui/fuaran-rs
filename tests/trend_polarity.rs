@@ -31,19 +31,17 @@ fn reserved_neutral_is_refused_and_the_hint_names_only_what_the_format_accepts()
     let err = decode_node(&metric(r#","trendPolarity":"Neutral""#))
         .expect_err("`Neutral` is RESERVED, not accepted");
     assert_eq!(err.code, DecodeErrorCode::UnknownDuCase, "{err:?}");
-    // The corpus states a bare-string enum's reject path as the SLOT
-    // (`reject-unknown-tone` → `$.style.tone`) and the harness matches it as a
-    // PREFIX. This host's `unknown_du_case` appends `.$type` uniformly across
-    // every bare enum — `tone`, `weight`, `variant` and now this one — so the
-    // emitted path is prefix-conformant and identical in shape to its siblings.
-    // Asserted as the prefix the corpus states, plus the host's actual suffix,
-    // so this test pins the real behaviour rather than an invented expectation
-    // and would go red if this slot alone ever diverged from the family.
-    assert!(
-        err.path.starts_with("$.kind.trendPolarity"),
-        "the reject path names the slot: {err:?}"
-    );
-    assert_eq!(err.path, "$.kind.trendPolarity.$type", "{err:?}");
+    // Phase 1073 RULED the bare-enum reject path, and this assertion changed with
+    // it. The corpus states a bare-string enum's reject path as the SLOT
+    // (`reject-unknown-tone` → `$.style.tone`), and WIRE_FORMAT.md §6 says `$type`
+    // appears in a path only "when the discriminator is at fault" — a bare enum has
+    // no discriminator on the wire, so `$.kind.trendPolarity.$type` named a JSON
+    // member the document does not contain. This host's family-wide `.$type` suffix
+    // (which the earlier form of this test pinned as intended behaviour, because the
+    // prefix-matching harness accepted it) is gone: `unknown_enum_case` reports the
+    // slot itself. Asserted as an EQUALITY, not a prefix — a prefix match is what let
+    // the divergence live unnoticed across three hosts.
+    assert_eq!(err.path, "$.kind.trendPolarity", "{err:?}");
     // The hint is the load-bearing half. Advertising `Neutral` would tell an
     // author to emit a spelling the format refuses; omitting it is what keeps a
     // later admission an ADDITION rather than a re-meaning of shipped bytes.
