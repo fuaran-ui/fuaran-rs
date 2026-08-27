@@ -31,6 +31,15 @@
      --fuaran-segmented-{bg|active-bg|active-fg|divider-color}              (Phase 66)
    ============================================================================ */
 
+/* fuaran-vocabulary-fingerprint: fv1:db6e4135e0aa5b83
+   The class vocabulary this stylesheet is written against (Phase 433). A host
+   serving this file can assert it matches the renderer emitting the classes —
+   see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
+   startup check. STAMPED, not hand-edited: the value is generated from
+   `Theme.vocabularyFingerprint` by `Build.fsproj -- Css` and pinned by
+   `-- CssCheck`. It fingerprints the class VOCABULARY, not the rules — a
+   re-coloured rule leaves it unchanged, by design. */
+
 :root {
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light;
