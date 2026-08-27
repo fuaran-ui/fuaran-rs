@@ -282,6 +282,26 @@ body {
   align-items: center;
 }
 
+/* Phase 431 — the `IconSize` modifiers the standalone `Icon` kind emits
+   (`Theme.iconSizeClass`). They shipped unstyled, so a declared `IconSize` had
+   no effect in this sheet at all. Sized in `em` rather than against the font
+   scale deliberately: an icon reads relative to the text it sits beside, and
+   there is no icon-size token to bind — adding one is a decision to widen the
+   typed `Theme` record (see HOST-STYLING-CHECKLIST §1.4b), not a stylesheet
+   edit. `--medium` is the default and is `inherit`, so an existing tree renders
+   exactly as before. */
+.fuaran-icon--small {
+  font-size: 0.85em;
+}
+
+.fuaran-icon--medium {
+  font-size: inherit;
+}
+
+.fuaran-icon--large {
+  font-size: 1.35em;
+}
+
 .fuaran-layout-dashboard {
   display: flex;
   flex-direction: column;
@@ -1394,11 +1414,23 @@ body {
    renderer's inert form-field vocabulary (`Renderer.Server/Render.fs
    renderFormField`); aliasing them into the client-vocabulary rules keeps
    SSR form fields styled identically to their hydrated counterparts. */
+/* Phase 431 — `.fuaran-field-range-{min,max}` / `.fuaran-filter-range-{min,max}`
+   are the pair-control input halves. The RangedNumber arm of the Range control
+   emits them WITHOUT `.fuaran-form-input`, so before this alias landed a
+   `FormFieldKind.Range` rendered two bare browser inputs beside every styled
+   field on the same form. `.fuaran-filter-range input` (below) still wins on
+   specificity for the filter twin's width/padding, so the filter bar is
+   unchanged; the date arm already carried `.fuaran-form-input`, so these
+   declarations are identical there. */
 .fuaran-select-control,
 .fuaran-form-input,
 .fuaran-form-select,
 .fuaran-form-textarea,
 .fuaran-form-field-control,
+.fuaran-field-range-min,
+.fuaran-field-range-max,
+.fuaran-filter-range-min,
+.fuaran-filter-range-max,
 .fuaran-filter-input,
 .fuaran-filter-select {
   padding: 6px var(--fuaran-space-sm, 8px) 6px var(--fuaran-space-sm, 8px);
@@ -1417,6 +1449,10 @@ body {
 .fuaran-form-select:focus-visible,
 .fuaran-form-textarea:focus-visible,
 .fuaran-form-field-control:focus-visible,
+.fuaran-field-range-min:focus-visible,
+.fuaran-field-range-max:focus-visible,
+.fuaran-filter-range-min:focus-visible,
+.fuaran-filter-range-max:focus-visible,
 .fuaran-filter-input:focus-visible,
 .fuaran-filter-select:focus-visible {
   outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
@@ -1520,6 +1556,23 @@ body {
   border-radius: var(--fuaran-radius-sm, 4px);
 }
 
+/* Phase 431 — the FORM twin of `.fuaran-filter-range` above. The filter half
+   has been styled since the filter bar shipped; this half never was, so
+   `FormFieldKind.Range` — and `FormFieldKind.DateRange`, which reuses the same
+   class family — laid its two inputs and separator out as bare inline content
+   on every host serving this sheet. The coverage conformance test
+   (`CssCoverageTests.fs`) is what makes the next such omission a red build. */
+.fuaran-field-range {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-field-range-sep,
+.fuaran-filter-range-sep {
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
 .fuaran-file-upload {
   display: inline-flex;
   flex-direction: column;
@@ -1540,8 +1593,13 @@ body {
 /* SSR placeholder for the client-library grid: the server emits a
    deterministic "[Grid: N rows — hydrates client-side]" body (never a
    blank) that hydration replaces. Styled like `.fuaran-custom-placeholder`
-   so a no-JS reader sees a deliberate placeholder, not a bare text run. */
-.fuaran-grid-ssr-placeholder {
+   so a no-JS reader sees a deliberate placeholder, not a bare text run.
+   Phase 431 — the chart and map arms emit the same shape and were missed when
+   the grid one was styled, so their placeholders rendered as bare text runs;
+   the coverage test now enumerates all three. */
+.fuaran-grid-ssr-placeholder,
+.fuaran-chart-ssr-placeholder,
+.fuaran-map-ssr-placeholder {
   background: var(--fuaran-tone-subdued-bg, #f3f4f6);
   border: var(--fuaran-border-width, 1px) dashed var(--fuaran-tone-default-border, #e5e7eb);
   border-radius: var(--fuaran-radius-md, 6px);
@@ -1572,6 +1630,16 @@ body {
 .fuaran-table-row:hover {
   background: var(--fuaran-tone-subdued-hover-bg, #e5e7eb);
   cursor: pointer;
+}
+
+/* Phase 431 — row selection had a class and no rule, so a selected row was
+   indistinguishable from an unselected one. Declared after the hover rule and
+   with the `:hover` companion, because a bare `.fuaran-grid-row-selected`
+   loses to `.fuaran-grid-row:hover` on specificity and the selection would
+   vanish under the pointer. */
+.fuaran-grid-row-selected,
+.fuaran-grid-row-selected:hover {
+  background: var(--fuaran-tone-brand-bg, #eff6ff);
 }
 
 /* Sortable table headers — the affordance for the reference table-sort
@@ -1786,8 +1854,24 @@ body {
    pick up Custom nodes the same way they pick up every other Kind), and
    only the `fuaran-custom-placeholder` child gets the dashed-border styling
    so consumers who register a renderer via `IFuaranRuntime.TryRenderCustom`
-   don't inherit the placeholder visuals. */
-.fuaran-custom-placeholder {
+   don't inherit the placeholder visuals.
+   Phase 431 — the SERVER renderer emits `fuaran-kind-custom-placeholder` for
+   the same body (Renderer.Server/Registry.fs), so it is aliased in here on the
+   `.fuaran-form-field-control` precedent: one vocabulary difference between the
+   two renderers must not become a styling difference. Aliased in alongside it,
+   the other five hooks whose element is a VISIBLE bracketed diagnostic —
+   render-failure fallback, depth-limit truncation, unattached mount, and the
+   two fragment-resolution refusals. Each rendered as an unstyled text run,
+   which is precisely what this rule exists to prevent; that they were the
+   `fuaran-custom-placeholder` case all along is what the coverage enumeration
+   made visible. */
+.fuaran-custom-placeholder,
+.fuaran-kind-custom-placeholder,
+.fuaran-node-fallback,
+.fuaran-depth-exceeded,
+.fuaran-mount-placeholder,
+.fuaran-fragment-cycle-placeholder,
+.fuaran-fragment-unresolved-placeholder {
   background: var(--fuaran-tone-subdued-bg, #f3f4f6);
   border: var(--fuaran-border-width, 1px) dashed var(--fuaran-tone-default-border, #e5e7eb);
   border-radius: var(--fuaran-radius-md, 6px);
