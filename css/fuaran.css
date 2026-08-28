@@ -31,7 +31,7 @@
      --fuaran-segmented-{bg|active-bg|active-fg|divider-color}              (Phase 66)
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:db6e4135e0aa5b83
+/* fuaran-vocabulary-fingerprint: fv1:f8c7017590804af1
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -354,6 +354,28 @@ body {
 .fuaran-layout-grid {
   display: grid;
   gap: var(--fuaran-space-md, 12px);
+}
+
+/* Column-fill (masonry). Realised with the CSS MULTI-COLUMN family, which is
+   normative in WIRE_FORMAT §3.6.7 — `column-count` rides inline from the
+   renderer (like the grid's template, so hosts needn't safelist every N) and
+   the gap is set here. `grid-template-rows: masonry` is the other candidate
+   mechanism and is deliberately NOT used: it is not deterministically
+   available across engines, and a layout whose behaviour depends on which
+   browser reads it cannot be a wire contract.
+
+   `break-inside: avoid` is load-bearing rather than cosmetic: without it a
+   multi-column container splits a child ACROSS a column boundary, so a card
+   or a picture would be cut in half down the page. */
+.fuaran-layout-masonry {
+  display: block;
+  column-gap: var(--fuaran-space-md, 12px);
+}
+
+.fuaran-layout-masonry > * {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  margin-bottom: var(--fuaran-space-md, 12px);
 }
 
 .fuaran-layout-split-panel {
@@ -2614,6 +2636,13 @@ html[data-fuaran-disconnected]::before {
   .fuaran-layout-grid {
     grid-template-columns: repeat(2, 1fr) !important;
   }
+
+  /* Masonry halves on the same breakpoint and for the same reason — its
+     `column-count` is also an inline emission, so it needs the same
+     `!important` to be overridden. */
+  .fuaran-layout-masonry {
+    column-count: 2 !important;
+  }
 }
 
 /* ── phone (≤ sm / 640px): single-column + scrollable overflow ─── */
@@ -2631,6 +2660,12 @@ html[data-fuaran-disconnected]::before {
   /* Grid collapses to one column (overrides the inline template — see note). */
   .fuaran-layout-grid {
     grid-template-columns: 1fr !important;
+  }
+
+  /* Masonry likewise. At one column the multi-column model degenerates to
+     ordinary block flow, which is the correct phone reading order. */
+  .fuaran-layout-masonry {
+    column-count: 1 !important;
   }
 
   /* Tab bar becomes a horizontal scroller instead of overflowing / clipping
