@@ -31,7 +31,7 @@
      --fuaran-segmented-{bg|active-bg|active-fg|divider-color}              (Phase 66)
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:f8c7017590804af1
+/* fuaran-vocabulary-fingerprint: fv1:075664559ccec161
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -1919,6 +1919,26 @@ body {
   font-family: monospace;
   font-size: 11px;
   color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+/* Phase 1108 — the CARDED degradation. An unregistered Custom node for which a
+   contract card is available renders the card's one-line summary and, where the
+   node's prop bag violates the card's declared schema, the defects. Both sit
+   inside the same dashed placeholder box; the summary reads as prose (it is a
+   sentence a person wrote) while the props list beside it stays monospace (it
+   is a schema). The defect list is toned as a warning because it is the one
+   part that says something is WRONG, as against merely unrendered. */
+.fuaran-custom-summary {
+  font-size: var(--fuaran-text-sm, 13px);
+  color: var(--fuaran-tone-default-fg, #111827);
+  margin-top: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-custom-defects {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--fuaran-tone-warning-fg, #92400e);
+  margin-top: var(--fuaran-space-xs, 4px);
 }
 
 /* ── motion vocabulary (Phase 12.F) ───────────────────────────── */
