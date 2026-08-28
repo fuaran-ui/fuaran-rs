@@ -3078,7 +3078,7 @@ fn decode_form_field(path: &str, j: &JVal) -> DResult<FormField> {
     let fields = as_obj(path, j)?;
     // The near-miss check runs BEFORE the rule decode, so a field carrying both
     // `validation` and a well-formed `rule` still names the ignored key.
-    check_near_misses_in(path, fields, FORM_FIELD_NEAR_MISSES, "form field")?;
+    check_near_misses_in(path, fields, FORM_FIELD_NEAR_MISSES, "form field", "")?;
     // Field alias: name → id. Id decodes first so the form context's
     // auto-bind can use it (Phase 596).
     let id = req_string_aliased(path, fields, "id", &["name"], "form field id string")?;
@@ -3379,18 +3379,23 @@ fn retired_positional_field(path: &str, fields: &Fields, name: &str, op_kind: &s
 }
 
 fn check_near_misses(path: &str, fields: &Fields, candidates: &[(&str, &str)]) -> DResult<()> {
-    check_near_misses_in(path, fields, candidates, "grid")
+    check_near_misses_in(path, fields, candidates, "grid", "")
 }
 
 /// The near-miss check, with the vocabulary NAMED. The message says which
 /// vocabulary the key is not part of, so a form field's near miss does not report
 /// itself against the grid's — the refusal is didactic, and a didactic message
 /// that names the wrong vocabulary sends the author to the wrong document.
+/// `consequence` is an optional trailing clause naming what the silence costs in
+/// that particular vocabulary (Phase 959) — the refusal is didactic, and the
+/// didactic is sharper when it says what was LOST, not only what was ignored.
+/// Empty for the grid, whose message the four other hosts pin unchanged.
 fn check_near_misses_in(
     path: &str,
     fields: &Fields,
     candidates: &[(&str, &str)],
     vocabulary: &str,
+    consequence: &str,
 ) -> DResult<()> {
     for (found, canonical) in candidates {
         if get(fields, found).is_some() {
@@ -3398,7 +3403,7 @@ fn check_near_misses_in(
                 DecodeErrorCode::WrongType,
                 format!("{path}.{found}"),
                 format!(
-                    "'{found}' is not part of the {vocabulary} vocabulary — it would be ignored, not honoured"
+                    "'{found}' is not part of the {vocabulary} vocabulary — it would be ignored, not honoured{consequence}"
                 ),
                 Some((*canonical).to_string()),
             ));
@@ -3406,6 +3411,92 @@ fn check_near_misses_in(
     }
     Ok(())
 }
+
+/// The `Accessibility` trait's near-miss set (Phase 959 — the Phase 863
+/// discipline applied to the §3.1 trait).
+///
+/// Rule 2's tolerance of unknown keys is right for a slot a future profile may
+/// add and wrong for a near miss of one that exists. That silence is sharper
+/// here than anywhere else in the vocabulary, for a reason peculiar to this
+/// trait: it has **no visible output**. A mislabelled column is on screen; an
+/// ignored `ariaLabel` looks identical to an honoured one from every side, so
+/// the refusal is the only feedback that can ever arrive.
+///
+/// Refused rather than aliased. `ariaLabel` IS an unambiguous synonym, so
+/// admission turns on §16's other half — a shorthand earns its place by being a
+/// genuine assist to the emitting model, and a six-character key rename is not
+/// one. `live` settles it: the HTML idiom it comes from also spells a BOOLEAN,
+/// so an alias would bind a possibly-boolean prior onto a closed token set.
+///
+/// `live` and `ariaLabel` are named by MEASURED evidence (6 and 1 emissions
+/// against `liveRegion`'s 12 and `label`'s 44, across 12,722 language-tier
+/// emissions); the rest of their families ride in with them. Declaration order
+/// is identical in all five hosts, so which defect surfaces first is
+/// deterministic.
+const A11Y_NEAR_MISSES: &[(&str, &str)] = &[
+    (
+        "aria-label",
+        "label — the accessible name, a Binding<string> (a bare string is the §3.6 shorthand)",
+    ),
+    (
+        "ariaLabel",
+        "label — the accessible name, a Binding<string> (a bare string is the §3.6 shorthand)",
+    ),
+    (
+        "aria-labelledby",
+        "labelledBy — the id of a sibling node whose text carries the name",
+    ),
+    (
+        "ariaLabelledBy",
+        "labelledBy — the id of a sibling node whose text carries the name",
+    ),
+    (
+        "labelledby",
+        "labelledBy — the slot name is camelCase on the wire, not the ARIA attribute spelling",
+    ),
+    (
+        "aria-describedby",
+        "describedBy — the id of a sibling node whose text carries the description",
+    ),
+    (
+        "ariaDescribedBy",
+        "describedBy — the id of a sibling node whose text carries the description",
+    ),
+    (
+        "describedby",
+        "describedBy — the slot name is camelCase on the wire, not the ARIA attribute spelling",
+    ),
+    ("aria-role", "role — the ARIA role NAME as a bare string"),
+    ("ariaRole", "role — the ARIA role NAME as a bare string"),
+    (
+        "aria-live",
+        "liveRegion — the closed token set \"polite\" / \"assertive\" / \"off\"",
+    ),
+    (
+        "ariaLive",
+        "liveRegion — the closed token set \"polite\" / \"assertive\" / \"off\"",
+    ),
+    (
+        "live",
+        "liveRegion — the closed token set \"polite\" / \"assertive\" / \"off\"",
+    ),
+    (
+        "liveregion",
+        "liveRegion — the closed token set \"polite\" / \"assertive\" / \"off\"",
+    ),
+    (
+        "aria-hidden",
+        "hidden — a Binding<bool> (a bare bool is the §3.6 shorthand)",
+    ),
+    (
+        "ariaHidden",
+        "hidden — a Binding<bool> (a bare bool is the §3.6 shorthand)",
+    ),
+];
+
+/// What the silence costs at this position, appended to the refusal message.
+const A11Y_NEAR_MISS_CONSEQUENCE: &str =
+    ", and the intent would reach assistive technology as nothing at all";
 
 /// Named by the census row itself. Deliberately NOT aliased to `editable:
 /// false`: an inverting alias that guesses wrong makes a read-only column
@@ -4724,6 +4815,17 @@ fn decode_semantic_style(path: &str, j: &JVal) -> DResult<SemanticStyle> {
 
 fn decode_accessibility(path: &str, j: &JVal) -> DResult<Accessibility> {
     let fields = as_obj(path, j)?;
+    // Phase 959 — the near-miss check runs BEFORE the slot reads, matching the
+    // `FormField` ordering, so a trait carrying both `ariaLabel` and a
+    // well-formed `label` still names the ignored key rather than decoding half
+    // the author's intent in silence.
+    check_near_misses_in(
+        path,
+        fields,
+        A11Y_NEAR_MISSES,
+        "accessibility",
+        A11Y_NEAR_MISS_CONSEQUENCE,
+    )?;
     let label = opt_binding_slot(path, fields, "label", StaticSlot::Str)?;
     let labelled_by = opt_string(path, fields, "labelledBy")?;
     let described_by = opt_string(path, fields, "describedBy")?;
