@@ -16,10 +16,12 @@ pub mod html;
 pub mod markdown;
 pub mod project;
 pub mod sanitize;
+pub mod seeds;
 pub mod server;
 
 pub use bindings::BindingSources;
 pub use project::project_resolved;
+pub use seeds::{HOST_RESERVED_STATE_PREFIX, collect_state_seeds, with_state_seeds};
 pub use server::{
     render_hydratable, render_hydratable_with_egress, render_to_html, render_to_html_with_egress,
     render_with_islands, render_with_islands_with_egress,

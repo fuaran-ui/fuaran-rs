@@ -136,7 +136,13 @@ impl BoundedProgram {
         self.resolved = if self.node_cost > self.budget.max_nodes {
             self.base_tree.clone()
         } else {
-            resolve_tree(&self.store, &self.base_tree)
+            // §24.4 — the tree's own `Binding.State` declarations seed their
+            // slots before any binding resolves. Laid UNDER the store, so a
+            // host value and every `SetState` write already folded into it win.
+            // Derived here rather than folded into `store` so a seed never
+            // outlives the declaration that produced it.
+            let seeded = crate::render::with_state_seeds(&self.base_tree, &self.store);
+            resolve_tree(&seeded, &self.base_tree)
         };
     }
 

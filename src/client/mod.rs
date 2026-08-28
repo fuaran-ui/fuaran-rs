@@ -102,7 +102,27 @@ impl ClientSession {
     /// projection resolves only what a decode-only consumer cannot. See
     /// [`render::project`](crate::render::project).
     pub fn project_resolved(&self) -> String {
-        crate::wire::encode_node(&crate::render::project_resolved(&self.sources, &self.tree))
+        crate::wire::encode_node(&crate::render::project_resolved(
+            &self.seeded_sources(),
+            &self.tree,
+        ))
+    }
+
+    /// The live sources with the CURRENT tree's `Binding.State` declarations
+    /// laid under them (`WIRE_FORMAT.md` §24.4).
+    ///
+    /// Derived on each read rather than folded into `self.sources` at
+    /// construction, and the difference is not cosmetic: `apply_op` replaces
+    /// the tree, so a stored seed would outlive the declaration that produced
+    /// it and keep filling a slot no reader declares any more. Deriving it
+    /// keeps the seed a property of the tree in hand, and keeps the precedence
+    /// §24.4 states — a `set_state` write and a host value both sit in
+    /// `self.sources` and both win.
+    ///
+    /// `render` needs no wrapper: the shared server renderer runs the same pass
+    /// itself, so client and server stay byte-identical for one tree.
+    fn seeded_sources(&self) -> std::borrow::Cow<'_, BindingSources> {
+        crate::render::with_state_seeds(&self.tree, &self.sources)
     }
 
     /// Render the current tree to a body-fragment HTML string against the live
@@ -157,7 +177,7 @@ impl ClientSession {
             NodeKind::Sparkline(spec) => &spec.source,
             _ => return RowsOutcome::NoRowSource,
         };
-        match resolve_rows(&self.sources, source) {
+        match resolve_rows(&self.seeded_sources(), source) {
             ResolvedRows::Rows(rows) => RowsOutcome::Rows(rows.into_owned()),
             ResolvedRows::NotResolved => RowsOutcome::NotResolved,
         }

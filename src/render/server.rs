@@ -3237,8 +3237,13 @@ pub fn render_to_html_with_egress(
     let no_islands = HashSet::new();
     let mut fragments = HashMap::new();
     collect_fragments(&mut fragments, tree);
+    // §24.4 — the whole tree's `Binding.State` declarations seed their slots
+    // BEFORE any binding resolves, so a reader that carries no data of its own
+    // reads what a sibling declared. Laid UNDER the caller's own sources: a
+    // seed is never an override. See `super::seeds`.
+    let seeded = super::seeds::with_state_seeds(tree, sources);
     let ctx = Ctx {
-        sources,
+        sources: &seeded,
         policy,
         fragments,
         islands: &no_islands,
@@ -3345,8 +3350,12 @@ pub fn render_with_islands_with_egress(
     let islands: HashSet<String> = island_ids.iter().map(|id| id.to_string()).collect();
     let mut fragments = HashMap::new();
     collect_fragments(&mut fragments, tree);
+    // §24.4 — the same seeding pass the static surface runs. The two surfaces
+    // must not differ, or one document would render two values depending only
+    // on whether a region was marked an island.
+    let seeded = super::seeds::with_state_seeds(tree, sources);
     let ctx = Ctx {
-        sources,
+        sources: &seeded,
         policy,
         fragments,
         islands: &islands,
