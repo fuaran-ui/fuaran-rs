@@ -2996,6 +2996,12 @@ const FORM_FIELD_NEAR_MISSES: &[(&str, &str)] = &[
     ("validate", "rule"),
 ];
 
+/// What the silence costs at this position, appended to the refusal message —
+/// the same shape as `A11Y_NEAR_MISS_CONSEQUENCE`, and pinned to the reference
+/// hosts' wording. A near-missed rule slot does not merely go unread: the field
+/// still renders, and it constrains nothing at all.
+const FORM_FIELD_NEAR_MISS_CONSEQUENCE: &str = ", and the field would accept anything";
+
 fn decode_compare_rule(path: &str, j: &JVal) -> DResult<CompareRule> {
     let fields = as_obj(path, j)?;
     let op = decode_compare_op(&format!("{path}.op"), req(path, fields, "op", "CompareOp")?)?;
@@ -3078,7 +3084,13 @@ fn decode_form_field(path: &str, j: &JVal) -> DResult<FormField> {
     let fields = as_obj(path, j)?;
     // The near-miss check runs BEFORE the rule decode, so a field carrying both
     // `validation` and a well-formed `rule` still names the ignored key.
-    check_near_misses_in(path, fields, FORM_FIELD_NEAR_MISSES, "form field", "")?;
+    check_near_misses_in(
+        path,
+        fields,
+        FORM_FIELD_NEAR_MISSES,
+        "form field",
+        FORM_FIELD_NEAR_MISS_CONSEQUENCE,
+    )?;
     // Field alias: name → id. Id decodes first so the form context's
     // auto-bind can use it (Phase 596).
     let id = req_string_aliased(path, fields, "id", &["name"], "form field id string")?;
