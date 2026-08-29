@@ -1931,10 +1931,11 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
             // binding re-encodes verbatim (one wire dialect) and the runtime
             // re-evaluates the pipeline against it, falling back to the
             // decode-time `initial` snapshot derived from the binding's
-            // carried default data. A State wrapper carrying NO data still
-            // errors didactically through the columnar codec (the 815
-            // posture), and a State wrapper's carried data is snapshot-decoded
-            // here so the ragged-rows didactic stays byte-identical.
+            // carried default data. A State wrapper carrying NO data — the bare
+            // `{"$type":"State","key":k}` — is a live source over the EMPTY
+            // initial snapshot (§16), and a State wrapper's carried data is
+            // snapshot-decoded here so the ragged-rows didactic stays
+            // byte-identical.
             let live_tag = match src_j {
                 JVal::Obj(sf) => match get(sf, "$type") {
                     Some(JVal::Str(t)) if t == "State" || t == "Selection" || t == "Query" => {
@@ -1979,23 +1980,41 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                     // empty-table start the Selection / Query branch below
                     // already takes, on the one input where State needs it too.
                     let empty_carried = matches!(carried, Some(JVal::Arr(rows)) if rows.is_empty());
-                    if tag == "State" && empty_carried {
+                    // §16 — an ABSENT `defaultValue` takes the same arm. The bare
+                    // `{"$type":"State","key":k}` is a live source over the empty
+                    // initial snapshot, exactly as a Selection / Query source
+                    // already was. It surfaced the columnar codec's missing-field
+                    // didactic until now, which was correct while nothing else
+                    // could fill the slot; under §24.4 a sibling reader's
+                    // declaration fills it, so the refusal was rejecting the most
+                    // direct spelling of "I read this key and carry no data of my
+                    // own" — the one FUARAN106's remedy text tells an author to
+                    // write. The two spellings say one thing; the empty array
+                    // stays the answer for a genuinely empty live collection
+                    // rather than a workaround for a wrapper this decoder would
+                    // not accept bare.
+                    if tag == "State" && (empty_carried || !has_carried) {
+                        // An absent default must stay ABSENT on the decoded
+                        // binding, or the two spellings stop re-encoding to their
+                        // own bytes. `decode_binding_slot`'s State arm reads a
+                        // missing default through the Rows slot, whose `null` arm
+                        // yields the empty row list — which the encoder then emits
+                        // as `"defaultValue":[]`, silently respelling a source
+                        // that DECLARES NOTHING as a declaration of the empty
+                        // table. `StaticValue::Ast(JVal::Null)` is this host's
+                        // representation of absence (`static_is_absent`), so the
+                        // key is omitted again on re-encode.
+                        let binding = match (has_carried, b) {
+                            (false, Binding::State { key, .. }) => Binding::State {
+                                key,
+                                default_value: StaticValue::Ast(JVal::Null),
+                            },
+                            (_, b) => b,
+                        };
                         TransformSource::Live {
-                            binding: Box::new(b),
+                            binding: Box::new(binding),
                             initial: empty_embedded_source(),
                         }
-                    } else if tag == "State" && !has_carried {
-                        // No carried data — surface the columnar codec's own
-                        // missing-field didactic (byte-identical to pre-818).
-                        let src_n = normalise_transform_source(src_j);
-                        TransformSource::Data(decode_data_source(&src_n).map_err(|e| {
-                            make_error(
-                                DecodeErrorCode::WrongType,
-                                format!("{path}.source"),
-                                e,
-                                None,
-                            )
-                        })?)
                     } else if tag == "State" {
                         // The carried data IS the initial snapshot; a decode
                         // failure (ragged / mixed-type rows) surfaces the same
