@@ -2902,6 +2902,29 @@ fn render_grid(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &GridSpec) -> String
     // never advertises an interaction it cannot perform.
     let sorted: Option<Vec<JVal>> = grid_sorted_rows(ctx, spec, rows);
     let rows: &[JVal] = sorted.as_deref().unwrap_or(rows);
+    // Phase 663's `GridSpec.editable` write-back is DECLARED NOT IMPLEMENTED on
+    // this host (Phase 666), and this is the record of that decision rather than
+    // an omission nobody wrote down. `spec.editable` decodes faithfully and is
+    // deliberately not read here: the reference host turns field-projected
+    // Text/Numeric cells into inputs that commit the whole updated rows value to
+    // the grid's `State` destination, and the commit half of that is
+    // unreachable from this renderer by the SAME rule the sort affordance above
+    // obeys — the parity-locked render carries no per-control slot attribute, so
+    // event → store wiring is the app's, not the loader's, and minting a `data-*`
+    // slot hint to close it would be a renderer-vocabulary change and therefore a
+    // cross-host parity change (see `CLAUDE.md`, "Interaction model"). A table
+    // never advertises an interaction it cannot perform, so an editable grid
+    // renders read-only here and says so, rather than drawing inputs that swallow
+    // every keystroke.
+    //
+    // Note what is NOT abstained: `CellKindErased::Editable` below still renders
+    // its input, because that is the pre-663 cell kind an app wires itself, and
+    // its inertness is the whole host's inertness rather than this flag's.
+    //
+    // The write path exists (`ClientSession::set_state`), so an app that wants
+    // the loop today wires its own listener over the rendered cells. Closing it
+    // generically is a vocabulary question for every host at once, not a change
+    // this one makes alone.
     let header_cells: String = spec
         .columns
         .iter()

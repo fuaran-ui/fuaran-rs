@@ -332,6 +332,31 @@ is app-specific** — the loader stays generic and leaves that mapping to the ap
 Adding a `data-*` slot hint to auto-wire would be a renderer-vocabulary change and
 therefore a cross-host parity change — do not add one unilaterally.
 
+**The editable grid is the first NAMED instance of that rule, and it is a declared
+abstention rather than a gap (Phase 666).** The reference host reads
+`GridSpec.editable` over a direct `Binding.State` source and renders each
+field-projected Text/Numeric cell as an input committing the whole updated rows
+value to that state key, so a chart on the same key tracks the edit. **This host
+decodes the flag faithfully and deliberately does not render it**, for exactly the
+reason the paragraph above states: the render half is reachable, the COMMIT half is
+not, and closing it means minting the per-control slot attribute this host may not
+mint alone. A renderer that drew the inputs anyway would advertise an interaction it
+cannot perform — the same refusal the sort affordance already makes
+(`render::server::render_grid`, where the decision is recorded beside the code).
+
+Two boundaries on that abstention, because it is narrower than it sounds. It is about
+`GridSpec.editable` only: `CellKindErased::Editable` still renders its input, since
+that cell kind is wired by the app and its inertness is this whole host's inertness
+rather than this flag's. And it is not a claim that the loop is unreachable — an app
+holding a `ClientSession` closes it today with its own listener over the rendered
+cells (`set_state` is the write path). What is abstained is doing so GENERICALLY, in
+the renderer, which is a question for every host at once.
+
+It follows that this host does not raise **FUARAN090** either, and
+`validator-coverage.json` names that abstention rather than leaving it to the file's
+"not ported" default: a host that renders the inert shape without diagnosing it is
+saying something specific, and silence would read as nothing to say.
+
 ## Edge hosting (`src/edge/`)
 
 The durability half of the client tier: a session a worker runtime may evict between
