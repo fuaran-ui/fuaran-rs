@@ -12,10 +12,12 @@ name: Notify cross-host conformance gate
 # The corpus repo already solved this for its own pushes; this is a mirror of
 # its workflow, differing only in `source_repo`.
 #
-# Requires a repo/Actions secret WORKSPACE_DISPATCH_TOKEN — a fine-grained PAT
-# or GitHub App token with `Contents: write` on the dispatch target (the scope
-# the repository_dispatch REST endpoint requires; the classic-PAT equivalent is
-# the `repo` scope). The default GITHUB_TOKEN is scoped to THIS repo only and
+# Requires the org-level Actions secret FUARAN_WORKSPACE_APP_PRIVATE_KEY — the
+# private key of the `fuaran-ui-workspace-broker` GitHub App (app id 4797739),
+# installed on the dispatch target only. The workflow mints a SHORT-LIVED
+# installation token at run time (the App holds `Contents: write` there — the
+# scope the repository_dispatch REST endpoint requires); no long-lived token is
+# stored anywhere. The default GITHUB_TOKEN is scoped to THIS repo only and
 # cannot dispatch cross-repo.
 #
 # NOTE: an unfired trigger looks identical to a green one. If this ever needs
@@ -29,9 +31,18 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
+      - name: Mint a workspace App installation token
+        id: workspace-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: 4797739 # fuaran-ui-workspace-broker
+          private-key: ${{ secrets.FUARAN_WORKSPACE_APP_PRIVATE_KEY }}
+          owner: fuaran-ui
+          repositories: workspace
+
       - name: Trigger cross-host wire-format conformance gate
         env:
-          GH_TOKEN: ${{ secrets.WORKSPACE_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ steps.workspace-token.outputs.token }}
         run: |
           gh api repos/fuaran-ui/workspace/dispatches \
             --method POST \
