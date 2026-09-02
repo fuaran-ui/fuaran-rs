@@ -2021,6 +2021,14 @@ fn box_layout(l: &BoxLayout) -> String {
             }
             case_obj("Grid", fields)
         }
+        // §3.6.7 — ordinal key order cols < gap. No `templateColumns` twin.
+        BoxLayout::Masonry { cols, gap } => {
+            let mut fields = vec![field("cols", int(*cols))];
+            if let Some(gap) = gap {
+                fields.push(field("gap", int(*gap)));
+            }
+            case_obj("Masonry", fields)
+        }
         BoxLayout::Auto => case_obj("Auto", vec![]),
     }
 }

@@ -113,6 +113,10 @@ fn box_kind_class(spec: &BoxSpec) -> &'static str {
         "fuaran-kind-divider"
     } else if matches!(spec.layout, BoxLayout::Grid { .. }) {
         "fuaran-kind-grid-layout"
+    } else if matches!(spec.layout, BoxLayout::Masonry { .. }) {
+        // §3.6.7 — the two modes fill differently, so a host styling "the grid
+        // container" must not catch both.
+        "fuaran-kind-masonry"
     } else {
         "fuaran-kind-stack"
     }

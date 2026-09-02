@@ -1360,6 +1360,25 @@ fn render_box(ctx: &Ctx<'_>, spec: &BoxSpec) -> String {
             &render_children(ctx, &spec.children),
         );
     }
+    if let BoxLayout::Masonry { cols, gap } = &spec.layout {
+        // WIRE_FORMAT §3.6.7 — column-fill, realised with the CSS multi-column
+        // family. `grid-template-rows: masonry` is NOT the mechanism and must
+        // not be substituted: it is not deterministically supported across
+        // engines, so a document rendered through it would lay out as a masonry
+        // on some readers' browsers and as an ordinary grid on others'.
+        let masonry_style = match gap {
+            Some(gap) => format!("column-count:{cols};gap:{gap}px"),
+            None => format!("column-count:{cols}"),
+        };
+        return el(
+            "div",
+            &[
+                ("class", s("fuaran-layout-masonry")),
+                ("style", s(masonry_style)),
+            ],
+            &render_children(ctx, &spec.children),
+        );
+    }
     let (dir, wrap, gap) = match &spec.layout {
         BoxLayout::Flex {
             direction,
@@ -1374,7 +1393,9 @@ fn render_box(ctx: &Ctx<'_>, spec: &BoxSpec) -> String {
             if *wrap { " fuaran-stack-wrap" } else { "" },
             *gap,
         ),
-        BoxLayout::Grid { .. } | BoxLayout::Auto => ("fuaran-stack-vertical", "", None),
+        BoxLayout::Grid { .. } | BoxLayout::Masonry { .. } | BoxLayout::Auto => {
+            ("fuaran-stack-vertical", "", None)
+        }
     };
     let class = format!("fuaran-layout-stack {dir}{wrap}");
     match gap {

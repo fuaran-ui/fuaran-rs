@@ -4079,8 +4079,35 @@ fn decode_box_layout(path: &str, j: &JVal) -> DResult<BoxLayout> {
                 }
             }
         }
+        "Masonry" => {
+            // WIRE_FORMAT §3.6.7 — column-fill. `cols` is REQUIRED and
+            // POSITIVE, on the §3.6.4 srcSet width-floor pattern:
+            // `column-count: 0` is invalid CSS, so a container declaring it
+            // would fall back to whatever the host stylesheet last said and the
+            // wire would be carrying a host-defined layout.
+            //
+            // No auto-column leniency here, unlike `Grid` above, and the
+            // asymmetry is deliberate rather than an omission: `Grid`
+            // canonicalises a column-less spec to `Auto` because the language
+            // already owns that concept, whereas `Auto` is a ROW-fill mode —
+            // rewriting a masonry into it would discard the author's intent
+            // rather than recover it. Mirror of F# / fuaran-ts.
+            let cols_j = get_aliased(fields, "cols", &["columns"])
+                .ok_or_else(|| missing_field(path, "cols", "positive integer column count"))?;
+            let cols = as_int(&format!("{path}.cols"), cols_j)?;
+            if cols <= 0 {
+                return Err(wrong_type(
+                    &format!("{path}.cols"),
+                    "JSON number (positive integer column count)",
+                ));
+            }
+            Ok(BoxLayout::Masonry {
+                cols,
+                gap: opt_int(path, fields, "gap")?,
+            })
+        }
         "Auto" => Ok(BoxLayout::Auto),
-        other => Err(unknown_du_case(path, other, "Flex | Grid | Auto")),
+        other => Err(unknown_du_case(path, other, "Flex | Grid | Masonry | Auto")),
     }
 }
 

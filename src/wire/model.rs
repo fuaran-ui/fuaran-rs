@@ -1261,6 +1261,14 @@ pub enum BoxLayout {
         gap: Option<i64>,
         template_columns: Option<String>,
     },
+    /// WIRE_FORMAT §3.6.7 (Phase 1082) — the column-fill mode. `cols` is
+    /// REQUIRED and POSITIVE; there is deliberately no `template_columns` twin,
+    /// because the multi-column model realising masonry has no track list for
+    /// one to name.
+    Masonry {
+        cols: i64,
+        gap: Option<i64>,
+    },
     Auto,
 }
 

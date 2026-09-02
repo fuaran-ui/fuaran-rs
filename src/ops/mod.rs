@@ -792,6 +792,19 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
                         })
                     })
                 }
+                // Phase 1082 — `Masonry` carries the same column count under the
+                // same field name. Without this arm the introspection surface
+                // would advertise `Cols` on a masonry box and the apply engine
+                // would answer `unknownField`. Mirror of F# / fuaran-ts.
+                ("Cols", BoxLayout::Masonry { gap, .. }) => {
+                    let gap = *gap;
+                    patch(coerce::int(value), |x| {
+                        NodeKind::Box(crate::wire::BoxSpec {
+                            layout: BoxLayout::Masonry { cols: x, gap },
+                            ..s.clone()
+                        })
+                    })
+                }
                 ("TemplateColumns", BoxLayout::Grid { cols, gap, .. }) => {
                     let (cols, gap) = (*cols, *gap);
                     patch(coerce::string(value), |x| {
