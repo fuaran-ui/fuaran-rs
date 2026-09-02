@@ -29,9 +29,30 @@
      --fuaran-radius-{sm|md|lg|full}
      --fuaran-border-width
      --fuaran-segmented-{bg|active-bg|active-fg|divider-color}              (Phase 66)
+
+   Writing direction (Phase 1114). Every inline-axis rule below is expressed in
+   CSS LOGICAL properties (`margin-inline-start`, `padding-inline-end`,
+   `border-inline-start`, `inset-inline-{start|end}`, `text-align: start|end`,
+   `float: inline-end`), so the whole sheet's LAYOUT mirrors under `dir="rtl"`
+   with no RTL override block and no second stylesheet. The document's `dir` is
+   the only input — a host that sets it on `<html>` gets a mirrored layout for
+   free, and a subtree that sets it locally mirrors only itself. The one
+   exception is a DIRECTIONAL GLYPH, which no logical property can mirror: the
+   disclosure chevron carries the sheet's only two `[dir="rtl"]` rules, and they
+   flip glyph content, never geometry.
+
+   Three physical usages survive DELIBERATELY, and each has a reason:
+     - `background-position` in `fuaran-skeleton-shimmer` — no logical longhand
+       exists for background-position, and a shimmer sweep is cosmetic.
+     - `transform: translateX` in `fuaran-motion-slide-in-right` — the animation
+       is NAMED by its physical direction and the name is part of the class
+       vocabulary; mirroring it would change what the author asked for.
+       `fuaran-motion-shake` is symmetric (±4px), so direction cannot affect it.
+     - `overflow` / scrollbar and `box-shadow` geometry — block-axis or
+       symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:68c3a78c4afdffbb
+/* fuaran-vocabulary-fingerprint: fv1:e53ff9baff6fc36f
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -410,7 +431,7 @@ body {
 .fuaran-tabs-vertical .fuaran-tabs-bar {
   flex-direction: column;
   border-bottom: none;
-  border-right: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-inline-end: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
   padding: var(--fuaran-space-md, 12px) 0;
 }
 
@@ -442,8 +463,7 @@ body {
      controls without forcing a fixed border on the button itself. */
   content: "";
   position: absolute;
-  left: 0;
-  right: 0;
+  inset-inline: 0;
   bottom: 0;
   height: var(--fuaran-tab-indicator-height, 2px);
   background: transparent;
@@ -614,7 +634,7 @@ body {
 
 .fuaran-disclosure-summary::after {
   content: "▸";
-  float: right;
+  float: inline-end;
   transition: transform 0.15s ease-in-out;
   color: var(--fuaran-tone-subdued-fg, #6b7280);
 }
@@ -625,6 +645,20 @@ body {
 
 .fuaran-layout-disclosure[open] > .fuaran-disclosure-summary::after {
   transform: rotate(90deg);
+}
+
+/* The ONLY direction-conditional pair in this sheet (Phase 1114). A chevron is a
+   DIRECTIONAL GLYPH and no logical property mirrors glyph content — the
+   `float: inline-end` above puts it on the correct edge, but `▸` still points
+   right. Transforms apply right-to-left, so in the open state the rotation runs
+   first and the mirror then flips the resulting down-pointing triangle onto
+   itself; the closed state simply becomes `◂`. */
+[dir="rtl"] .fuaran-disclosure-summary::after {
+  transform: scaleX(-1);
+}
+
+[dir="rtl"] .fuaran-layout-disclosure[open] > .fuaran-disclosure-summary::after {
+  transform: scaleX(-1) rotate(90deg);
 }
 
 .fuaran-disclosure-summary:focus-visible {
@@ -670,7 +704,7 @@ body {
   font-size: var(--fuaran-text-sm, 13px);
   font-variant-numeric: tabular-nums;
   color: var(--fuaran-tone-default-fg, #1f2937);
-  text-align: right;
+  text-align: end;
 }
 
 .fuaran-label-value-row-emphasis {
@@ -860,7 +894,7 @@ body {
    rendered content, not a background image, and carries its own `aria-label` —
    so it survives a stylesheet that never loads. */
 .fuaran-metric-trend-glyph {
-  margin-right: 0.35em;
+  margin-inline-end: 0.35em;
 }
 
 .fuaran-metric-subtext {
@@ -1054,7 +1088,7 @@ body {
 
 /* ── callout ──────────────────────────────────────────────────── */
 .fuaran-callout {
-  border-left: 4px solid var(--fuaran-tone-info-border, #93c5fd);
+  border-inline-start: 4px solid var(--fuaran-tone-info-border, #93c5fd);
   background: var(--fuaran-tone-info-bg, #eff6ff);
   color: var(--fuaran-tone-info-fg, #1e40af);
   padding: var(--fuaran-space-md, 12px) var(--fuaran-space-lg, 16px);
@@ -1190,10 +1224,10 @@ body {
 
 @keyframes fuaran-progress-slide {
   0% {
-    margin-left: 0%;
+    margin-inline-start: 0%;
   }
   100% {
-    margin-left: 70%;
+    margin-inline-start: 70%;
   }
 }
 
@@ -1303,7 +1337,7 @@ body {
    author set an `Icon`, so the gap is intentional even before a host maps
    `data-icon` to a glyph). */
 .fuaran-button-icon {
-  margin-right: var(--fuaran-space-xs, 4px);
+  margin-inline-end: var(--fuaran-space-xs, 4px);
   vertical-align: middle;
 }
 
@@ -1643,7 +1677,7 @@ body {
 .fuaran-table-header {
   background: var(--fuaran-tone-subdued-bg, #f3f4f6);
   color: var(--fuaran-tone-subdued-fg, #6b7280);
-  text-align: left;
+  text-align: start;
   padding: var(--fuaran-space-sm, 8px) var(--fuaran-space-md, 12px);
   font-weight: var(--fuaran-font-weight-medium, 500);
   font-size: var(--fuaran-text-xs, 12px);
@@ -1693,7 +1727,7 @@ body {
   /* ↕ — sortable, currently unsorted. */
   content: "\2195";
   opacity: 0.35;
-  margin-left: 0.35em;
+  margin-inline-start: 0.35em;
   font-size: 0.8em;
 }
 
@@ -1875,7 +1909,7 @@ body {
 
 .fuaran-map-marker-list {
   margin-top: var(--fuaran-space-sm, 8px);
-  padding-left: 20px;
+  padding-inline-start: 20px;
   font-size: var(--fuaran-text-xs, 12px);
 }
 
@@ -2070,7 +2104,7 @@ body {
 .fuaran-segmented-horizontal .fuaran-segmented-option + .fuaran-segmented-option::before {
   content: "";
   position: absolute;
-  left: 0;
+  inset-inline-start: 0;
   top: 20%;
   bottom: 20%;
   width: 1px;
@@ -2346,7 +2380,7 @@ html[data-fuaran-disconnected]::before {
 .fuaran-image-lightbox-close {
   position: absolute;
   top: var(--fuaran-space-md, 12px);
-  right: var(--fuaran-space-md, 12px);
+  inset-inline-end: var(--fuaran-space-md, 12px);
 }
 
 /* ── Media (Phase 1076) ────────────────────────────────────────────
@@ -2378,10 +2412,69 @@ html[data-fuaran-disconnected]::before {
   width: 100%;
 }
 
+/* Phase 1110 - the transcript disclosure. It exists only when a media node
+   declares a transcript, so the group wrapper appears only then too: a media
+   node without one emits the bare element it always emitted, and no rule here
+   can reach it.
+
+   The disclosure reuses the DISCLOSURE kind's summary chrome deliberately
+   rather than minting a second one - a reader who has learned what a Fuaran
+   disclosure looks like should not have to learn it twice - but it keeps its
+   own class names, because a transcript is a slot of a media node and not a
+   `Disclosure` node, and a host stylesheet must be able to target one without
+   catching the other. */
+.fuaran-media-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-sm, 8px);
+}
+
+.fuaran-media-transcript {
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-md, 6px);
+  overflow: hidden;
+}
+
+.fuaran-media-transcript-summary {
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+  font-size: var(--fuaran-text-sm, 13px);
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  padding: var(--fuaran-space-sm, 8px) var(--fuaran-space-md, 12px);
+  cursor: pointer;
+  list-style: none;
+}
+
+.fuaran-media-transcript-summary::-webkit-details-marker {
+  display: none;
+}
+
+.fuaran-media-transcript-summary::after {
+  content: "▸";
+  float: right;
+  transition: transform 0.15s ease-in-out;
+}
+
+.fuaran-media-transcript[open] > .fuaran-media-transcript-summary::after {
+  transform: rotate(90deg);
+}
+
+.fuaran-media-transcript-summary:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: calc(-1 * var(--fuaran-focus-ring-width, 2px));
+}
+
+.fuaran-media-transcript-body {
+  padding: var(--fuaran-space-md, 12px);
+  font-size: var(--fuaran-text-sm, 13px);
+  color: var(--fuaran-tone-default-fg, #1f2937);
+  white-space: pre-wrap;
+}
+
 /* ── List (Phase 287) ──────────────────────────────────────────── */
 .fuaran-list {
   margin: 0;
-  padding-left: var(--fuaran-space-xl, 24px);
+  padding-inline-start: var(--fuaran-space-xl, 24px);
   color: var(--fuaran-tone-default-fg, #1f2937);
 }
 
@@ -2469,7 +2562,7 @@ html[data-fuaran-disconnected]::before {
 .fuaran-toast {
   position: fixed;
   bottom: var(--fuaran-space-lg, 16px);
-  right: var(--fuaran-space-lg, 16px);
+  inset-inline-end: var(--fuaran-space-lg, 16px);
   z-index: var(--fuaran-z-toast, 1100);
   display: flex;
   align-items: center;
@@ -2556,7 +2649,7 @@ html[data-fuaran-disconnected]::before {
 .fuaran-modal-dismiss {
   position: absolute;
   top: var(--fuaran-space-md, 12px);
-  right: var(--fuaran-space-md, 12px);
+  inset-inline-end: var(--fuaran-space-md, 12px);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -2601,7 +2694,7 @@ html[data-fuaran-disconnected]::before {
 .fuaran-codeblock-copy {
   position: absolute;
   top: var(--fuaran-space-sm, 8px);
-  right: var(--fuaran-space-sm, 8px);
+  inset-inline-end: var(--fuaran-space-sm, 8px);
   padding: var(--fuaran-space-xs, 4px) var(--fuaran-space-sm, 8px);
   border: var(--fuaran-border-width, 1px) solid var(--fuaran-code-copy-border, #45475a);
   border-radius: var(--fuaran-radius-sm, 4px);
