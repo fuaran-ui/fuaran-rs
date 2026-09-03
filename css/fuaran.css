@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:a2691fe9295530d0
+/* fuaran-vocabulary-fingerprint: fv1:8068069268d58955
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -2172,13 +2172,101 @@ body {
 .fuaran-motion-expand-collapse {
 }
 
+/* ── Transition pair (Phase 1122) ───────────────────────────────
+   `cross-fade` and `slide-between` are the two tokens whose subject
+   is a TRANSITION BETWEEN renderings rather than the arrival or the
+   state of one. They therefore key on the node's CHILD, not on the
+   node: a `Switch` whose bound selector moves replaces the element
+   standing in it, and the incoming element runs the animation on
+   mount. Nothing here needs a wrapper, a state class or a script,
+   which is why the renderer adds none.
+
+   Both are enter-only. There is deliberately no exit half: the old
+   child is already gone by the time React commits the new one, and
+   holding it in the document to fade it out would mean owning two
+   subtrees, two sets of node ids and two focus targets for the
+   duration — a cost the wire member does not ask for and the
+   accessibility tree would have to be lied to about.
+
+   The slide runs on the ADVANCE axis (in from the right), which is
+   the direction the timer and a left-swipe both move. A
+   direction-aware variant would need to know which way the last
+   change went, which is state, and state here would have to be
+   invented by the renderer rather than read from the document. */
+
+@keyframes fuaran-motion-cross-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fuaran-motion-slide-between {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.fuaran-motion-cross-fade > * {
+  animation: fuaran-motion-cross-fade 240ms ease-out both;
+}
+
+.fuaran-motion-slide-between {
+  overflow-x: hidden;
+}
+
+.fuaran-motion-slide-between > * {
+  animation: fuaran-motion-slide-between 260ms ease-out both;
+}
+
+/* The auto-advance stage wrapper (Phase 1122). Structural only — it
+   exists so the timed advance has an element to hang its pause and
+   stop affordances on, and it must not change the layout of a switch
+   that gains an interval. `display: contents` would remove the box
+   entirely and take the focus outline with it, so the wrapper stays
+   a box and simply declares nothing about its own size.
+
+   The focus ring is stated explicitly and never removed: the stage is
+   a tab stop wherever the arrow keys do something, and a reader
+   driving a carousel from the keyboard has to be able to see where
+   they are. */
+.fuaran-switch-stage {
+  position: relative;
+}
+
+.fuaran-switch-stage:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: 2px;
+}
+
 /* Respect the user's reduced-motion preference — `Motion` is a typed
-   intent token, not a hard motion mandate. */
+   intent token, not a hard motion mandate.
+
+   Phase 1122 extends the existing rule to the transition pair rather
+   than writing a second block, so there is one place a reader looks
+   to find out what the preference suppresses. Note what this rule can
+   and cannot do: it makes the TRANSITION inert, and it cannot make
+   the timed ADVANCE stop — the content would still change under the
+   reader, silently. That half is the renderer's, and it is why
+   `SwitchStage` never starts a timer under the same preference. */
 @media (prefers-reduced-motion: reduce) {
   .fuaran-motion-pulse-during-load,
   .fuaran-motion-fade-in-on-mount,
   .fuaran-motion-shake-on-error,
   .fuaran-motion-slide-in-from-right {
+    animation: none;
+  }
+
+  .fuaran-motion-cross-fade > *,
+  .fuaran-motion-slide-between > * {
     animation: none;
   }
 }
