@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:0bb0bce8e9295ec6
+/* fuaran-vocabulary-fingerprint: fv1:a2691fe9295530d0
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -2733,6 +2733,59 @@ html[data-fuaran-disconnected]::before {
 
 .fuaran-list-item {
   margin: var(--fuaran-space-xs, 4px) 0;
+}
+
+/* ── Tree (Phase 1120) ─────────────────────────────────────────── */
+/* The WAI-ARIA tree pattern's stylesheet half. Two things here are
+   load-bearing rather than decorative, and both are accessibility rather
+   than looks.
+
+   The focus ring is stated explicitly and never removed. This widget is
+   ONE tab stop with a focus that moves under the arrow keys, so a reader
+   navigating it has no other indication of where they are — a suppressed
+   outline here is not an aesthetic choice, it is the whole interaction
+   becoming invisible.
+
+   And the indent is `padding-inline-start` on the GROUP, so nesting reads
+   correctly in a right-to-left rendering with no extra rule: each level
+   indents away from the reading edge whichever edge that is. */
+.fuaran-tree {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--fuaran-tone-default-fg, #1f2937);
+}
+
+.fuaran-tree-group {
+  margin: 0;
+  padding-inline-start: var(--fuaran-space-lg, 16px);
+  list-style: none;
+}
+
+.fuaran-tree-item {
+  margin: 0;
+  border-radius: var(--fuaran-radius-sm, 4px);
+}
+
+.fuaran-tree-item:focus-visible {
+  outline: 2px solid var(--fuaran-focus-ring, #2563eb);
+  outline-offset: 1px;
+}
+
+.fuaran-tree-label {
+  display: block;
+  padding: var(--fuaran-space-xs, 4px) var(--fuaran-space-sm, 8px);
+  cursor: default;
+}
+
+/* Selection is announced by `aria-selected`, so the visual state is
+   attached to that attribute rather than to a class: the two cannot then
+   disagree, and a host restyling the tree cannot leave a selected row
+   looking unselected. */
+.fuaran-tree-item[aria-selected='true'] > .fuaran-tree-label {
+  background: var(--fuaran-tone-brand-bg, #eff6ff);
+  color: var(--fuaran-tone-brand-fg, #1d4ed8);
+  font-weight: 600;
 }
 
 /* ── Link (Phase 139) ──────────────────────────────────────────── */
