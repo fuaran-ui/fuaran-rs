@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:8ec8768b446a6b34
+/* fuaran-vocabulary-fingerprint: fv1:0ceb36d1ae574252
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -2509,6 +2509,103 @@ html[data-fuaran-disconnected]::before {
 
 .fuaran-embed-aspect-sixteen-nine {
   aspect-ratio: 16 / 9;
+}
+
+/* ── Tooltip trait (Phase 1112) ────────────────────────────────── */
+/* The node-level hint. `.fuaran-has-tooltip` is the WRAPPER of any node whose
+   `tooltip` trait resolved to text; `.fuaran-tooltip` is the hint element the
+   renderers emit as that wrapper's last child, carrying `role="tooltip"` and
+   the id the node's `aria-describedby` points at.
+
+   THE REVEAL IS PURE CSS, and deliberately so: it is the whole of the
+   affordance under SSR, where there is no script at all, and it is what makes
+   the hint HOVERABLE and PERSISTENT for free (WCAG 1.4.13). The hint is a CHILD
+   of the hover target, so a pointer travelling from the node onto the hint
+   never leaves `:hover` and the hint does not vanish underneath it. `:focus-
+   within` is the keyboard half, and it covers both placements the renderers
+   produce — the wrapper's own `tabindex="0"` and a focus landing on the node's
+   semantic element. */
+.fuaran-has-tooltip {
+  position: relative;
+}
+
+.fuaran-tooltip {
+  position: absolute;
+  inset-block-start: 100%;
+  inset-inline-start: 0;
+  z-index: 30;
+
+  /* Bounded by construction: never wider than the viewport's usable width, and
+     never wider than a comfortable measure. `anywhere` is the guarantee that
+     the hint's own text is never clipped by its own box — a long unbroken token
+     wraps rather than overflowing. Collision-aware FLIPPING at a viewport edge
+     needs measurement and is therefore a client-tier enhancement a host may
+     add; the reference renderer does not claim it (WIRE_FORMAT.md §3.1). */
+  max-inline-size: min(20rem, calc(100vw - 2rem));
+  inline-size: max-content;
+  overflow-wrap: anywhere;
+
+  /* Tokenised against the existing vocabulary — this phase mints no new theme
+     token. The hint reads as a subdued surface with the default border, which
+     is what a host re-binding the tone families already controls. */
+  margin-block-start: var(--fuaran-space-xs, 4px);
+  padding: var(--fuaran-space-xs, 4px) var(--fuaran-space-md, 12px);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-sm, 4px);
+  background: var(--fuaran-tone-subdued-bg, #f9fafb);
+  color: var(--fuaran-tone-default-fg, #1f2937);
+  font-size: var(--fuaran-text-sm, 13px);
+  line-height: var(--fuaran-line-height-normal, 1.5);
+
+  /* Hidden, not absent. `visibility` keeps the element in the accessibility
+     tree's reach for `aria-describedby` on user agents that resolve the
+     reference eagerly, where `display: none` would not, and it is animatable
+     alongside opacity. */
+  visibility: hidden;
+  opacity: 0;
+  transition:
+    opacity 120ms ease-out,
+    visibility 0s linear 120ms;
+}
+
+.fuaran-has-tooltip:hover > .fuaran-tooltip,
+.fuaran-has-tooltip:focus-within > .fuaran-tooltip {
+  visibility: visible;
+  opacity: 1;
+  transition:
+    opacity 120ms ease-out,
+    visibility 0s linear 0s;
+}
+
+/* Escape dismisses (WCAG 1.4.13), by way of the marker the client tier's
+   document-level listener writes. Last, and with a specificity that beats both
+   reveal rules, because dismissal must win over a hover the user has not
+   moved. Under SSR nothing writes the marker and this rule never matches —
+   which is the honest degradation, not a silent one. */
+.fuaran-has-tooltip[data-fuaran-tooltip-dismissed]:hover > .fuaran-tooltip,
+.fuaran-has-tooltip[data-fuaran-tooltip-dismissed]:focus-within > .fuaran-tooltip {
+  visibility: hidden;
+  opacity: 0;
+}
+
+/* The wrapper takes a focus stop only where the node's own body is not one, so
+   the ring it draws is the node's — give it the same ring every other focusable
+   surface here gets rather than the user agent's default outline. */
+.fuaran-has-tooltip[tabindex]:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: var(--fuaran-focus-ring-offset, 2px);
+  border-radius: var(--fuaran-radius-sm, 4px);
+}
+
+/* The hint is an affordance, not an animation. Under reduced motion it appears
+   and disappears outright — still hoverable, still dismissible, with no fade. */
+@media (prefers-reduced-motion: reduce) {
+  .fuaran-tooltip,
+  .fuaran-has-tooltip:hover > .fuaran-tooltip,
+  .fuaran-has-tooltip:focus-within > .fuaran-tooltip {
+    transition: none;
+  }
 }
 
 /* ── List (Phase 287) ──────────────────────────────────────────── */
