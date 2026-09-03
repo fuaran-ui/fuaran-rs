@@ -11,8 +11,8 @@ pub mod sha256;
 pub mod sink;
 
 pub use chain::{
-    Actor, OpRecord, OpResult, OpStream, VerificationError, compute_hash, genesis_previous_hash,
-    verify_chain,
+    Actor, OpRecord, OpResult, OpStream, VerificationError, compute_hash, encode_actor,
+    genesis_previous_hash, verify_chain,
 };
 pub use replay::{ReplayError, replay, replay_stream};
 pub use sha256::{sha256, sha256_hex};

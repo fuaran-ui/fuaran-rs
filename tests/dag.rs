@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::dag::{MergeResult, decode_record, encode_record, merge3_way};
-use fuaran_rs::opstream::sha256_hex;
-use fuaran_rs::wire::{decode_node, encode_node};
+use fuaran_rs::opstream::{Actor, sha256_hex};
+use fuaran_rs::wire::{DecodeErrorCode, decode_node, encode_node};
 
 fn corpus() -> Option<PathBuf> {
     let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
@@ -183,4 +183,250 @@ fn distinct_style_subfields_auto_blend() {
         }
         MergeResult::Conflicts(c) => panic!("expected an auto-blend, got {c:?}"),
     }
+}
+
+// ─── The typed actor on the DAG record (Phase 1144 / 1168) ───────────────────
+//
+// Six checks, each pinning something the four curated corpus fixtures do not
+// reach on their own. The corpus is the oracle for the BYTES; these pin the
+// refusal contract, which has no reject vector in the `dag/` family.
+
+/// The corpus family must exercise BOTH actor cases. `dag-linear-step` was
+/// deliberately moved from a human to an agent actor when Phase 1144 re-minted
+/// the family, precisely so the four-member agent shape is cross-host verified;
+/// a future regeneration that collapsed it back to all-human would leave the
+/// agent branch of every host's codec uncertified while still passing the
+/// round-trip leg above.
+#[test]
+fn the_dag_corpus_exercises_both_actor_cases() {
+    let Some(root) = corpus() else {
+        eprintln!("corpus not found; skipping");
+        return;
+    };
+    let manifest = parse(&read(&root, "dag/manifest.json")).expect("dag manifest parses");
+    let Some(JVal::Arr(fixtures)) = manifest.field("fixtures") else {
+        panic!("dag manifest has no fixtures");
+    };
+    let mut humans = 0;
+    let mut agents = 0;
+    for fixture in fixtures {
+        let input_file = str_field(fixture, "inputFile").expect("inputFile");
+        let record =
+            decode_record(&read(&root, &format!("dag/{input_file}"))).expect("dag record decodes");
+        match record.actor {
+            Actor::Human { .. } => humans += 1,
+            Actor::Agent { .. } => agents += 1,
+        }
+    }
+    assert!(humans > 0, "no human-actor fixture in the dag/ family");
+    assert!(agents > 0, "no agent-actor fixture in the dag/ family");
+}
+
+/// Top-level keys are Ordinal-sorted, which is what puts `actor` at the FRONT
+/// where the pre-1144 `userId` sat at the back. Pinned over a record carrying
+/// every optional member, so a future key that sorted ahead of `actor` fails
+/// here rather than shifting bytes silently.
+#[test]
+fn dag_record_top_level_keys_are_ordinal_sorted() {
+    let json = concat!(
+        r#"{"actor":{"kind":"agent","model":"claude","version":"4.8","id":"planner"},"#,
+        r#""hash":"h3","op":{"$type":"RemoveNode","target":"x"},"outcomeHash":"o1","#,
+        r#""parents":["h1","h2"],"promptId":"p-9","#,
+        r#""resultEnvelope":{"$type":"Failure","code":"E","message":"m"},"#,
+        r#""streamId":"s","timestamp":1700000000,"tombstoned":true}"#
+    );
+    let record = decode_record(json).expect("decodes");
+    let encoded = encode_record(&record);
+    assert_eq!(encoded, json, "round-trips byte-identically");
+
+    let keys = top_level_keys(&encoded);
+    assert_eq!(
+        keys,
+        vec![
+            "actor",
+            "hash",
+            "op",
+            "outcomeHash",
+            "parents",
+            "promptId",
+            "resultEnvelope",
+            "streamId",
+            "timestamp",
+            "tombstoned",
+        ],
+        "top-level key order"
+    );
+    let mut sorted = keys.clone();
+    sorted.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+    assert_eq!(keys, sorted, "top-level keys are Ordinal-sorted");
+}
+
+/// The emitted object's depth-1 keys, in emission order. Deliberately a scan of
+/// the BYTES rather than a re-parse: the property under test is what the encoder
+/// wrote, and a parser that sorts or reorders would hide exactly the defect this
+/// pins.
+fn top_level_keys(encoded: &str) -> Vec<String> {
+    let bytes = encoded.as_bytes();
+    let mut keys = Vec::new();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut key_start: Option<usize> = None;
+    let mut opened_at_depth_1 = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        let c = b as char;
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+                if let (true, Some(start)) = (opened_at_depth_1, key_start) {
+                    keys.push(encoded[start..i].to_string());
+                }
+                key_start = None;
+                opened_at_depth_1 = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
+                key_start = Some(i + 1);
+                opened_at_depth_1 =
+                    depth == 1 && i > 0 && (bytes[i - 1] == b'{' || bytes[i - 1] == b',');
+            }
+            '{' | '[' => depth += 1,
+            '}' | ']' => depth -= 1,
+            _ => {}
+        }
+    }
+    keys
+}
+
+/// The actor's OWN members keep their pinned order (`kind` first, then the case
+/// fields) — deliberately NOT Ordinal-sorted, which would emit
+/// `{"id":…,"kind":…,"model":…,"version":…}` and break every host's bytes.
+#[test]
+fn the_nested_actor_keeps_its_pinned_member_order() {
+    let json = concat!(
+        r#"{"actor":{"kind":"agent","model":"claude","version":"4.8","id":"planner"},"#,
+        r#""hash":"h","op":{"$type":"RemoveNode","target":"x"},"parents":[],"#,
+        r#""resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1,"#,
+        r#""tombstoned":false}"#
+    );
+    let encoded = encode_record(&decode_record(json).expect("decodes"));
+    assert!(
+        encoded.contains(
+            r#""actor":{"kind":"agent","model":"claude","version":"4.8","id":"planner"}"#
+        ),
+        "agent actor emitted in pinned order, got {encoded}"
+    );
+    let human = json.replace(
+        r#"{"kind":"agent","model":"claude","version":"4.8","id":"planner"}"#,
+        r#"{"kind":"human","id":"u1"}"#,
+    );
+    let encoded = encode_record(&decode_record(&human).expect("decodes"));
+    assert!(
+        encoded.contains(r#""actor":{"kind":"human","id":"u1"}"#),
+        "human actor emitted in pinned order, got {encoded}"
+    );
+}
+
+/// A pre-1144 `userId` envelope is refused BY NAME, not lifted to a `Human`.
+/// A lift would mint a record whose stored `hash` no host can reproduce, which
+/// turns a clear refusal into a silent verification failure downstream.
+#[test]
+fn a_pre_1144_user_id_envelope_is_refused_by_name() {
+    let json = concat!(
+        r#"{"hash":"h","op":{"$type":"RemoveNode","target":"x"},"parents":[],"#,
+        r#""resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1,"#,
+        r#""tombstoned":false,"userId":"u1"}"#
+    );
+    let err = decode_record(json).expect_err("a pre-1144 envelope is refused");
+    assert_eq!(err.code, DecodeErrorCode::MissingField);
+    assert_eq!(err.path, "$.actor");
+    assert!(
+        err.message.contains("userId") && err.message.contains("do not carry forward"),
+        "the refusal names the cause and the consequence, got: {}",
+        err.message
+    );
+}
+
+/// Every malformed actor is NAMED, never defaulted — the actor is inside the
+/// reference host's content address, so a guessed one silently invalidates the
+/// record's own hash.
+#[test]
+fn a_malformed_actor_is_named_never_defaulted() {
+    let with = |actor: &str| {
+        format!(
+            concat!(
+                r#"{{"actor":{},"hash":"h","op":{{"$type":"RemoveNode","target":"x"}},"#,
+                r#""parents":[],"resultEnvelope":{{"$type":"Success"}},"streamId":"s","#,
+                r#""timestamp":1,"tombstoned":false}}"#
+            ),
+            actor
+        )
+    };
+    let cases: Vec<(&str, DecodeErrorCode, &str)> = vec![
+        // Not an object at all.
+        (r#""u1""#, DecodeErrorCode::WrongType, "$.actor"),
+        // Object, but no discriminator.
+        (
+            r#"{"id":"u1"}"#,
+            DecodeErrorCode::MissingField,
+            "$.actor.kind",
+        ),
+        // A kind outside the closed pair.
+        (
+            r#"{"kind":"robot","id":"u1"}"#,
+            DecodeErrorCode::UnknownDuCase,
+            "$.actor.kind",
+        ),
+        // Human missing its one field.
+        (
+            r#"{"kind":"human"}"#,
+            DecodeErrorCode::MissingField,
+            "$.actor.id",
+        ),
+        // Agent missing a case field.
+        (
+            r#"{"kind":"agent","model":"claude","id":"planner"}"#,
+            DecodeErrorCode::MissingField,
+            "$.actor.version",
+        ),
+        // A case field of the wrong type.
+        (
+            r#"{"kind":"human","id":7}"#,
+            DecodeErrorCode::WrongType,
+            "$.actor.id",
+        ),
+    ];
+    for (actor, code, path) in cases {
+        let err =
+            decode_record(&with(actor)).expect_err(&format!("actor {actor} should be refused"));
+        assert_eq!(err.code, code, "code for actor {actor}");
+        assert_eq!(err.path, path, "path for actor {actor}");
+    }
+}
+
+/// `actor` is required outright: an envelope carrying neither `actor` nor the
+/// legacy `userId` is a plain missing-field refusal, distinct from the
+/// pre-1144 one above so the two diagnoses stay tellable apart.
+#[test]
+fn a_record_with_no_actor_at_all_is_refused() {
+    let json = concat!(
+        r#"{"hash":"h","op":{"$type":"RemoveNode","target":"x"},"parents":[],"#,
+        r#""resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1,"#,
+        r#""tombstoned":false}"#
+    );
+    let err = decode_record(json).expect_err("a record with no actor is refused");
+    assert_eq!(err.code, DecodeErrorCode::MissingField);
+    assert_eq!(err.path, "$.actor");
+    assert!(
+        !err.message.contains("userId"),
+        "must not blame userId when there was none: {}",
+        err.message
+    );
 }

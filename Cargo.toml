@@ -6,7 +6,7 @@
 # consumer does `cargo add fuaran-ui` then `use fuaran_rs::…`.
 [package]
 name = "fuaran-ui"
-version = "0.0.1-alpha.1"
+version = "0.0.2-alpha.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Rust host of the Fuaran UI wire format — a dependency-light, idiomatic-Rust reference implementation of the canonical-JSON contract a Rust service, WASM client, or embedded host reads, writes, and drives."

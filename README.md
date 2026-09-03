@@ -403,8 +403,44 @@ wire cannot express one** — the field never reaches it. Certified by the corpu
 `reject-op-insertchild-retired-position` / `reject-op-movenode-retired-newposition` and
 pinned by `tests/retired_position.rs`.
 
-This host declares no stability policy yet (pre-1.0, `0.0.1-alpha.1`), so the change is
+This host declares no stability policy yet (pre-1.0), so the change is
 recorded here rather than in a `STABILITY.md` it does not have.
+
+## Typed actor on the DAG record — a re-addressing change
+
+`dag::DagRecord` carried a bare-string `user_id` until Phase 1144 replaced it with the
+typed `actor` the linear op-stream chain has carried since Phase 320 — the same
+`Human | Agent` value, in the same **pinned** canonical encoding
+(`opstream::encode_actor`), nested verbatim exactly as the `op` is. Top-level keys are
+Ordinal-sorted, so `actor` sorts to the **front** where `userId` sat at the back. This
+host adopts it in Phase 1168, byte-identical to the regenerated
+`wire-format-fixtures/dag/` family.
+
+**It re-addresses every DAG node.** The reference host folds the attribution member into
+the DAG content address, so substituting a typed actor for a bare id changes the
+pre-image — a pre-1144 `hash` is no longer reproducible and is not a valid parent link
+for a post-1144 node. **Pre-1144 DAG addresses do not carry forward, and there is no
+in-place upgrade for a persisted DAG.**
+
+Decoding is deliberately **not** dual-read: a pre-1144 `userId` envelope is refused **by
+name** rather than lifted to a `Human`. A lift would mint a record carrying a stored
+`hash` no host can reproduce, turning a clear refusal here into a silent verification
+failure somewhere else. Every malformed actor is likewise named and never defaulted — a
+non-object is `WRONG_TYPE`, a missing `kind` or case field is `MISSING_FIELD`, and a
+`kind` outside the closed pair is `UNKNOWN_DU_CASE`.
+
+One thing this host does **not** do: it mints no DAG content address and verifies none.
+The only pre-images `fuaran-rs` computes are the linear chain's (`opstream::chain`), so
+`hash` is an opaque string it round-trips. The reference pre-image and the exact member
+substitution are recorded beside the type in `src/dag/record.rs`; a Rust DAG addresser
+would be a new capability, not part of this adoption.
+
+Certified by the four `dag/` corpus fixtures (both actor cases — the family carries a
+human and an agent deliberately) and pinned by `tests/dag.rs`.
+
+This host declares no stability policy yet (pre-1.0), so the change is recorded here
+rather than in a `STABILITY.md` it does not have; the version advances
+`0.0.1-alpha.1` -> `0.0.2-alpha.1`.
 
 ## Layout
 

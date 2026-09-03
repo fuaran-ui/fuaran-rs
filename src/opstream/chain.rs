@@ -53,8 +53,13 @@ pub enum OpResult {
     Failure { code: String, message: String },
 }
 
-/// Canonical encoding of the actor — field order pinned (kind first).
-fn encode_actor(a: &Actor) -> String {
+/// Canonical encoding of the actor — field order pinned (`kind` first, then the
+/// case fields), NOT Ordinal-sorted. That pinning is the contract: the same
+/// bytes are folded into the linear chain's pre-image here and nested verbatim
+/// into the DAG record's wire form (`crate::dag::record`) since Phase 1144, so
+/// there is ONE canonical actor encoding in this host rather than two that can
+/// drift. Public for that second consumer.
+pub fn encode_actor(a: &Actor) -> String {
     match a {
         Actor::Human { id } => format!("{{\"kind\":\"human\",\"id\":{}}}", escape_string(id)),
         Actor::Agent { model, version, id } => format!(
