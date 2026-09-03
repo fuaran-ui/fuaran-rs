@@ -221,6 +221,16 @@ if (-not $SkipWasm) {
             Write-Host "==> placement C-ABI conformance (wasm32 leg)" -ForegroundColor Cyan
             & $node.Source (Join-Path $PSScriptRoot "js/placement-abi.mjs")
             if ($LASTEXITCODE -ne 0) { throw "the wasm32 placement-ABI leg failed." }
+
+            # Phase 610's list-valued Transform params, on the same two-target
+            # arrangement and for the same reason: the rule is shipped for the
+            # headless host AND the browser-native client, so it is certified on
+            # both. The native leg is tests/list_param_abi.rs and has already run
+            # above; this one drives the SAME shared fixture
+            # (tests/fixtures/list-param.json) through the module just built.
+            Write-Host "==> list-param conformance (wasm32 leg)" -ForegroundColor Cyan
+            & $node.Source (Join-Path $PSScriptRoot "js/list-param.mjs")
+            if ($LASTEXITCODE -ne 0) { throw "the wasm32 list-param leg failed." }
         }
     } else {
         Write-Host "==> wasm32 target not installed; skipping the client-module build (rustup target add wasm32-unknown-unknown to enable)." -ForegroundColor Yellow

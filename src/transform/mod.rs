@@ -20,8 +20,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::canonical::format_number;
 use crate::wire::{
-    Agg, AggFn, BinOp, Cell, ColExpr, ColumnType, DataColumn, DataSource, JoinKind, ScalarFn,
-    SchemaEntry, SortDir, SortKey, TransformStep, WindowFn,
+    Agg, AggFn, BinOp, CaseArm, Cell, ColExpr, ColumnType, DataColumn, DataSource, JoinKind,
+    ScalarFn, SchemaEntry, SortDir, SortKey, TransformStep, WindowFn,
 };
 
 /// A concrete evaluated table — schema (column order + types) + columnar cells.
@@ -1667,4 +1667,121 @@ pub fn pipeline_params(pipeline: &[TransformStep]) -> Vec<String> {
         }
     }
     out
+}
+
+// ─── list-param substitution (fuaran-core#91 / Phase 610) ────────────────────
+//
+// A LIST param resolves by SUBSTITUTION, not through the evaluation env: every
+// `InParam` bound in a [`ListEnv`] is rewritten to the literal `InList` form
+// BEFORE the pipeline is evaluated, which is why `eval_expr`'s `InParam` arm is
+// an unbound-param error rather than a lookup. An unbound `InParam` is left
+// intact — the host's prune then sees it still naming its own param, so one
+// `step_params`-driven prune covers scalar and list params alike, with no
+// second rule.
+
+/// The list-param environment — binds each `ColExpr::InParam` name to the
+/// selection substituted for it. A `BTreeMap` for the same determinism reason
+/// [`EvalEnv`] is one.
+pub type ListEnv = BTreeMap<String, Vec<Cell>>;
+
+/// Substitute every `InParam` bound in `list_env` with the literal `InList`
+/// form, through one expression. An unbound list param is returned intact (its
+/// subject still rewritten), so it keeps naming its own param for the caller's
+/// prune.
+fn substitute_list_params_expr(list_env: &ListEnv, e: &ColExpr) -> ColExpr {
+    match e {
+        ColExpr::Col { .. } | ColExpr::Lit { .. } | ColExpr::Param { .. } => e.clone(),
+        ColExpr::Binary { op, left, right } => ColExpr::Binary {
+            op: *op,
+            left: Box::new(substitute_list_params_expr(list_env, left)),
+            right: Box::new(substitute_list_params_expr(list_env, right)),
+        },
+        ColExpr::Not { expr } => ColExpr::Not {
+            expr: Box::new(substitute_list_params_expr(list_env, expr)),
+        },
+        ColExpr::Coalesce { exprs } => ColExpr::Coalesce {
+            exprs: exprs
+                .iter()
+                .map(|x| substitute_list_params_expr(list_env, x))
+                .collect(),
+        },
+        ColExpr::Case { cases, else_expr } => ColExpr::Case {
+            cases: cases
+                .iter()
+                .map(|br| CaseArm {
+                    when: substitute_list_params_expr(list_env, &br.when),
+                    then: substitute_list_params_expr(list_env, &br.then),
+                })
+                .collect(),
+            else_expr: Box::new(substitute_list_params_expr(list_env, else_expr)),
+        },
+        ColExpr::Cast { column_type, expr } => ColExpr::Cast {
+            column_type: *column_type,
+            expr: Box::new(substitute_list_params_expr(list_env, expr)),
+        },
+        ColExpr::Apply { func, args } => ColExpr::Apply {
+            func: *func,
+            args: args
+                .iter()
+                .map(|x| substitute_list_params_expr(list_env, x))
+                .collect(),
+        },
+        ColExpr::InList { subject, items } => ColExpr::InList {
+            subject: Box::new(substitute_list_params_expr(list_env, subject)),
+            items: items
+                .iter()
+                .map(|x| substitute_list_params_expr(list_env, x))
+                .collect(),
+        },
+        ColExpr::InParam { subject, name } => {
+            let subject = Box::new(substitute_list_params_expr(list_env, subject));
+            match list_env.get(name) {
+                Some(items) => ColExpr::InList {
+                    subject,
+                    items: items
+                        .iter()
+                        .map(|cell| ColExpr::Lit { cell: cell.clone() })
+                        .collect(),
+                },
+                None => ColExpr::InParam {
+                    subject,
+                    name: name.clone(),
+                },
+            }
+        }
+        ColExpr::IsNull { expr } => ColExpr::IsNull {
+            expr: Box::new(substitute_list_params_expr(list_env, expr)),
+        },
+    }
+}
+
+/// Substitute every `InParam` bound in `list_env` through the whole pipeline —
+/// the Rust mirror of Core `Transform.substituteListParams`. Only `Filter` /
+/// `Derive` carry a `ColExpr`; every other step is returned unchanged.
+pub fn substitute_list_params(
+    list_env: &ListEnv,
+    pipeline: &[TransformStep],
+) -> Vec<TransformStep> {
+    pipeline
+        .iter()
+        .map(|t| match t {
+            TransformStep::Filter { pred } => TransformStep::Filter {
+                pred: substitute_list_params_expr(list_env, pred),
+            },
+            TransformStep::Derive { name, expr } => TransformStep::Derive {
+                name: name.clone(),
+                expr: substitute_list_params_expr(list_env, expr),
+            },
+            TransformStep::Project { .. }
+            | TransformStep::GroupBy { .. }
+            | TransformStep::Join { .. }
+            | TransformStep::Window { .. }
+            | TransformStep::Pivot { .. }
+            | TransformStep::Unpivot { .. }
+            | TransformStep::Sort { .. }
+            | TransformStep::Distinct
+            | TransformStep::Limit { .. }
+            | TransformStep::Union { .. } => t.clone(),
+        })
+        .collect()
 }

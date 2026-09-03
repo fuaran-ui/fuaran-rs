@@ -242,6 +242,48 @@ fn jval_to_cell(j: &JVal) -> Option<Cell> {
     }
 }
 
+/// Coerce a resolved LIST value to the `Vec<Cell>` a `Transform` LIST param
+/// substitutes (Phase 610) — a multi-select chip's selection. Element coercion
+/// is [`jval_to_cell`]'s, so a list element and a scalar param cannot disagree
+/// about what a value means. A non-array, or an array holding a non-scalar
+/// item, is `None` and keeps the pre-existing loud "non-scalar value" error.
+///
+/// The typed `StringList` static is admitted beside the raw JSON array because
+/// it is the *same* value in the typed encoding — the shape a multi-select's
+/// `defaultValue` takes on the wire. Every other typed static is `None`: a
+/// `Rows` feed and a `FloatSeq` series are collections, but they are not a
+/// selection, and guessing that they are would scope a grid off a sparkline.
+fn value_to_cells(value: &Value<'_>) -> Option<Vec<Cell>> {
+    match value {
+        Value::Text(_) => None,
+        Value::Json(j) => jval_to_cells(j),
+        Value::Static(sv) => match sv {
+            StaticValue::Ast(j) => jval_to_cells(j),
+            StaticValue::StringList(items) => {
+                Some(items.iter().map(|s| Cell::Str(s.clone())).collect())
+            }
+            StaticValue::Options(_)
+            | StaticValue::StringOpt(_)
+            | StaticValue::FloatSeq(_)
+            | StaticValue::Markers(_)
+            | StaticValue::Rows(_)
+            | StaticValue::FloatPair(_, _)
+            | StaticValue::StringPair(_, _) => None,
+        },
+    }
+}
+
+fn jval_to_cells(j: &JVal) -> Option<Vec<Cell>> {
+    let JVal::Arr(items) = j else {
+        return None;
+    };
+    let mut cells = Vec::with_capacity(items.len());
+    for item in items {
+        cells.push(jval_to_cell(item)?);
+    }
+    Some(cells)
+}
+
 /// Evaluate a `Binding::Transform` to a concrete [`Table`] — the shared frame
 /// seam (mirrors the TS `evalTransformFrame`). Each param's scalar `from`
 /// binding resolves through [`resolve`] (so a `Selection.defaultValue` seeds
@@ -251,6 +293,17 @@ fn jval_to_cell(j: &JVal) -> Option<Cell> {
 /// evaluator itself stays strict, so a *non-filter* step over an unbound param
 /// still surfaces `UnboundParam` loudly). A non-scalar / i18n-unresolved param
 /// source, a missing `Ref`, and an evaluator error are all `Err`.
+///
+/// Phase 610 — a param source that resolves to a LIST (a multi-select chip's
+/// selection) is a LIST param. It never enters the scalar env: it resolves by
+/// SUBSTITUTION through [`transform::substitute_list_params`] (`InParam` → the
+/// literal `InList` form) BEFORE the prune, which is how `fuaran-core#91`
+/// specifies a list param rather than as a second evaluation env. An EMPTY
+/// selection is UNBOUND rather than `items: []`, so deselecting everything
+/// shows the unfiltered table rather than an empty one. A list bound to a name
+/// the pipeline reads as a scalar `Param` (or a scalar bound to one it reads as
+/// `InParam`) substitutes nothing and reaches the evaluator's strict
+/// `UnboundParam` — loud, never a silent wrong scoping.
 pub fn eval_transform_frame(
     sources: &BindingSources,
     params: &Option<Vec<TransformParam>>,
@@ -300,6 +353,7 @@ pub fn eval_transform_frame(
     };
     let params = params.as_deref().unwrap_or(&[]);
     let mut env = transform::EvalEnv::new();
+    let mut list_env = transform::ListEnv::new();
     let mut unbound: BTreeSet<String> = BTreeSet::new();
     for p in params {
         match resolve(sources, &p.from) {
@@ -307,12 +361,25 @@ pub fn eval_transform_frame(
                 Some(cell) => {
                     env.insert(p.name.clone(), cell);
                 }
-                None => {
-                    return Err(format!(
-                        "Transform param '{}' resolved to a non-scalar value",
-                        p.name
-                    ));
-                }
+                None => match value_to_cells(&value) {
+                    // Phase 610 — an EMPTY selection is UNBOUND, not an empty
+                    // membership set: "nothing selected" is the absence of a
+                    // constraint, not a constraint no row satisfies, so it takes
+                    // the same lenient prune an unset scalar chip gets and the
+                    // unfiltered table shows.
+                    Some(cells) if cells.is_empty() => {
+                        unbound.insert(p.name.clone());
+                    }
+                    Some(cells) => {
+                        list_env.insert(p.name.clone(), cells);
+                    }
+                    None => {
+                        return Err(format!(
+                            "Transform param '{}' resolved to a non-scalar value",
+                            p.name
+                        ));
+                    }
+                },
             },
             Resolution::NotResolved => {
                 unbound.insert(p.name.clone());
@@ -325,10 +392,20 @@ pub fn eval_transform_frame(
             }
         }
     }
+    // Phase 610 — bound LIST params substitute BEFORE the prune. A substituted
+    // `InParam` becomes an `InList` and so names no param at all, while an
+    // unbound one survives as `InParam` and is caught by the prune below under
+    // its own name — which is why one `step_params`-driven prune covers both
+    // param kinds with no second rule.
+    let substituted: Cow<'_, [TransformStep]> = if list_env.is_empty() {
+        Cow::Borrowed(pipeline)
+    } else {
+        Cow::Owned(transform::substitute_list_params(&list_env, pipeline))
+    };
     // Prune filter steps that reference an unbound param (only `Filter` /
     // `Derive` carry params; only `Filter` is prunable).
-    let mut pruned: Vec<TransformStep> = Vec::with_capacity(pipeline.len());
-    for step in pipeline {
+    let mut pruned: Vec<TransformStep> = Vec::with_capacity(substituted.len());
+    for step in substituted.iter() {
         let keep = match step {
             TransformStep::Filter { .. } => transform::step_params(step)
                 .iter()
