@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:8068069268d58955
+/* fuaran-vocabulary-fingerprint: fv1:e697c1d1c162b9a7
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -1944,6 +1944,60 @@ body {
   outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
     var(--fuaran-focus-ring-color, #93c5fd);
   outline-offset: 1px;
+}
+
+/* Phase 1123 — cross-container transfer. Four classes, all of them STATE or
+   CHROME rather than layout: the handle, the header cell and the row are the
+   reorder affordance's, unchanged, because one handle serves both routes.
+
+   `.fuaran-drag-over` is toggled imperatively by the renderer's own drag
+   handlers, because `:hover` is not updated during an HTML5 drag and there is
+   no declarative selector for "a compatible row is over me". It marks the row
+   or the place control that would receive the drop — the visible drop state,
+   which is what keeps a drag from being a guess. */
+.fuaran-grid-transfer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-drag-over {
+  outline: var(--fuaran-focus-ring-width, 2px) dashed
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: -2px;
+}
+
+/* The keyboard landing point, and the pointer's append target. A real
+   <button>, so it is focusable and activatable with no ARIA re-plumbing. */
+.fuaran-drag-place {
+  align-self: flex-start;
+  padding: var(--fuaran-space-xs, 4px) var(--fuaran-space-sm, 8px);
+  font-size: var(--fuaran-text-sm, 14px);
+  line-height: 1.2;
+  border: 1px dashed var(--fuaran-color-border, #d1d5db);
+  border-radius: var(--fuaran-radius-sm, 4px);
+  background: transparent;
+  color: var(--fuaran-color-text-muted, #6b7280);
+  cursor: pointer;
+}
+
+.fuaran-drag-place:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: 1px;
+}
+
+/* The live region. Rendered EMPTY by both pipelines and given text only by a
+   reader's own gesture, so it occupies no space until it has something to say
+   — never `display: none`, which would take it out of the accessibility tree
+   and silence the announcements it exists for. */
+.fuaran-drag-status {
+  font-size: var(--fuaran-text-sm, 14px);
+  color: var(--fuaran-color-text-muted, #6b7280);
+}
+
+.fuaran-drag-status:empty {
+  margin: 0;
 }
 
 .fuaran-grid-cell-editable {
