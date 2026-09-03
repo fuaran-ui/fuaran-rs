@@ -80,9 +80,11 @@ fuaran-rs/
 ├── include/fuaran.h     # hand-written C header for src/ffi/ — the native binding surface + ownership/threading contract
 ├── css/fuaran.css       # byte-copy of the reference stylesheet (parity-tested against the reference artefact)
 ├── js/                  # thin hand-written WASM loader (fuaran-loader.js) + client-loop demo (index.html)
-│                        #   + placement-abi.mjs (the wasm32 leg of the placement C-ABI)
+│                        #   + placement-abi.mjs / list-param.mjs (the wasm32 legs of the
+│                        #     placement C-ABI and the list-valued Transform params)
 ├── tests/               # conformance.rs + apply.rs + validator.rs + markdown.rs + render.rs + client.rs + ffi.rs
-│                        #   + placement.rs / placement_abi.rs + fixtures/ (the shared two-target ABI scenarios)
+│                        #   + placement.rs / placement_abi.rs + transform_list_param.rs /
+│                        #     list_param_abi.rs + fixtures/ (the shared two-target ABI scenarios)
 ├── Cargo.toml           # lib + cdylib + staticlib crate types; release profile tuned for a small wasm artefact
 ├── run.ps1              # Stage-0 entry point — fmt/clippy/build/test/wasm; -CrossTargets/-Package for native mobile
 ├── LICENSE              # Apache 2.0 + Diametrical Ltd copyright
@@ -172,6 +174,46 @@ mutation, and the file says so rather than leaving it to be assumed.
 fixture, as JSON, for a cross-host runner that compares the hosts to each other rather than each to
 the corpus in isolation. An **example** rather than a `[[bin]]`, so a published crate does not grow
 an installable binary for the sake of a CI step.
+
+### LIST-valued `Binding.Transform` params
+
+`WIRE_FORMAT.md` §3.3, "LIST-valued `Binding.Transform` params (Phase 610)". A
+param whose `from` resolves to a JSON **array** is a LIST param, read by the
+pipeline through the membership test's `param` form
+(`{"$type":"in","expr":…,"param":"<name>"}`). Three rules, and they are one
+mechanism rather than three:
+
+- **It resolves by SUBSTITUTION, never through the evaluation env.**
+  `transform::substitute_list_params` rewrites each bound `InParam` to the
+  literal `InList` form BEFORE evaluation, which is why `eval_expr`'s `InParam`
+  arm is an unbound-param error rather than a lookup. An unbound one is left
+  intact, so it still names its own param and the ONE existing prune covers both
+  param kinds — do not add a second rule for lists.
+- **An EMPTY selection is UNBOUND, never `items: []`.** The dependent `filter`
+  step prunes, so deselecting everything shows the UNFILTERED table. This is
+  load-bearing rather than cosmetic here, and the reason is measured:
+  `membership_over_an_empty_literal_list_matches_nothing` pins that this host's
+  `in` over an empty item list is FALSE for every row, so the two readings differ
+  visibly (every row vs none). A host whose `in` matched everything would pass
+  the empty-selection test while implementing the rule backwards.
+- **A kind mismatch reaches the strict refusal.** A list bound to a name read as
+  a scalar `param`, or a scalar bound to one read through `in`/`param`,
+  substitutes nothing, is not pruned (its name is bound, merely to the wrong
+  shape), and reaches `UnboundParam`. Loud, never a silent wrong scoping.
+
+**Certified on BOTH targets, because both are hosts.** The server renderer and
+the `wasm32` client resolve through the same
+`render::bindings::eval_transform_frame`; the native leg
+(`tests/list_param_abi.rs`) and the `wasm32` leg (`js/list-param.mjs`, run by
+`run.ps1` when node is on PATH) drive the SAME `tests/fixtures/list-param.json`
+over the C-ABI, so the two are held to identical bytes for identical selections.
+That fixture is **not** the semantic oracle — `tests/transform_list_param.rs` is,
+against the shared corpus fixture `nodes/multiselect-chip-list-param.json`, and a
+guard there pins the fixture's embedded tree to it so the ABI legs cannot agree
+with each other about a tree the corpus no longer contains. Both legs carry a
+go-red probe: a selection naming nothing, whose answer is the EMPTY table — the
+one comparison that separates "nothing selected" from "a constraint no row
+satisfies".
 
 ### Destination policy — AMBIENT on the render context (`src/render/egress.rs`)
 

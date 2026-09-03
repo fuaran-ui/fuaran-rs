@@ -1,0 +1,33 @@
+{
+  "note": "Phase 610 list-valued Transform params, driven through the C-ABI on BOTH targets. The native leg is tests/list_param_abi.rs; the wasm32 leg is js/list-param.mjs. Semantics are owned by tests/transform_list_param.rs and the shared corpus; this file records envelopes, not truth.",
+  "tree": "{\"id\":\"multiselect-chip-list-param\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"dept-chip\",\"kind\":{\"$type\":\"Select\",\"label\":\"Departments\",\"multiple\":true,\"source\":{\"$type\":\"Static\",\"value\":[{\"label\":\"Engineering\",\"value\":\"eng\"},{\"label\":\"Sales\",\"value\":\"sales\"},{\"label\":\"Operations\",\"value\":\"ops\"}]},\"value\":{\"$type\":\"Static\"},\"values\":{\"$type\":\"Filter\",\"name\":\"depts\"}}},{\"id\":\"dept-grid\",\"kind\":{\"$type\":\"DataGrid\",\"columns\":[{\"field\":\"dept\",\"kind\":{\"$type\":\"Text\"},\"label\":\"Department\"},{\"field\":\"amount\",\"kind\":{\"$type\":\"Text\"},\"label\":\"Spend\"}],\"rowKeyField\":\"dept\",\"source\":{\"$type\":\"Transform\",\"params\":[{\"from\":{\"$type\":\"Filter\",\"name\":\"depts\"},\"name\":\"depts\"}],\"pipeline\":[{\"$type\":\"filter\",\"pred\":{\"$type\":\"in\",\"expr\":{\"$type\":\"col\",\"name\":\"dept\"},\"param\":\"depts\"}}],\"source\":{\"columns\":{\"amount\":{\"validity\":[true,true,true],\"values\":[100,90,70]},\"dept\":{\"validity\":[true,true,true],\"values\":[\"eng\",\"sales\",\"ops\"]}},\"schema\":[{\"name\":\"dept\",\"type\":\"string\"},{\"name\":\"amount\",\"type\":\"int\"}]}}}}],\"heading\":\"Spend by department\",\"layout\":{\"$type\":\"Auto\"},\"role\":\"Dashboard\"}}",
+  "node": "dept-grid",
+  "filter": "depts",
+  "cases": [
+    {
+      "name": "nothing-selected-shows-the-unfiltered-table",
+      "selection": null,
+      "expect": "{\"resolved\":true,\"rows\":[{\"amount\":100,\"dept\":\"eng\"},{\"amount\":90,\"dept\":\"sales\"},{\"amount\":70,\"dept\":\"ops\"}]}"
+    },
+    {
+      "name": "an-empty-selection-prunes-to-the-unfiltered-table",
+      "selection": "[]",
+      "expect": "{\"resolved\":true,\"rows\":[{\"amount\":100,\"dept\":\"eng\"},{\"amount\":90,\"dept\":\"sales\"},{\"amount\":70,\"dept\":\"ops\"}]}"
+    },
+    {
+      "name": "a-selection-scopes-the-grid",
+      "selection": "[\"eng\",\"ops\"]",
+      "expect": "{\"resolved\":true,\"rows\":[{\"amount\":100,\"dept\":\"eng\"},{\"amount\":70,\"dept\":\"ops\"}]}"
+    },
+    {
+      "name": "a-scalar-where-a-list-is-read-is-refused",
+      "selection": "\"eng\"",
+      "expect": "{\"resolved\":false}"
+    }
+  ],
+  "probe": {
+    "case": "a-selection-scopes-the-grid",
+    "selection": "[\"ghost\"]",
+    "expect": "{\"resolved\":true,\"rows\":[]}"
+  }
+}
