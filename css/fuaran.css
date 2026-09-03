@@ -3307,6 +3307,269 @@ html[data-fuaran-disconnected]::before {
   }
 }
 
+/* ── print defaults (Phase 1124) ──────────────────────────────────── */
+/* The paged rendering of everything the document did NOT declare. Phase 1473
+   below supplies the authored half — `keepTogether`, `breakBefore`,
+   `keepRowsTogether`, `repeatHeader`, four classes a tree opts into. This block
+   is the other half: what a page does on paper when its author said nothing at
+   all, which is the ordinary case and was, until this phase, "whatever the
+   browser happened to do with a stylesheet written for a screen".
+
+   THE ORDER OF THE TWO BLOCKS IS LOAD-BEARING and this one comes FIRST. At
+   equal specificity the later rule wins, so an authored 1473 declaration beats
+   a default here rather than the reverse. `PrintCascadeTests` pins it — the
+   ordering, the absence of any `break-before` in this block, and the absence of
+   any fragmentation rule on a `tr` — because "the author wins" is a claim about
+   source order that nothing else in the build would notice breaking.
+
+   THE RULE THIS BLOCK FOLLOWS, stated so the next kind's author extends rather
+   than rediscovers it. Five questions, in order:
+
+   1. IS IT TRANSIENT OR POINTER-ONLY? Hide it. A toast, a tooltip, a drag
+      handle and a loading skeleton describe a moment or a gesture, and paper
+      has neither.
+   2. IS THE CONTROL ITSELF THE WHOLE MESSAGE? Hide it. A dismiss cross, a copy
+      button, an expand affordance and a pager step are glyphs standing for an
+      act nobody can perform on a sheet of paper. A control carrying AUTHORED
+      TEXT is not in this class and is kept: a printed form whose "Submit"
+      vanished reads as broken, and the label is often the only description of
+      what the page could do.
+   3. WOULD HIDING IT LOSE PROVENANCE? Keep it, and this is where the obvious
+      reading of "hide the chrome" is wrong. A filter bar and a pager status are
+      the record of WHICH ROWS these are; a table printed without them is a
+      table making a claim it cannot support. Both are kept deliberately.
+   4. IS IT COLLAPSED DETAIL OF WHAT IS HERE, or an ALTERNATIVE TO IT? Detail is
+      expanded — a disclosure, a transcript and a scroll area are all "there is
+      more of this, just out of view", and out-of-view is a screen idea. An
+      alternative is left alone: a tab panel and a switch stage are branches the
+      reader CHOSE between, and printing the ones they did not choose is not
+      completeness, it is a different document.
+   5. IS IT A UNIT THAT READS WRONG WHEN HALVED? Give it `break-inside: avoid` —
+      but only where the vocabulary has no way to say so, and see the note on
+      rows below.
+
+   WHAT THIS BLOCK DELIBERATELY DOES NOT DO, each a decision rather than an
+   omission:
+
+   - NO `@page` RULE. No size, no margin, no running header or footer. Those are
+     the reader's, set in the dialogue they are looking at when they print, and
+     a stylesheet that fixes a margin here silently overrules a choice they made
+     about their own paper. It is also the charter's own line: the paged MEDIUM
+     is host chrome, and the reference host's opinion about margins is not the
+     language's.
+   - NO `print-color-adjust: exact`. Forcing backgrounds to print spends the
+     reader's ink to rescue a tone channel that must not have depended on colour
+     in the first place. The right repair is the one below — make the tone
+     legible WITHOUT the fill — and forcing the fill would hide the fact that it
+     had not been.
+   - NO BLANKET ROW COHESION. A `tr { break-inside: avoid }` here would be
+     defensible typography and would make `keepRowsTogether` — admitted one
+     release ago — do nothing at all on any grid, since the default would
+     already have done it everywhere. A shipped wire member whose declaration
+     changes no rendering is a fake affordance in the sense this vocabulary's
+     charter uses the word. The container default below is a narrower case and
+     is kept for that reason: `keepTogether` still governs every non-card
+     container, so it keeps a real domain.
+
+   The `page-break-*` spellings ride alongside the modern properties throughout,
+   for the reason Phase 1473 gives: an engine that honours only the retired
+   names would otherwise silently do nothing, which is worse than no rule. */
+@media print {
+  /* -- 1 + 2: transient, pointer-only, and glyph-only controls ----- */
+  /* A `[hidden]` overlay is already gone; these are the ones that would
+     otherwise print. `.fuaran-toast` and `.fuaran-tooltip` are positioned out
+     of flow, so on paper they would land over whatever they overlapped. */
+  .fuaran-toast,
+  .fuaran-tooltip,
+  .fuaran-skeleton,
+  .fuaran-skeleton-row,
+  .fuaran-drag-status,
+  .fuaran-drag-place,
+  .fuaran-grid-reorder-cell,
+  .fuaran-grid-reorder-header,
+  .fuaran-grid-pager-step,
+  .fuaran-toast-dismiss,
+  .fuaran-modal-dismiss,
+  .fuaran-popover-dismiss,
+  .fuaran-callout-dismiss,
+  .fuaran-codeblock-copy,
+  .fuaran-image-expand,
+  .fuaran-image-lightbox,
+  .fuaran-upload-drop-hint {
+    display: none;
+  }
+
+  /* An OPEN modal is the reader's current task, so it prints — but not as a
+     fixed-position overlay with a dark wash behind it, which on paper is a full
+     page of ink and an element some engines repeat on every sheet. It rejoins
+     the flow instead. A closed one keeps its `[hidden]`. */
+  .fuaran-modal-overlay {
+    position: static;
+    inset: auto;
+    display: block;
+    padding: 0;
+    background: none;
+  }
+
+  .fuaran-modal-dialog {
+    max-height: none;
+    box-shadow: none;
+  }
+
+  /* -- 4: collapsed detail is expanded ---------------------------- */
+  /* A scroll area is "there is more of this below the fold"; paper has no fold,
+     so the whole content prints. Removing the overflow is what makes the
+     clipped remainder reachable at all — `max-height` alone would leave it
+     cut. */
+  .fuaran-scrollarea,
+  .fuaran-scrollarea-vertical,
+  .fuaran-scrollarea-horizontal,
+  .fuaran-scrollarea-both {
+    overflow: visible;
+    max-height: none;
+    height: auto;
+  }
+
+  /* A CLOSED `<details>` prints closed by default, so a printed page can be
+     missing content the reader would say is on it. Two legs, because the hiding
+     mechanism changed: modern engines hide the content through
+     `::details-content`, which is the leg that works today; the `display` leg is
+     kept for engines that predate the pseudo-element.
+
+     HONEST LIMIT: an engine implementing neither prints the disclosure shut.
+     That is a rendering limit and not a document one — the content is in the
+     markup either way, so a host with a stricter requirement can open the
+     elements before printing. Nothing here can force it from CSS alone. */
+  ::details-content {
+    content-visibility: visible;
+  }
+
+  .fuaran-layout-disclosure:not([open]) > .fuaran-disclosure-body,
+  .fuaran-media-transcript:not([open]) > .fuaran-media-transcript-body {
+    display: block;
+  }
+
+  /* The twisty is a gesture affordance; the summary TEXT is the heading of the
+     section it opens, so the text stays and only the marker goes. */
+  .fuaran-disclosure-summary::after,
+  .fuaran-media-transcript-summary::after {
+    content: none;
+  }
+
+  /* -- 5: units that read wrong when halved ----------------------- */
+  /* A card, a metric tile and a fact tile are each ONE statement: a figure split
+     from its label, or a heading from the body it introduces, is not a smaller
+     version of the tile but a misleading one. `keepTogether` (Phase 1473)
+     remains the way to say this about any OTHER container — this default covers
+     only the shapes that are always atomic. */
+  .fuaran-layout-card,
+  .fuaran-metric,
+  .fuaran-fact,
+  .fuaran-label-value-row,
+  .fuaran-callout,
+  .fuaran-chart,
+  .fuaran-sparkline,
+  .fuaran-drawing,
+  .fuaran-media-group,
+  .fuaran-image-figure,
+  .fuaran-codeblock {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* A heading stranded at the foot of a page introduces nothing. `break-after`
+     is used nowhere else in this sheet, which is also what keeps this block
+     clear of Phase 1473's `break-before` vocabulary — the two properties never
+     meet. */
+  .fuaran-heading,
+  .fuaran-card-heading,
+  .fuaran-callout-heading,
+  .fuaran-summary-list-heading,
+  .fuaran-chart-title {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  .fuaran-markdown,
+  .fuaran-markdown p,
+  .fuaran-list-item {
+    orphans: 3;
+    widows: 3;
+  }
+
+  /* -- 6: the tone channel without colour ------------------------- */
+  /* Browsers drop background fills when printing unless the reader asks for
+     them, so a surface whose tone lives ONLY in its fill arrives blank — and a
+     mono printer flattens what colour does survive. These borders are the
+     repair: `currentColor` reuses the tone's own foreground, so the outline
+     tracks the tone in colour and degrades to a visible box in grey.
+
+     The rest of the channel needed no repair and was VERIFIED rather than
+     rebuilt, which is the finding worth recording: `.fuaran-metric-trend-glyph`
+     is a rendered CHARACTER carrying its own `aria-label`, so it survives
+     grayscale, background suppression and a stylesheet that never loads at all;
+     and a callout's tone rides `border-left-color`, and borders print where
+     fills do not. */
+  .fuaran-badge,
+  .fuaran-grid-cell-pill,
+  .fuaran-progress-bar {
+    border: 1px solid currentColor;
+  }
+
+  /* A progress fill IS its own measurement — with the fill dropped, the bar
+     reads as empty at every value. A rule under it survives ink suppression
+     because a border is not a background. */
+  .fuaran-progress-fill {
+    border-bottom: 3px solid currentColor;
+  }
+
+  /* A `<video>` with no declared poster prints as an empty rectangle, and its
+     mandatory label reaches the DOM only as `aria-label` — not rendered text.
+     A border is the whole of what a stylesheet can do about that: the frame
+     reads as deliberate rather than as a smudge. Surfacing the label would be a
+     renderer EMISSION change, because a replaced element generates no `::after`
+     content, so no rule here can reach it. Recorded in
+     `docs/HOST-STYLING-CHECKLIST.md` §1.5f rather than left for the next
+     session to rediscover at a printer. */
+  .fuaran-media-video,
+  .fuaran-media-audio {
+    border: 1px solid currentColor;
+  }
+
+  /* -- 3: provenance the reader needs, kept visible ---------------- */
+  /* The filter bar and the pager STATUS say WHICH ROWS these are, so neither is
+     hidden; only the pager's step buttons are, above, because a step is an act
+     and a status is a fact. What they get here is inert-looking chrome, so a
+     printed filter reads as a recorded value rather than an empty box waiting
+     for input. */
+  .fuaran-filter-input,
+  .fuaran-filter-select,
+  .fuaran-form-input,
+  .fuaran-form-select,
+  .fuaran-form-textarea,
+  .fuaran-select-control {
+    background: none;
+    box-shadow: none;
+  }
+
+  /* -- links ------------------------------------------------------ */
+  /* An absolute destination is unrecoverable once the page is on paper, so it
+     is printed beside the text. Scoped to `http(s)` on purpose: a relative or
+     in-page href tells a reader holding a sheet of paper nothing, and printing
+     `(#section-3)` after every cross-reference is noise. Suppressed inside a
+     grid or table cell, where a column of appended URLs destroys the table. */
+  .fuaran-link[href^="http"]::after {
+    content: " <" attr(href) ">";
+    font-size: 0.85em;
+    word-break: break-all;
+  }
+
+  .fuaran-grid-cell .fuaran-link[href^="http"]::after,
+  .fuaran-table-cell .fuaran-link[href^="http"]::after {
+    content: none;
+  }
+}
+
 /* ── print break control (Phase 1473) ─────────────────────────────── */
 /* The paged rendering of subtree COHESION. Four classes, appended to a
    container's own className only when the document declares them, so a tree
