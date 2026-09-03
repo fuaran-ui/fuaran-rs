@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:0ceb36d1ae574252
+/* fuaran-vocabulary-fingerprint: fv1:ddf410d1083b1f80
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -1524,6 +1524,58 @@ body {
     var(--fuaran-focus-ring-color, #93c5fd);
   outline-offset: var(--fuaran-focus-ring-offset, 2px);
   border-color: var(--fuaran-tone-default-focus-border, #93c5fd);
+}
+
+/* Phase 1113 — the typeahead / autocomplete control. The wrapper is the
+   positioning context for the popup and nothing else; the input inside it is a
+   `.fuaran-form-field-control` / `.fuaran-filter-input` and takes those rules
+   above, so the control looks like every other field until it opens.
+
+   The popup is styled to be USABLE at the SSR floor's expense of nothing: the
+   server renderer emits a native `<input list>` + `<datalist>`, which draws its
+   own browser-supplied popup and matches none of these selectors. Both surfaces
+   are correct; only one of them is ours to style. */
+.fuaran-combobox {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+}
+
+.fuaran-combobox-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 2px 0 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 16rem;
+  overflow-y: auto;
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-sm, 4px);
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  color: inherit;
+}
+
+/* `[hidden]` on a `<ul>` loses to `display: block` from the rule above in some
+   user agents, so the closed state is stated explicitly rather than relied on. */
+.fuaran-combobox-list[hidden] {
+  display: none;
+}
+
+.fuaran-combobox-option {
+  padding: 6px var(--fuaran-space-sm, 8px);
+  cursor: pointer;
+}
+
+/* The ACTIVE option — highlighted by the keyboard walk, and not the same thing
+   as the selected one. It is a background change rather than an outline because
+   focus never leaves the input: an outline here would claim a focus ring for an
+   element the keyboard never lands on. */
+.fuaran-combobox-option-active {
+  background: var(--fuaran-tone-brand-bg, #eff6ff);
+  color: var(--fuaran-tone-brand-fg, #1e3a8a);
 }
 
 .fuaran-form {
