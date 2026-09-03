@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:d911851c9795e550
+/* fuaran-vocabulary-fingerprint: fv1:21dc300f76acc190
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -1275,10 +1275,24 @@ body {
 }
 
 /* ── sparkline ────────────────────────────────────────────────── */
+/* Phase 1098 - the sparkline is now a lowered `Drawing` INSIDE this element
+   rather than a bespoke `<svg class="fuaran-sparkline">`, so the hook is a
+   CONTAINER. `inline-block` keeps the inline flow an `<svg>` had by default (a
+   trend line sits beside text, which is the whole use case), and the box stays
+   exactly 100 x 30 - the same ratio as the lowered viewBox, which is why the
+   retired `preserveAspectRatio="none"` is not needed to reproduce the picture.
+   `color` still drives the mark: the lowering strokes `currentColor`. */
 .fuaran-sparkline {
+  display: inline-block;
   width: 100px;
   height: 30px;
   color: var(--fuaran-tone-brand-fg, #1d4ed8);
+}
+
+.fuaran-sparkline > .fuaran-drawing {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 /* ── pill (grid-cell-tone-bearing) ────────────────────────────── */
