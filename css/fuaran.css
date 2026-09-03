@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:8b3d17a39ac85085
+/* fuaran-vocabulary-fingerprint: fv1:6702894e3f667a62
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -1610,6 +1610,170 @@ body {
 .fuaran-combobox-option-active {
   background: var(--fuaran-tone-brand-bg, #eff6ff);
   color: var(--fuaran-tone-brand-fg, #1e3a8a);
+}
+
+/* Phase 1130 — the rating control. Two markups share these rules, because the
+   two tiers emit what each medium can honour: the client renders a
+   `role="slider"` span (or a `role="img"` one for a bound average that nothing
+   can write), and the SSR floor renders native radios beside the same star row.
+   The star vocabulary is therefore styled once and the interaction chrome is
+   attached to the wrappers.
+
+   The glyph is a CSS mask over `currentColor` rather than a text character:
+   a star typed as text inherits the reader's font, renders as an emoji on some
+   platforms and as a hollow outline on others, and cannot be half-filled at
+   all. The fill fraction rides as `--fuaran-rating-fill`, which is a VALUE the
+   renderer computes; the three-state class beside it is the vocabulary. */
+.fuaran-rating {
+  /* Phase 1130 — the rating glyph, as a MASK image rather than a text
+     character. A star typed as text inherits the reader's font, renders as a
+     colour emoji on some platforms and a hollow outline on others, and cannot
+     be half-filled at all; a mask is one shape everywhere and clips to any
+     fraction.
+
+     Declared HERE and not in `:root`, deliberately: `:root` is the Theme
+     record's surface — every variable there is emitted by `Theme.toCss` and a
+     conformance test holds the two sides equal — and this is a shape hook, not
+     a theme token. A host that wants a different mark overrides this one
+     declaration and every rating on the page follows. */
+  --fuaran-rating-glyph: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14l-5-4.87 6.91-1.01L12 2z'/%3E%3C/svg%3E");
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  line-height: 1;
+}
+
+.fuaran-rating:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: var(--fuaran-focus-ring-offset, 2px);
+  border-radius: var(--fuaran-radius-sm, 4px);
+}
+
+.fuaran-rating-star {
+  position: relative;
+  display: inline-block;
+  width: 1.15em;
+  height: 1.15em;
+  background: var(--fuaran-tone-default-border, #e5e7eb);
+  -webkit-mask: var(--fuaran-rating-glyph) center / contain no-repeat;
+  mask: var(--fuaran-rating-glyph) center / contain no-repeat;
+}
+
+/* The filled part is drawn as an overlay clipped to the fraction, so a whole,
+   a half and a 0.3 star all come out of one code path — which is the same claim
+   `RatingModel.fills` makes on the F# side. */
+.fuaran-rating-star::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: var(--fuaran-rating-fill, 0%);
+  background: var(--fuaran-tone-warning-fg, #b45309);
+  -webkit-mask: inherit;
+  mask: inherit;
+}
+
+.fuaran-rating-star-empty {
+  --fuaran-rating-fill: 0%;
+}
+
+.fuaran-rating-star-full {
+  --fuaran-rating-fill: 100%;
+}
+
+/* The partial star carries its own fraction inline; the class exists so the
+   vocabulary is enumerable and so a host theme can treat a partial star
+   differently without parsing a percentage. */
+.fuaran-rating-star-partial {
+  opacity: 1;
+}
+
+/* The pointer surface of the hydrated control: one hit target per enterable
+   position, laid over the star row. `aria-hidden`, never a focus stop — the
+   slider above is the single control. */
+.fuaran-rating-hits {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+
+.fuaran-rating-hit {
+  flex: 1 1 0;
+  cursor: pointer;
+}
+
+/* The SSR floor's native radios. Visually hidden rather than `display: none`:
+   a hidden radio is removed from the accessibility tree and from the tab order,
+   which would take away the very keyboard adjustability the floor exists to
+   supply. Clipped instead, so the browser still focuses and announces it. */
+.fuaran-rating-choices {
+  position: relative;
+}
+
+.fuaran-rating-choice {
+  cursor: pointer;
+}
+
+.fuaran-rating-choice input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.fuaran-rating-choice-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The display-only rating (a bound average nothing can write). No focus ring,
+   no pointer affordance — it is a picture of a score. */
+.fuaran-rating-static {
+  cursor: default;
+}
+
+/* Phase 1130 — the box a non-input chip control sits in. `fuaran-filter-input`
+   styles an `<input>`; a chip whose control is a composed element (today, the
+   rating's star row) needs the same inline box without the input chrome. */
+.fuaran-filter-control {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Phase 1130 — the colour control. A native `<input type="color">` on every
+   tier, so all this does is give the swatch the same box the other fields have;
+   the picker itself is the platform's and is not ours to style. The
+   vendor-prefixed inner selectors strip the default padding that would
+   otherwise leave a white frame around the swatch. */
+.fuaran-color-input {
+  padding: 2px;
+  min-width: 3rem;
+  height: 2.25rem;
+  cursor: pointer;
+}
+
+.fuaran-color-input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.fuaran-color-input::-webkit-color-swatch {
+  border: none;
+  border-radius: var(--fuaran-radius-sm, 4px);
+}
+
+.fuaran-color-input::-moz-color-swatch {
+  border: none;
+  border-radius: var(--fuaran-radius-sm, 4px);
 }
 
 .fuaran-form {
