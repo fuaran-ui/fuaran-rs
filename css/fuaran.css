@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:e53ff9baff6fc36f
+/* fuaran-vocabulary-fingerprint: fv1:8ec8768b446a6b34
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -2469,6 +2469,46 @@ html[data-fuaran-disconnected]::before {
   font-size: var(--fuaran-text-sm, 13px);
   color: var(--fuaran-tone-default-fg, #1f2937);
   white-space: pre-wrap;
+}
+
+/* ── Embed (Phase 1111) ────────────────────────────────────────── */
+/* The sandboxed third-party frame. A browser gives an `<iframe>` a 2px inset
+   border and a 300x150 intrinsic box by default, both of which are wrong for
+   an embedded document in a page's flow, so the reset is the whole of the
+   unconditional rule. The reference sheet takes no view on height: with no
+   declared ratio the host owns the box, which is `Natural`'s meaning. */
+.fuaran-embed {
+  display: block;
+  max-width: 100%;
+  width: 100%;
+  border: 0;
+}
+
+/* The declared ratios. The vocabulary is `Image`'s — the same closed set of
+   four, because a ratio is a ratio — but the CLASSES are the embed's own: a
+   host stylesheet must be able to size the frames without catching the
+   images, and a shared class name would make that impossible. */
+.fuaran-embed-aspect-square,
+.fuaran-embed-aspect-four-three,
+.fuaran-embed-aspect-three-two,
+.fuaran-embed-aspect-sixteen-nine {
+  height: auto;
+}
+
+.fuaran-embed-aspect-square {
+  aspect-ratio: 1 / 1;
+}
+
+.fuaran-embed-aspect-four-three {
+  aspect-ratio: 4 / 3;
+}
+
+.fuaran-embed-aspect-three-two {
+  aspect-ratio: 3 / 2;
+}
+
+.fuaran-embed-aspect-sixteen-nine {
+  aspect-ratio: 16 / 9;
 }
 
 /* ── List (Phase 287) ──────────────────────────────────────────── */
