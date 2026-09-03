@@ -1,0 +1,108 @@
+{
+  "note": "Phase 1128 — the platform-baseline capability wave (Media text tracks #1110, Embed #1111, the tooltip trait #1112, Combobox #1113, Tree #1120), driven through the C-ABI on BOTH targets. The native leg is tests/platform_baseline_abi.rs; the wasm32 leg is js/platform-baseline.mjs. This matters beyond this repo: fuaran-swift and fuaran-kt are decode-only render projections over this core, so whatever the ABI does not expose, they cannot reach — and 'the server path does the right thing' is therefore not the claim that needs making.",
+  "oracle": "Every `tree` is the SHARED CORPUS fixture verbatim, and `expectTree` is the same bytes — so the round-trip leg is certified against wire-format-fixtures, not against this file. The render expectations are drawn from the NORMATIVE obligations in WIRE_FORMAT.md (3.6.6 / 3.6.8 / 3.6.9 / 3.6.12 and the tooltip trait in 3.6), and whether this host MEETS them is settled by tests/render_obligations.rs against render-fidelity.json. This file records envelopes, not truth: its job is to hold the two TARGETS to identical bytes for identical inputs.",
+  "egressNote": "The C-ABI session opens under deny_non_local_egress and exposes no policy knob, so a remote Embed source is REFUSED on this path. That is not an artefact of the fixture — it is what a Swift or Kotlin surface over this core actually gets, and the embed case pins it deliberately: title and sandbox survive, the source is omitted, and the refusal is recorded under the embed's own class.",
+  "cases": [
+    {
+      "name": "media-text-tracks",
+      "capability": "Media text tracks and the transcript (fuaran#1110)",
+      "corpusFixture": "nodes/media-video-tracks-2.json",
+      "tree": "{\"id\":\"media-video-tracks-2\",\"kind\":{\"$type\":\"Media\",\"kind\":{\"$type\":\"Video\"},\"label\":\"Harbour restoration, part two\",\"src\":{\"$type\":\"Static\",\"value\":\"/restoration-2.mp4\"},\"tracks\":[{\"kind\":\"Subtitles\",\"label\":\"Gàidhlig\",\"src\":{\"$type\":\"Static\",\"value\":\"/restoration-2.gd.vtt\"},\"srcLang\":\"gd\"},{\"default\":true,\"kind\":\"Captions\",\"label\":\"English captions\",\"src\":{\"$type\":\"Static\",\"value\":\"/restoration-2.en.vtt\"},\"srcLang\":\"en\"},{\"default\":true,\"kind\":\"Captions\",\"label\":\"English captions (verbose)\",\"src\":{\"$type\":\"Static\",\"value\":\"/restoration-2.en-verbose.vtt\"},\"srcLang\":\"en\"}]}}",
+      "state": [],
+      "expectTree": "{\"id\":\"media-video-tracks-2\",\"kind\":{\"$type\":\"Media\",\"kind\":{\"$type\":\"Video\"},\"label\":\"Harbour restoration, part two\",\"src\":{\"$type\":\"Static\",\"value\":\"/restoration-2.mp4\"},\"tracks\":[{\"kind\":\"Subtitles\",\"label\":\"Gàidhlig\",\"src\":{\"$type\":\"Static\",\"value\":\"/restoration-2.gd.vtt\"},\"srcLang\":\"gd\"},{\"default\":true,\"kind\":\"Captions\",\"label\":\"English captions\",\"src\":{\"$type\":\"Static\",\"value\":\"/restoration-2.en.vtt\"},\"srcLang\":\"en\"},{\"default\":true,\"kind\":\"Captions\",\"label\":\"English captions (verbose)\",\"src\":{\"$type\":\"Static\",\"value\":\"/restoration-2.en-verbose.vtt\"},\"srcLang\":\"en\"}]}}",
+      "expectRenderContains": [
+        "<track kind=\"subtitles\" src=\"/restoration-2.gd.vtt\" srclang=\"gd\" label=\"Gàidhlig\" />",
+        "<track kind=\"captions\" src=\"/restoration-2.en.vtt\" srclang=\"en\" label=\"English captions\" default />",
+        "<track kind=\"captions\" src=\"/restoration-2.en-verbose.vtt\" srclang=\"en\" label=\"English captions (verbose)\" />"
+      ],
+      "expectRenderAbsent": [],
+      "expectOrder": [
+        "/restoration-2.gd.vtt",
+        "/restoration-2.en.vtt",
+        "/restoration-2.en-verbose.vtt"
+      ]
+    },
+    {
+      "name": "embed-sandboxed",
+      "capability": "Embed — the sandboxed third-party embed (fuaran#1111)",
+      "corpusFixture": "nodes/embed-permissions-1.json",
+      "tree": "{\"id\":\"embed-permissions-1\",\"kind\":{\"$type\":\"Embed\",\"permissions\":[\"AllowFullscreen\"],\"src\":{\"$type\":\"Static\",\"value\":\"https://player.example/embed/harbour\"},\"title\":\"Harbour restoration, part two\"}}",
+      "state": [],
+      "expectTree": "{\"id\":\"embed-permissions-1\",\"kind\":{\"$type\":\"Embed\",\"permissions\":[\"AllowFullscreen\"],\"src\":{\"$type\":\"Static\",\"value\":\"https://player.example/embed/harbour\"},\"title\":\"Harbour restoration, part two\"}}",
+      "expectRenderContains": [
+        "title=\"Harbour restoration, part two\"",
+        "sandbox=\"\"",
+        "loading=\"lazy\"",
+        "referrerpolicy=\"strict-origin-when-cross-origin\"",
+        "allow=\"fullscreen\"",
+        "data-fuaran-egress-refused=\"embed:player.example\""
+      ],
+      "expectRenderAbsent": [
+        "src=",
+        "about:blank",
+        "allow-fullscreen",
+        "allow-scripts"
+      ],
+      "expectOrder": []
+    },
+    {
+      "name": "tooltip-trait",
+      "capability": "The node-level tooltip trait (fuaran#1112)",
+      "corpusFixture": "nodes/tooltip-button-1.json",
+      "tree": "{\"id\":\"tooltip-button-1\",\"kind\":{\"$type\":\"Button\",\"label\":\"Rebuild index\",\"onClick\":{\"$type\":\"Notify\",\"channel\":\"rebuild\",\"payload\":{}},\"variant\":\"Secondary\"},\"tooltip\":\"Re-reads every document; takes about a minute on this corpus.\"}",
+      "state": [],
+      "expectTree": "{\"id\":\"tooltip-button-1\",\"kind\":{\"$type\":\"Button\",\"label\":\"Rebuild index\",\"onClick\":{\"$type\":\"Notify\",\"channel\":\"rebuild\",\"payload\":{}},\"variant\":\"Secondary\"},\"tooltip\":\"Re-reads every document; takes about a minute on this corpus.\"}",
+      "expectRenderContains": [
+        "fuaran-has-tooltip",
+        "<span id=\"tooltip-button-1-tooltip\" class=\"fuaran-tooltip\" role=\"tooltip\">Re-reads every document; takes about a minute on this corpus.</span>",
+        "aria-describedby=\"tooltip-button-1-tooltip\""
+      ],
+      "expectRenderAbsent": [
+        "aria-label=\"Re-reads",
+        "tabindex="
+      ],
+      "expectOrder": []
+    },
+    {
+      "name": "combobox-field",
+      "capability": "FormFieldKind.Combobox (fuaran#1113)",
+      "corpusFixture": "nodes/form-combobox-static.json",
+      "tree": "{\"id\":\"form-combobox-static\",\"kind\":{\"$type\":\"Form\",\"fields\":[{\"id\":\"country\",\"kind\":{\"$type\":\"Combobox\",\"onChange\":\"<closure>\",\"options\":{\"$type\":\"Static\",\"value\":[{\"label\":\"United Kingdom\",\"value\":\"gbr\"},{\"label\":\"France\",\"value\":\"fra\"},{\"label\":\"Germany\",\"value\":\"deu\"}]},\"value\":{\"$type\":\"Static\",\"value\":\"fra\"}},\"label\":\"Country\",\"required\":true}],\"onSubmit\":{\"$type\":\"Chain\",\"ops\":[]},\"submitLabel\":\"Save\"}}",
+      "state": [],
+      "expectTree": "{\"id\":\"form-combobox-static\",\"kind\":{\"$type\":\"Form\",\"fields\":[{\"id\":\"country\",\"kind\":{\"$type\":\"Combobox\",\"onChange\":\"<closure>\",\"options\":{\"$type\":\"Static\",\"value\":[{\"label\":\"United Kingdom\",\"value\":\"gbr\"},{\"label\":\"France\",\"value\":\"fra\"},{\"label\":\"Germany\",\"value\":\"deu\"}]},\"value\":{\"$type\":\"Static\",\"value\":\"fra\"}},\"label\":\"Country\",\"required\":true}],\"onSubmit\":{\"$type\":\"Chain\",\"ops\":[]},\"submitLabel\":\"Save\"}}",
+      "expectRenderContains": [
+        "class=\"fuaran-combobox\"",
+        "class=\"fuaran-form-input fuaran-combobox-input\"",
+        "list=\"country-options\"",
+        "autocomplete=\"off\"",
+        "data-fuaran-combobox-constrained=\"true\"",
+        "<datalist id=\"country-options\">",
+        "<option value=\"fra\">France</option>"
+      ],
+      "expectRenderAbsent": [
+        "role=\"combobox\"",
+        "aria-expanded",
+        "aria-autocomplete",
+        "aria-activedescendant"
+      ],
+      "expectOrder": []
+    },
+    {
+      "name": "tree-selection",
+      "capability": "Tree — recursive disclosure with tree semantics (fuaran#1120)",
+      "corpusFixture": "nodes/tree-selection-1.json",
+      "tree": "{\"id\":\"tree-selection-1\",\"kind\":{\"$type\":\"Tree\",\"items\":[{\"id\":\"harbour\",\"label\":\"Harbour\"},{\"id\":\"quay\",\"label\":\"Quay\"}],\"onSelect\":\"<closure>\",\"selectionStateKey\":\"selectedRow\"}}",
+      "state": [{ "key": "selectedRow", "value": "\"quay\"" }],
+      "expectTree": "{\"id\":\"tree-selection-1\",\"kind\":{\"$type\":\"Tree\",\"items\":[{\"id\":\"harbour\",\"label\":\"Harbour\"},{\"id\":\"quay\",\"label\":\"Quay\"}],\"onSelect\":\"<closure>\",\"selectionStateKey\":\"selectedRow\"}}",
+      "expectRenderContains": [
+        "class=\"fuaran-tree\" role=\"tree\"",
+        "data-fuaran-tree-item=\"harbour\" tabindex=\"-1\" aria-selected=\"false\"",
+        "data-fuaran-tree-item=\"quay\" tabindex=\"0\" aria-selected=\"true\"",
+        "aria-level=\"1\" aria-setsize=\"2\" aria-posinset=\"1\"",
+        "<span class=\"fuaran-tree-label\">Quay</span>"
+      ],
+      "expectRenderAbsent": ["aria-expanded"],
+      "expectOrder": ["harbour", "quay"]
+    }
+  ]
+}

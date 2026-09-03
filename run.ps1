@@ -2,7 +2,9 @@
 # fuaran-rs — Stage-0 entry point (workspace CLAUDE.md "Every new sibling ships a run.ps1").
 # Full happy path: cargo fmt --check -> cargo clippy -> cargo build -> cargo test,
 # plus a wasm32 client-module build when the target is installed, and — when node
-# is on PATH — the wasm32 leg of the placement C-ABI (js/placement-abi.mjs).
+# is on PATH — the wasm32 legs of the placement C-ABI (js/placement-abi.mjs), the
+# list-valued Transform params (js/list-param.mjs) and the platform-baseline
+# capability wave (js/platform-baseline.mjs).
 # Switches: -SkipFormat / -SkipBuild / -SkipTests / -SkipWasm for fast iteration.
 #
 # Opt-in native-mobile packaging (Phase 537 — the C-ABI staticlib for the Swift /
@@ -231,6 +233,21 @@ if (-not $SkipWasm) {
             Write-Host "==> list-param conformance (wasm32 leg)" -ForegroundColor Cyan
             & $node.Source (Join-Path $PSScriptRoot "js/list-param.mjs")
             if ($LASTEXITCODE -ne 0) { throw "the wasm32 list-param leg failed." }
+
+            # Phase 1128's platform-baseline capability wave (Media text tracks,
+            # Embed, the tooltip trait, Combobox, Tree), on the same two-target
+            # arrangement. It matters more here than for the two legs above: the
+            # native Swift and Kotlin surfaces are decode-only render projections
+            # over this core, so whatever the ABI does not carry, they cannot
+            # reach — and a wave that landed the codec and the server renderer
+            # says nothing on its own about whether a native surface can see it.
+            # The native leg is tests/platform_baseline_abi.rs and has already run
+            # above; this one drives the SAME shared fixture
+            # (tests/fixtures/platform-baseline.json) through the module just
+            # built, comparing both the re-serialised tree and the rendered markup.
+            Write-Host "==> platform-baseline conformance (wasm32 leg)" -ForegroundColor Cyan
+            & $node.Source (Join-Path $PSScriptRoot "js/platform-baseline.mjs")
+            if ($LASTEXITCODE -ne 0) { throw "the wasm32 platform-baseline leg failed." }
         }
     } else {
         Write-Host "==> wasm32 target not installed; skipping the client-module build (rustup target add wasm32-unknown-unknown to enable)." -ForegroundColor Yellow
