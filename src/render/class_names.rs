@@ -4,7 +4,7 @@
 
 use crate::wire::{
     BoxLayout, BoxRole, BoxSpec, Emphasis, FontVoice, IconSize, NodeKind, SemanticStyle, StyleRole,
-    StyleWeight, ToneVariant, TrendPolarity,
+    StyleWeight, TextDirection, ToneVariant, TrendPolarity,
 };
 
 /// Map a `ToneVariant` to its CSS-variable name root.
@@ -147,6 +147,8 @@ pub fn kind_class(kind: &NodeKind) -> String {
         NodeKind::Link(_) => "fuaran-kind-link".to_string(),
         NodeKind::Image(_) => "fuaran-kind-image".to_string(),
         NodeKind::Media(_) => "fuaran-kind-media".to_string(),
+        NodeKind::Embed(_) => "fuaran-kind-embed".to_string(),
+        NodeKind::Tree(_) => "fuaran-kind-tree".to_string(),
         NodeKind::List(_) => "fuaran-kind-list".to_string(),
         NodeKind::Toast(_) => "fuaran-kind-toast".to_string(),
         NodeKind::CodeBlock(_) => "fuaran-kind-code-block".to_string(),
@@ -175,7 +177,17 @@ pub fn kind_class(kind: &NodeKind) -> String {
 
 /// Compose the full className for a node: kind class + semantic style.
 pub fn node_class_name(kind: &NodeKind, style: &SemanticStyle) -> String {
-    format!("{} {}", kind_class(kind), style_class_name(style))
+    let base = format!("{} {}", kind_class(kind), style_class_name(style));
+    // Phase 1472 - the DECLARED direction adds an isolation class, appended
+    // LAST, matching the reference's composition order. `Auto` adds nothing: it
+    // is the inherited direction, and `unicode-bidi: isolate` on a node that
+    // declared no direction would change the pre-1472 rendering of every
+    // document.
+    match style.direction {
+        TextDirection::Auto => base,
+        TextDirection::Ltr => format!("{base} fuaran-dir-ltr"),
+        TextDirection::Rtl => format!("{base} fuaran-dir-rtl"),
+    }
 }
 
 /// Phase 867 — the `Metric` trend's SENTIMENT and its glyph, composed from the

@@ -209,6 +209,7 @@ fn collect_op_missing(gate: &CapabilityGate, op: &TreeOp, missing: &mut BTreeSet
                 state: StateBehaviour::default(),
                 style: SemanticStyle::default(),
                 accessibility: None,
+                tooltip: None,
             };
             collect_node_missing(gate, &scratch, missing);
         }

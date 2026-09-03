@@ -978,6 +978,95 @@ fn media_spec(spec: &MediaSpec) -> String {
     if spec.r#loop {
         fields.push(field("loop", boolean(true)));
     }
+    // Phase 1110 - omitted when EMPTY (an absent list and an empty one denote
+    // the same document), and emitted in the AUTHORED order the wire carried:
+    // a reader picks a track from a menu the user agent builds in document
+    // order, so sorting it would be rewriting somebody else's menu. This is the
+    // OPPOSITE of `srcSet`'s ascending-width rule, deliberately.
+    if !spec.tracks.is_empty() {
+        fields.push(field(
+            "tracks",
+            arr(spec.tracks.iter().map(track_entry).collect()),
+        ));
+    }
+    if let Some(transcript) = &spec.transcript {
+        fields.push(field("transcript", text_source(transcript)));
+    }
+    obj(fields)
+}
+
+/// Phase 1110 - one `TrackEntry`. `default` is the one omitted-at-`false` slot;
+/// the other four are always present.
+fn track_entry(t: &TrackEntry) -> String {
+    let mut fields = vec![
+        field("kind", s(t.kind.as_str())),
+        field("label", text_source(&t.label)),
+        field("src", binding(&t.src)),
+        field("srcLang", s(&t.src_lang)),
+    ];
+    if t.default {
+        fields.push(field("default", boolean(true)));
+    }
+    obj(fields)
+}
+
+/// Phase 1111 - `Embed`. `permissions` omits at the EMPTY list and `aspectRatio`
+/// at `Natural`, so the minimum embed carries `src` and `title` alone - and a
+/// host emitting `"permissions":[]` diverges on exactly that fixture.
+fn embed_spec(spec: &EmbedSpec) -> String {
+    let mut fields = vec![
+        field("src", binding(&spec.src)),
+        field("title", text_source(&spec.title)),
+    ];
+    if spec.aspect_ratio != ImageAspect::Natural {
+        fields.push(field("aspectRatio", s(spec.aspect_ratio.as_str())));
+    }
+    if !spec.permissions.is_empty() {
+        fields.push(field(
+            "permissions",
+            arr(spec.permissions.iter().map(|p| s(p.as_str())).collect()),
+        ));
+    }
+    obj(fields)
+}
+
+/// Phase 1120 - `Tree`. Both State keys and the handler sentinel omit when
+/// absent; `items` is always present.
+fn tree_spec(spec: &TreeSpec) -> String {
+    let mut fields = vec![field(
+        "items",
+        arr(spec.items.iter().map(tree_item).collect()),
+    )];
+    if let Some(key) = &spec.expanded_state_key {
+        fields.push(field("expandedStateKey", s(key)));
+    }
+    if spec.on_select.is_some() {
+        fields.push(field("onSelect", CLOSURE.to_string()));
+    }
+    if let Some(key) = &spec.selection_state_key {
+        fields.push(field("selectionStateKey", s(key)));
+    }
+    obj(fields)
+}
+
+/// Phase 1120 - one `TreeItem`. `children` omits at the EMPTY LIST, so a leaf
+/// carries two keys and nothing else - which is most of a real hierarchy, and a
+/// host emitting `"children":[]` on a leaf produces different bytes for most of
+/// a file listing.
+fn tree_item(item: &TreeItem) -> String {
+    let mut fields = vec![
+        field("id", s(&item.id)),
+        field("label", text_source(&item.label)),
+    ];
+    if !item.children.is_empty() {
+        fields.push(field(
+            "children",
+            arr(item.children.iter().map(tree_item).collect()),
+        ));
+    }
+    if let Some(icon) = &item.icon {
+        fields.push(field("icon", s(icon)));
+    }
     obj(fields)
 }
 
@@ -1425,6 +1514,27 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
             ));
             case_obj("Choice", fields)
         }
+        // Phase 1113 - `allowFreeText` omits at `false`: the SHORTEST combobox
+        // document is the CONSTRAINED one, so a host that emitted the member
+        // unconditionally would diverge on every constrained fixture.
+        FormFieldKind::Combobox {
+            options,
+            value,
+            allow_free_text,
+            on_change,
+        } => {
+            let mut fields = handler_field("onChange", on_change);
+            if *allow_free_text {
+                fields.push(field("allowFreeText", boolean(true)));
+            }
+            fields.push(field("options", binding(options)));
+            fields.extend(control_value_field(
+                auto_bind,
+                control_value_defaults::choice(),
+                value,
+            ));
+            case_obj("Combobox", fields)
+        }
         // 0.2.0 — the dual-thumb range (absorbed FilterKind.RangeFilter). The
         // Static pair rides as the bare `{max, min}` object — no envelope.
         FormFieldKind::Range {
@@ -1725,6 +1835,16 @@ fn file_upload_spec(spec: &FileUploadSpec) -> String {
     if let Some(disabled) = &spec.disabled {
         fields.push(field("disabled", binding(disabled)));
     }
+    // Phase 1115 - both omit at `false`. The SHORTEST upload document is the
+    // plain picker, which is exactly what every document written before this
+    // revision says, so a host emitting either member unconditionally diverges
+    // on every pre-1115 upload fixture.
+    if spec.accept_paste {
+        fields.push(field("acceptPaste", boolean(true)));
+    }
+    if spec.drop_target {
+        fields.push(field("dropTarget", boolean(true)));
+    }
     obj(fields)
 }
 
@@ -1927,6 +2047,13 @@ fn grid_spec(spec: &GridSpec) -> String {
     if let Some(rows) = &spec.static_rows {
         fields.push(field("staticRows", static_rows(rows)));
     }
+    // Phase 1473 — the DataGrid pair, omitted at `false` like the Box pair.
+    if spec.keep_rows_together {
+        fields.push(field("keepRowsTogether", boolean(true)));
+    }
+    if spec.repeat_header {
+        fields.push(field("repeatHeader", boolean(true)));
+    }
     obj(fields)
 }
 
@@ -2043,6 +2170,14 @@ fn box_spec(spec: &BoxSpec) -> String {
     }
     fields.push(field("layout", box_layout(&spec.layout)));
     fields.push(field("role", s(spec.role.as_str())));
+    // Phase 1473 — omitted at `false`, so a document that declares neither is
+    // byte-identical to every pre-1473 document.
+    if spec.keep_together {
+        fields.push(field("keepTogether", boolean(true)));
+    }
+    if spec.break_before {
+        fields.push(field("breakBefore", boolean(true)));
+    }
     obj(fields)
 }
 
@@ -2138,6 +2273,14 @@ fn modal_spec(spec: &ModalSpec) -> String {
     }
     if let Some(heading) = &spec.heading {
         fields.push(field("heading", text_source(heading)));
+    }
+    // WIRE_FORMAT.md 3.6.11 - omitted at `Modal`, so every pre-modality document
+    // re-encodes to the bytes it already had.
+    if spec.modality != ModalityKind::Modal {
+        fields.push(field("modality", s(spec.modality.as_str())));
+    }
+    if let Some(anchor) = &spec.anchor {
+        fields.push(field("anchor", s(anchor)));
     }
     obj(fields)
 }
@@ -2275,6 +2418,8 @@ fn node_kind(k: &NodeKind) -> String {
         NodeKind::Link(spec) => case_obj_hoisted("Link", link_spec(spec)),
         NodeKind::Image(spec) => case_obj_hoisted("Image", image_spec(spec)),
         NodeKind::Media(spec) => case_obj_hoisted("Media", media_spec(spec)),
+        NodeKind::Embed(spec) => case_obj_hoisted("Embed", embed_spec(spec)),
+        NodeKind::Tree(spec) => case_obj_hoisted("Tree", tree_spec(spec)),
         NodeKind::List(spec) => case_obj_hoisted("List", list_spec(spec)),
         NodeKind::Toast(spec) => case_obj_hoisted("Toast", toast_spec(spec)),
         NodeKind::CodeBlock(spec) => case_obj_hoisted("CodeBlock", code_block_spec(spec)),
@@ -2459,6 +2604,11 @@ fn semantic_style(style: &SemanticStyle) -> String {
     if style.voice != FontVoice::Default {
         fields.push(field("voice", s(style.voice.as_str())));
     }
+    // Phase 1472 - omitted at `Auto`. The whole `style` object is itself omitted
+    // when every member is at its default, so a pre-1472 document is byte-stable.
+    if style.direction != TextDirection::Auto {
+        fields.push(field("direction", s(style.direction.as_str())));
+    }
     obj(fields)
 }
 
@@ -2495,6 +2645,12 @@ fn node(n: &Node) -> String {
     }
     if let Some(a) = &n.accessibility {
         fields.push(field("accessibility", accessibility(a)));
+    }
+    // Phase 1112 - the tooltip trait. The CANONICAL encoding of a literal hint
+    // is a BARE STRING, which `text_source` already produces: `Literal` is
+    // `TextSource`'s transparent case wherever it appears.
+    if let Some(t) = &n.tooltip {
+        fields.push(field("tooltip", text_source(t)));
     }
     obj(fields)
 }

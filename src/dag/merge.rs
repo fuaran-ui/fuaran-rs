@@ -118,6 +118,7 @@ fn mk_node(
         state,
         style,
         accessibility,
+        tooltip: None,
     }
 }
 
@@ -238,6 +239,17 @@ fn merge_style(
         ),
         role: pick_field(conflicts, id, "style.role", bs.role, as_.role, bsb.role),
         voice: pick_field(conflicts, id, "style.voice", bs.voice, as_.voice, bsb.voice),
+        // Phase 1472 - the declared direction is a style facet like every other,
+        // merged per field so two lanes changing different facets of one node
+        // still fold cleanly.
+        direction: pick_field(
+            conflicts,
+            id,
+            "style.direction",
+            bs.direction,
+            as_.direction,
+            bsb.direction,
+        ),
     }
 }
 

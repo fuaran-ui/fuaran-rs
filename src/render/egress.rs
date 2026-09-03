@@ -47,17 +47,25 @@ pub enum EgressClass {
     /// A file READ the tree asks for. It carries no URL of its own, but it is
     /// scoped here so a policy can speak about it in the same vocabulary.
     FileRead,
+    /// WIRE_FORMAT.md 19.1 - a framed document the browser fetches with no user
+    /// act and then EXECUTES. Scoped separately from [`EgressClass::Media`] and
+    /// never folded into it: a composition that declared an origin for image
+    /// egress has said nothing about which DOCUMENTS it is willing to RUN, and a
+    /// class that conflated the two would let the first declaration answer the
+    /// second question.
+    Embed,
 }
 
 impl EgressClass {
     /// Every class, in wire order. Used by [`EgressPolicy::allow_origin`] when a
     /// rule is declared without a class scope (which means "every class").
-    pub const ALL: [EgressClass; 5] = [
+    pub const ALL: [EgressClass; 6] = [
         EgressClass::Hyperlink,
         EgressClass::Media,
         EgressClass::Route,
         EgressClass::Download,
         EgressClass::FileRead,
+        EgressClass::Embed,
     ];
 
     /// The stable lowercase wire spelling — what a refusal marker records.
@@ -69,6 +77,7 @@ impl EgressClass {
             EgressClass::Route => "route",
             EgressClass::Download => "download",
             EgressClass::FileRead => "fileRead",
+            EgressClass::Embed => "embed",
         }
     }
 
@@ -452,6 +461,38 @@ pub fn sanitize_url_for_egress(
             EGRESS_REFUSAL_URL.to_string(),
             egress_refusal_marker(&refused).into_iter().collect(),
         ),
+    }
+}
+
+/// WIRE_FORMAT.md 19.1 - the render seam for `Embed.src`, and the one place a
+/// refusal does NOT take rule 6's substitute-`about:blank` route.
+///
+/// The reason is the element: an `<iframe>` pointed at the refusal URL RENDERS
+/// that page, where one with no `src` is a well-defined empty browsing context
+/// that fetches nothing. So a refusal returns `None` and the caller omits the
+/// attribute - while still emitting the marker, so "nothing was declared" and
+/// "this was refused" stay different facts in the document.
+///
+/// Two gates, in order: the stricter https-only scheme floor
+/// ([`super::sanitize::sanitize_embed_src`]), then the deployment policy under
+/// this destination's OWN class.
+#[must_use]
+pub fn sanitize_embed_src_for_egress(
+    policy: &EgressPolicy,
+    url: &str,
+) -> (Option<String>, Vec<(&'static str, String)>) {
+    let Some(safe) = super::sanitize::sanitize_embed_src(url) else {
+        return (
+            None,
+            vec![(
+                EGRESS_REFUSAL_ATTRIBUTE,
+                format!("{}:unsafe-url", EgressClass::Embed.name()),
+            )],
+        );
+    };
+    match check_destination(policy, EgressClass::Embed, &safe) {
+        EgressVerdict::Allowed(emitted) => (Some(emitted), Vec::new()),
+        refused => (None, egress_refusal_marker(&refused).into_iter().collect()),
     }
 }
 

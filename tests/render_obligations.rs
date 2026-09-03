@@ -642,6 +642,390 @@ fn owes_custom_unregistered_custom_labelled() {
 
 // ─── The registry ────────────────────────────────────────────────────────────
 
+// ─── Phase 1110 — Media text tracks and the transcript (§3.6.6) ──────────────
+
+/// §3.6.6 obligation 2 — `<track>` children are emitted in the AUTHORED order,
+/// never re-sorted.
+///
+/// The fixture is authored in an order NO sort produces (`gd`, then two `en`),
+/// which is what makes this separately testable from §3.6.4's `srcSet` rule: a
+/// renderer that sorted by `srclang` would emit `en, en, gd`, and one that
+/// sorted by `label` would emit them differently again. Both pass an
+/// emission-only check and fail here.
+#[test]
+fn owes_media_authored_child_order() {
+    let html = render(
+        r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"Harbour restoration","src":{"$type":"Static","value":"/restoration-2.mp4"},"tracks":[{"kind":"Subtitles","label":"Gaidhlig","src":{"$type":"Static","value":"/a.vtt"},"srcLang":"gd"},{"kind":"Captions","label":"English captions","src":{"$type":"Static","value":"/b.vtt"},"srcLang":"en"},{"kind":"Captions","label":"English captions (verbose)","src":{"$type":"Static","value":"/c.vtt"},"srcLang":"en"}]}}"#,
+    );
+    let at = |needle: &str| {
+        html.find(needle)
+            .unwrap_or_else(|| panic!("missing {needle} in {html}"))
+    };
+    let (a, b, c) = (
+        at(r#"src="/a.vtt""#),
+        at(r#"src="/b.vtt""#),
+        at(r#"src="/c.vtt""#),
+    );
+    assert!(
+        a < b && b < c,
+        "tracks are emitted in the AUTHORED order, never re-sorted: {html}"
+    );
+}
+
+/// §3.6.6 obligation 3 — at most one `<track>` of a given kind carries
+/// `default`, and the FIRST election of a kind wins.
+///
+/// Both directions, and the second is the one that matters: the losing track is
+/// STILL EMITTED — only its claim on the menu is dropped — and the election is
+/// PER KIND, so a captions default and a subtitles default coexist. A renderer
+/// that kept one default across the whole list would pass a naive count and
+/// fail the coexistence leg.
+#[test]
+fn owes_media_single_default_per_kind() {
+    let html = render(
+        r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Video"},"label":"Harbour restoration","src":{"$type":"Static","value":"/restoration-2.mp4"},"tracks":[{"default":true,"kind":"Captions","label":"English captions","src":{"$type":"Static","value":"/first.vtt"},"srcLang":"en"},{"default":true,"kind":"Captions","label":"English captions (verbose)","src":{"$type":"Static","value":"/second.vtt"},"srcLang":"en"},{"default":true,"kind":"Subtitles","label":"Gaidhlig","src":{"$type":"Static","value":"/third.vtt"},"srcLang":"gd"}]}}"#,
+    );
+    let track = |src: &str| {
+        let start = html
+            .find(&format!(r#"src="{src}""#))
+            .unwrap_or_else(|| panic!("missing {src} in {html}"));
+        let open = html[..start].rfind("<track").expect("track element");
+        let close = html[open..].find('>').expect("track close") + open;
+        html[open..=close].to_string()
+    };
+    assert!(
+        track("/first.vtt").contains("default"),
+        "the FIRST election of a kind is honoured: {html}"
+    );
+    assert!(
+        !track("/second.vtt").contains("default"),
+        "a later election of the SAME kind is emitted WITHOUT the attribute: {html}"
+    );
+    // The track is still emitted — only its claim on the menu is dropped.
+    assert!(
+        html.contains(r#"src="/second.vtt""#),
+        "the losing track is still emitted: {html}"
+    );
+    // Per KIND, not per element: a subtitles default coexists with a captions one.
+    assert!(
+        track("/third.vtt").contains("default"),
+        "the election is PER KIND — a subtitles default coexists with a captions \
+         default: {html}"
+    );
+}
+
+/// §3.6.6 — a declared `transcript` renders as a `<details>` disclosure BESIDE
+/// the transport, carrying the MEDIA's resolved label as its accessible name.
+///
+/// Both directions. `<video>` and `<audio>` admit only source-ish children, so a
+/// transcript placed INSIDE would be fallback content a browser never shows —
+/// hence the position assertion, not merely a presence one. And absent, the
+/// emission is the bare element: the wrapper appears ONLY here, so a renderer
+/// that always wrapped would change the markup of every media node.
+#[test]
+fn owes_media_transcript_disclosure_named() {
+    let html = render(
+        r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Audio"},"label":"Curator's commentary","src":{"$type":"Static","value":"/commentary.mp3"},"transcript":"The harbour was rebuilt twice."}}"#,
+    );
+    let audio = html
+        .find("<audio")
+        .unwrap_or_else(|| panic!("no <audio>: {html}"));
+    let details = html
+        .find("<details")
+        .unwrap_or_else(|| panic!("no transcript disclosure: {html}"));
+    assert!(
+        audio < details,
+        "the transcript renders BESIDE the transport and AFTER it, never inside: {html}"
+    );
+    assert!(
+        html.contains(r#"<div class="fuaran-media-group""#),
+        "a present transcript gains the group wrapper: {html}"
+    );
+    assert!(
+        html.contains(r#"class="fuaran-media-transcript" aria-label="Curator&#x27;s commentary""#),
+        "the disclosure carries the MEDIA's resolved label as its own accessible \
+         name, so a reader meeting it out of context is told which recording it \
+         transcribes: {html}"
+    );
+
+    // The absent twin. Without it a renderer that ALWAYS emitted the wrapper
+    // would pass every assertion above and change every media node's markup.
+    let bare = render(
+        r#"{"id":"m2","kind":{"$type":"Media","kind":{"$type":"Audio"},"label":"Curator's commentary","src":{"$type":"Static","value":"/commentary.mp3"}}}"#,
+    );
+    assert!(
+        !bare.contains("fuaran-media-group") && !bare.contains("<details"),
+        "absent, the emission is the bare element it would otherwise be: {bare}"
+    );
+}
+
+// ─── Phase 1111 — the sandboxed third-party embed (§3.6.8) ───────────────────
+
+/// §3.6.8 — a `title` carrying the resolved title is ALWAYS emitted.
+///
+/// Including on a REFUSED embed, which is the leg worth having: a frame with no
+/// accessible name is announced as "frame" and nothing else, and a renderer that
+/// built the attribute list only on the success path would strip the name from
+/// exactly the frames a reader most needs described.
+#[test]
+fn owes_embed_accessible_name_always() {
+    let allowed = render_permissive(
+        r#"{"id":"e","kind":{"$type":"Embed","src":{"$type":"Static","value":"https://player.example/embed/harbour"},"title":"Harbour restoration, part two"}}"#,
+    );
+    assert!(
+        allowed.contains(r#"title="Harbour restoration, part two""#),
+        "the resolved title is emitted: {allowed}"
+    );
+    // Refused by the default deny-non-local policy — the name survives.
+    let refused = render(
+        r#"{"id":"e","kind":{"$type":"Embed","src":{"$type":"Static","value":"https://player.example/embed/harbour"},"title":"Harbour restoration, part two"}}"#,
+    );
+    assert!(
+        refused.contains(r#"title="Harbour restoration, part two""#),
+        "the title is emitted on a REFUSED embed too — a frame with no accessible \
+         name is announced as \"frame\" and nothing else: {refused}"
+    );
+}
+
+/// §3.6.8 obligations 1, 2 and 3 — `sandbox` on EVERY embed, EMPTY when nothing
+/// is granted; tokens in DECLARATION order and de-duplicated; `AllowFullscreen`
+/// is NOT a sandbox token; `loading` and `referrerpolicy` unconditional.
+///
+/// The permissionless leg is the one a naive renderer fails: omitting the
+/// attribute when the list is empty produces the same markup as an UNSANDBOXED
+/// frame, which is the opposite of what the empty list declares.
+#[test]
+fn owes_embed_sandbox_always_exactly_declared() {
+    let bare = render_permissive(
+        r#"{"id":"e","kind":{"$type":"Embed","src":{"$type":"Static","value":"https://player.example/embed/harbour"},"title":"Harbour"}}"#,
+    );
+    assert!(
+        bare.contains(r#"sandbox="""#),
+        "the sandbox declaration is emitted on EVERY embed and is EMPTY when \
+         nothing is granted — omitting it would produce the same markup as an \
+         UNSANDBOXED frame: {bare}"
+    );
+    assert!(
+        bare.contains(r#"loading="lazy""#)
+            && bare.contains(r#"referrerpolicy="strict-origin-when-cross-origin""#),
+        "both are unconditional, with no wire slot for either: {bare}"
+    );
+    assert!(
+        !bare.contains("allow="),
+        "an empty `allow` is not the same statement as an absent one: {bare}"
+    );
+
+    // Declaration order, de-duplication, and the token that is NOT one.
+    let granted = render_permissive(
+        r#"{"id":"e","kind":{"$type":"Embed","permissions":["AllowSameOrigin","AllowScripts","AllowScripts","AllowFullscreen"],"src":{"$type":"Static","value":"https://player.example/embed/harbour"},"title":"Harbour"}}"#,
+    );
+    assert!(
+        granted.contains(r#"sandbox="allow-scripts allow-same-origin""#),
+        "tokens are emitted in the VOCABULARY's declaration order and \
+         de-duplicated, whatever order the document authored: {granted}"
+    );
+    assert!(
+        !granted.contains("allow-forms"),
+        "an undeclared relaxation is never emitted: {granted}"
+    );
+    assert!(
+        granted.contains(r#"allow="fullscreen""#),
+        "`AllowFullscreen` is a permissions-policy directive, NOT a sandbox \
+         token — a host that mapped the whole enum onto sandbox tokens passes \
+         every other fixture and fails here: {granted}"
+    );
+    assert!(
+        !granted.contains("allow-fullscreen"),
+        "`AllowFullscreen` must not also appear as a sandbox token: {granted}"
+    );
+}
+
+/// §19.1 rule 4 — a `src` the `embed` egress class refuses OMITS the attribute
+/// entirely.
+///
+/// This is the one place a refusal does not take §19 rule 6's
+/// substitute-`about:blank` route, and the assertions pin both halves of why: an
+/// `<iframe>` pointed at the refusal URL would RENDER that page, so neither the
+/// destination NOR the refusal URL may appear — while the refusal is still
+/// RECORDED, so "nothing was declared" and "this was refused" stay different
+/// facts.
+///
+/// The `http` leg pins the stricter scheme floor: §19's ordinary accept set
+/// admits it and this class does not.
+#[test]
+fn owes_embed_refused_embed_source_omitted() {
+    let refused = render(
+        r#"{"id":"e","kind":{"$type":"Embed","src":{"$type":"Static","value":"https://collector.example/frame"},"title":"Harbour"}}"#,
+    );
+    // The refusal MARKER names the host, by design — that is the record, and it
+    // never carries the URL, because the query string of a refused exfiltration
+    // attempt is the payload itself. What must not appear is the DESTINATION.
+    assert!(
+        !refused.contains("https://collector.example") && !refused.contains("/frame"),
+        "a refused destination is never emitted: {refused}"
+    );
+    assert!(
+        refused.contains(r#"data-fuaran-egress-refused="embed:collector.example""#),
+        "the refusal is recorded under the embed's OWN class, never `media:` — a          composition that declared an origin for image egress has said nothing          about which DOCUMENTS it is willing to run: {refused}"
+    );
+    assert!(
+        !refused.contains("src="),
+        "the source attribute is OMITTED entirely — an <iframe> at the refusal \
+         URL RENDERS that page, where one with no source is a well-defined empty \
+         browsing context that fetches nothing: {refused}"
+    );
+    assert!(
+        !refused.contains(REFUSAL_URL),
+        "and NOT substituted with the refusal URL: {refused}"
+    );
+    assert!(
+        refused.contains("data-fuaran-egress-refused"),
+        "the refusal is still recorded, so \"nothing was declared\" and \"this was \
+         refused\" stay different facts: {refused}"
+    );
+
+    // The stricter floor: `http` is refused where §19's ordinary accept set
+    // admits it, because an intermediary that can rewrite the channel is an
+    // intermediary's script running in a frame this page created.
+    let insecure = render_permissive(
+        r#"{"id":"e","kind":{"$type":"Embed","src":{"$type":"Static","value":"http://player.example/embed/harbour"},"title":"Harbour"}}"#,
+    );
+    assert!(
+        !insecure.contains("src="),
+        "the embed class accepts `https` and nothing else: {insecure}"
+    );
+    // A schemeless reference names a same-origin document, which is exactly the
+    // shape a guest granted AllowSameOrigin + AllowScripts can reach out of.
+    let relative = render_permissive(
+        r#"{"id":"e","kind":{"$type":"Embed","src":{"$type":"Static","value":"/local/frame.html"},"title":"Harbour"}}"#,
+    );
+    assert!(
+        !relative.contains("src="),
+        "a schemeless reference is refused by this class: {relative}"
+    );
+
+    // The allow twin. Without it a renderer that emitted NO embed source ever
+    // would pass every assertion above and this obligation would guard nothing.
+    let allowed = render_permissive(
+        r#"{"id":"e","kind":{"$type":"Embed","src":{"$type":"Static","value":"https://player.example/embed/harbour"},"title":"Harbour"}}"#,
+    );
+    assert!(
+        allowed.contains(r#"src="https://player.example/embed/harbour""#),
+        "a permitted https embed still renders its source: {allowed}"
+    );
+}
+
+// ─── Phase 1120 — Tree (§3.6.12) ─────────────────────────────────────────────
+
+/// §3.6.12 obligation 5 — every row carries a STATED `aria-label` equal to its
+/// visible label.
+///
+/// A `treeitem` OWNS its child group, so a name computed from contents reads the
+/// whole branch out as the row's own name: a parent row whose accessible name
+/// came from its subtree would announce "Goods Cocoa Yarn". Both the parent and
+/// a leaf are asserted, because a renderer that stated the name only where it
+/// had no children would leave exactly the rows that need it computing theirs.
+#[test]
+fn owes_tree_accessible_name_always() {
+    let html = render(
+        r#"{"id":"t","kind":{"$type":"Tree","items":[{"children":[{"id":"cocoa","label":"Cocoa"}],"id":"goods","label":"Goods"},{"id":"ledger","label":"Ledger"}]}}"#,
+    );
+    for (id, label) in [("goods", "Goods"), ("cocoa", "Cocoa"), ("ledger", "Ledger")] {
+        assert!(
+            html.contains(&format!(r#"aria-label="{label}""#)),
+            "row '{id}' states its own visible label as its accessible name: {html}"
+        );
+    }
+    // The name is STATED, not computed: the parent's own label, not its branch.
+    assert!(
+        !html.contains(r#"aria-label="Goods Cocoa""#),
+        "a name computed from contents would read the whole branch out: {html}"
+    );
+}
+
+// ─── Phase 1115 — FileUpload ingress routes (§3.6.10) ────────────────────────
+
+/// §3.6.10 obligations 1 and 5 — the `<input type="file">` and its label are
+/// emitted WHATEVER gestures the document declares.
+///
+/// All four flag combinations, because a declared route is ADDITIONAL and never
+/// a replacement: a host that swapped the picker for a drop zone would ship a
+/// pointer-only control, and there is no keyboard equivalent of a drag. The
+/// declaration twin is asserted too, so a renderer that ignored both members
+/// outright does not pass by emitting the picker and nothing else.
+#[test]
+fn owes_file_upload_picker_always_present() {
+    for (drop, paste) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut members = String::new();
+        if paste {
+            members.push_str(r#""acceptPaste":true,"#);
+        }
+        if drop {
+            members.push_str(r#""dropTarget":true,"#);
+        }
+        let html = render(&format!(
+            r#"{{"id":"u","kind":{{"$type":"FileUpload","accept":[".csv"],{members}"label":"Drop a spreadsheet","multiple":false,"onSelect":"<closure>"}}}}"#
+        ));
+        assert!(
+            html.contains(r#"type="file""#),
+            "the picker is emitted whatever the document declares \
+             (drop={drop}, paste={paste}): {html}"
+        );
+        assert!(
+            html.contains(r#"class="fuaran-file-upload-label""#)
+                && html.contains("Drop a spreadsheet"),
+            "and so is its label (drop={drop}, paste={paste}): {html}"
+        );
+        assert_eq!(
+            html.contains("data-fuaran-upload-drop"),
+            drop,
+            "the drop route is declared exactly when the document declares it: {html}"
+        );
+        assert_eq!(
+            html.contains("data-fuaran-upload-paste"),
+            paste,
+            "the paste route is declared exactly when the document declares it: {html}"
+        );
+    }
+}
+
+// ─── §3.6.11 — Modal / Popover modality ──────────────────────────────────────
+
+/// §3.6.11 — the `aria-modal` inertness claim is emitted for the BLOCKING
+/// modality alone.
+///
+/// A popover does not make the rest of the page inert, so claiming it would tell
+/// assistive technology to ignore content the reader can still reach. Never
+/// emitted as `"false"` either: the attribute's ABSENCE is the other statement,
+/// and `aria-modal="false"` is a third thing neither modality means.
+#[test]
+fn owes_modal_aria_modal_only_when_blocking() {
+    let blocking = render(
+        r#"{"id":"m","kind":{"$type":"Modal","children":[],"dismissable":true,"open":{"$type":"Static","value":true}}}"#,
+    );
+    assert!(
+        blocking.contains(r#"aria-modal="true""#),
+        "the blocking modality claims inertness: {blocking}"
+    );
+    assert!(
+        blocking.contains(r#"role="dialog""#),
+        "and is a dialog: {blocking}"
+    );
+
+    let popover = render(
+        r#"{"id":"m","kind":{"$type":"Modal","children":[],"dismissable":true,"modality":"Popover","open":{"$type":"Static","value":true}}}"#,
+    );
+    assert!(
+        !popover.contains("aria-modal"),
+        "a popover does not make the page inert, so it claims nothing — and the \
+         absence IS the statement, never `aria-modal=\"false\"`: {popover}"
+    );
+    assert!(
+        popover.contains(r#"role="dialog""#),
+        "a popover is still a dialog: {popover}"
+    );
+}
+
 /// Which (kind, claim) pairs this host asserts, and how.
 ///
 /// Keyed by the claim's WIRE token, because the enumeration it is matched
@@ -682,6 +1066,43 @@ const CHECKERS: &[(&str, fn())] = &[
     (
         "Custom/unregistered-custom-labelled",
         owes_custom_unregistered_custom_labelled,
+    ),
+    // Phase 1128 — the platform-baseline wave's obligations, adopted here.
+    (
+        "Media/authored-child-order",
+        owes_media_authored_child_order,
+    ),
+    (
+        "Media/single-default-per-kind",
+        owes_media_single_default_per_kind,
+    ),
+    (
+        "Media/transcript-disclosure-named",
+        owes_media_transcript_disclosure_named,
+    ),
+    (
+        "Embed/accessible-name-always",
+        owes_embed_accessible_name_always,
+    ),
+    (
+        "Embed/sandbox-always-exactly-declared",
+        owes_embed_sandbox_always_exactly_declared,
+    ),
+    (
+        "Embed/refused-embed-source-omitted",
+        owes_embed_refused_embed_source_omitted,
+    ),
+    (
+        "Tree/accessible-name-always",
+        owes_tree_accessible_name_always,
+    ),
+    (
+        "FileUpload/picker-always-present",
+        owes_file_upload_picker_always_present,
+    ),
+    (
+        "Modal/aria-modal-only-when-blocking",
+        owes_modal_aria_modal_only_when_blocking,
     ),
 ];
 

@@ -1093,6 +1093,32 @@ fn reference_vocabulary() -> Option<(std::collections::BTreeSet<String>, Vec<Str
         root.join("src")
             .join("Fuaran.UI.Renderer.Core")
             .join("DrawingSvg.fs"),
+        // Phase 1128 — `Css.fs` was MISSING from this list, and its absence made
+        // the oracle under-report the reference vocabulary by 36 tokens.
+        //
+        // It is the file the reference EXTRACTED its class composition into
+        // precisely so the spellings could not drift ("each spell
+        // `\"fuaran-metric fuaran-metric-\" + tone` inline can drift by a …"), so
+        // omitting it dropped `fuaran-badge`, `fuaran-metric`, `fuaran-toast`,
+        // `fuaran-layout-stack` and thirty-odd more out of the set this host is
+        // measured against — every one of them a class the reference does emit.
+        //
+        // The gate never SAID so, because it was masked: the walk panicked on the
+        // first fixture carrying a kind this host had not adopted, so it never
+        // reached its own offender assertion. Adopting the kind is what surfaced
+        // the stale list, which is the class of finding the manifest-driven
+        // obligation suite next door exists to make loud rather than incidental.
+        root.join("src")
+            .join("Fuaran.UI.Renderer.Core")
+            .join("Css.fs"),
+        // Markdown.fs and MathMl.fs likewise compose emitted classes for the two
+        // sub-renderers whose output this host also emits.
+        root.join("src")
+            .join("Fuaran.UI.Renderer.Core")
+            .join("Markdown.fs"),
+        root.join("src")
+            .join("Fuaran.UI.Renderer.Core")
+            .join("MathMl.fs"),
     ];
 
     // A token ending in '-' is a composition prefix (fuaran-metric- styles

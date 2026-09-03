@@ -58,6 +58,9 @@ fn project_node(sources: &BindingSources, node: &Node) -> Node {
         state: project_state(sources, &node.state),
         style: node.style,
         accessibility: node.accessibility.clone(),
+        // Phase 1112 - projected like every other content slot, so the resolved
+        // tree a native surface reads carries the hint's TEXT, not its binding.
+        tooltip: map_opt_text(sources, &node.tooltip),
     }
 }
 
@@ -86,6 +89,24 @@ fn map_text(sources: &BindingSources, text: &TextSource) -> TextSource {
             TextSource::Literal(try_scalar_string(sources, binding).unwrap_or_default())
         }
         other => other.clone(),
+    }
+}
+
+/// Phase 1120 - the recursive half of the `Tree` projection. Separate from the
+/// arm because `TreeItem` is self-referential and the walk has to be too.
+fn project_tree_item(
+    sources: &BindingSources,
+    item: &crate::wire::TreeItem,
+) -> crate::wire::TreeItem {
+    crate::wire::TreeItem {
+        id: item.id.clone(),
+        label: map_text(sources, &item.label),
+        children: item
+            .children
+            .iter()
+            .map(|c| project_tree_item(sources, c))
+            .collect(),
+        icon: item.icon.clone(),
     }
 }
 
@@ -124,6 +145,10 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             heading: map_opt_text(sources, &spec.heading),
             layout: spec.layout.clone(),
             role: spec.role,
+            // Phase 1473 — paged-medium declarations, not text: they project
+            // through untouched, like every other non-TextSource slot.
+            keep_together: spec.keep_together,
+            break_before: spec.break_before,
         }),
         NodeKind::SplitPanel(spec) => NodeKind::SplitPanel(SplitPanelSpec {
             children: project_children(sources, &spec.children),
@@ -168,6 +193,8 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             open: spec.open.clone(),
             on_dismiss: spec.on_dismiss.clone(),
             heading: map_opt_text(sources, &spec.heading),
+            modality: spec.modality,
+            anchor: spec.anchor.clone(),
         }),
         NodeKind::ScrollArea(spec) => NodeKind::ScrollArea(ScrollAreaSpec {
             children: project_children(sources, &spec.children),
@@ -277,6 +304,44 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             controls: spec.controls,
             r#loop: spec.r#loop,
             kind: spec.kind.clone(),
+            // Phase 1110 - a track's `label` IS a TextSource and reaches the
+            // user agent's track menu, so a `Bound(Transform)` one resolves here
+            // exactly as the media label does; `src` stays a Binding, left as
+            // the primary `src` is. The AUTHORED order is preserved by mapping
+            // in place rather than collecting through anything that reorders.
+            tracks: spec
+                .tracks
+                .iter()
+                .map(|t| crate::wire::TrackEntry {
+                    kind: t.kind,
+                    src: t.src.clone(),
+                    src_lang: t.src_lang.clone(),
+                    label: map_text(sources, &t.label),
+                    default: t.default,
+                })
+                .collect(),
+            transcript: map_opt_text(sources, &spec.transcript),
+        }),
+        // Phase 1111 - `title` is the only TextSource on the record; `src` is a
+        // Binding, left as every other URL slot is.
+        NodeKind::Embed(spec) => NodeKind::Embed(crate::wire::EmbedSpec {
+            src: spec.src.clone(),
+            title: map_text(sources, &spec.title),
+            aspect_ratio: spec.aspect_ratio,
+            permissions: spec.permissions.clone(),
+        }),
+        // Phase 1120 - every row's `label` is a TextSource, at every depth, so
+        // the projection recurses. A shallow map would hand a native surface
+        // literal labels at the root and unresolved bindings one level down.
+        NodeKind::Tree(spec) => NodeKind::Tree(crate::wire::TreeSpec {
+            items: spec
+                .items
+                .iter()
+                .map(|i| project_tree_item(sources, i))
+                .collect(),
+            expanded_state_key: spec.expanded_state_key.clone(),
+            selection_state_key: spec.selection_state_key.clone(),
+            on_select: spec.on_select,
         }),
         NodeKind::List(spec) => NodeKind::List(ListSpec {
             items: spec.items.iter().map(|t| map_text(sources, t)).collect(),
@@ -345,6 +410,8 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             label: map_text(sources, &spec.label),
             multiple: spec.multiple,
             disabled: spec.disabled.clone(),
+            drop_target: spec.drop_target,
+            accept_paste: spec.accept_paste,
         }),
         NodeKind::Select(spec) => NodeKind::Select(SelectSpec {
             label: map_text(sources, &spec.label),
@@ -387,6 +454,8 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
                 sortable: sr.sortable,
                 default_sort: sr.default_sort.clone(),
             }),
+            keep_rows_together: spec.keep_rows_together,
+            repeat_header: spec.repeat_header,
         }),
         NodeKind::Chart(spec) => NodeKind::Chart(ChartSpec {
             kind: spec.kind,

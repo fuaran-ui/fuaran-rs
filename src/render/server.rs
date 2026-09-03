@@ -34,11 +34,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::canonical::JVal;
 use crate::wire::{
     Action, Binding, BoxLayout, BoxRole, BoxSpec, CellFormat, CellKindErased, ChartSpec,
-    ColumnErased, DisclosureSpec, FilterSpec, FormField, FormFieldKind, FormSpec, GridSpec,
-    HeadingVariant, ImageAspect, ImageFit, ImageLoading, ImageVariant, MapSpec, MathDisplay,
-    MediaKind, ModalSpec, Node, NodeKind, Orientation, ScrollAreaSpec, ScrollOrientation,
-    SelectOption, SelectSpec, SrcSetEntry, StateBehaviour, StaticRows, StaticValue, TabsSpec,
-    TextSource, ToneVariant, encode_node,
+    ColumnErased, DisclosureSpec, EmbedPermission, FilterSpec, FormField, FormFieldKind, FormSpec,
+    GridSpec, HeadingVariant, ImageAspect, ImageFit, ImageLoading, ImageVariant, MapSpec,
+    MathDisplay, MediaKind, ModalSpec, ModalityKind, Node, NodeKind, Orientation, ScrollAreaSpec,
+    ScrollOrientation, SelectOption, SelectSpec, SrcSetEntry, StateBehaviour, StaticRows,
+    StaticValue, TabsSpec, TextDirection, TextSource, ToneVariant, TrackKind, TreeItem, TreeSpec,
+    encode_node,
 };
 
 use super::bindings::{
@@ -48,7 +49,10 @@ use super::bindings::{
     static_display_string, try_bool, try_number, try_scalar_number, try_string,
 };
 use super::class_names::{icon_size_class, node_class_name, tone_var, trend_sentiment};
-use super::egress::{EgressClass, EgressPolicy, deny_non_local_egress, sanitize_url_for_egress};
+use super::egress::{
+    EgressClass, EgressPolicy, deny_non_local_egress, sanitize_embed_src_for_egress,
+    sanitize_url_for_egress,
+};
 use super::html::{Attr, AttrVal, el, entity_encode, escape_attr, escape_text, text_el, void_el};
 use super::markdown::to_html_with_egress as markdown_to_html_with_egress;
 
@@ -127,6 +131,10 @@ fn collect_fragments<'a>(acc: &mut HashMap<String, &'a Node>, node: &'a Node) {
         | NodeKind::Link(_)
         | NodeKind::Image(_)
         | NodeKind::Media(_)
+        // A frame's document is somebody else's tree, and a `TreeItem` is a
+        // record rather than a `Node` - neither can carry a FragmentDecl.
+        | NodeKind::Embed(_)
+        | NodeKind::Tree(_)
         | NodeKind::List(_)
         | NodeKind::Toast(_)
         | NodeKind::CodeBlock(_)
@@ -260,19 +268,78 @@ fn forwards_to_semantic_element(kind: &NodeKind) -> bool {
     // `Accessibility.Label` therefore overrides the spec's own `label`, which is
     // the right precedence — the node-level slot is the author saying this
     // particular instance is named something else.
+    // Phase 1111 - `Embed` satisfies all three the way `Media` does: the
+    // `<iframe>` IS the body root, it carries native semantics (a focus
+    // container a reader tabs INTO), and nothing else competes for the name.
+    //
+    // Phase 1120 - `Tree` deliberately does NOT. Its body is a `<ul>` of many
+    // rows, each of which owns its own accessible name, so a node-level
+    // `aria-label` forwarded onto the container would name the WIDGET from a
+    // slot the rows also read - and the first condition (a single root element
+    // that IS the node) is the one it fails.
     matches!(
         kind,
-        NodeKind::Link(_) | NodeKind::Button(_) | NodeKind::Image(_) | NodeKind::Media(_)
+        NodeKind::Link(_)
+            | NodeKind::Button(_)
+            | NodeKind::Image(_)
+            | NodeKind::Media(_)
+            | NodeKind::Embed(_)
     )
 }
 
+/// Phase 1112 - does the node's own semantic element take the tooltip's
+/// `aria-describedby`, or does the wrapper take it AND a focus stop?
+///
+/// Obligation 2 requires the description to sit on the element that TAKES
+/// KEYBOARD FOCUS, and requires such an element to exist. So the split is not
+/// [`forwards_to_semantic_element`]'s: `Image` forwards its a11y projection but
+/// an `<img>` is not a focus stop, so a description placed there is announced on
+/// no interaction at all. The four kinds whose body is BOTH the semantic element
+/// and a focus stop take it directly; everything else takes it on the wrapper,
+/// which is given `tabindex="0"` in the same act - "giving the node's wrapper a
+/// focus stop where the node's own body is not one", verbatim.
+fn tooltip_rides_semantic_element(kind: &NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::Link(_) | NodeKind::Button(_) | NodeKind::Media(_) | NodeKind::Embed(_)
+    )
+}
+
+/// Phase 1112 - the hint element's stable id, derived from the node id.
+fn tooltip_hint_id(node_id: &str) -> String {
+    format!("{node_id}-tooltip")
+}
+
 fn render_node_plain(ctx: &Ctx<'_>, node: &Node) -> String {
-    let class_name = node_class_name(&node.kind, &node.style);
+    // Phase 1112 - the hint is resolved FIRST, because obligation 5 makes
+    // emptiness decide the whole emission: a hint resolving to empty or
+    // whitespace emits no hint element, no `aria-describedby`, no focus stop and
+    // no class fragment. Advertising a description that is not there is worse
+    // than silence, so this is a trim test rather than an is-some test.
+    let tooltip_text = node
+        .tooltip
+        .as_ref()
+        .map(|t| render_text(ctx.sources, t))
+        .filter(|t| !t.trim().is_empty());
+
+    let mut class_name = node_class_name(&node.kind, &node.style);
+    if tooltip_text.is_some() {
+        class_name.push_str(" fuaran-has-tooltip");
+    }
     let mut attrs: Vec<Attr> = vec![
         ("id", s(node.id.clone())),
         ("data-fuaran-node-id", s(node.id.clone())),
         ("class", s(class_name)),
     ];
+    // Phase 1472 - the DECLARED direction rides the wrapper, first among the
+    // attributes that follow `class`. `Auto` emits nothing here: this host has
+    // not adopted the Phase 1114 `dir="auto"` isolation HEURISTIC, and inventing
+    // one under a declaration slot would conflate two different statements.
+    match node.style.direction {
+        TextDirection::Auto => {}
+        TextDirection::Ltr => attrs.push(("dir", s("ltr"))),
+        TextDirection::Rtl => attrs.push(("dir", s("rtl"))),
+    }
     // Route the projection: a kind whose body IS the node's semantic element
     // takes the a11y attributes onto that element; every other kind carries
     // them on the wrapper, as before. The wrapper keeps the node's address
@@ -286,7 +353,52 @@ fn render_node_plain(ctx: &Ctx<'_>, node: &Node) -> String {
             attrs.push((name, s(value)));
         }
     }
-    el("div", &attrs, &render_kind(ctx, node, &semantic_attrs))
+
+    // Phase 1112 obligations 1, 2 and 4. The hint id is referenced from
+    // `aria-describedby` on whichever element takes focus; where the document
+    // already declared an `accessibility.describedBy`, the ids are MERGED
+    // (declaration first, space-joined) rather than replaced - `aria-describedby`
+    // is an id list and the document has declared two descriptions.
+    let mut hint = String::new();
+    if let Some(text) = &tooltip_text {
+        let hint_id = tooltip_hint_id(&node.id);
+        let target = if tooltip_rides_semantic_element(&node.kind) {
+            &mut semantic_attrs
+        } else {
+            &mut attrs
+        };
+        let merged = target
+            .iter_mut()
+            .find(|(name, _)| *name == "aria-describedby");
+        match merged {
+            Some((_, value)) => {
+                if let AttrVal::Str(existing) = value {
+                    *value = s(format!("{existing} {hint_id}"));
+                }
+            }
+            None => target.push(("aria-describedby", s(hint_id.clone()))),
+        }
+        if !tooltip_rides_semantic_element(&node.kind) {
+            // Obligation 2's second half: such an element MUST exist. A wrapper
+            // `<div>` is not a focus stop until it is given one.
+            attrs.push(("tabindex", s("0")));
+        }
+        // Obligation 3 - emitted as a DESCENDANT of the hover target, which
+        // satisfies hoverable and persistent structurally: the pointer moving
+        // onto the hint has not left the wrapper.
+        hint = text_el(
+            "span",
+            &[
+                ("id", s(hint_id)),
+                ("class", s("fuaran-tooltip")),
+                ("role", s("tooltip")),
+            ],
+            text,
+        );
+    }
+
+    let body = render_kind(ctx, node, &semantic_attrs);
+    el("div", &attrs, &format!("{body}{hint}"))
 }
 
 /// `semantic_attrs` carries the node's a11y projection for the kinds that emit
@@ -1043,7 +1155,195 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
             }
             attrs.extend_from_slice(semantic_attrs);
             push_egress_attrs(&mut attrs, egress_attrs);
-            el(tag, &attrs, "")
+
+            // Phase 1110 obligations 1, 2 and 3, and the fold is what makes the
+            // third expressible: `claimed` carries the track KINDS whose default
+            // has already been elected, so the FIRST election of a kind wins and
+            // a later one is emitted WITHOUT the attribute. The track itself is
+            // still emitted - only its claim on the menu is dropped - and the
+            // election is per kind, so a captions default and a subtitles
+            // default coexist.
+            //
+            // Obligation 2: the authored ORDER is preserved, never re-sorted.
+            // That is the OPPOSITE of `srcSet`'s ascending-width rule and not an
+            // inconsistency: a browser picks ONE srcset candidate by an
+            // algorithm, so ordering that is canonicalisation, while a reader
+            // picks a track from a menu the user agent builds in DOCUMENT order.
+            //
+            // Obligation 4: a refused track source DROPS the whole track. It
+            // takes the POSTER's disposition rather than the source's - an
+            // element must have a source, but it need not have this track, and a
+            // `<track>` pointing at the refusal URL is a menu entry that opens
+            // onto nothing. The refusal is read from the seam's own verdict, not
+            // by comparing against whatever URL it substitutes.
+            let mut claimed: Vec<TrackKind> = Vec::new();
+            let mut tracks = String::new();
+            for entry in &spec.tracks {
+                let (safe, refusal) = sanitize_url_for_egress(
+                    ctx.policy,
+                    EgressClass::Media,
+                    &try_string(ctx.sources, &entry.src).unwrap_or_default(),
+                );
+                if safe.is_empty() || !refusal.is_empty() {
+                    continue;
+                }
+                let takes_default = entry.default && !claimed.contains(&entry.kind);
+                if takes_default {
+                    claimed.push(entry.kind);
+                }
+                tracks.push_str(&void_el(
+                    "track",
+                    &[
+                        ("kind", s(track_kind_token(entry.kind))),
+                        ("src", s(safe)),
+                        ("srclang", s(entry.src_lang.clone())),
+                        ("label", s(render_text(ctx.sources, &entry.label))),
+                        ("default", AttrVal::Flag(takes_default)),
+                    ],
+                ));
+            }
+            let transport = el(tag, &attrs, &tracks);
+
+            // The transcript renders as a disclosure BESIDE the transport, never
+            // inside it: `<video>` and `<audio>` admit only source-ish children,
+            // so a transcript placed there would be fallback content a browser
+            // never shows. It carries the MEDIA's resolved label as its own
+            // accessible name, so a reader meeting it out of context is told
+            // which recording it transcribes. Absent, the emission is the bare
+            // element it would otherwise be - the wrapper appears ONLY here.
+            match &spec.transcript {
+                None => transport,
+                Some(transcript) => {
+                    let summary = text_el(
+                        "summary",
+                        &[("class", s("fuaran-media-transcript-summary"))],
+                        "Transcript",
+                    );
+                    let body = text_el(
+                        "div",
+                        &[("class", s("fuaran-media-transcript-body"))],
+                        &render_text(ctx.sources, transcript),
+                    );
+                    let details = el(
+                        "details",
+                        &[
+                            ("class", s("fuaran-media-transcript")),
+                            ("aria-label", s(render_text(ctx.sources, &spec.label))),
+                        ],
+                        &format!("{summary}{body}"),
+                    );
+                    el(
+                        "div",
+                        &[("class", s("fuaran-media-group"))],
+                        &format!("{transport}{details}"),
+                    )
+                }
+            }
+        }
+        // Phase 1111 - WIRE_FORMAT.md 3.6.8. Four render obligations, none of
+        // which the bytes can carry.
+        NodeKind::Embed(spec) => {
+            // Obligation 4 (and 19.1 rule 4): a REFUSED source omits the
+            // attribute ENTIRELY. This is the one place a refusal does not take
+            // 19's substitute-`about:blank` route, and the reason is the
+            // element: an `<iframe>` pointed at a refusal URL RENDERS that page,
+            // where one with no source is a well-defined empty browsing context
+            // that fetches nothing. The refusal is still RECORDED, as the
+            // egress-refusal data attribute, so "nothing was declared" and "this
+            // was refused" stay different facts.
+            let (src, egress_attrs) = sanitize_embed_src_for_egress(
+                ctx.policy,
+                &try_string(ctx.sources, &spec.src).unwrap_or_default(),
+            );
+            let class_name = match spec.aspect_ratio {
+                ImageAspect::Natural => "fuaran-embed".to_string(),
+                ImageAspect::Square => "fuaran-embed fuaran-embed-aspect-square".to_string(),
+                ImageAspect::FourThree => "fuaran-embed fuaran-embed-aspect-four-three".to_string(),
+                ImageAspect::ThreeTwo => "fuaran-embed fuaran-embed-aspect-three-two".to_string(),
+                ImageAspect::SixteenNine => {
+                    "fuaran-embed fuaran-embed-aspect-sixteen-nine".to_string()
+                }
+            };
+            // Obligation 2: the tokens are emitted in the vocabulary's
+            // DECLARATION order and de-duplicated - by membership test rather
+            // than by mapping the authored list, which is what makes both
+            // properties structural. `AllowFullscreen` is NOT a sandbox token:
+            // it is a permissions-policy directive and rides `allow="fullscreen"`,
+            // emitted only where declared, because an empty `allow` is not the
+            // same statement as an absent one.
+            let has = |p: EmbedPermission| spec.permissions.contains(&p);
+            let mut sandbox: Vec<&str> = Vec::new();
+            if has(EmbedPermission::AllowScripts) {
+                sandbox.push("allow-scripts");
+            }
+            if has(EmbedPermission::AllowSameOrigin) {
+                sandbox.push("allow-same-origin");
+            }
+            if has(EmbedPermission::AllowForms) {
+                sandbox.push("allow-forms");
+            }
+            let mut attrs: Vec<Attr> = vec![
+                ("class", s(class_name)),
+                // Obligation on `title` (3.6.8): emitted ALWAYS, including on a
+                // refused embed. A frame with no accessible name is announced as
+                // "frame" and nothing else.
+                ("title", s(render_text(ctx.sources, &spec.title))),
+                // Obligation 1: the sandbox declaration is emitted on EVERY
+                // embed and is EMPTY when nothing is granted. Omitting it on a
+                // permissionless embed produces the same markup as an
+                // UNSANDBOXED frame, so the emission is unconditional rather
+                // than derived from the list being non-empty.
+                ("sandbox", s(sandbox.join(" "))),
+                // Obligation 3: both unconditional, with no slot for either. The
+                // referrer policy is deliberately NOT `no-referrer` - several
+                // ubiquitous providers restrict playback by referring domain, so
+                // stripping the header outright breaks a legitimate embed, while
+                // sending the origin alone leaks no path and no query.
+                ("loading", s("lazy")),
+                ("referrerpolicy", s("strict-origin-when-cross-origin")),
+            ];
+            if let Some(src) = src {
+                attrs.push(("src", s(src)));
+            }
+            if has(EmbedPermission::AllowFullscreen) {
+                attrs.push(("allow", s("fullscreen")));
+            }
+            attrs.extend_from_slice(semantic_attrs);
+            push_egress_attrs(&mut attrs, egress_attrs);
+            el("iframe", &attrs, "")
+        }
+        // Phase 1120 - WIRE_FORMAT.md 3.6.12. The ARIA tree pattern, the roving
+        // tabindex, and the whole hierarchy reachable WITHOUT SCRIPT: a server
+        // rendering emits the same elements, the same ARIA and the same roving
+        // tabindex, with `aria-expanded` reflecting the statically-resolvable
+        // expanded state. Movement is the interactive host's addition over that
+        // identical DOM, never a precondition for the document being readable.
+        NodeKind::Tree(spec) => {
+            let expanded = read_expanded_items(ctx.sources, spec.expanded_state_key.as_deref());
+            let selected = read_selected_item(ctx.sources, spec.selection_state_key.as_deref());
+            // Obligation 4: ONE tab stop for the whole widget. The focusable row
+            // is the SELECTED row when it is visible, else the FIRST visible
+            // row, so a server rendering and a client's first frame agree.
+            let focusable = focusable_tree_item(
+                spec.expanded_state_key.is_some(),
+                &expanded,
+                selected.as_deref(),
+                &spec.items,
+            );
+            let rows = render_tree_items(
+                ctx,
+                spec,
+                &expanded,
+                selected.as_deref(),
+                focusable.as_deref(),
+                1,
+                &spec.items,
+            );
+            el(
+                "ul",
+                &[("class", s("fuaran-tree")), ("role", s("tree"))],
+                &rows,
+            )
         }
         NodeKind::List(spec) => {
             let items: String = spec
@@ -1223,16 +1523,30 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
             if let Some(accept) = accept {
                 attrs.push(("accept", s(accept)));
             }
+            // Phase 1115 obligation 1: a declared route is ADDITIONAL, never a
+            // replacement. The `<input type="file">` and its label are emitted
+            // whatever the document declares - a host that replaced the picker
+            // with a drop zone would ship a pointer-only control, and there is
+            // no keyboard equivalent of a drag. So the routes contribute DATA
+            // ATTRIBUTES and nothing else on this tier; obligation 5 makes the
+            // plain picker the conforming no-script answer.
+            let mut wrapper: Vec<Attr> = vec![("class", s("fuaran-file-upload"))];
+            if spec.drop_target {
+                wrapper.push(("data-fuaran-upload-drop", s("declared")));
+            }
+            if spec.accept_paste {
+                wrapper.push(("data-fuaran-upload-paste", s("declared")));
+            }
             el(
                 "label",
-                &[("class", s("fuaran-file-upload"))],
+                &wrapper,
                 &format!("{label}{}", void_el("input", &attrs)),
             )
         }
         NodeKind::Select(spec) => render_select(ctx, spec),
         // Visualisation
         NodeKind::DataGrid(spec) => match &spec.static_rows {
-            Some(rows) => render_static_table(ctx, rows),
+            Some(rows) => render_static_table(ctx, rows, spec),
             None => render_grid(ctx, &node.state, spec),
         },
         NodeKind::Chart(spec) => render_chart(ctx, &node.state, spec),
@@ -1308,6 +1622,10 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
 // ─── Box — the unified container ─────────────────────────────────────────────
 
 fn render_box(ctx: &Ctx<'_>, spec: &BoxSpec) -> String {
+    // Phase 1473 - appended to whichever element this box becomes, on every
+    // branch: the declaration is about THIS container, and a branch that
+    // dropped it would honour the document on some layouts and not others.
+    let brk = print_break_classes(spec.keep_together, spec.break_before);
     if spec.role == BoxRole::Card {
         let header = spec
             .heading
@@ -1327,19 +1645,22 @@ fn render_box(ctx: &Ctx<'_>, spec: &BoxSpec) -> String {
         );
         return el(
             "section",
-            &[("class", s("fuaran-layout-card"))],
+            &[("class", s(format!("fuaran-layout-card{brk}")))],
             &format!("{header}{body}"),
         );
     }
     if spec.role == BoxRole::Dashboard || matches!(spec.layout, BoxLayout::Auto) {
         return el(
             "div",
-            &[("class", s("fuaran-layout-dashboard"))],
+            &[("class", s(format!("fuaran-layout-dashboard{brk}")))],
             &render_children(ctx, &spec.children),
         );
     }
     if spec.role == BoxRole::Separator {
-        return void_el("hr", &[("class", s("fuaran-layout-separator"))]);
+        return void_el(
+            "hr",
+            &[("class", s(format!("fuaran-layout-separator{brk}")))],
+        );
     }
     if let BoxLayout::Grid {
         cols,
@@ -1356,7 +1677,10 @@ fn render_box(ctx: &Ctx<'_>, spec: &BoxSpec) -> String {
         };
         return el(
             "div",
-            &[("class", s("fuaran-layout-grid")), ("style", s(grid_style))],
+            &[
+                ("class", s(format!("fuaran-layout-grid{brk}"))),
+                ("style", s(grid_style)),
+            ],
             &render_children(ctx, &spec.children),
         );
     }
@@ -1373,7 +1697,7 @@ fn render_box(ctx: &Ctx<'_>, spec: &BoxSpec) -> String {
         return el(
             "div",
             &[
-                ("class", s("fuaran-layout-masonry")),
+                ("class", s(format!("fuaran-layout-masonry{brk}"))),
                 ("style", s(masonry_style)),
             ],
             &render_children(ctx, &spec.children),
@@ -1397,7 +1721,7 @@ fn render_box(ctx: &Ctx<'_>, spec: &BoxSpec) -> String {
             ("fuaran-stack-vertical", "", None)
         }
     };
-    let class = format!("fuaran-layout-stack {dir}{wrap}");
+    let class = format!("fuaran-layout-stack {dir}{wrap}{brk}");
     match gap {
         Some(gap) => el(
             "div",
@@ -1438,13 +1762,34 @@ fn render_modal(ctx: &Ctx<'_>, spec: &ModalSpec) -> String {
     // Overlay render-fidelity contract: ALWAYS in the DOM; closed = `hidden`;
     // positioned by CSS. Inert server-side.
     let is_open = try_bool(ctx.sources, &spec.open) == Some(true);
+    // WIRE_FORMAT.md 3.6.11 - the two modalities take DIFFERENT class families
+    // rather than one family with a modifier: a popover is not a modal that
+    // happens to be smaller, and the surfaces are styled independently.
+    let popover = spec.modality == ModalityKind::Popover;
+    let (outer_class, heading_class, dismiss_class, body_class, surface_class) = if popover {
+        (
+            "fuaran-popover",
+            "fuaran-popover-heading",
+            "fuaran-popover-dismiss",
+            "fuaran-popover-body",
+            "fuaran-popover-surface",
+        )
+    } else {
+        (
+            "fuaran-modal-overlay",
+            "fuaran-modal-heading",
+            "fuaran-modal-dismiss",
+            "fuaran-modal-body",
+            "fuaran-modal-dialog",
+        )
+    };
     let heading = spec
         .heading
         .as_ref()
         .map(|h| {
             text_el(
                 "h2",
-                &[("class", s("fuaran-modal-heading"))],
+                &[("class", s(heading_class))],
                 &render_text(ctx.sources, h),
             )
         })
@@ -1453,7 +1798,7 @@ fn render_modal(ctx: &Ctx<'_>, spec: &ModalSpec) -> String {
         text_el(
             "button",
             &[
-                ("class", s("fuaran-modal-dismiss")),
+                ("class", s(dismiss_class)),
                 ("type", s("button")),
                 ("aria-label", s("Close")),
             ],
@@ -1464,23 +1809,29 @@ fn render_modal(ctx: &Ctx<'_>, spec: &ModalSpec) -> String {
     };
     let body = el(
         "div",
-        &[("class", s("fuaran-modal-body"))],
+        &[("class", s(body_class))],
         &render_children(ctx, &spec.children),
     );
-    let dialog = el(
-        "div",
-        &[
-            ("class", s("fuaran-modal-dialog")),
-            ("role", s("dialog")),
-            ("aria-modal", s("true")),
-        ],
-        &format!("{heading}{dismiss}{body}"),
-    );
-    let mut overlay_attrs: Vec<Attr> = vec![("class", s("fuaran-modal-overlay"))];
-    if !is_open {
-        overlay_attrs.push(("hidden", AttrVal::Flag(true)));
+    // The `aria-modal-only-when-blocking` obligation: the inertness claim is
+    // emitted for the BLOCKING modality alone. A popover does not make the rest
+    // of the page inert, so claiming it would tell assistive technology to
+    // ignore content the reader can still reach. Never emitted as `"false"` -
+    // the attribute's absence IS the other statement.
+    let mut surface_attrs: Vec<Attr> = vec![("class", s(surface_class)), ("role", s("dialog"))];
+    if !popover {
+        surface_attrs.push(("aria-modal", s("true")));
     }
-    el("div", &overlay_attrs, &dialog)
+    let surface = el("div", &surface_attrs, &format!("{heading}{dismiss}{body}"));
+    let mut outer_attrs: Vec<Attr> = vec![("class", s(outer_class))];
+    if !is_open {
+        outer_attrs.push(("hidden", AttrVal::Flag(true)));
+    }
+    if let Some(anchor) = &spec.anchor
+        && popover
+    {
+        outer_attrs.push(("data-fuaran-popover-anchor", s(anchor.clone())));
+    }
+    el("div", &outer_attrs, &surface)
 }
 
 fn render_scroll_area(ctx: &Ctx<'_>, spec: &ScrollAreaSpec) -> String {
@@ -2220,6 +2571,209 @@ fn render_form_field(ctx: &Ctx<'_>, field: &FormField) -> String {
     )
 }
 
+/// Phase 1473 - the container's paged-medium class fragment.
+///
+/// The declarations are CSS in a `@media print` block and need NO SCRIPT, which
+/// is obligation 4: a server-rendered page with no hydration carries the same
+/// paged behaviour as a fully interactive one, so this is the whole of the
+/// floor rather than a tier a static host may defer. Obligation 1 scopes the
+/// behaviour to the paged medium and obligation 5 forbids deriving anything
+/// else from it - both live in the stylesheet these classes hook, so a
+/// continuous (screen) rendering is unchanged.
+fn print_break_classes(keep_together: bool, break_before: bool) -> &'static str {
+    match (keep_together, break_before) {
+        (false, false) => "",
+        (true, false) => " fuaran-break-inside-avoid",
+        (false, true) => " fuaran-break-before-page",
+        (true, true) => " fuaran-break-inside-avoid fuaran-break-before-page",
+    }
+}
+
+/// Phase 1473 - the grid's own pair, SEPARATE from the container's and on
+/// purpose: these hook rules at the ROW and the header ROW GROUP, which live
+/// INSIDE the element the class sits on, where the container pair applies to the
+/// element itself. Collapsing the two into one helper would put four
+/// mutually-unrelated flags behind one name.
+fn grid_print_break_classes(keep_rows_together: bool, repeat_header: bool) -> String {
+    let mut out = String::new();
+    if keep_rows_together {
+        out.push_str(" fuaran-grid-rows-together");
+    }
+    if repeat_header {
+        out.push_str(" fuaran-grid-repeat-header");
+    }
+    out
+}
+
+/// Phase 1110 - the lower-case HTML token for a wire `TrackKind` case.
+fn track_kind_token(kind: TrackKind) -> &'static str {
+    match kind {
+        TrackKind::Subtitles => "subtitles",
+        TrackKind::Captions => "captions",
+        TrackKind::Descriptions => "descriptions",
+        TrackKind::Chapters => "chapters",
+    }
+}
+
+/// Phase 1120 - the expanded-row set the named State slot holds.
+///
+/// The slot holds a JSON ARRAY OF ROW IDS - an array rather than a map of
+/// booleans, because the question a host asks is set membership and a set has
+/// one spelling where a map has two for "closed". A value of any OTHER shape
+/// reads as EMPTY rather than as an error: this is a host's own state slot, not
+/// a wire document, so there is nothing here to refuse, and refusing would blank
+/// a tree over a value the reader never authored.
+fn read_expanded_items(sources: &BindingSources, key: Option<&str>) -> Vec<String> {
+    let Some(key) = key else {
+        return Vec::new();
+    };
+    match sources.state.get(key) {
+        Some(JVal::Arr(items)) => items
+            .iter()
+            .filter_map(|v| match v {
+                JVal::Str(id) => Some(id.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Phase 1120 - the selected row id the named State slot holds: a BARE row-id
+/// string. Same lenience, same reason as [`read_expanded_items`].
+fn read_selected_item(sources: &BindingSources, key: Option<&str>) -> Option<String> {
+    match sources.state.get(key?) {
+        Some(JVal::Str(id)) if !id.is_empty() => Some(id.clone()),
+        _ => None,
+    }
+}
+
+/// Phase 1120 - is this row OPEN?
+///
+/// A tree naming no `expandedStateKey` renders FULLY EXPANDED and does not
+/// toggle, which is the same reading that lets a grid honour a declared initial
+/// order while offering no interactive sorting - and it is the only reading
+/// under which such a tree shows its content at all. A row with no children is
+/// never "open": obligation 2 turns on exactly that distinction.
+fn tree_item_expanded(key_named: bool, expanded: &[String], item: &TreeItem) -> bool {
+    !item.children.is_empty() && (!key_named || expanded.iter().any(|id| id == &item.id))
+}
+
+/// Phase 1120 - the visible rows in document order: roots, plus the descendants
+/// of every OPEN row.
+fn visible_tree_items(
+    key_named: bool,
+    expanded: &[String],
+    items: &[TreeItem],
+    out: &mut Vec<String>,
+) {
+    for item in items {
+        out.push(item.id.clone());
+        if tree_item_expanded(key_named, expanded, item) {
+            visible_tree_items(key_named, expanded, &item.children, out);
+        }
+    }
+}
+
+/// Phase 1120 - which single row carries `tabindex="0"` (obligation 4).
+fn focusable_tree_item(
+    key_named: bool,
+    expanded: &[String],
+    selected: Option<&str>,
+    items: &[TreeItem],
+) -> Option<String> {
+    let mut visible = Vec::new();
+    visible_tree_items(key_named, expanded, items, &mut visible);
+    if let Some(sel) = selected
+        && visible.iter().any(|id| id == sel)
+    {
+        return Some(sel.to_string());
+    }
+    visible.into_iter().next()
+}
+
+/// Phase 1120 - one level of the ARIA tree, and the recursion is the point: a
+/// nested `role="group"` is emitted for each OPEN row's children, so a closed
+/// row's subtree is not in the DOM at all.
+fn render_tree_items(
+    ctx: &Ctx<'_>,
+    spec: &TreeSpec,
+    expanded: &[String],
+    selected: Option<&str>,
+    focusable: Option<&str>,
+    level: usize,
+    items: &[TreeItem],
+) -> String {
+    let key_named = spec.expanded_state_key.is_some();
+    let set_size = items.len();
+    let mut out = String::new();
+    for (i, item) in items.iter().enumerate() {
+        let is_open = tree_item_expanded(key_named, expanded, item);
+        let has_children = !item.children.is_empty();
+        let label = render_text(ctx.sources, &item.label);
+        let mut attrs: Vec<Attr> = vec![
+            ("class", s("fuaran-tree-item")),
+            ("role", s("treeitem")),
+            // Obligation 5: the accessible name is STATED rather than left to be
+            // computed. A `treeitem` OWNS its child group, so a name computed
+            // from contents reads the whole branch out as the row's own name.
+            ("aria-label", s(label.clone())),
+            ("aria-level", s(level.to_string())),
+            ("aria-setsize", s(set_size.to_string())),
+            ("aria-posinset", s((i + 1).to_string())),
+            ("data-fuaran-tree-item", s(item.id.clone())),
+            (
+                "tabindex",
+                s(if focusable == Some(item.id.as_str()) {
+                    "0"
+                } else {
+                    "-1"
+                }),
+            ),
+        ];
+        // Obligation 2: `aria-expanded` on rows that HAVE children, and on no
+        // others. On a leaf the attribute asserts a collapsed subtree that does
+        // not exist, and assistive technology announces such a row as closed - a
+        // reader told there is more when there is not.
+        if has_children {
+            attrs.push(("aria-expanded", s(if is_open { "true" } else { "false" })));
+        }
+        // Obligation 3: `aria-selected` only where `selectionStateKey` is named.
+        // A tree that never selects must not declare a selectable widget with
+        // nothing selected.
+        if spec.selection_state_key.is_some() {
+            attrs.push((
+                "aria-selected",
+                s(if selected == Some(item.id.as_str()) {
+                    "true"
+                } else {
+                    "false"
+                }),
+            ));
+        }
+        let label_el = text_el("span", &[("class", s("fuaran-tree-label"))], &label);
+        let group = if is_open {
+            el(
+                "ul",
+                &[("class", s("fuaran-tree-group")), ("role", s("group"))],
+                &render_tree_items(
+                    ctx,
+                    spec,
+                    expanded,
+                    selected,
+                    focusable,
+                    level + 1,
+                    &item.children,
+                ),
+            )
+        } else {
+            String::new()
+        };
+        out.push_str(&el("li", &attrs, &format!("{label_el}{group}")));
+    }
+    out
+}
+
 fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
     match &field.kind {
         FormFieldKind::Text { value, .. } => {
@@ -2375,6 +2929,72 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
                     ("required", AttrVal::Flag(field.required)),
                 ],
                 &options_html,
+            )
+        }
+        // Phase 1113 obligations 3 and 4 - WIRE_FORMAT.md 3.6.9.
+        //
+        // The no-script floor is a native `<input type="text" list>` bound to a
+        // `<datalist>`: that PAIR is a combobox to the user agent, which supplies
+        // the popup, the filtering, the keyboard interaction and the
+        // accessibility semantics itself.
+        //
+        // A static host MUST NOT emit hand-written `role="combobox"` /
+        // `aria-expanded` on that input. A static `aria-expanded="false"` that
+        // can never become `true` REPLACES the user agent's correct semantics
+        // with a claim inert markup cannot keep - so the absence of those
+        // attributes here is the obligation being met, not an omission.
+        //
+        // `allowFreeText = false` is likewise NOT claimed as enforced: a
+        // `<datalist>` is a suggestion list and HTML has no native membership
+        // constraint for one. The declaration is carried as data so a client tier
+        // (and a server re-checking a submission, per 22) can act on it.
+        FormFieldKind::Combobox {
+            options,
+            value,
+            allow_free_text,
+            ..
+        } => {
+            let list_id = format!("{}-options", field.id);
+            let opts = resolve_options(ctx.sources, options);
+            let current = try_string(ctx.sources, value).unwrap_or_default();
+            let input = void_el(
+                "input",
+                &[
+                    ("class", s("fuaran-form-input fuaran-combobox-input")),
+                    ("data-fuaran-field", s(field.id.clone())),
+                    ("type", s("text")),
+                    ("list", s(list_id.clone())),
+                    // The browser's own history dropdown would otherwise compete
+                    // with the datalist popup for the same gesture.
+                    ("autocomplete", s("off")),
+                    (
+                        "data-fuaran-combobox-constrained",
+                        s(if *allow_free_text { "false" } else { "true" }),
+                    ),
+                    ("id", s(field.id.clone())),
+                    ("required", AttrVal::Flag(field.required)),
+                    ("value", s(current)),
+                ],
+            );
+            let list = el(
+                "datalist",
+                &[("id", s(list_id))],
+                &opts
+                    .iter()
+                    .filter(|o| o.value != "<opaque>")
+                    .map(|o| {
+                        text_el(
+                            "option",
+                            &[("value", s(o.value.clone()))],
+                            &render_text(ctx.sources, &o.label),
+                        )
+                    })
+                    .collect::<String>(),
+            );
+            el(
+                "span",
+                &[("class", s("fuaran-combobox"))],
+                &format!("{input}{list}"),
             )
         }
         FormFieldKind::TextArea { value, rows, .. } => {
@@ -2646,6 +3266,55 @@ fn render_filter(ctx: &Ctx<'_>, spec: &FilterSpec) -> String {
                 &options_html,
             )
         }
+        // Phase 1113 - the same control in the filter-chip carrier. One control
+        // vocabulary since the filters/forms unification, so the emission is the
+        // form field's with the chip's own class and the filter's name.
+        FormFieldKind::Combobox {
+            options,
+            value,
+            allow_free_text,
+            ..
+        } => {
+            let list_id = format!("{}-filter-options", spec.name);
+            let opts = resolve_options(ctx.sources, options);
+            let current = try_string(ctx.sources, value).unwrap_or_default();
+            let input = void_el(
+                "input",
+                &[
+                    ("class", s("fuaran-filter-input fuaran-combobox-input")),
+                    ("type", s("text")),
+                    ("list", s(list_id.clone())),
+                    ("autocomplete", s("off")),
+                    (
+                        "data-fuaran-combobox-constrained",
+                        s(if *allow_free_text { "false" } else { "true" }),
+                    ),
+                    ("placeholder", s(label_text.clone())),
+                    ("value", s(current)),
+                    ("data-filter-name", s(spec.name.clone())),
+                ],
+            );
+            let list = el(
+                "datalist",
+                &[("id", s(list_id))],
+                &opts
+                    .iter()
+                    .filter(|o| o.value != "<opaque>")
+                    .map(|o| {
+                        text_el(
+                            "option",
+                            &[("value", s(o.value.clone()))],
+                            &render_text(ctx.sources, &o.label),
+                        )
+                    })
+                    .collect::<String>(),
+            );
+            el(
+                "span",
+                &[("class", s("fuaran-combobox"))],
+                &format!("{input}{list}"),
+            )
+        }
         FormFieldKind::Range { value, .. } => {
             let (min, max) = resolve_float_pair(ctx.sources, value).unwrap_or((0.0, 0.0));
             el(
@@ -2890,6 +3559,7 @@ fn render_grid_cell(ctx: &Ctx<'_>, col: &ColumnErased, row: &JVal) -> String {
                 state: StateBehaviour::default(),
                 style: crate::wire::SemanticStyle::default(),
                 accessibility: None,
+                tooltip: None,
             };
             render_node(ctx, &placeholder)
         }
@@ -2972,7 +3642,13 @@ fn render_grid(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &GridSpec) -> String
     let body = el("tbody", &[], &body_rows);
     el(
         "table",
-        &[("class", s("fuaran-grid"))],
+        &[(
+            "class",
+            s(format!(
+                "fuaran-grid{}",
+                grid_print_break_classes(spec.keep_rows_together, spec.repeat_header)
+            )),
+        )],
         &format!("{head}{body}"),
     )
 }
@@ -3032,7 +3708,7 @@ fn grid_sorted_rows(ctx: &Ctx<'_>, spec: &GridSpec, rows: &[JVal]) -> Option<Vec
 }
 
 /// The static read-only table leg, driven by a grid's `staticRows`.
-fn render_static_table(ctx: &Ctx<'_>, spec: &StaticRows) -> String {
+fn render_static_table(ctx: &Ctx<'_>, spec: &StaticRows, grid: &GridSpec) -> String {
     let header_cells: String = spec
         .headers
         .iter()
@@ -3067,7 +3743,18 @@ fn render_static_table(ctx: &Ctx<'_>, spec: &StaticRows) -> String {
     // progressive-enhancement script honours it without re-parsing the wire. Emitted
     // ONLY when declared (an undeclared table's bytes are unchanged), and in the same
     // order as the F# / TS / Python / Go renderers so the markup stays parity-locked.
-    let mut attrs = vec![("class", s("fuaran-table"))];
+    // Phase 1473 — the two grid print declarations reach the STATIC leg too:
+    // `staticRows` is a mode of `GridSpec`, not a separate kind, so a document
+    // declaring `repeatHeader` on a static table means exactly what it means on
+    // a bound one — and this is the leg where the rows and the header row group
+    // are real elements the print rules can hook.
+    let mut attrs = vec![(
+        "class",
+        s(format!(
+            "fuaran-table{}",
+            grid_print_break_classes(grid.keep_rows_together, grid.repeat_header)
+        )),
+    )];
     if let Some(sortable) = spec.sortable {
         attrs.push((
             "data-fuaran-sortable",

@@ -69,6 +69,7 @@ fn metric(id: &str, label: &str, value: f64) -> Node {
         state: empty_state(),
         style: SemanticStyle::default(),
         accessibility: None,
+        tooltip: None,
     }
 }
 
@@ -92,10 +93,13 @@ fn flex_box(
                 wrap,
             },
             role,
+            keep_together: false,
+            break_before: false,
         }),
         state: empty_state(),
         style: SemanticStyle::default(),
         accessibility: None,
+        tooltip: None,
     }
 }
 

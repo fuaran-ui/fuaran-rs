@@ -115,6 +115,10 @@ pub fn resolve_tree(sources: &BindingSources, node: &Node) -> Node {
         state: node.state.clone(),
         style: node.style,
         accessibility: node.accessibility.clone(),
+        // Phase 1112 - the hint is CONTENT, so it resolves like every other
+        // TextSource slot rather than travelling through unread: a `Bound`
+        // tooltip must show the store's value, not its binding.
+        tooltip: resolve_text_opt(sources, &node.tooltip),
     }
 }
 
@@ -273,6 +277,17 @@ fn resolve_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
         // structural child list, so a state write inside one is not yet
         // visible. Same recorded negative result, same remedy if it moves.
         | NodeKind::Media(_)
+        // Phase 1111 / 1120 — beside `Media` for the same reason, and recorded
+        // rather than implied. `Embed` carries a reactive `src` and no
+        // structural child list. `Tree`'s rows are `TreeItem` RECORDS, not
+        // `Node`s, so `structural_children` does not reach them at all and its
+        // labels are the only reactive surface it has; its two State slots are
+        // read by the RENDERER from the store, never substituted into the tree,
+        // so there is nothing here for this pass to make visible either way.
+        // A state write inside either is therefore not yet visible — the same
+        // negative result, and the same remedy if the floor widens.
+        | NodeKind::Embed(_)
+        | NodeKind::Tree(_)
         | NodeKind::List(_)
         | NodeKind::Toast(_)
         | NodeKind::CodeBlock(_)

@@ -121,6 +121,32 @@ bare_enum!(ImageAspect {
 // while `Lazy` is a positive declaration. A host MUST NOT infer laziness from
 // position, viewport, or anything else the tree does not say.
 bare_enum!(ImageLoading { Eager => "Eager", Lazy => "Lazy" });
+// Phase 1110 - the closed timed-text track vocabulary (WIRE_FORMAT.md 3.6.6).
+// `metadata` is deliberately NOT a case: its cues are rendered by no user agent
+// and read only by script, so a declarative document naming it would state an
+// intent no conformant host could honour. The set is closed at four; a fifth is
+// an addition, not a spelling a decoder may guess at.
+bare_enum!(TrackKind {
+    Subtitles => "Subtitles", Captions => "Captions",
+    Descriptions => "Descriptions", Chapters => "Chapters"
+});
+// Phase 1111 - the closed sandbox-relaxation vocabulary (WIRE_FORMAT.md 3.6.8).
+// A BARE enum, so an unrecognised token reports at the ELEMENT's own path with
+// no `$type` suffix. A decoder MUST NOT silently drop an unrecognised
+// permission: that would turn a document asking for something this vocabulary
+// has no name for into a document asking for LESS, which reads as success.
+bare_enum!(EmbedPermission {
+    AllowScripts => "AllowScripts", AllowSameOrigin => "AllowSameOrigin",
+    AllowForms => "AllowForms", AllowFullscreen => "AllowFullscreen"
+});
+// WIRE_FORMAT.md 3.6.11 - the modality a `Modal` declares. Omitted at `Modal`,
+// which is the blocking modality every pre-modality document meant.
+bare_enum!(ModalityKind { Modal => "Modal", Popover => "Popover" });
+// Phase 1472 - the node-level declared text direction (WIRE_FORMAT.md 3.1).
+// Lower-case on the wire, like `LiveRegionKind` and `SortDirection`, because
+// these are the HTML `dir` tokens themselves. Omitted at `Auto`, which leaves
+// the inherited direction in place - the pre-1472 rendering.
+bare_enum!(TextDirection { Auto => "auto", Ltr => "ltr", Rtl => "rtl" });
 // Anti-scraper render strategy for a `Link` — `email` marks a `mailto:` link
 // whose address must not appear in plaintext in emitted markup (the renderers
 // own the emission strategy). Lower-case on the wire, like `SortDirection`.
@@ -859,6 +885,81 @@ pub struct MediaSpec {
     /// the wire key are the same word.
     pub r#loop: bool,
     pub kind: MediaKind,
+    /// Phase 1110 - the element's timed-text tracks, in the AUTHORED order the
+    /// wire carries. Omitted when EMPTY: an absent list and an empty one denote
+    /// the same document, so a decoder restores `[]` and never a null.
+    pub tracks: Vec<TrackEntry>,
+    /// Phase 1110 - the text alternative. An ordinary optional: absent means the
+    /// document offers no transcript, which is a different statement from
+    /// offering an empty one.
+    pub transcript: Option<TextSource>,
+}
+
+/// Phase 1110 - one timed-text track (WIRE_FORMAT.md 3.6.6). Four of the five
+/// members are REQUIRED, which makes it the strictest record on the wire;
+/// `default` is the one omitted-at-`false` slot.
+///
+/// `src_lang` is required on EVERY kind, where HTML makes `srclang` mandatory
+/// only on a subtitles track: a track with no language is one nothing downstream
+/// can route, and there is no value to default to that would not be an invented
+/// claim about someone else's recording.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackEntry {
+    pub kind: TrackKind,
+    pub src: Binding,
+    pub src_lang: String,
+    pub label: TextSource,
+    pub default: bool,
+}
+
+/// Phase 1111 - the sandboxed third-party embed (WIRE_FORMAT.md 3.6.8).
+///
+/// `title` is REQUIRED: a frame is a focus container a reader tabs INTO, so
+/// there is no decorative embed the way there is a decorative image, and an
+/// invented title is a claim about somebody else's document.
+///
+/// `permissions` is omitted at the EMPTY list, and empty means TOTAL DENIAL -
+/// the wire-cheapest document is also the most locked-down one. `aspect_ratio`
+/// REUSES [`ImageAspect`] rather than minting a parallel enum with identical
+/// cases, and omits at `Natural` for the reason every other omit-at-default slot
+/// does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbedSpec {
+    pub src: Binding,
+    pub title: TextSource,
+    pub aspect_ratio: ImageAspect,
+    pub permissions: Vec<EmbedPermission>,
+}
+
+/// Phase 1120 - one `Tree` row (WIRE_FORMAT.md 3.6.12).
+///
+/// `children` is a list of the SAME record, which makes this the format's first
+/// self-referential shape; it omits at the EMPTY LIST, so a leaf carries two
+/// keys and nothing else. `id` is required because it is what the two State
+/// slots NAME; `label` is a `TextSource` because it is content.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TreeItem {
+    pub id: String,
+    pub label: TextSource,
+    pub children: Vec<TreeItem>,
+    pub icon: Option<String>,
+}
+
+/// Phase 1120 - recursive disclosure with tree semantics (WIRE_FORMAT.md
+/// 3.6.12).
+///
+/// The kind carries no `expandable` and no `selectable` boolean, and none is
+/// coming: a behaviour the reader drives is declared as a named State key the
+/// host both writes and reads. `expanded_state_key` names a State value holding
+/// a JSON ARRAY OF ROW IDS (absent => the tree renders FULLY EXPANDED and does
+/// not toggle); `selection_state_key` names one holding a BARE ROW-ID STRING
+/// (absent => the tree does not select and emits no `aria-selected`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TreeSpec {
+    pub items: Vec<TreeItem>,
+    pub expanded_state_key: Option<String>,
+    pub selection_state_key: Option<String>,
+    pub on_select: Option<Closure>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -916,6 +1017,22 @@ pub enum FormFieldKind {
     Choice {
         options: Binding,
         value: Binding,
+        on_change: Option<Closure>,
+    },
+    /// Phase 1113 - the searchable form of `Choice` (WIRE_FORMAT.md 3.6.9).
+    /// `options` / `value` / `on_change` are `Choice`'s, deliberately and
+    /// normatively: the constrained combobox IS a searchable select, so a
+    /// document migrating between the two changes its `$type` and nothing else,
+    /// and a host implementing a different value contract here would break
+    /// exactly that migration.
+    ///
+    /// `allow_free_text` omits at `false`, and the polarity is load-bearing -
+    /// the SHORTEST combobox document is the CONSTRAINED one, and admitting
+    /// off-list values is the thing an emitter has to ask for.
+    Combobox {
+        options: Binding,
+        value: Binding,
+        allow_free_text: bool,
         on_change: Option<Closure>,
     },
     RangedNumber {
@@ -1055,6 +1172,13 @@ pub struct FileUploadSpec {
     pub label: TextSource,
     pub multiple: bool,
     pub disabled: Option<Binding>,
+    /// Phase 1115 - an ADDITIONAL ingress route, never a replacement for the
+    /// picker. Omits at `false`, and the polarity is load-bearing: the shortest
+    /// upload document is the plain picker, which is what every document written
+    /// before this revision says.
+    pub drop_target: bool,
+    /// Phase 1115 - the paste ingress route. Same polarity, same reason.
+    pub accept_paste: bool,
     // `onSelect` is an always-emitted closure — no field.
 }
 
@@ -1172,6 +1296,21 @@ pub struct GridSpec {
     /// convention as `editable`. Edits and reorders share one destination.
     pub reorderable: bool,
     pub static_rows: Option<StaticRows>,
+    /// Phase 1473 — a PAGED-medium declaration, omitted at `false`. It names the
+    /// one fact a host cannot recover from a rendering: a formatter laying out
+    /// pages sees boxes, and nothing in the rendering carries back that the
+    /// three lines of a totals block are ONE THING that reads wrong when halved.
+    /// "Not stated" and "explicitly off" are the same state, so there is no
+    /// third value and a present member of the wrong JSON kind is REFUSED
+    /// rather than coerced.
+    /// No row of this grid is split across a page boundary. Applied to the
+    /// grid's ROWS, never to the grid as a whole — which is why it is a separate
+    /// member from `BoxSpec.keep_together` rather than reachable by wrapping.
+    pub keep_rows_together: bool,
+    /// Phase 1473 — the column headers repeat at the top of every page the grid
+    /// continues onto. What survives on `DataGrid` is precisely what no
+    /// arrangement of existing kinds reaches.
+    pub repeat_header: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1278,6 +1417,19 @@ pub struct BoxSpec {
     pub heading: Option<TextSource>,
     pub layout: BoxLayout,
     pub role: BoxRole,
+    /// Phase 1473 — a PAGED-medium declaration, omitted at `false`. It names the
+    /// one fact a host cannot recover from a rendering: a formatter laying out
+    /// pages sees boxes, and nothing in the rendering carries back that the
+    /// three lines of a totals block are ONE THING that reads wrong when halved.
+    /// "Not stated" and "explicitly off" are the same state, so there is no
+    /// third value and a present member of the wrong JSON kind is REFUSED
+    /// rather than coerced.
+    /// This container and its whole subtree stay on one page.
+    pub keep_together: bool,
+    /// Phase 1473 — this container starts at the top of a fresh page. There is
+    /// deliberately no break-AFTER member anywhere: a break after this container
+    /// is a break before the next one.
+    pub break_before: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1335,6 +1487,14 @@ pub struct ModalSpec {
     /// A wire-survivable `Action` (not a closure sentinel); optional since Phase 426.
     pub on_dismiss: Option<Action>,
     pub heading: Option<TextSource>,
+    /// WIRE_FORMAT.md 3.6.11 - omitted at `Modal`, the blocking modality every
+    /// pre-modality document meant. Only the blocking modality carries the
+    /// `aria-modal` inertness claim.
+    pub modality: ModalityKind,
+    /// WIRE_FORMAT.md 3.6.11 - the id of the element a `Popover` is positioned
+    /// against. An ordinary optional: a popover with no anchor is positioned by
+    /// the host's own default.
+    pub anchor: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1665,6 +1825,8 @@ pub enum NodeKind {
     Link(LinkSpec),
     Image(ImageSpec),
     Media(MediaSpec),
+    Embed(EmbedSpec),
+    Tree(TreeSpec),
     List(ListSpec),
     Toast(ToastSpec),
     CodeBlock(CodeBlockSpec),
@@ -1728,6 +1890,8 @@ impl NodeKind {
             NodeKind::Link(_) => "Link",
             NodeKind::Image(_) => "Image",
             NodeKind::Media(_) => "Media",
+            NodeKind::Embed(_) => "Embed",
+            NodeKind::Tree(_) => "Tree",
             NodeKind::List(_) => "List",
             NodeKind::Toast(_) => "Toast",
             NodeKind::CodeBlock(_) => "CodeBlock",
@@ -1775,6 +1939,8 @@ impl NodeKind {
             | NodeKind::Link(_)
             | NodeKind::Image(_)
             | NodeKind::Media(_)
+            | NodeKind::Embed(_)
+            | NodeKind::Tree(_)
             | NodeKind::List(_)
             | NodeKind::Toast(_)
             | NodeKind::CodeBlock(_)
@@ -1832,6 +1998,8 @@ pub const CANONICAL_NODE_KINDS: &[&str] = &[
     "Link",
     "Image",
     "Media",
+    "Embed",
+    "Tree",
     "List",
     "Toast",
     "CodeBlock",
@@ -1882,6 +2050,7 @@ pub const CANONICAL_FORM_FIELD_KINDS: &[&str] = &[
     "TextArea",
     "Date",
     "DateRange",
+    "Combobox",
 ];
 
 // ─── Node envelope (§3.1) ────────────────────────────────────────────────────
@@ -1909,6 +2078,11 @@ pub struct SemanticStyle {
     pub role: StyleRole,
     /// Phase 147 — omitted on the wire at its default (`Default`).
     pub voice: FontVoice,
+    /// Phase 1472 - the DECLARED text direction, omitted at `Auto`. A node
+    /// declaring one is a bidi ISOLATION boundary: the host emits `dir` on the
+    /// node's own element so a run of the opposite direction cannot reorder the
+    /// text around it.
+    pub direction: TextDirection,
 }
 
 impl Default for SemanticStyle {
@@ -1919,6 +2093,7 @@ impl Default for SemanticStyle {
             weight: StyleWeight::Standard,
             role: StyleRole::None,
             voice: FontVoice::Default,
+            direction: TextDirection::Auto,
         }
     }
 }
@@ -1952,6 +2127,11 @@ pub struct Node {
     /// Restored to all-default when the wire omits it (the common case).
     pub style: SemanticStyle,
     pub accessibility: Option<Accessibility>,
+    /// Phase 1112 - the node-level tooltip TRAIT (WIRE_FORMAT.md 3.6). A hint is
+    /// uniform across kinds, so it sits on the envelope beside `accessibility`
+    /// rather than in any kind. It is a DESCRIPTION, never a NAME: a host
+    /// projects it as `aria-describedby` and never as `aria-label`.
+    pub tooltip: Option<TextSource>,
 }
 
 // ─── TreeOp (§3.4) ───────────────────────────────────────────────────────────

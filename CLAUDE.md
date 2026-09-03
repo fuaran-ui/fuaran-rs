@@ -80,11 +80,14 @@ fuaran-rs/
 ├── include/fuaran.h     # hand-written C header for src/ffi/ — the native binding surface + ownership/threading contract
 ├── css/fuaran.css       # byte-copy of the reference stylesheet (parity-tested against the reference artefact)
 ├── js/                  # thin hand-written WASM loader (fuaran-loader.js) + client-loop demo (index.html)
-│                        #   + placement-abi.mjs / list-param.mjs (the wasm32 legs of the
-│                        #     placement C-ABI and the list-valued Transform params)
+│                        #   + placement-abi.mjs / list-param.mjs / platform-baseline.mjs (the wasm32
+│                        #     legs of the placement C-ABI, the list-valued Transform params, and the
+│                        #     platform-baseline capability wave)
 ├── tests/               # conformance.rs + apply.rs + validator.rs + markdown.rs + render.rs + client.rs + ffi.rs
+│                        #   + render_obligations.rs (the manifest-driven render-obligation gate)
 │                        #   + placement.rs / placement_abi.rs + transform_list_param.rs /
-│                        #     list_param_abi.rs + fixtures/ (the shared two-target ABI scenarios)
+│                        #     list_param_abi.rs + platform_baseline_abi.rs
+│                        #   + fixtures/ (the shared two-target ABI scenarios)
 ├── Cargo.toml           # lib + cdylib + staticlib crate types; release profile tuned for a small wasm artefact
 ├── run.ps1              # Stage-0 entry point — fmt/clippy/build/test/wasm; -CrossTargets/-Package for native mobile
 ├── LICENSE              # Apache 2.0 + Diametrical Ltd copyright
@@ -509,6 +512,60 @@ semantic oracle; `tests/placement.rs` is, and confusing the two would let a wron
 expectation certify itself. Both legs carry a go-red probe that perturbs a real
 request every run, because a recorded-envelope comparison whose recorder is the code
 under test is worth nothing without one.
+
+## The platform-baseline capability wave
+
+Five vocabulary additions adopted together — `Media`'s timed-text `tracks` and its
+`transcript` (§3.6.6), the sandboxed `Embed` kind (§3.6.8), the node-level `tooltip`
+TRAIT (§3.6), `FormFieldKind.Combobox` (§3.6.9) and the self-referential `Tree` kind
+(§3.6.12) — each in the codec, in the server-HTML emission, and in the executable
+render-obligation gate.
+
+**Four things about it are load-bearing and easy to undo by accident.**
+
+- **`Tree` items are bounded on their OWN axis.** A whole hierarchy of `TreeItem`
+  rows lives inside ONE node, so `NodeGuard` is entered once and never again however
+  deep the rows go — neither the node-depth guard nor the syntactic one reaches the
+  recursion, and a self-referential shape with no counter of its own is unbounded
+  recursion in a decoder whose overflow ABORTS the process. Hence
+  `limits::TreeItemGuard`, on the `TreeOp::Batch` precedent and held to the same
+  `MAX_NODE_DEPTH`. Do not fold it into either existing counter.
+- **`Embed.src` has its OWN egress class and its own scheme floor.** `EgressClass::Embed`
+  is scoped separately from `Media` because a composition that declared an origin for
+  image egress has said nothing about which DOCUMENTS it is willing to RUN, and
+  `sanitize::sanitize_embed_src` accepts `https` and nothing else — refusing `http`
+  and, more sharply, every SCHEMELESS reference, since a same-origin frame is exactly
+  the shape where a guest granted both `AllowSameOrigin` and `AllowScripts` can reach
+  its own frame element and strip the sandbox attribute off it. A refusal OMITS the
+  source attribute rather than substituting the refusal URL: an `<iframe>` pointed at
+  that URL renders it, where one with no source fetches nothing.
+- **The tooltip's focus-stop split is NOT `forwards_to_semantic_element`'s.** The
+  description must ride the element that takes KEYBOARD FOCUS, so `Image` — which
+  forwards its a11y projection but is not a focus stop — takes the hint on its wrapper
+  with a `tabindex`, where `Button` / `Link` / `Media` / `Embed` take it directly. A
+  hint resolving to empty or whitespace emits NOTHING at all: no element, no
+  `aria-describedby`, no focus stop, no class fragment.
+- **The `dir` emission covers the DECLARED direction only.** `SemanticStyle.direction`
+  emits `dir="ltr"` / `dir="rtl"` plus the `fuaran-dir-*` isolation class; `Auto` emits
+  nothing, because this host has not adopted the reference tier's `dir="auto"`
+  isolation HEURISTIC over bound display leaves, and inventing one under a declaration
+  slot would conflate two different statements. No `lang` is emitted from any of this
+  — a locale is not derivable from a direction, and the document shell is where `lang`
+  belongs.
+
+**Certified on BOTH targets, because both are hosts.** The native leg
+(`tests/platform_baseline_abi.rs`) and the `wasm32` leg (`js/platform-baseline.mjs`,
+run by `run.ps1` when node is on PATH) drive the SAME
+`tests/fixtures/platform-baseline.json` over the C-ABI, comparing the re-serialised
+tree AND the rendered markup. That matters more here than for the other two ABI legs:
+the native surfaces over this core are decode-only render projections, so five
+capabilities landing in the codec and the renderer says nothing on its own about
+whether such a surface can SEE them. **No new ABI verb was needed** — the surface is
+generic over the vocabulary, so a kind reaches a native binding the moment the codec
+and the renderer carry it. What such a binding cannot reach is the egress policy:
+the C-ABI session opens under `deny_non_local_egress` and exposes no knob, so a remote
+`Embed` source is refused on that path, and the fixture pins that deliberately rather
+than working around it.
 
 ## Native C-ABI surface (`src/ffi/` + `include/fuaran.h`)
 

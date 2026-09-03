@@ -118,6 +118,36 @@ pub fn sanitize_url(url: &str) -> Option<Cow<'_, str>> {
     }
 }
 
+/// WIRE_FORMAT.md 19.1 - the STRICTER floor for `Embed.src`, a slot that
+/// EXECUTES rather than merely displaying.
+///
+/// Rules 1 and 2 are shared with [`sanitize_url`] verbatim - the same
+/// normalisation, the same scheme extraction - and then rule 3 replaces the
+/// accept set outright: **accept if and only if the scheme is `https`**.
+///
+/// Two of the exclusions are things the ordinary floor ACCEPTS, and both are
+/// deliberate. `http` is refused because a document delivered over a channel any
+/// intermediary can rewrite is an intermediary's script running in a frame this
+/// page created. A **schemeless** reference is refused because it names a
+/// same-origin document, and a same-origin frame is exactly the shape where a
+/// guest granted both `AllowSameOrigin` and `AllowScripts` can reach its own
+/// frame ELEMENT and strip the sandbox attribute off it.
+///
+/// `None` means the caller emits NO source attribute at all - not `about:blank`,
+/// which an `<iframe>` would RENDER, and not the original value.
+///
+/// Accepting exactly one scheme means the class performs no positional test, so
+/// it needs no rule-5 protocol-relative analogue and cannot inherit that
+/// surface: `//host/x` has no scheme and is refused by rule 3 alone.
+#[must_use]
+pub fn sanitize_embed_src(url: &str) -> Option<String> {
+    let normalised = normalize_url_for_floor(url);
+    match extract_scheme(&normalised) {
+        Some(scheme) if scheme == "https" => Some(normalised.into_owned()),
+        _ => None,
+    }
+}
+
 /// The URL itself if accepted, or `about:blank` — for call sites that must
 /// emit *some* href to keep the element valid.
 pub fn sanitize_url_or_blank(url: &str) -> String {

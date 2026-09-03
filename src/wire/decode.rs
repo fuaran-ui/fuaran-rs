@@ -509,6 +509,17 @@ decode_bare_enum!(decode_image_variant, ImageVariant, "ImageVariant");
 decode_bare_enum!(decode_image_fit, ImageFit, "ImageFit");
 decode_bare_enum!(decode_image_aspect, ImageAspect, "ImageAspect");
 decode_bare_enum!(decode_image_loading, ImageLoading, "ImageLoading");
+// Phase 1110 - the timed-text track vocabulary. BARE, so an unrecognised
+// spelling reports at `$.kind.tracks[i].kind` with no `.$type` suffix.
+decode_bare_enum!(decode_track_kind, TrackKind, "TrackKind");
+// Phase 1111 - the sandbox-relaxation vocabulary. BARE and reported at the
+// ELEMENT's own path (`$.kind.permissions[0]`), which is what makes the HTML
+// token an author reaches for from memory (`"allow-top-navigation"`) an
+// UNKNOWN_DU_CASE there rather than a silent drop.
+decode_bare_enum!(decode_embed_permission, EmbedPermission, "EmbedPermission");
+// WIRE_FORMAT.md 3.6.11 / Phase 1472 - the modality and direction tokens.
+decode_bare_enum!(decode_modality_kind, ModalityKind, "ModalityKind");
+decode_bare_enum!(decode_text_direction, TextDirection, "TextDirection");
 decode_bare_enum!(decode_link_protection, LinkProtection, "LinkProtection");
 decode_bare_enum!(decode_math_display, MathDisplay, "MathDisplay");
 decode_bare_enum!(decode_date_variant, DateVariant, "DateVariant");
@@ -2639,12 +2650,171 @@ fn decode_media_spec(path: &str, j: &JVal) -> DResult<MediaSpec> {
     let kind = decode_media_kind(&format!("{path}.kind"), kind_j)?;
     let controls = opt_bool(path, fields, "controls")?.unwrap_or(true);
     let r#loop = opt_bool(path, fields, "loop")?.unwrap_or(false);
+    // Phase 1110 - the MISSING-LIST-FIELD class again (`srcSet`'s rule, one kind
+    // over): an ABSENT `tracks` IS the empty list, never `None` and never null.
+    // A PRESENT `null` goes through `as_arr` and is refused, because absence
+    // already has a spelling and admitting a second lets two conformant hosts
+    // emit different canonical bytes for the same document. The AUTHORED order
+    // is preserved here and at render - a reader picks a track from a menu the
+    // user agent builds in document order, so sorting it would be rewriting
+    // somebody else's menu.
+    let tracks = match get(fields, "tracks") {
+        None => Vec::new(),
+        Some(v) => {
+            let arr = as_arr(&format!("{path}.tracks"), v)?;
+            let mut out = Vec::with_capacity(arr.len());
+            for (i, entry) in arr.iter().enumerate() {
+                out.push(decode_track_entry(&format!("{path}.tracks[{i}]"), entry)?);
+            }
+            out
+        }
+    };
+    // An ordinary optional: absent means the document offers no transcript,
+    // which is a different statement from offering an empty one.
+    let transcript = opt_text_source(path, fields, "transcript")?;
     Ok(MediaSpec {
         src,
         label,
         controls,
         r#loop,
         kind,
+        tracks,
+        transcript,
+    })
+}
+
+/// Phase 1110 - one `TrackEntry` (WIRE_FORMAT.md 3.6.6), the strictest record on
+/// the wire: four of five members REQUIRED.
+///
+/// `srcLang` is required on EVERY kind, where HTML makes it mandatory only on a
+/// subtitles track - there is no value to default to that would not be an
+/// invented claim about someone else's recording. The path carries the array
+/// index the caller supplied, so a document with four tracks names the one at
+/// fault.
+///
+/// `default` is the one omitted-at-`false` slot and is NOT truthiness-coerced: a
+/// stringified boolean is `WRONG_TYPE`, at the position a host decoding array
+/// elements with a looser walker than its records would get wrong.
+fn decode_track_entry(path: &str, j: &JVal) -> DResult<TrackEntry> {
+    let fields = as_obj(path, j)?;
+    let kind_j = req(path, fields, "kind", "TrackKind")?;
+    let kind = decode_track_kind(&format!("{path}.kind"), kind_j)?;
+    let src = req_binding_slot(
+        path,
+        fields,
+        "src",
+        "TrackEntry Binding<string> Src",
+        StaticSlot::Str,
+    )?;
+    let src_lang = req_string(path, fields, "srcLang", "TrackEntry srcLang string")?;
+    let label = req_text_source(path, fields, "label", "TrackEntry label TextSource")?;
+    let default = opt_bool(path, fields, "default")?.unwrap_or(false);
+    Ok(TrackEntry {
+        kind,
+        src,
+        src_lang,
+        label,
+        default,
+    })
+}
+
+/// Phase 1111 - the sandboxed third-party embed (WIRE_FORMAT.md 3.6.8).
+///
+/// `title` is REQUIRED and refused when absent rather than defaulted: an
+/// invented title is a claim about somebody else's document. `permissions` is
+/// the empty list when absent, and empty means TOTAL DENIAL - so the
+/// wire-cheapest document is also the most locked-down one.
+fn decode_embed_spec(path: &str, j: &JVal) -> DResult<EmbedSpec> {
+    let fields = as_obj(path, j)?;
+    let src = req_binding_slot(
+        path,
+        fields,
+        "src",
+        "Embed Binding<string> Src",
+        StaticSlot::Str,
+    )?;
+    let title = req_text_source(path, fields, "title", "Embed accessible title TextSource")?;
+    let aspect_ratio = match get(fields, "aspectRatio") {
+        None => ImageAspect::Natural,
+        Some(v) => decode_image_aspect(&format!("{path}.aspectRatio"), v)?,
+    };
+    // An unrecognised permission is REFUSED, never dropped: dropping would turn
+    // a document asking for something this vocabulary has no name for into a
+    // document asking for LESS, which reads as success.
+    let permissions = match get(fields, "permissions") {
+        None => Vec::new(),
+        Some(v) => {
+            let arr = as_arr(&format!("{path}.permissions"), v)?;
+            let mut out = Vec::with_capacity(arr.len());
+            for (i, entry) in arr.iter().enumerate() {
+                out.push(decode_embed_permission(
+                    &format!("{path}.permissions[{i}]"),
+                    entry,
+                )?);
+            }
+            out
+        }
+    };
+    Ok(EmbedSpec {
+        src,
+        title,
+        aspect_ratio,
+        permissions,
+    })
+}
+
+/// Phase 1120 - `Tree` (WIRE_FORMAT.md 3.6.12).
+fn decode_tree_spec(path: &str, j: &JVal) -> DResult<TreeSpec> {
+    let fields = as_obj(path, j)?;
+    let items_j = req(path, fields, "items", "Tree item list")?;
+    let arr = as_arr(&format!("{path}.items"), items_j)?;
+    let mut items = Vec::with_capacity(arr.len());
+    for (i, item) in arr.iter().enumerate() {
+        items.push(decode_tree_item(&format!("{path}.items[{i}]"), item)?);
+    }
+    Ok(TreeSpec {
+        items,
+        expanded_state_key: opt_string(path, fields, "expandedStateKey")?,
+        selection_state_key: opt_string(path, fields, "selectionStateKey")?,
+        on_select: opt_closure(fields, "onSelect"),
+    })
+}
+
+/// Phase 1120 - one `TreeItem`, the format's first SELF-REFERENTIAL shape.
+///
+/// Item nesting is bounded on its OWN axis (WIRE_FORMAT.md 21.5): a whole
+/// hierarchy lives inside one node, so it consumes no node depth at all, and the
+/// `TreeOp::Batch` precedent is what fixes the ceiling at `MAX_NODE_DEPTH`
+/// counted separately. The guard refuses on the way DOWN and pops in `Drop`,
+/// which is what keeps the counter correct on this decoder's many `?` returns.
+///
+/// The child walk is THIS function, not a looser inline one: a host whose child
+/// walker is looser than its root walker passes
+/// `reject-tree-item-missing-{id,label}` and fails
+/// `reject-tree-nested-item-missing-id` one level down.
+fn decode_tree_item(path: &str, j: &JVal) -> DResult<TreeItem> {
+    let _guard = crate::limits::TreeItemGuard::enter().map_err(|b| limit_error(path, b))?;
+
+    let fields = as_obj(path, j)?;
+    let id = req_string(path, fields, "id", "TreeItem id string")?;
+    let label = req_text_source(path, fields, "label", "TreeItem label TextSource")?;
+    let children = match get(fields, "children") {
+        None => Vec::new(),
+        Some(v) => {
+            let arr = as_arr(&format!("{path}.children"), v)?;
+            let mut out = Vec::with_capacity(arr.len());
+            for (i, child) in arr.iter().enumerate() {
+                out.push(decode_tree_item(&format!("{path}.children[{i}]"), child)?);
+            }
+            out
+        }
+    };
+    let icon = opt_string(path, fields, "icon")?;
+    Ok(TreeItem {
+        id,
+        label,
+        children,
+        icon,
     })
 }
 
@@ -2893,6 +3063,23 @@ fn decode_form_field_kind(
                 StaticSlot::Options,
             )?,
             value: value_or(StaticSlot::StringOpt, control_value_defaults::choice())?,
+            on_change,
+        }),
+        // Phase 1113 - the searchable form of `Choice`, sharing its value contract
+        // exactly: a document migrating between the two changes its `$type` and
+        // nothing else, so the auto-bind placeholder is `choice()`'s too.
+        // `allowFreeText` is NOT truthiness-coerced - a lenient read would widen
+        // the field on `"no"` and `"false"` alike.
+        "Combobox" => Ok(FormFieldKind::Combobox {
+            options: req_binding_slot(
+                path,
+                fields,
+                "options",
+                "Combobox options binding",
+                StaticSlot::Options,
+            )?,
+            value: value_or(StaticSlot::StringOpt, control_value_defaults::choice())?,
+            allow_free_text: opt_bool(path, fields, "allowFreeText")?.unwrap_or(false),
             on_change,
         }),
         // 0.2.0 — the dual-thumb numeric range (absorbed FilterKind.RangeFilter).
@@ -3242,11 +3429,20 @@ fn decode_file_upload_spec(path: &str, j: &JVal) -> DResult<FileUploadSpec> {
     let label = req_text_source(path, fields, "label", "FileUpload label TextSource")?;
     let multiple = req_bool(path, fields, "multiple", "multiple bool")?;
     let disabled = opt_binding_slot(path, fields, "disabled", StaticSlot::Bool)?;
+    // Phase 1115 - two ADDITIONAL ingress routes. Absent reads as `false`; a
+    // present member of any other type is `WRONG_TYPE` and MUST NOT be coerced,
+    // because the slot decides whether a whole ingress route exists and a
+    // lenient truthiness read would open a drop target on `"no"` and `"false"`
+    // alike.
+    let drop_target = opt_bool(path, fields, "dropTarget")?.unwrap_or(false);
+    let accept_paste = opt_bool(path, fields, "acceptPaste")?.unwrap_or(false);
     Ok(FileUploadSpec {
         accept,
         label,
         multiple,
         disabled,
+        drop_target,
+        accept_paste,
     })
 }
 
@@ -3729,6 +3925,9 @@ fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
         edit_state_key,
         reorderable,
         static_rows,
+        // Phase 1473 — the DataGrid arm of the same refusal.
+        keep_rows_together: opt_bool(path, fields, "keepRowsTogether")?.unwrap_or(false),
+        repeat_header: opt_bool(path, fields, "repeatHeader")?.unwrap_or(false),
     })
 }
 
@@ -4131,6 +4330,14 @@ fn decode_box_spec(path: &str, j: &JVal) -> DResult<BoxSpec> {
         heading,
         layout,
         role,
+        // Phase 1473 — refused, never coerced: a document that meant `true` and
+        // wrote `"true"` would otherwise render with its declaration silently
+        // dropped, which is exactly the split block the member exists to
+        // prevent. Pinned on BOTH decoder arms the vocabulary reaches, because
+        // they are separate branches and a vector on one proves nothing about
+        // the other.
+        keep_together: opt_bool(path, fields, "keepTogether")?.unwrap_or(false),
+        break_before: opt_bool(path, fields, "breakBefore")?.unwrap_or(false),
     })
 }
 
@@ -4260,12 +4467,21 @@ fn decode_modal_spec(path: &str, j: &JVal) -> DResult<ModalSpec> {
     let open = req_binding_slot(path, fields, "open", "open binding", StaticSlot::Bool)?;
     // Field alias: title → heading.
     let heading = opt_text_source_aliased(path, fields, "heading", &["title"])?;
+    // WIRE_FORMAT.md 3.6.11 - omitted at `Modal`. A non-string is `WRONG_TYPE`
+    // and an unrecognised spelling `UNKNOWN_DU_CASE`, both at `$.kind.modality`
+    // with no `.$type` suffix: this is a BARE enum.
+    let modality = match get(fields, "modality") {
+        None => ModalityKind::Modal,
+        Some(v) => decode_modality_kind(&format!("{path}.modality"), v)?,
+    };
     Ok(ModalSpec {
         children,
         dismissable,
         open,
         on_dismiss,
         heading,
+        modality,
+        anchor: opt_string(path, fields, "anchor")?,
     })
 }
 
@@ -4598,6 +4814,8 @@ fn decode_node_kind_g2(
         "Link" => (|| -> DResult<NodeKind> { Ok(NodeKind::Link(decode_link_spec(path, j)?)) })(),
         "Image" => (|| -> DResult<NodeKind> { Ok(NodeKind::Image(decode_image_spec(path, j)?)) })(),
         "Media" => (|| -> DResult<NodeKind> { Ok(NodeKind::Media(decode_media_spec(path, j)?)) })(),
+        "Embed" => (|| -> DResult<NodeKind> { Ok(NodeKind::Embed(decode_embed_spec(path, j)?)) })(),
+        "Tree" => (|| -> DResult<NodeKind> { Ok(NodeKind::Tree(decode_tree_spec(path, j)?)) })(),
         "List" => (|| -> DResult<NodeKind> { Ok(NodeKind::List(decode_list_spec(path, j)?)) })(),
         "Toast" => (|| -> DResult<NodeKind> { Ok(NodeKind::Toast(decode_toast_spec(path, j)?)) })(),
         "CodeBlock" => {
@@ -4862,12 +5080,20 @@ fn decode_semantic_style(path: &str, j: &JVal) -> DResult<SemanticStyle> {
         None => FontVoice::Default,
         Some(v) => decode_font_voice(&format!("{path}.voice"), v)?,
     };
+    // Phase 1472 - omitted at `Auto`. Lower-case tokens, so the upper-case
+    // spelling an author reaches for (`"LTR"`) is UNKNOWN_DU_CASE rather than
+    // being case-folded into acceptance.
+    let direction = match get(fields, "direction") {
+        None => TextDirection::Auto,
+        Some(v) => decode_text_direction(&format!("{path}.direction"), v)?,
+    };
     Ok(SemanticStyle {
         emphasis,
         tone,
         weight,
         role,
         voice,
+        direction,
     })
 }
 
@@ -4937,12 +5163,18 @@ fn decode_node_ast(path: &str, j: &JVal) -> DResult<Node> {
         None => None,
         Some(v) => Some(decode_accessibility(&format!("{path}.accessibility"), v)?),
     };
+    // Phase 1112 - the tooltip TRAIT, on the envelope beside `accessibility`
+    // rather than in any kind. It takes every `TextSource` arm, so a non-string,
+    // non-object value is `WRONG_TYPE` at `$.tooltip` - reported through the
+    // shared `TextSource` decoder rather than by a second reading here.
+    let tooltip = opt_text_source(path, fields, "tooltip")?;
     Ok(Node {
         id: id.to_string(),
         kind,
         state,
         style,
         accessibility,
+        tooltip,
     })
 }
 

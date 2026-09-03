@@ -133,6 +133,11 @@ fn layout_children(n: &Node) -> Option<&Vec<Node>> {
         | NodeKind::Link(_)
         | NodeKind::Image(_)
         | NodeKind::Media(_)
+        // Neither carries a structural `children: Vec<Node>` — a frame's
+        // document is somebody else's tree, and a `TreeItem` is a record rather
+        // than a `Node`, so no structural child op addresses one.
+        | NodeKind::Embed(_)
+        | NodeKind::Tree(_)
         | NodeKind::List(_)
         | NodeKind::Toast(_)
         | NodeKind::CodeBlock(_)
@@ -216,6 +221,11 @@ fn child_nodes(n: &Node) -> Vec<&Node> {
         | NodeKind::Link(_)
         | NodeKind::Image(_)
         | NodeKind::Media(_)
+        // Neither carries a structural `children: Vec<Node>` — a frame's
+        // document is somebody else's tree, and a `TreeItem` is a record rather
+        // than a `Node`, so no structural child op addresses one.
+        | NodeKind::Embed(_)
+        | NodeKind::Tree(_)
         | NodeKind::List(_)
         | NodeKind::Toast(_)
         | NodeKind::CodeBlock(_)
@@ -743,6 +753,11 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
         // Remaining Display kinds carry no field-level surface yet.
         NodeKind::Image(_)
         | NodeKind::Media(_)
+        // No field-level update surface yet, on the same terms as the Display
+        // kinds beside them: `UpdateProp` reaches these through the structural
+        // JSON path, not through a named field.
+        | NodeKind::Embed(_)
+        | NodeKind::Tree(_)
         | NodeKind::List(_)
         | NodeKind::Toast(_)
         | NodeKind::CodeBlock(_)

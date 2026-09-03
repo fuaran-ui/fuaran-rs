@@ -68,6 +68,7 @@ thread_local! {
     static NODE_DEPTH: Cell<usize> = const { Cell::new(0) };
     static NODE_COUNT: Cell<usize> = const { Cell::new(0) };
     static OP_DEPTH: Cell<usize> = const { Cell::new(0) };
+    static TREE_ITEM_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
 /// Reset the walk counters. Called by each public decode entry point, so a walk
@@ -77,6 +78,7 @@ pub(crate) fn reset_walk() {
     NODE_DEPTH.with(|d| d.set(0));
     NODE_COUNT.with(|c| c.set(0));
     OP_DEPTH.with(|d| d.set(0));
+    TREE_ITEM_DEPTH.with(|d| d.set(0));
 }
 
 /// Why `thread_local!` rather than a threaded `&mut` parameter or a plain
@@ -154,6 +156,37 @@ impl Drop for OpGuard {
     }
 }
 
+/// The `Tree` ITEM axis, counted separately from both the node and the op axes.
+///
+/// WIRE_FORMAT.md §21.5, on the `TreeOp::Batch` precedent: a whole hierarchy of
+/// `TreeItem` rows lives inside ONE node, so it consumes no node depth at all —
+/// `NodeGuard` is entered once for the `Tree` node and never again however deep
+/// the rows go. At roughly two JSON levels per row it is nowhere near the
+/// syntactic bound either, so neither existing guard reaches it and a
+/// self-referential shape with no counter of its own is unbounded recursion in
+/// a decoder whose overflow ABORTS THE PROCESS.
+///
+/// Held to the same `MAX_NODE_DEPTH` ceiling, because that is a protocol number
+/// rather than a per-host tuning knob.
+pub(crate) struct TreeItemGuard;
+
+impl TreeItemGuard {
+    pub(crate) fn enter() -> Result<TreeItemGuard, LimitBreach> {
+        let depth = TREE_ITEM_DEPTH.with(|d| d.get());
+        if depth >= MAX_NODE_DEPTH {
+            return Err(LimitBreach::TreeItemDepth);
+        }
+        TREE_ITEM_DEPTH.with(|d| d.set(depth + 1));
+        Ok(TreeItemGuard)
+    }
+}
+
+impl Drop for TreeItemGuard {
+    fn drop(&mut self) {
+        TREE_ITEM_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
 /// Which bound was breached. Carried separately from the error type so this
 /// module takes no dependency on the wire crate's error shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +194,7 @@ pub(crate) enum LimitBreach {
     NodeDepth,
     NodeCount,
     OpDepth,
+    TreeItemDepth,
 }
 
 impl LimitBreach {
@@ -177,6 +211,9 @@ impl LimitBreach {
             LimitBreach::OpDepth => {
                 format!("op nesting deeper than the wire limit MAX_NODE_DEPTH = {MAX_NODE_DEPTH}")
             }
+            LimitBreach::TreeItemDepth => format!(
+                "Tree item nesting deeper than the wire limit MAX_NODE_DEPTH = {MAX_NODE_DEPTH}"
+            ),
         }
     }
 
@@ -190,6 +227,9 @@ impl LimitBreach {
             }
             LimitBreach::OpDepth => {
                 format!("a Batch nesting ops no more than {MAX_NODE_DEPTH} levels deep")
+            }
+            LimitBreach::TreeItemDepth => {
+                format!("a Tree nesting items no more than {MAX_NODE_DEPTH} levels deep")
             }
         }
     }

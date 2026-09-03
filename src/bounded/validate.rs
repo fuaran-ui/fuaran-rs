@@ -122,6 +122,12 @@ pub fn legitimate_events(kind: &NodeKind) -> &'static [&'static str] {
         NodeKind::Tabs(_) => &["click", "change"],
         NodeKind::Stepper(_) => &["click", "change"],
         NodeKind::Disclosure(_) => &["click", "change", "toggle"],
+        // Phase 1120 — a `Tree` row is a control the reader drives: the row
+        // selection arrives as a bubbled click (which is also where a keyboard
+        // Enter/Space lands), and the expansion toggle as a change. Same
+        // reasoning as `Tabs` and `Stepper`, and the kind carries the matching
+        // wire surface — `onSelect` and two named State slots the host writes.
+        NodeKind::Tree(_) => &["click", "change"],
 
         NodeKind::Box(_)
         | NodeKind::SplitPanel(_)
@@ -148,6 +154,14 @@ pub fn legitimate_events(kind: &NodeKind) -> &'static [&'static str] {
         // no closure-bearing position (§4), so there is nothing an inbound
         // event could legitimately be addressed to.
         | NodeKind::Media(_)
+        // Phase 1111 — `Embed` accepts NO event, and that is a decision rather
+        // than an omission. The framed document is a separate browsing context
+        // this host deliberately isolates; events inside it are the guest's and
+        // never cross the sandbox, and the kind declares no handler slot and
+        // reaches no closure-bearing position (§4), so there is nothing an
+        // inbound event could legitimately be addressed to. `Mount` is the kind
+        // for a COOPERATING guest with a declared channel.
+        | NodeKind::Embed(_)
         | NodeKind::List(_)
         | NodeKind::Toast(_)
         | NodeKind::CodeBlock(_)

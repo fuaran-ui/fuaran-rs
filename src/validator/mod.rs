@@ -410,7 +410,16 @@ impl Walker {
             }
             // No bounded-primitive / binding surface to lint (children are
             // walked by the caller).
-            NodeKind::SplitPanel(_)
+            // Phase 1111 / 1120 — no bounded-primitive or binding surface this
+            // gate lints today. `Embed.title` is REQUIRED by the codec, so the
+            // FUARAN108-shaped empty-name defect cannot reach here; `Tree`'s
+            // duplicate-row-id obligation (FUARAN126) is a whole-tree property
+            // this host has not ported, and it is covered by the declared
+            // abstention default in `validator-coverage.json` rather than
+            // silently by this arm.
+            NodeKind::Embed(_)
+            | NodeKind::Tree(_)
+            | NodeKind::SplitPanel(_)
             | NodeKind::ScrollArea(_)
             | NodeKind::Skeleton(_)
             | NodeKind::Icon(_)
@@ -467,6 +476,16 @@ impl Walker {
                 on_change,
             }
             | FormFieldKind::SegmentedChoice {
+                options,
+                value,
+                on_change,
+                ..
+            }
+            // Phase 1113 — the combobox IS a searchable select, sharing
+            // `Choice`'s value contract exactly, so it shares its lint too: an
+            // omitted handler arms the write-back default and therefore needs a
+            // WRITABLE value slot.
+            | FormFieldKind::Combobox {
                 options,
                 value,
                 on_change,
@@ -775,6 +794,8 @@ fn child_nodes(n: &Node) -> Vec<&Node> {
         | NodeKind::Link(_)
         | NodeKind::Image(_)
         | NodeKind::Media(_)
+        | NodeKind::Embed(_)
+        | NodeKind::Tree(_)
         | NodeKind::List(_)
         | NodeKind::Toast(_)
         | NodeKind::CodeBlock(_)
