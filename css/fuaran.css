@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:493cc9680d73090c
+/* fuaran-vocabulary-fingerprint: fv1:d911851c9795e550
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -2869,6 +2869,50 @@ html[data-fuaran-disconnected]::before {
   position: absolute;
   top: var(--fuaran-space-md, 12px);
   inset-inline-end: var(--fuaran-space-md, 12px);
+}
+
+/* ── Popover (Phase 1119 — the non-blocking Modal modality) ─────── */
+/* The wrapper carries NO positioning. That is the SSR floor made a property of
+   the stylesheet rather than of one renderer: a no-script host cannot measure
+   an anchor, so the surface renders IN FLOW at the position the node occupies
+   in the document, and every conformant host renders the same thing. The client
+   control sets `position: fixed` and the computed coordinates on the element
+   imperatively after mount, so the hydrated DOM is the one the server emitted.
+
+   No backdrop rule, deliberately: the page behind a popover stays visible and
+   interactive, and a scrim is what would make this a modal. */
+.fuaran-popover {
+  z-index: var(--fuaran-z-popover, 900);
+  max-width: var(--fuaran-popover-max-width, 320px);
+}
+
+.fuaran-popover[hidden] {
+  display: none;
+}
+
+.fuaran-popover-surface {
+  position: relative;
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border: 1px solid var(--fuaran-border-subtle, #e5e7eb);
+  border-radius: var(--fuaran-radius-md, 6px);
+  box-shadow: var(--fuaran-shadow-lg, 0 10px 15px -3px rgba(0, 0, 0, 0.1));
+  padding: var(--fuaran-space-lg, 16px);
+}
+
+.fuaran-popover-heading {
+  margin: 0 0 var(--fuaran-space-sm, 8px) 0;
+  font-size: var(--fuaran-text-md, 16px);
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+}
+
+.fuaran-popover-dismiss {
+  position: absolute;
+  top: var(--fuaran-space-sm, 8px);
+  inset-inline-end: var(--fuaran-space-sm, 8px);
+}
+
+.fuaran-popover-body {
+  font-size: var(--fuaran-text-sm, 14px);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
