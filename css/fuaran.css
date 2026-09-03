@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:e697c1d1c162b9a7
+/* fuaran-vocabulary-fingerprint: fv1:8b3d17a39ac85085
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -1906,6 +1906,37 @@ body {
 }
 
 .fuaran-grid-pager-step:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: 1px;
+}
+
+/* Phase 1125 — the grid export affordance. The wrapper exists only on a grid
+   that declares `exportable`, so every other grid's markup and cascade are
+   untouched. The control is placed after the grid and aligned to its trailing
+   edge, beside where a pager would sit: an export is a thing you do to a table
+   you have finished reading, not a heading over one you are about to.
+
+   The button is a real <button> with a real accessible name — nothing here
+   depends on the icon font, the pointer, or colour alone. */
+.fuaran-grid-exportable {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-sm, 8px);
+}
+
+.fuaran-grid-export {
+  align-self: flex-end;
+  padding: 2px var(--fuaran-space-sm, 8px);
+  font-size: var(--fuaran-text-xs, 12px);
+  border-radius: var(--fuaran-radius-sm, 4px);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  color: var(--fuaran-color-text, #111827);
+  cursor: pointer;
+}
+
+.fuaran-grid-export:focus-visible {
   outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
     var(--fuaran-focus-ring-color, #93c5fd);
   outline-offset: 1px;
