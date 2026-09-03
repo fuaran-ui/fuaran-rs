@@ -784,6 +784,26 @@ body {
   line-height: var(--fuaran-line-height-normal, 1.5);
 }
 
+/* ── declared text direction (Phase 1472) ─────────────────────────── */
+/* `TextDirection` (`.fuaran-dir-{direction}`) rides the same className the
+   role and voice fragments do, appended only when the value declares a
+   direction of its own, so a tree that declares none renders byte-identically.
+   The renderer emits the matching `dir` attribute on the same element.
+
+   This rule is NOT presentational and is not a reference default a host should
+   feel free to drop. `dir` states which way the run reads; `unicode-bidi:
+   isolate` is what stops the surrounding bidirectional context reordering it,
+   and without it an account or reference number declared `ltr` inside
+   right-to-left prose is still read back with its digits out of order (WCAG
+   1.3.2, Meaningful Sequence). It is stated here rather than left to the user
+   agent's own `[dir]` rule so the isolation does not depend on which UA
+   stylesheet a host ships — and it is markup and CSS only, so it holds with no
+   script running at all. */
+.fuaran-dir-ltr,
+.fuaran-dir-rtl {
+  unicode-bidi: isolate;
+}
+
 /* ── Metric ───────────────────────────────────────────────────────── */
 .fuaran-metric {
   background: var(--fuaran-tone-default-bg, #ffffff);
