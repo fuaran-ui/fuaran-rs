@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:ddf410d1083b1f80
+/* fuaran-vocabulary-fingerprint: fv1:493cc9680d73090c
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -1694,6 +1694,36 @@ body {
   display: inline-flex;
   flex-direction: column;
   gap: var(--fuaran-space-xs, 4px);
+}
+
+/* Phase 1115 — the drop / paste ingress affordance. The zone is the SAME
+   <label> the plain picker is, with a dashed boundary added so a reader can
+   see there is somewhere to drop; the control inside it is untouched, because
+   the drop is an additional route and never a replacement for click-to-pick.
+   `-active` is the drop state, applied while a drag is over the zone, and it
+   is why this family cannot be a no-script affordance: nothing in CSS observes
+   a drag. */
+.fuaran-upload-drop {
+  padding: var(--fuaran-space-sm, 8px);
+  border: var(--fuaran-border-width, 1px) dashed var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-md, 6px);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.fuaran-upload-drop-active {
+  border-style: solid;
+  border-color: var(--fuaran-tone-info-border, #93c5fd);
+  background: var(--fuaran-tone-info-bg, #eff6ff);
+}
+
+.fuaran-upload-drop-refused {
+  border-color: var(--fuaran-tone-critical-border, #fca5a5);
+}
+
+/* The refusal line — role="status", so it is announced as well as shown. */
+.fuaran-upload-drop-hint {
+  color: var(--fuaran-tone-critical-fg, #b91c1c);
+  font-size: var(--fuaran-text-sm, 13px);
 }
 
 /* ── grid + table ─────────────────────────────────────────────── */
