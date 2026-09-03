@@ -65,6 +65,7 @@ fuaran-rs/
 ├── src/canonical/       # canonical-JSON layer — float.rs (number form) + json.rs (parser + canonical renderer)
 ├── src/wire/            # model.rs (typed tree, native enums) + decode.rs / encode.rs + the DecodeError envelope
 ├── src/ops/             # tree-op apply engine — total reducer + ApplyError envelope + can_apply dry-run
+│                        #   + placement.rs (the placement algebra: placed insert / move / nudge + clone verbs)
 ├── src/validator/       # pre-emit structural validator — canonical FUARAN### defect codes
 ├── src/render/          # emission tier — server.rs (HTML walk + islands) + markdown.rs (corpus-certified)
 │                        #   + sanitize.rs (injection floor) + egress.rs (destination policy, §14.1)
@@ -79,7 +80,9 @@ fuaran-rs/
 ├── include/fuaran.h     # hand-written C header for src/ffi/ — the native binding surface + ownership/threading contract
 ├── css/fuaran.css       # byte-copy of the reference stylesheet (parity-tested against the reference artefact)
 ├── js/                  # thin hand-written WASM loader (fuaran-loader.js) + client-loop demo (index.html)
+│                        #   + placement-abi.mjs (the wasm32 leg of the placement C-ABI)
 ├── tests/               # conformance.rs + apply.rs + validator.rs + markdown.rs + render.rs + client.rs + ffi.rs
+│                        #   + placement.rs / placement_abi.rs + fixtures/ (the shared two-target ABI scenarios)
 ├── Cargo.toml           # lib + cdylib + staticlib crate types; release profile tuned for a small wasm artefact
 ├── run.ps1              # Stage-0 entry point — fmt/clippy/build/test/wasm; -CrossTargets/-Package for native mobile
 ├── LICENSE              # Apache 2.0 + Diametrical Ltd copyright
@@ -404,12 +407,73 @@ Nothing in the module reads a clock, allocates an id, or touches a filesystem, a
 compiles for `wasm32` with no target-specific code — which is what makes the browser
 module and an edge worker the same session type.
 
+## The placement algebra (`src/ops/placement.rs` + the session verbs)
+
+The op vocabulary is **positionless** — `InsertChild` and `MoveNode` append, and an
+explicit order is stated only by a `ReorderChildren` naming every sibling id (an id
+is checkable; an ordinal is not, which is why the ordinal fields were retired). So
+placing a node anywhere but last is `Batch [InsertChild|MoveNode; ReorderChildren]`:
+correct, but it leaves every consumer deriving the full sibling permutation itself.
+`ops::placement` ships that derivation once — `Placement` / `Target`, `place_op` /
+`move_op` / `nudge_op` / `can_place`, and the clone verbs `duplicate_op` /
+`paste_op` — and it is **purely additive**: every helper emits ops from the existing
+vocabulary, so the wire format, the corpus, the apply engine and the node contract
+are untouched. It is a library, not a wire change.
+
+**Five things about it are load-bearing and easy to undo by accident.**
+
+- **The refusals are pre-statements of THIS engine's refusals, and that
+  correspondence is measured rather than asserted.** `tests/placement.rs` runs an
+  EXHAUSTIVE enumeration — every fixture tree crossed with every node id plus a
+  `ghost`, every parent, every placement over every anchor — and checks each verdict
+  against the real `ops::apply`: an emitted op must apply *and* exhibit the declared
+  order (no false permit), and a refusal must correspond to a refusal of the op the
+  helper would otherwise have emitted (no false refuse). Do not "simplify" a
+  predicate into a re-derivation of the engine's logic; the point is that the engine
+  is the oracle.
+- **The insert path matches CODE for code; the move path matches refusal for
+  refusal, and the difference is the engine's, not a laxity.** `place_op` checks in
+  the engine's own order (parent → childless → duplicate), so the codes coincide
+  exactly. `MoveNode` checks self / descendant *before* it checks whether the node
+  is structurally addressable, while the helper checks addressability first — so a
+  node failing both is named by one code here and the other there. Both refuse,
+  which is the property; equal codes would be a claim the engine does not support.
+- **`UnknownAnchor` is a deliberate TIGHTENING, and it has two honest cases.** An
+  anchor that is not a child of the destination is refused before emission, because
+  the only op that could honour it is a `ReorderChildren` naming it, which the engine
+  refuses as `OrderingMismatch` — asserted against the engine. An anchor naming the
+  *moved node itself* has no apply-side twin at all: no op in the vocabulary places a
+  node relative to itself. The test says so rather than manufacturing a twin.
+- **The clone remap runs over the WHOLE traversal surface**, the same walk
+  `ops::all_node_ids` performs — layout children *and* `Switch` cases,
+  `ErrorBoundary` slots and `state` placeholders — because the id-uniqueness
+  contract is tree-wide. A remap restricted to the structural child lists would
+  smuggle a duplicate past the engine's own check, and there is a test for exactly
+  that shape. Minted ids dodge the target tree, the incoming subtree's own ids, and
+  each other; a non-colliding id is PRESERVED, so a pasted subtree keeps its
+  identity where it can.
+- **The fresh-id seam is a trait because it is stateful.** `DerivedIds`
+  (`<oldId>-copy`, probing) is the default; `SequentialIds` (`<prefix>-1`, `-2`, …)
+  is the deterministic replay/test option, and it is reachable from a binding
+  through the ABI's `idPrefix` member rather than only from Rust.
+
+**The verbs ship for two targets, so they are certified on two.** The native leg
+(`tests/placement_abi.rs`) and the `wasm32` leg (`js/placement-abi.mjs`, run by
+`run.ps1` when node is on PATH) read the **same** `tests/fixtures/placement-abi.json`
+— requests plus the exact recorded result envelopes — so the two targets are held to
+identical bytes for identical requests, and two copies of the scenarios cannot drift
+into certifying two different things while reporting one. That fixture is **not** the
+semantic oracle; `tests/placement.rs` is, and confusing the two would let a wrong
+expectation certify itself. Both legs carry a go-red probe that perturbs a real
+request every run, because a recorded-envelope comparison whose recorder is the code
+under test is worth nothing without one.
+
 ## Native C-ABI surface (`src/ffi/` + `include/fuaran.h`)
 
 The C-ABI export surface — `fuaran_alloc` / `fuaran_dealloc`, `fuaran_session_new` /
-`_free` / `_render` / `_tree_json` / `_apply_op` / `_set_state` / `_set_filter` /
-`_set_query`, and `fuaran_last_error` — lives in **`src/ffi/`** and is **target-
-neutral**: it compiles into the `wasm32` browser module *and* the native `staticlib`
+`_free` / `_render` / `_tree_json` / `_apply_op` / `_place` / `_nudge` / `_duplicate` /
+`_paste` / `_set_state` / `_set_filter` / `_set_query`, and `fuaran_last_error` — lives
+in **`src/ffi/`** and is **target-neutral**: it compiles into the `wasm32` browser module *and* the native `staticlib`
 / `cdylib` (`crate-type = ["lib", "cdylib", "staticlib"]`). Nothing in it is
 `wasm32`-specific; `src/client/wasm.rs` is now just the browser build's re-export of
 `crate::ffi` at the shim's historical path (the JS loader links the same symbol
@@ -451,6 +515,23 @@ the adopted architecture drives all native rendering through a session
 needed. Stateless candidates (`fuaran_validate`, `fuaran_encode_canonical`,
 `fuaran_apply`) are listed **reserved** in the header, not implemented — add them only
 on demand.
+
+**The placement verbs (Phase 833) extend that surface without changing its shape.**
+`_place` / `_nudge` / `_duplicate` / `_paste` are session-level and mutate through the
+same apply engine `_apply_op` reaches, so they are stateful and are not candidates for
+the reserved stateless list. They exist because the native surfaces over this core are
+decode-only render projections whose every structural edit goes through the session: a
+binding without them would have to reimplement the placement algebra to author a placed
+insert, which is a *second* implementation of a semantics this crate is the reference
+for. Three details a binding author needs. Each verb takes ONE canonical-JSON request
+document rather than a widening list of `(ptr, len)` pairs, and the document shape is
+the same across all four, so a binding writes one encoder. On success the call returns
+`{"ok":true,"op":…}` — the emitted op rides back because a host that journals, replays
+or diffs its op-stream needs the op and cannot re-derive it from the resulting tree. On
+failure the held tree is untouched and the envelope carries either the `placement`
+class (the `PlaceError` code, which pre-states the apply refusal) or the `request`
+class (a malformed request document) — same shape as the rest of the surface, so a
+binding parses one error form.
 
 **Cross-target build legs + packaging.** `run.ps1 -CrossTargets` builds the six mobile
 release legs (`aarch64-apple-ios{,-sim}`, `aarch64-apple-darwin`,

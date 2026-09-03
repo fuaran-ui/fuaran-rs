@@ -172,6 +172,62 @@ FuaranBuf fuaran_session_resolved_rows(FuaranSession *session, const uint8_t *pt
 FuaranBuf fuaran_session_apply_op(FuaranSession *session, const uint8_t *ptr,
                                   size_t len);
 
+/* ------------------------------------------------------------------------- *
+ * Placement verbs (Phase 833) — place / nudge / duplicate / paste
+ *
+ * The op vocabulary is positionless: InsertChild and MoveNode APPEND, and an
+ * explicit order is stated only by a ReorderChildren naming every sibling id.
+ * These four entry points compute the op a placement becomes, apply it, and hand
+ * it back — so a binding that renders a session (which is every native binding,
+ * the tree being owned by this core) does not have to reimplement the algebra to
+ * author a placed insert.
+ *
+ * Each takes ONE canonical-JSON request document as a UTF-8 (ptr, len) buffer,
+ * one document shape across all four verbs:
+ *
+ *   place      {"parentId":"...","placement":"Last"|"First"|"Before"|"After",
+ *               "anchor":"..."?, "child":{ ...node... }}
+ *   paste      { ...target..., "subtree":{ ...node... }, "idPrefix":"..."? }
+ *   duplicate  { ...target..., "source":"...", "idPrefix":"..."? }
+ *   nudge      {"target":"...","delta":<whole number of sibling positions>}
+ *
+ * "anchor" is REQUIRED for Before / After and REFUSED for Last / First: a caller
+ * that supplied an anchor a verb would silently drop has stated an intent that is
+ * not being honoured.
+ *
+ * "idPrefix" (clone verbs only) selects the DETERMINISTIC fresh-id strategy —
+ * minted ids are <prefix>-1, -2, ... in traversal order. Omit it for the default
+ * derived strategy (<oldId>-copy, then -copy-2, ...). Either way every id in the
+ * clone that collides with one already in the tree is remapped, and ids that do
+ * not collide are preserved.
+ *
+ * RESULT. On success the session adopts the new tree and the call returns
+ *   {"ok":true,"op":{ ...the emitted canonical TreeOp... }}
+ * The op rides back because it is the artefact the verb computed: a host that
+ * journals, replays, or diffs its op-stream needs the op and cannot re-derive it
+ * from the resulting tree. On failure the held tree is UNTOUCHED and the call
+ * returns the surface's usual error envelope, with one of two classes:
+ *   {"error":{"class":"placement","code":"ParentNotFound"|"ChildlessKind"|
+ *             "NodeNotFound"|"UnknownAnchor"|"DuplicateId"|"MoveIntoSelf"|
+ *             "MoveIntoDescendant"|"CannotNudgeRoot"|"NudgeOutOfRange",
+ *             "message":"..."}}
+ *   {"error":{"class":"request","code":"INVALID_REQUEST","message":"..."}}
+ * A "placement" refusal pre-states the apply-engine refusal the emitted op would
+ * have met, so a binding can grey out an illegal drop without a dry-run apply.
+ * NULL session -> empty buffer.
+ * ------------------------------------------------------------------------- */
+FuaranBuf fuaran_session_place(FuaranSession *session, const uint8_t *ptr,
+                               size_t len);
+
+FuaranBuf fuaran_session_nudge(FuaranSession *session, const uint8_t *ptr,
+                               size_t len);
+
+FuaranBuf fuaran_session_duplicate(FuaranSession *session, const uint8_t *ptr,
+                                   size_t len);
+
+FuaranBuf fuaran_session_paste(FuaranSession *session, const uint8_t *ptr,
+                               size_t len);
+
 /*
  * Write a reactive `$state.<key>` slot from a JSON value (the write-back an
  * omitted-handler control performs). Re-render to observe the change. Returns
@@ -247,6 +303,13 @@ FuaranBuf fuaran_rosetta_encode(const uint8_t *ptr, size_t len);
  *   session_project_resolved for a decode-only surface — Phase 650, an additive
  *   projection of the same tree). No stateless entry points are needed for the
  *   native binding tiers.
+ *
+ *   The Phase 833 placement verbs extend that surface without changing its
+ *   shape: they are session-level, they mutate through the same apply engine
+ *   session_apply_op reaches, and they exist because the alternative — a binding
+ *   authoring a placed insert itself — is a second implementation of an algebra
+ *   this core is the reference for. They are STATEFUL, and so are not candidates
+ *   for the reserved stateless list below.
  *
  *   RESERVED (not in v0; names held for a future stateless surface if demand
  *   appears — do not bind yet):

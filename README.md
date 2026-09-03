@@ -97,7 +97,11 @@ Shipped:
 - **`ops`** — the tree-op apply engine: `apply(tree, op)` over the full `TreeOp`
   algebra (structural ops, `UpdateProp` with the nested-path grammar,
   `ReplaceBinding`), total (structured `ApplyError`s, never a panic), atomic
-  `Batch`, and the `can_apply` dry-run obeying the apply-envelope law.
+  `Batch`, and the `can_apply` dry-run obeying the apply-envelope law. Plus
+  `ops::placement`, the **placement algebra**: `place_op` / `move_op` /
+  `nudge_op` / `can_place` and the clone verbs `duplicate_op` / `paste_op`, which
+  turn "put this node there" into ops from the existing vocabulary and pre-state
+  the engine's own refusals.
 - **`validator`** — the pre-emit structural validator surfacing the canonical
   `FUARAN###` defect codes over a decoded tree (node identity, bounded
   primitives, shape coherence, write-back / wire-survivability lints).
@@ -452,6 +456,7 @@ fuaran-rs/
 │   ├── canonical/       # canonical-JSON layer — number form, parser, canonical renderer
 │   ├── wire/            # typed wire model + Node / TreeOp codec + DecodeError envelope
 │   ├── ops/             # tree-op apply engine + ApplyError envelope + dry-run
+│   │                    #   + placement.rs (placed insert / move / nudge + clone verbs)
 │   ├── validator/       # pre-emit structural validator (FUARAN### codes)
 │   ├── render/          # server-HTML renderer + islands + markdown + sanitise floor
 │   ├── bounded/         # the bounded program loop — interpreter, budget, effects, re-resolve
@@ -462,6 +467,7 @@ fuaran-rs/
 ├── js/
 │   ├── fuaran-loader.js # thin hand-written WASM loader (no wasm-bindgen)
 │   ├── driver-semantics.mjs # the wasm32 leg of the bounded-loop conformance check
+│   ├── placement-abi.mjs # the wasm32 leg of the placement C-ABI
 │   └── index.html       # client-loop demo
 ├── tests/
 │   ├── conformance.rs   # shared-corpus certification (round-trip + reject legs)
@@ -471,6 +477,8 @@ fuaran-rs/
 │   ├── render.rs        # renderer behaviour + islands laws + CSS byte-parity
 │   ├── client.rs        # client-session decode → render → drive loop
 │   ├── edge.rs          # the durability protocol — fencing, kill points, rehydration
+│   ├── placement.rs     # the placement algebra against the real apply engine
+│   ├── placement_abi.rs # the native leg of the placement C-ABI (shared fixture)
 │   └── driver_semantics.rs # bounded-loop conformance against the scenario corpus
 ├── run.ps1              # cargo fmt --check -> clippy -> build -> test -> wasm build
 ├── LICENSE              # Apache-2.0

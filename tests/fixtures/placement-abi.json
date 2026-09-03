@@ -1,0 +1,90 @@
+{
+  "tree": "{\"id\":\"root\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"left\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"a\",\"kind\":{\"$type\":\"Markdown\",\"text\":{\"$type\":\"Literal\",\"text\":\"body\"}}},{\"id\":\"b\",\"kind\":{\"$type\":\"Markdown\",\"text\":{\"$type\":\"Literal\",\"text\":\"body\"}}},{\"id\":\"c\",\"kind\":{\"$type\":\"Markdown\",\"text\":{\"$type\":\"Literal\",\"text\":\"body\"}}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"solo\",\"kind\":{\"$type\":\"Markdown\",\"text\":{\"$type\":\"Literal\",\"text\":\"body\"}}},{\"id\":\"right\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"d\",\"kind\":{\"$type\":\"Markdown\",\"text\":{\"$type\":\"Literal\",\"text\":\"body\"}}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"empty\",\"kind\":{\"$type\":\"Box\",\"children\":[],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}}",
+  "cases": [
+    {
+      "name": "place-last-appends",
+      "verb": "place",
+      "request": "{\"parentId\":\"left\",\"placement\":\"Last\",\"child\":{\"id\":\"x\",\"kind\":{\"$type\":\"Markdown\",\"text\":{\"$type\":\"Literal\",\"text\":\"body\"}}}}",
+      "expect": "{\"ok\":true,\"op\":{\"$type\":\"InsertChild\",\"child\":{\"id\":\"x\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},\"parentId\":\"left\"}}"
+    },
+    {
+      "name": "place-before-an-interior-sibling",
+      "verb": "place",
+      "request": "{\"parentId\":\"left\",\"placement\":\"Before\",\"anchor\":\"b\",\"child\":{\"id\":\"y\",\"kind\":{\"$type\":\"Markdown\",\"text\":{\"$type\":\"Literal\",\"text\":\"body\"}}}}",
+      "expect": "{\"ok\":true,\"op\":{\"$type\":\"Batch\",\"ops\":[{\"$type\":\"InsertChild\",\"child\":{\"id\":\"y\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},\"parentId\":\"left\"},{\"$type\":\"ReorderChildren\",\"newOrder\":[\"a\",\"y\",\"b\",\"c\",\"x\"],\"parentId\":\"left\"}]}}"
+    },
+    {
+      "name": "nudge-up-swaps-with-the-previous-sibling",
+      "verb": "nudge",
+      "request": "{\"target\":\"y\",\"delta\":-1}",
+      "expect": "{\"ok\":true,\"op\":{\"$type\":\"ReorderChildren\",\"newOrder\":[\"y\",\"a\",\"b\",\"c\",\"x\"],\"parentId\":\"left\"}}"
+    },
+    {
+      "name": "duplicate-under-the-derived-strategy",
+      "verb": "duplicate",
+      "request": "{\"source\":\"right\",\"parentId\":\"root\",\"placement\":\"After\",\"anchor\":\"right\"}",
+      "expect": "{\"ok\":true,\"op\":{\"$type\":\"Batch\",\"ops\":[{\"$type\":\"InsertChild\",\"child\":{\"id\":\"right-copy\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"d-copy\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},\"parentId\":\"root\"},{\"$type\":\"ReorderChildren\",\"newOrder\":[\"left\",\"solo\",\"right\",\"right-copy\",\"empty\"],\"parentId\":\"root\"}]}}"
+    },
+    {
+      "name": "duplicate-under-the-deterministic-strategy",
+      "verb": "duplicate",
+      "request": "{\"source\":\"empty\",\"parentId\":\"root\",\"placement\":\"Last\",\"idPrefix\":\"dup\"}",
+      "expect": "{\"ok\":true,\"op\":{\"$type\":\"InsertChild\",\"child\":{\"id\":\"dup-1\",\"kind\":{\"$type\":\"Box\",\"children\":[],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},\"parentId\":\"root\"}}"
+    },
+    {
+      "name": "paste-remaps-collisions-and-preserves-the-rest",
+      "verb": "paste",
+      "request": "{\"subtree\":{\"id\":\"left\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"a\",\"kind\":{\"$type\":\"Markdown\",\"text\":{\"$type\":\"Literal\",\"text\":\"body\"}}},{\"id\":\"z\",\"kind\":{\"$type\":\"Markdown\",\"text\":{\"$type\":\"Literal\",\"text\":\"body\"}}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},\"parentId\":\"empty\",\"placement\":\"Last\"}",
+      "expect": "{\"ok\":true,\"op\":{\"$type\":\"InsertChild\",\"child\":{\"id\":\"left-copy\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"a-copy\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"z\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},\"parentId\":\"empty\"}}"
+    },
+    {
+      "name": "place-into-a-childless-kind-is-refused",
+      "verb": "place",
+      "request": "{\"parentId\":\"solo\",\"placement\":\"Last\",\"child\":{\"id\":\"nope\",\"kind\":{\"$type\":\"Markdown\",\"text\":{\"$type\":\"Literal\",\"text\":\"body\"}}}}",
+      "expect": "{\"error\":{\"class\":\"placement\",\"code\":\"ChildlessKind\",\"message\":\"ChildlessKind: node 'solo' has no children field — only child-bearing layout kinds accept structural child ops.\"}}"
+    },
+    {
+      "name": "place-on-an-anchor-that-is-not-a-sibling-is-refused",
+      "verb": "place",
+      "request": "{\"parentId\":\"left\",\"placement\":\"Before\",\"anchor\":\"d\",\"child\":{\"id\":\"nope\",\"kind\":{\"$type\":\"Markdown\",\"text\":{\"$type\":\"Literal\",\"text\":\"body\"}}}}",
+      "expect": "{\"error\":{\"class\":\"placement\",\"code\":\"UnknownAnchor\",\"message\":\"UnknownAnchor: 'd' is not among the destination's post-op children.\"}}"
+    },
+    {
+      "name": "nudging-the-root-is-refused",
+      "verb": "nudge",
+      "request": "{\"target\":\"root\",\"delta\":1}",
+      "expect": "{\"error\":{\"class\":\"placement\",\"code\":\"CannotNudgeRoot\",\"message\":\"CannotNudgeRoot: the root 'root' has no siblings to nudge among.\"}}"
+    },
+    {
+      "name": "duplicating-an-absent-source-is-refused",
+      "verb": "duplicate",
+      "request": "{\"source\":\"ghost\",\"parentId\":\"root\",\"placement\":\"Last\"}",
+      "expect": "{\"error\":{\"class\":\"placement\",\"code\":\"NodeNotFound\",\"message\":\"NodeNotFound: node 'ghost' is not in the tree, or sits in a position the structural ops cannot reach.\"}}"
+    },
+    {
+      "name": "an-unknown-placement-case-is-a-request-error",
+      "verb": "place",
+      "request": "{\"parentId\":\"left\",\"placement\":\"Sideways\",\"child\":{\"id\":\"nope\",\"kind\":{\"$type\":\"Markdown\",\"text\":{\"$type\":\"Literal\",\"text\":\"body\"}}}}",
+      "expect": "{\"error\":{\"class\":\"request\",\"code\":\"INVALID_REQUEST\",\"message\":\"'Sideways' is not a placement — expected Last | First | Before | After\"}}"
+    },
+    {
+      "name": "a-Before-without-an-anchor-is-a-request-error",
+      "verb": "place",
+      "request": "{\"parentId\":\"left\",\"placement\":\"Before\",\"child\":{\"id\":\"nope\",\"kind\":{\"$type\":\"Markdown\",\"text\":{\"$type\":\"Literal\",\"text\":\"body\"}}}}",
+      "expect": "{\"error\":{\"class\":\"request\",\"code\":\"INVALID_REQUEST\",\"message\":\"placement 'Before' requires an 'anchor' node id\"}}"
+    },
+    {
+      "name": "a-Last-carrying-an-anchor-is-a-request-error",
+      "verb": "place",
+      "request": "{\"parentId\":\"left\",\"placement\":\"Last\",\"anchor\":\"a\",\"child\":{\"id\":\"nope\",\"kind\":{\"$type\":\"Markdown\",\"text\":{\"$type\":\"Literal\",\"text\":\"body\"}}}}",
+      "expect": "{\"error\":{\"class\":\"request\",\"code\":\"INVALID_REQUEST\",\"message\":\"placement 'Last' takes no 'anchor'\"}}"
+    },
+    {
+      "name": "a-malformed-child-node-is-a-request-error",
+      "verb": "place",
+      "request": "{\"parentId\":\"left\",\"placement\":\"Last\",\"child\":{\"id\":\"bad\",\"kind\":{\"$type\":\"NoSuchKind\"}}}",
+      "expect": "{\"error\":{\"class\":\"request\",\"code\":\"INVALID_REQUEST\",\"message\":\"the 'child' node does not decode: unknown NodeKind discriminator 'NoSuchKind' at $.kind.$type\"}}"
+    }
+  ],
+  "finalTree": "{\"id\":\"root\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"left\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"y\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"a\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"b\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"c\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"x\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"solo\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"right\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"d\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"right-copy\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"d-copy\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"empty\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"left-copy\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"a-copy\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"z\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"dup-1\",\"kind\":{\"$type\":\"Box\",\"children\":[],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}}"
+}

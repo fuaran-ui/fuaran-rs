@@ -14,6 +14,12 @@
 //! The dry-run entry [`can_apply`] obeys the apply-envelope law shared by the
 //! sibling hosts: `can_apply(tree, op) ≡ apply(tree, op).is_ok()`.
 
+/// The placement algebra — placed insert / move / nudge, and the clone verbs
+/// (duplicate / paste). Every helper emits ops from the existing vocabulary and
+/// pre-states this engine's own refusals, so an editor can refuse an illegal
+/// drop without a dry-run apply.
+pub mod placement;
+
 use crate::canonical::{JVal, ordinal_cmp};
 use crate::wire::coerce;
 use crate::wire::{Binding, Node, NodeKind, TreeOp};

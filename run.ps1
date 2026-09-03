@@ -1,7 +1,8 @@
 #Requires -Version 7.0
 # fuaran-rs — Stage-0 entry point (workspace CLAUDE.md "Every new sibling ships a run.ps1").
 # Full happy path: cargo fmt --check -> cargo clippy -> cargo build -> cargo test,
-# plus a wasm32 client-module build when the target is installed.
+# plus a wasm32 client-module build when the target is installed, and — when node
+# is on PATH — the wasm32 leg of the placement C-ABI (js/placement-abi.mjs).
 # Switches: -SkipFormat / -SkipBuild / -SkipTests / -SkipWasm for fast iteration.
 #
 # Opt-in native-mobile packaging (Phase 537 — the C-ABI staticlib for the Swift /
@@ -204,6 +205,23 @@ if (-not $SkipWasm) {
         Write-Host "==> cargo build --target wasm32-unknown-unknown --release (client module)" -ForegroundColor Cyan
         & $cargo build --target wasm32-unknown-unknown --release
         if ($LASTEXITCODE -ne 0) { throw "wasm32 client-module build failed." }
+
+        # The placement C-ABI ships for two targets, so it is certified on two.
+        # The native leg is an ordinary test (tests/placement_abi.rs) and has
+        # already run above; this one drives the SAME shared fixture
+        # (tests/fixtures/placement-abi.json) through the module just built, so
+        # the packed-uint64 return form is exercised by execution rather than by
+        # the fact that it compiles. It skips cleanly without node — the module
+        # build above is the part that must not be optional.
+        $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $node) {
+            Write-Host "==> skip the wasm32 placement-ABI leg — node not found on PATH (install Node.js to enable)." -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "==> placement C-ABI conformance (wasm32 leg)" -ForegroundColor Cyan
+            & $node.Source (Join-Path $PSScriptRoot "js/placement-abi.mjs")
+            if ($LASTEXITCODE -ne 0) { throw "the wasm32 placement-ABI leg failed." }
+        }
     } else {
         Write-Host "==> wasm32 target not installed; skipping the client-module build (rustup target add wasm32-unknown-unknown to enable)." -ForegroundColor Yellow
     }
