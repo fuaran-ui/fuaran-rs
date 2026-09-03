@@ -20,8 +20,8 @@ use fuaran_rs::render::chart_lowering::{
     ChartAxisUnitMode, ChartLowerStyle, ChartTitles, lower_chart_with, project_row,
 };
 use fuaran_rs::wire::{
-    ChartDataLabels, ChartKind, ChartLegendPosition, ChartXScale, Format, Node, NodeKind,
-    SemanticStyle, StateBehaviour, TextSource,
+    Binding, ChartDataLabels, ChartKind, ChartLegendPosition, ChartXScale, Format, Node, NodeKind,
+    SemanticStyle, StateBehaviour, StaticValue, TextSource,
 };
 
 /// Walk up from the crate dir to the shared corpus (mirrors conformance.rs).
@@ -106,6 +106,73 @@ fn value_format_of(j: &JVal) -> Format {
     }
 }
 
+/// The corpus carries the four `TextSource`-typed chart declarations — `title`,
+/// `subtitle`, `xTitle`, `yTitle` — in canonical wire JSON, exactly as
+/// `valueFormat` above carries a `Format`. A BARE STRING is the canonical
+/// `Literal` spelling (§16 lenient-accept, normative for every conformant
+/// host); the object arms are `Literal` / `Bound` / `I18n`.
+///
+/// Building every arm here is the whole point of Phase 1143. The lowering
+/// carries a non-literal declaration into the drawing UNRESOLVED (clauses 1–2
+/// of `CHART-LOWERING-TEXT-CONTRACT.md`), so a harness that matched only the
+/// bare string handed it `None` — and the fixture that exists to pin the carry
+/// lowered as though the author had declared nothing at all, drawing the
+/// capitalised field-name fallback in place of the author's meaning. That is
+/// precisely the DROP the contract forbids, arrived at through the harness
+/// rather than the host. An unsupported arm therefore PANICS rather than
+/// degrading to `None`, for the same reason `value_format_of` does: a silent
+/// `None` is what hid this.
+fn text_source_of(j: &JVal) -> TextSource {
+    if let JVal::Str(s) = j {
+        return TextSource::Literal(s.clone());
+    }
+    let tag = match j.field("$type") {
+        Some(JVal::Str(t)) => t.as_str(),
+        _ => panic!("chart-lowering input: TextSource is neither a bare string nor $type-tagged"),
+    };
+    match tag {
+        "Literal" => match j.field("text") {
+            Some(JVal::Str(s)) => TextSource::Literal(s.clone()),
+            _ => panic!("chart-lowering input: Literal TextSource missing text"),
+        },
+        "Bound" => match j.field("binding") {
+            Some(b) => TextSource::Bound(Box::new(binding_of(b))),
+            None => panic!("chart-lowering input: Bound TextSource missing binding"),
+        },
+        "I18n" => TextSource::I18n {
+            key: match j.field("key") {
+                Some(JVal::Str(k)) => k.clone(),
+                _ => panic!("chart-lowering input: I18n TextSource missing key"),
+            },
+            args: match j.field("args") {
+                None => Vec::new(),
+                Some(JVal::Obj(entries)) => entries.clone(),
+                Some(_) => panic!("chart-lowering input: I18n args is not an object"),
+            },
+        },
+        other => panic!("chart-lowering input: unsupported TextSource arm {other}"),
+    }
+}
+
+/// The `Binding` behind a `Bound` text declaration. Only the `Static` arm
+/// appears in this fixture family — a chart title's binding is what the drawing
+/// carries UNRESOLVED, so the corpus pins the carry and not any resolver — and
+/// an arm the family has not exercised panics rather than being approximated.
+fn binding_of(j: &JVal) -> Binding {
+    let tag = match j.field("$type") {
+        Some(JVal::Str(t)) => t.as_str(),
+        _ => panic!("chart-lowering input: Binding missing $type"),
+    };
+    match tag {
+        "Static" => Binding::Static {
+            value: StaticValue::Ast(j.field("value").cloned().unwrap_or(JVal::Null)),
+        },
+        other => {
+            panic!("chart-lowering input: unsupported Binding arm {other} behind a Bound text")
+        }
+    }
+}
+
 /// Lower one fixture input to the canonical Drawing-node wire JSON, mirroring the
 /// reference harness: lower → wrap in a Drawing node id `chart-<name>` → encode.
 fn lowered_json(name: &str, input: &str) -> String {
@@ -123,21 +190,20 @@ fn lowered_json(name: &str, input: &str) -> String {
         _ => panic!("fixture missing yFields array"),
     };
     let stacked = matches!(spec.field("stacked"), Some(JVal::Bool(true)));
-    let title: Option<TextSource> = match spec.field("title") {
-        Some(JVal::Str(t)) => Some(TextSource::Literal(t.clone())),
-        _ => None,
-    };
-    // Phase 878 — the axis names + subtitle are plain strings in the fixture
-    // input (the neutral cross-host contract), omitted when absent.
-    let literal_field = |key: &str| -> Option<TextSource> {
+    // Phase 878 / 1143 — the four `TextSource`-typed declarations, carried in
+    // canonical wire JSON and omitted when absent.
+    // An explicit `null` is how three cases in this family spell "no title";
+    // it reads as ABSENT here, as it always has, and never as a declaration.
+    let text_field = |key: &str| -> Option<TextSource> {
         match spec.field(key) {
-            Some(JVal::Str(t)) => Some(TextSource::Literal(t.clone())),
-            _ => None,
+            None | Some(JVal::Null) => None,
+            Some(j) => Some(text_source_of(j)),
         }
     };
-    let x_title = literal_field("xTitle");
-    let y_title = literal_field("yTitle");
-    let subtitle = literal_field("subtitle");
+    let title = text_field("title");
+    let x_title = text_field("xTitle");
+    let y_title = text_field("yTitle");
+    let subtitle = text_field("subtitle");
     // Phase 880 — `legendPosition` is a bare wire string in the fixture input,
     // omitted when the case takes the host default.
     let legend_position: Option<ChartLegendPosition> = match spec.field("legendPosition") {
