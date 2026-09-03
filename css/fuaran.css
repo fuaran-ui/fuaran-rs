@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:21dc300f76acc190
+/* fuaran-vocabulary-fingerprint: fv1:0bb0bce8e9295ec6
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -3109,5 +3109,74 @@ html[data-fuaran-disconnected]::before {
   .fuaran-file-upload,
   .fuaran-tab {
     min-height: 44px;
+  }
+}
+
+/* ── print break control (Phase 1473) ─────────────────────────────── */
+/* The paged rendering of subtree COHESION. Four classes, appended to a
+   container's own className only when the document declares them, so a tree
+   that declares nothing renders a byte-identical class string and this block
+   never matches.
+
+   THE WHOLE FLOOR IS HERE, and it is CSS with no script at any point. That is
+   what makes the declarations honourable by a static host: `break-inside`,
+   `break-before` and `display: table-header-group` are formatter instructions,
+   so a no-script page printed straight from the browser keeps the totals block
+   whole and repeats the grid's header on every sheet. No host has to observe a
+   page boundary, count rows, or wire a listener, and there is nothing here a
+   hydrating client adds.
+
+   The rules sit INSIDE `@media print` deliberately. `break-inside` is inert on
+   a continuous medium in any case, but stating the medium is what makes the
+   screen rendering unchanged BY CONSTRUCTION rather than by the accident that
+   the properties happen not to apply — and it keeps `display:
+   table-header-group`, which very much does apply on screen, from reordering a
+   grid nobody is printing.
+
+   `page-break-*` is the retired spelling of the same properties. It is emitted
+   alongside each modern property because engines that predate the unified
+   fragmentation module still honour only the old names, and a print rule that
+   silently does nothing on the reader's actual printer is worse than none. */
+@media print {
+  /* "Keep this block whole" — the box and its whole subtree stay on one page
+     where the formatter can manage it. */
+  .fuaran-break-inside-avoid {
+    -webkit-column-break-inside: avoid;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* "Start this on a fresh page." There is no break-AFTER counterpart in the
+     vocabulary: a break after this box is a break before the next one. */
+  .fuaran-break-before-page {
+    page-break-before: always;
+    break-before: page;
+  }
+
+  /* "Do not split this row" — a row is one thing, so a wrapped cell does not
+     leave half its lines on one page and half on the next. The rule reaches
+     the rows INSIDE the grid, which is the boundary nothing outside the grid
+     can name. Both the semantic-table leg and the client grid carry the class
+     on the table element, so one rule serves both. */
+  .fuaran-grid-rows-together tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* "Repeat this header" — the column headers reappear at the top of every
+     page the grid continues onto. `table-header-group` is the one construct
+     that makes the repetition the paged formatter's own job; scripting it
+     would mean measuring pages, which no page can do about its own printing. */
+  .fuaran-grid-repeat-header thead {
+    display: table-header-group;
+  }
+
+  /* A repeated header is a header on every page, so its cells must not be
+     split either — a header row torn across the boundary defeats the point of
+     repeating it. Scoped to the declaring grid, so it changes nothing for a
+     grid that declares no repeat. */
+  .fuaran-grid-repeat-header thead tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
   }
 }
