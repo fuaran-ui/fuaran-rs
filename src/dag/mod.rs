@@ -7,5 +7,8 @@
 pub mod merge;
 pub mod record;
 
-pub use merge::{MergeConflict, MergeResult, merge3_way};
+pub use merge::{
+    MergeConflict, MergeConflictClass, MergeResult, MergeSide, encode_envelope, merge3_way,
+    sort_canonical,
+};
 pub use record::{DagRecord, decode_record, encode_record};

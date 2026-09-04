@@ -24,16 +24,233 @@ use std::collections::{HashMap, HashSet};
 
 use crate::canonical::ordinal_cmp;
 use crate::wire::{
-    Accessibility, BoxSpec, DisclosureSpec, ModalSpec, Node, NodeKind, ScrollAreaSpec,
-    SemanticStyle, SplitPanelSpec, StateBehaviour, StepperSpec, SummaryListSpec, TabsSpec,
-    encode_node,
+    Accessibility, BoxSpec, DisclosureSpec, Emphasis, FontVoice, ModalSpec, Node, NodeKind,
+    ScrollAreaSpec, SemanticStyle, SplitPanelSpec, StateBehaviour, StepperSpec, StyleRole,
+    StyleWeight, SummaryListSpec, TabsSpec, TextDirection, ToneVariant, encode_node,
 };
 
-/// A `(node_id, facet)` cell that could not be auto-merged.
+/// The CLASS of a refusal — the closed cross-host vocabulary the envelope's
+/// `class` field spells. This host emits `ConcurrentEdit` and
+/// `ReorderVsStructural`; the rest are carried because the vocabulary is the
+/// wire contract, not one host's subset of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeConflictClass {
+    /// Both sides edited the same cell to different values (the canonical case).
+    ConcurrentEdit,
+    /// Both sides moved the same node to different parents.
+    ConcurrentMove,
+    /// One side deleted a node the other modified.
+    DeleteModify,
+    /// A kind swap destroyed a pinned cell.
+    KindSwapOrphansPin,
+    /// One side reordered a parent the other structurally changed.
+    ReorderVsStructural,
+    /// Post-merge whole-tree validation found a combined illegality no single
+    /// op produced.
+    CombinedCycle,
+}
+
+impl MergeConflictClass {
+    /// The wire-stable spelling the envelope's `class` field carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MergeConflictClass::ConcurrentEdit => "ConcurrentEdit",
+            MergeConflictClass::ConcurrentMove => "ConcurrentMove",
+            MergeConflictClass::DeleteModify => "DeleteModify",
+            MergeConflictClass::KindSwapOrphansPin => "KindSwapOrphansPin",
+            MergeConflictClass::ReorderVsStructural => "ReorderVsStructural",
+            MergeConflictClass::CombinedCycle => "CombinedCycle",
+        }
+    }
+}
+
+/// One SIDE of a two-sided refusal: that branch's value for the contended cell,
+/// plus the branch's own opaque provenance tag.
+///
+/// The tag is per-side because `secondary_tag` cannot be: that slot names the
+/// tag of the side that LOST TO A PIN, so with no pin held there is no such
+/// side, and filling it from the first-argument branch would make the envelope
+/// a function of the order the caller passed its branches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeSide {
+    pub value: String,
+    pub tag: Option<String>,
+}
+
+/// A `(node_id, facet)` cell that could not be auto-merged, as a recovery
+/// envelope carrying **two views of the same refusal**.
+///
+/// * `a` / `b` are the SIDES view: the first- and second-argument branches'
+///   values for the contended cell, populated on every two-sided refusal. This
+///   is what a host needs to show a human what each side wanted, and what a
+///   second replica merging the same pair in the OPPOSITE order must agree
+///   with — swapping the branches transposes `a` and `b` and rewrites nothing
+///   else in the envelope.
+/// * `base` / `primary` / `secondary` / `secondary_tag` are the PRECEDENCE
+///   view: the LCA value, the pinned winner, and the side that lost to it.
+///
+/// This host's only entry point is [`merge3_way`], which is **author-agnostic**
+/// — neither side is `Primary`, so no pin is ever held and the three precedence
+/// slots are always `None`. That is not an omission: a value in either slot IS
+/// a precedence claim, so populating one under no pin would assert a precedence
+/// the merge never established. They are carried so a precedence-bearing entry
+/// point fills them without re-shaping the envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeConflict {
     pub node_id: String,
     pub facet: String,
+    pub class: MergeConflictClass,
+    /// The LCA's value for the cell — the empty string for an `insert` facet,
+    /// whose id exists on neither side of the LCA and so has no base value.
+    pub base: String,
+    pub a: Option<MergeSide>,
+    pub b: Option<MergeSide>,
+    pub primary: Option<String>,
+    pub secondary: Option<String>,
+    pub secondary_tag: Option<String>,
+    pub primacy_held: bool,
+}
+
+/// A two-sided refusal under the author-agnostic merge: both branches' values
+/// recorded, no precedence pin claimed.
+fn two_sided(
+    node_id: &str,
+    facet: &str,
+    class: MergeConflictClass,
+    base: &str,
+    a_value: &str,
+    b_value: &str,
+) -> MergeConflict {
+    MergeConflict {
+        node_id: node_id.to_string(),
+        facet: facet.to_string(),
+        class,
+        base: base.to_string(),
+        a: Some(MergeSide {
+            value: a_value.to_string(),
+            tag: None,
+        }),
+        b: Some(MergeSide {
+            value: b_value.to_string(),
+            tag: None,
+        }),
+        primary: None,
+        secondary: None,
+        secondary_tag: None,
+        primacy_held: false,
+    }
+}
+
+/// The refusal-envelope spelling of a style sub-field's value: the enum CASE
+/// NAME, which is what the reference host's envelope carries.
+///
+/// For five of the six sub-fields that is also the wire spelling, so `as_str`
+/// serves. `TextDirection` is the exception — its wire spelling is lowercase
+/// (`"auto"`) while its case name is `Auto` — so it spells its own, and a
+/// `style.direction` refusal stays byte-identical to the reference host's.
+trait StyleFacetValue: Copy + PartialEq {
+    fn facet_value(self) -> &'static str;
+}
+
+macro_rules! wire_spelled_facet {
+    ($($t:ty),+ $(,)?) => {
+        $(impl StyleFacetValue for $t {
+            fn facet_value(self) -> &'static str {
+                self.as_str()
+            }
+        })+
+    };
+}
+
+wire_spelled_facet!(ToneVariant, StyleWeight, Emphasis, StyleRole, FontVoice);
+
+impl StyleFacetValue for TextDirection {
+    fn facet_value(self) -> &'static str {
+        match self {
+            TextDirection::Auto => "Auto",
+            TextDirection::Ltr => "Ltr",
+            TextDirection::Rtl => "Rtl",
+        }
+    }
+}
+
+/// Mirror of the canonical encoder's string escape, kept local so the merge
+/// module takes no codec dependency for the envelope (only `"`, `\` and the
+/// control characters need escaping; non-ASCII rides through as UTF-8).
+fn append_escaped(out: &mut String, s: &str) {
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+fn append_side(out: &mut String, side: Option<&MergeSide>) {
+    match side {
+        None => out.push_str("null"),
+        Some(s) => {
+            out.push_str("{\"tag\":");
+            match &s.tag {
+                None => out.push_str("null"),
+                Some(t) => append_escaped(out, t),
+            }
+            out.push_str(",\"value\":");
+            append_escaped(out, &s.value);
+            out.push('}');
+        }
+    }
+}
+
+/// Order a refusal set deterministically. `(node_id, facet)` is unique within
+/// one merge — a facet of a node is merged once — so it totally orders an
+/// envelope regardless of the fold's internal emission order.
+pub fn sort_canonical(conflicts: &mut [MergeConflict]) {
+    conflicts.sort_by(|x, y| {
+        ordinal_cmp(&x.node_id, &y.node_id).then_with(|| ordinal_cmp(&x.facet, &y.facet))
+    });
+}
+
+/// Canonical JSON of a REFUSAL envelope: the conflict set as a sorted array of
+/// `{a,b,base,class,facet,nodeId,primacyHeld}` objects (object keys
+/// alphabetical, entries in `(node_id, facet)` order). Byte-stable across
+/// hosts, so `sha256_hex` over it is the cross-host refusal hash — the
+/// determinism artefact for a REFUSED merge, as the outcome hash is for an
+/// auto-merge.
+///
+/// The precedence view is projected as `primacyHeld` alone: `primary` /
+/// `secondary` are derivable from the sides plus the pin, and a corpus that
+/// committed both would pin the same value twice.
+pub fn encode_envelope(conflicts: &[MergeConflict]) -> String {
+    let mut sorted = conflicts.to_vec();
+    sort_canonical(&mut sorted);
+    let mut out = String::from("[");
+    for (i, c) in sorted.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"a\":");
+        append_side(&mut out, c.a.as_ref());
+        out.push_str(",\"b\":");
+        append_side(&mut out, c.b.as_ref());
+        out.push_str(",\"base\":");
+        append_escaped(&mut out, &c.base);
+        out.push_str(",\"class\":");
+        append_escaped(&mut out, c.class.as_str());
+        out.push_str(",\"facet\":");
+        append_escaped(&mut out, &c.facet);
+        out.push_str(",\"nodeId\":");
+        append_escaped(&mut out, &c.node_id);
+        out.push_str(",\"primacyHeld\":");
+        out.push_str(if c.primacy_held { "true" } else { "false" });
+        out.push('}');
+    }
+    out.push(']');
+    out
 }
 
 /// The outcome of a 3-way merge: the merged tree, or the conflicting cells.
@@ -158,7 +375,7 @@ fn accessibility_canonical(shell: &NodeKind, n: &Node) -> String {
 // ─── facet pickers ───────────────────────────────────────────────────────────
 
 /// Pick one style sub-field; record a conflict on a genuine divergence.
-fn pick_field<T: Copy + PartialEq>(
+fn pick_field<T: StyleFacetValue>(
     conflicts: &mut Vec<MergeConflict>,
     node_id: &str,
     facet: &str,
@@ -169,10 +386,14 @@ fn pick_field<T: Copy + PartialEq>(
     let a_changed = a_v != base_v;
     let b_changed = b_v != base_v;
     if a_changed && b_changed && a_v != b_v {
-        conflicts.push(MergeConflict {
-            node_id: node_id.to_string(),
-            facet: facet.to_string(),
-        });
+        conflicts.push(two_sided(
+            node_id,
+            facet,
+            MergeConflictClass::ConcurrentEdit,
+            base_v.facet_value(),
+            a_v.facet_value(),
+            b_v.facet_value(),
+        ));
         return base_v;
     }
     if a_changed {
@@ -196,10 +417,14 @@ fn pick_canonical(
     let a_changed = a_c != base_c;
     let b_changed = b_c != base_c;
     if a_changed && b_changed && a_c != b_c {
-        conflicts.push(MergeConflict {
-            node_id: node_id.to_string(),
-            facet: facet.to_string(),
-        });
+        conflicts.push(two_sided(
+            node_id,
+            facet,
+            MergeConflictClass::ConcurrentEdit,
+            base_c,
+            a_c,
+            b_c,
+        ));
         return 0;
     }
     if a_changed {
@@ -340,12 +565,46 @@ fn merge3(conflicts: &mut Vec<MergeConflict>, base: &Node, a: &Node, b: &Node) -
             let ac = a_map.get(cid).copied().unwrap_or(bc);
             let bb = b_map.get(cid).copied().unwrap_or(bc);
             merge3(conflicts, bc, ac, bb)
-        } else if let Some(ac) = a_map.get(cid) {
-            (*ac).clone()
-        } else if let Some(bb) = b_map.get(cid) {
-            (*bb).clone()
         } else {
-            unreachable!("merge3: child id {cid} vanished")
+            match (a_map.get(cid), b_map.get(cid)) {
+                (Some(ac), Some(bb)) => {
+                    // BOTH branches introduced this id. There is no base to
+                    // merge against, so agreement is the only clean outcome:
+                    // identical content is the shared value, and DIFFERENT
+                    // content is a refusal naming the id. Taking the A side
+                    // unconditionally — which is what this did before the
+                    // shared-children guard below reached the case — is a
+                    // silent, arrival-order-dependent pick.
+                    let ac_c = encode_node(ac);
+                    let bb_c = encode_node(bb);
+                    if ac_c == bb_c {
+                        return (*ac).clone();
+                    }
+                    conflicts.push(two_sided(
+                        cid,
+                        "insert",
+                        MergeConflictClass::ConcurrentEdit,
+                        // The id exists on neither side of the LCA, so it has
+                        // no base value — the empty string, not an encoding of
+                        // some node that was never there.
+                        "",
+                        &ac_c,
+                        &bb_c,
+                    ));
+                    // The merge has already refused, so this value reaches no
+                    // caller — but it must not depend on which branch arrived
+                    // first either. Same doctrine as the insert tie-break:
+                    // order by canonical bytes.
+                    if ordinal_cmp(&ac_c, &bb_c) != std::cmp::Ordering::Greater {
+                        (*ac).clone()
+                    } else {
+                        (*bb).clone()
+                    }
+                }
+                (Some(ac), None) => (*ac).clone(),
+                (None, Some(bb)) => (*bb).clone(),
+                (None, None) => unreachable!("merge3: child id {cid} vanished"),
+            }
         }
     };
 
@@ -361,6 +620,17 @@ fn merge3(conflicts: &mut Vec<MergeConflict>, base: &Node, a: &Node, b: &Node) -
             .collect()
     } else if !a_struct && b_struct {
         b_ids
+            .iter()
+            .map(|cid| recurse_child(conflicts, cid))
+            .collect()
+    } else if a_ids == b_ids {
+        // Both sides changed the children to the SAME id list — agreement, not
+        // a conflict, and the guard every other facet already has. Its absence
+        // here made `merge3_way base a a` refuse for any branch that touched
+        // children at all. The shared ids' CONTENTS are checked by
+        // `recurse_child`, which refuses a same-id-different-content insert
+        // rather than defaulting to a side.
+        a_ids
             .iter()
             .map(|cid| recurse_child(conflicts, cid))
             .collect()
@@ -397,10 +667,14 @@ fn merge3(conflicts: &mut Vec<MergeConflict>, base: &Node, a: &Node, b: &Node) -
             }
             merged
         } else {
-            conflicts.push(MergeConflict {
-                node_id: id.clone(),
-                facet: "children".to_string(),
-            });
+            conflicts.push(two_sided(
+                &id,
+                "children",
+                MergeConflictClass::ReorderVsStructural,
+                &base_ids.join(","),
+                &a_ids.join(","),
+                &b_ids.join(","),
+            ));
             base_ids
                 .iter()
                 .map(|cid| recurse_child(conflicts, cid))
