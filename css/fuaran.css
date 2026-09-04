@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:609b5d83ca7fc9d3
+/* fuaran-vocabulary-fingerprint: fv1:31d200d72663a91a
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -2062,6 +2062,38 @@ body {
 
 /* The refusal line — role="status", so it is announced as well as shown. */
 .fuaran-upload-drop-hint {
+  color: var(--fuaran-tone-critical-fg, #b91c1c);
+  font-size: var(--fuaran-text-sm, 13px);
+}
+
+/* ── upload streaming (Phase 1117) ────────────────────────────────
+   The shell an upload gets when it declares a host-registered `destination`.
+   It wraps the control rather than replacing it — a `<div>` and not a
+   `<label>`, because the drop zone above is already a label and both may be
+   declared on one upload — and adds exactly one thing: a status line.
+
+   All three status classes are `role="status"` spans, so each is announced as
+   well as shown. They are three classes rather than one because the three
+   states are three different colours to a reader who can see and three
+   different sentences to one who cannot, and folding them together would have
+   made "uploading" and "nothing was saved" the same visual event. */
+.fuaran-upload-stream {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-upload-stream-progress {
+  color: var(--fuaran-tone-info-fg, #1d4ed8);
+  font-size: var(--fuaran-text-sm, 13px);
+}
+
+.fuaran-upload-stream-done {
+  color: var(--fuaran-tone-success-fg, #15803d);
+  font-size: var(--fuaran-text-sm, 13px);
+}
+
+.fuaran-upload-stream-refused {
   color: var(--fuaran-tone-critical-fg, #b91c1c);
   font-size: var(--fuaran-text-sm, 13px);
 }
