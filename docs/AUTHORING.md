@@ -264,18 +264,27 @@ the difference is deliberate:
   client that could not paint a chart would not reach parity with the clients it
   sits beside, so the lowering earns its pixels here where in a purely headless
   host it would not.
-- **A `Sparkline` paints, but as bespoke SVG rather than a lowered `Drawing`.**
-  `render_sparkline` resolves the float sequence and emits an
-  `<svg class="fuaran-sparkline">` wrapping one `<polyline>`, or the empty-state
-  placeholder when the source resolves to nothing.
+- **A `Sparkline` is lowered in-host too, and through the same builder.** The
+  series is lowered to a canonical `Drawing` (`render::sparkline_lowering`) and
+  painted as inline SVG inside a `fuaran-sparkline` container — so the picture
+  agrees with every other host's by construction rather than by a hand-written
+  copy kept in step. An unresolved or empty series keeps the em-dash placeholder:
+  that fallback is a *host* element rather than a `Shape`, so the lowering
+  reports it in the type (`None`) instead of drawing an empty canvas nobody can
+  read.
 
-  Say that precisely, because the byte-copied reference stylesheet has moved
-  ahead of it: `css/fuaran.css` now treats `.fuaran-sparkline` as a *container*
-  and styles `.fuaran-sparkline > .fuaran-drawing`, a selector nothing in this
-  host produces. Nothing in CI catches the gap — the class-vocabulary and
-  stylesheet-parity checks need a reference-host checkout the workflow
-  deliberately omits and reports as NOT RUN. Treat it as known outstanding work
-  rather than a description of the current output.
+  The `fuaran-sparkline` class is a CONTAINER, not the drawn element. That is
+  where the 100×30 sizing and the inherited `color` the lowering's
+  `currentColor` stroke reads have always lived, and it is what the byte-copied
+  reference stylesheet targets — `.fuaran-sparkline > .fuaran-drawing`, a
+  DIRECT-child selector, which is why the arm splices the bare svg rather than
+  reusing the `Drawing` node's own `<div>` wrapper.
+
+  The contract is `wire-format-fixtures/sparkline-lowering/*`, and
+  `tests/sparkline_lowering.rs` certifies every committed vector byte-for-byte
+  plus the wiring that reaches it. Before that suite this arm had **no** test at
+  all — the corpus round-trip walk exercises the decode of a `Sparkline` and says
+  nothing about the picture.
 
 ## The crate's shape
 

@@ -12,8 +12,8 @@ bytes), the tree-op apply engine (+ `can_apply` dry-run), the pre-emit validator
 (canonical `FUARAN###` codes), dataframe evaluation (`Binding.Transform`), the
 server-side emission tier (parity-locked server-HTML renderer, corpus-certified
 deterministic markdown renderer, hydration-ready emission, islands partial
-hydration, golden-certified chart lowering), and the **browser-native `wasm32`
-client** — a `ClientSession` (decode → render → drive) over a minimal C-ABI shim +
+hydration, golden-certified chart and sparkline lowering), and the
+**browser-native `wasm32` client** — a `ClientSession` (decode → render → drive) over a minimal C-ABI shim +
 a thin hand-written JS loader, no `wasm-bindgen`.
 
 **Framing — load-bearing, do not regress.** The emission surface is the **canonical
@@ -68,6 +68,7 @@ fuaran-rs/
 │                        #   + placement.rs (the placement algebra: placed insert / move / nudge + clone verbs)
 ├── src/validator/       # pre-emit structural validator — canonical FUARAN### defect codes
 ├── src/render/          # emission tier — server.rs (HTML walk + islands) + markdown.rs (corpus-certified)
+│                        #   + chart_lowering.rs / sparkline_lowering.rs (golden-certified Drawing lowerings)
 │                        #   + sanitize.rs (injection floor) + egress.rs (destination policy, §14.1)
 │                        #   + bindings.rs / class_names.rs / html.rs
 ├── src/bounded/         # the bounded program loop (client placement) — actions.rs (the one evaluating

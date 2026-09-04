@@ -249,7 +249,12 @@ const CHART_FONT: &str = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-ser
 
 /// Round-half-up to 2 dp — a single deterministic rule every host reproduces
 /// (avoids banker's-rounding / platform float-print divergence).
-fn r2(x: f64) -> f64 {
+///
+/// `pub(crate)` because the sparkline lowering beside this one obeys the SAME
+/// rule (the `sparkline-lowering/*` corpus pins it in the same words), and two
+/// copies of a rounding rule is exactly the shape both lowerings exist to
+/// remove.
+pub(crate) fn r2(x: f64) -> f64 {
     (x * 100.0 + 0.5).floor() / 100.0
 }
 
@@ -1247,7 +1252,9 @@ fn style_fill(fill: &str) -> DrawStyle {
     }
 }
 
-fn style_stroke(stroke: &str, width: f64) -> DrawStyle {
+/// A stroked, unfilled shape style. `pub(crate)` for the sparkline lowering,
+/// whose one `Polyline` carries exactly this chrome.
+pub(crate) fn style_stroke(stroke: &str, width: f64) -> DrawStyle {
     DrawStyle {
         stroke: Some(static_str(stroke)),
         stroke_width: Some(static_num(width)),

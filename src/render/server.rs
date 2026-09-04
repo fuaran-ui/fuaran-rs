@@ -2005,56 +2005,37 @@ fn render_tabs(ctx: &Ctx<'_>, parent_node_id: &str, spec: &TabsSpec) -> String {
 // ─── Sparkline ───────────────────────────────────────────────────────────────
 
 fn render_sparkline(ctx: &Ctx<'_>, spec: &crate::wire::SparklineSpec) -> String {
+    // Phase 1099 — the bespoke `<polyline>` builder is retired in favour of the
+    // shared `Sparkline -> Drawing` lowering, painted through the SAME drawing
+    // builder the `Drawing` and lowered-`Chart` arms already use. So this host's
+    // sparkline agrees with every other host's by construction rather than by a
+    // hand-written copy kept in step, and `sparkline-lowering/*` is what says so.
+    //
+    // The `fuaran-sparkline` class is a CONTAINER now, not the drawn element:
+    // that is where the 100x30 sizing and the inherited `color` the lowering's
+    // `currentColor` stroke reads have always lived, and it is the shape the
+    // byte-copied reference stylesheet has been styling since Phase 1098
+    // (`.fuaran-sparkline > .fuaran-drawing`, a DIRECT-child selector — which is
+    // why this arm splices the bare svg rather than calling `render_drawing`,
+    // whose own `<div>` wrapper would break it).
+    //
+    // An unresolved or empty series keeps the em-dash element, unchanged. This
+    // host resolves both to the empty series, and both mean the same thing to a
+    // reader, so the collapse the reference states as two arms is behaviour-
+    // identical here.
     let series = resolve_float_seq(ctx.sources, &spec.source);
-    if series.is_empty() {
-        return text_el(
+    match super::sparkline_lowering::try_lower_sparkline(&series) {
+        Some(drawing) => el(
+            "div",
+            &[("class", s("fuaran-sparkline"))],
+            &drawing_svg(ctx, &drawing),
+        ),
+        None => text_el(
             "div",
             &[("class", s("fuaran-sparkline fuaran-sparkline-empty"))],
             EM_DASH,
-        );
+        ),
     }
-    let n = series.len();
-    let min_v = series.iter().copied().fold(f64::INFINITY, f64::min);
-    let max_v = series.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let range = if max_v - min_v < 1e-9 {
-        1.0
-    } else {
-        max_v - min_v
-    };
-    let points: String = series
-        .iter()
-        .enumerate()
-        .map(|(i, v)| {
-            let x = if n <= 1 {
-                50.0
-            } else {
-                (i as f64 / (n - 1) as f64) * 100.0
-            };
-            let y = 30.0 - ((v - min_v) / range) * 28.0 - 1.0;
-            format!("{x:.2},{y:.2}")
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    let polyline = el(
-        "polyline",
-        &[
-            ("class", s("fuaran-sparkline-line")),
-            ("fill", s("none")),
-            ("stroke", s("currentColor")),
-            ("stroke-width", s("1.5")),
-            ("points", s(points)),
-        ],
-        "",
-    );
-    el(
-        "svg",
-        &[
-            ("class", s("fuaran-sparkline")),
-            ("viewBox", s("0 0 100 30")),
-            ("preserveAspectRatio", s("none")),
-        ],
-        &polyline,
-    )
 }
 
 // ─── Drawing (Phase 525) — inline SVG for the server-HTML tier ────────────────
@@ -2418,7 +2399,13 @@ fn root_aria_label(ctx: &Ctx<'_>, spec: &crate::wire::DrawingSpec) -> String {
     format!(" aria-label=\"{}\"", draw_escape(&composed))
 }
 
-fn render_drawing(ctx: &Ctx<'_>, spec: &crate::wire::DrawingSpec) -> String {
+/// The bare `<svg class="fuaran-drawing">` element — the shared builder's own
+/// output, with no host wrapper around it.
+///
+/// Split out at Phase 1099 because the sparkline arm splices this INTO its own
+/// `fuaran-sparkline` container, whose stylesheet rule is a direct-child
+/// selector. `render_drawing` below is this plus the `Drawing` node's wrapper.
+fn drawing_svg(ctx: &Ctx<'_>, spec: &crate::wire::DrawingSpec) -> String {
     let vb = &spec.view_box;
     let view_box = format!(
         "{} {} {} {}",
@@ -2445,10 +2432,13 @@ fn render_drawing(ctx: &Ctx<'_>, spec: &crate::wire::DrawingSpec) -> String {
     let body: String = spec.shapes.iter().map(|s| render_shape(ctx, s)).collect();
     let root_style = draw_style_attrs(&spec.style, false);
     let aria = root_aria_label(ctx, spec);
-    let svg = format!(
+    format!(
         "<svg class=\"fuaran-drawing\" role=\"img\" viewBox=\"{view_box}\"{aria}{root_style}>{title}{desc}{body}</svg>"
-    );
-    format!("<div>{svg}</div>")
+    )
+}
+
+fn render_drawing(ctx: &Ctx<'_>, spec: &crate::wire::DrawingSpec) -> String {
+    format!("<div>{}</div>", drawing_svg(ctx, spec))
 }
 
 // ─── Inputs (inert) ──────────────────────────────────────────────────────────

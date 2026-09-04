@@ -18,6 +18,7 @@ pub mod project;
 pub mod sanitize;
 pub mod seeds;
 pub mod server;
+pub mod sparkline_lowering;
 
 pub use bindings::BindingSources;
 pub use project::project_resolved;
