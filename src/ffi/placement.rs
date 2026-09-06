@@ -57,7 +57,7 @@ use crate::ops::placement::{
 };
 use crate::wire::{Node, TreeOp, decode_node, encode_op};
 
-use super::{FuaranBuf, borrow_str, pack_string};
+use super::{FuaranBuf, borrow_failure_detail, borrow_str, guard_buf, pack_string};
 
 /// A failure of one placement call, in the order a caller meets them.
 enum VerbError {
@@ -256,21 +256,24 @@ unsafe fn dispatch(
     session: *mut ClientSession,
     ptr: *const u8,
     len: usize,
+    entry: &str,
     verb: fn(&ClientSession, &JVal) -> Result<TreeOp, VerbError>,
 ) -> FuaranBuf {
-    if session.is_null() {
-        return pack_string(String::new());
-    }
-    // SAFETY: caller contract — a live handle under single-owner confinement.
-    let session = unsafe { &mut *session };
-    let Some(request) = (unsafe { borrow_str(ptr, len) }) else {
-        return pack_string(envelope(
-            "request",
-            "INVALID_REQUEST",
-            "the request is not valid UTF-8",
-        ));
-    };
-    pack_string(run(session, request, verb))
+    guard_buf(entry, || {
+        if session.is_null() {
+            return pack_string(String::new());
+        }
+        // SAFETY: caller contract — a live handle under single-owner confinement.
+        let session = unsafe { &mut *session };
+        let Some(request) = (unsafe { borrow_str(ptr, len) }) else {
+            return pack_string(envelope(
+                "request",
+                "INVALID_REQUEST",
+                borrow_failure_detail(ptr, len),
+            ));
+        };
+        pack_string(run(session, request, verb))
+    })
 }
 
 /// Place a node among a parent's children: `{"parentId":…,"placement":…,
@@ -288,7 +291,7 @@ pub unsafe extern "C" fn fuaran_session_place(
     len: usize,
 ) -> FuaranBuf {
     // SAFETY: caller contract.
-    unsafe { dispatch(session, ptr, len, place_verb) }
+    unsafe { dispatch(session, ptr, len, "fuaran_session_place", place_verb) }
 }
 
 /// Move a node one or more sibling positions: `{"target":…,"delta":±n}`. Emits
@@ -303,7 +306,7 @@ pub unsafe extern "C" fn fuaran_session_nudge(
     len: usize,
 ) -> FuaranBuf {
     // SAFETY: caller contract.
-    unsafe { dispatch(session, ptr, len, nudge_verb) }
+    unsafe { dispatch(session, ptr, len, "fuaran_session_nudge", nudge_verb) }
 }
 
 /// Duplicate a subtree already in the session's tree and place the clone:
@@ -319,7 +322,7 @@ pub unsafe extern "C" fn fuaran_session_duplicate(
     len: usize,
 ) -> FuaranBuf {
     // SAFETY: caller contract.
-    unsafe { dispatch(session, ptr, len, duplicate_verb) }
+    unsafe { dispatch(session, ptr, len, "fuaran_session_duplicate", duplicate_verb) }
 }
 
 /// Place a subtree lifted from ANOTHER tree: `{"subtree":{…node…},"parentId":…,
@@ -335,5 +338,5 @@ pub unsafe extern "C" fn fuaran_session_paste(
     len: usize,
 ) -> FuaranBuf {
     // SAFETY: caller contract.
-    unsafe { dispatch(session, ptr, len, paste_verb) }
+    unsafe { dispatch(session, ptr, len, "fuaran_session_paste", paste_verb) }
 }

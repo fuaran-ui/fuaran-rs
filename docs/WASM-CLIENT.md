@@ -20,8 +20,25 @@ cargo build --target wasm32-unknown-unknown --release
 covers it rather than leaving it to drift.
 
 The size comes from the release profile in `Cargo.toml`, which is tuned for this
-artefact specifically: `opt-level = "s"`, `lto = true`, `panic = "abort"` (no
-unwinding tables in the browser module) and `strip = true`.
+artefact specifically: `opt-level = "s"`, `lto = true` and `strip = true`.
+
+`panic = "abort"` used to sit in that profile and is deliberately gone. A Cargo
+profile is not target-scoped, so it also governed the native staticlib the
+native bindings link, and it made a panic anywhere in this crate an abort of
+*their* process; the C-ABI now installs a panic boundary on every entry point,
+and a boundary that cannot catch is not one. **The browser module is unaffected
+either way** — `wasm32-unknown-unknown` fixes the panic strategy at `abort` in
+its own target specification, so this artefact still carries no unwinding tables
+and pays nothing for the change. The consequence here, and only here, is that
+the boundary is INERT: a panic traps the instance rather than returning an error
+envelope, so the session must be re-created. `include/fuaran.h` states the same
+asymmetry for a native consumer.
+
+One caller-side consequence does reach this document: `fuaran_alloc` is fallible
+and returns `0` when a request cannot be satisfied. Address `0` is a valid
+offset in linear memory, so writing there would corrupt the module rather than
+fail — `js/fuaran-loader.js` therefore refuses a null allocation at the one
+place that would otherwise do the write.
 
 To try the shipped demo, put the module beside the loader and serve the
 directory over HTTP — ES modules and WebAssembly both need a real origin, not

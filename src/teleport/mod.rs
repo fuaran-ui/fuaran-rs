@@ -144,7 +144,14 @@ pub fn decode(s: &str) -> Result<Bundle, TeleportError> {
     let env = parse(&text).map_err(|e| TeleportError::InvalidJson(e.message))?;
 
     // 3. Envelope shape + version.
-    let JVal::Obj(_) = &env else {
+    //
+    // `fields` is bound HERE, by the same refusal that establishes the shape,
+    // and carried down to the digest step below. It used to be re-destructured
+    // there behind an `unreachable!()`, which was a correct claim about the code
+    // as written and an invitation to a later edit: the refusal that made it
+    // true is thirty lines away, and nothing but this comment connected them.
+    // One binding, one refusal, no second claim to keep true.
+    let JVal::Obj(fields) = &env else {
         return Err(TeleportError::InvalidEnvelope(
             "envelope is not an object".to_string(),
         ));
@@ -177,9 +184,6 @@ pub fn decode(s: &str) -> Result<Bundle, TeleportError> {
 
     // 4. Digest verification — before decoding any payload. Rebuild the preimage
     //    through the same canonical renderer, dropping only the digest field.
-    let JVal::Obj(fields) = &env else {
-        unreachable!()
-    };
     let without_digest: Vec<(String, JVal)> = fields
         .iter()
         .filter(|(k, _)| k != "digest")

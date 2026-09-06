@@ -249,17 +249,25 @@ fn strip_event_handlers(input: Vec<char>) -> Vec<char> {
         };
         let eq = index_of_any(&s, &['='], found);
         let next_space = index_of_any(&s, &[' ', '\t', '\n', '>'], found + 1);
-        let is_boolean_attr = match (eq, next_space) {
-            (None, _) => true,
-            (Some(e), Some(sp)) => sp < e,
-            (Some(_), None) => false,
+        // The `=` position when this is a VALUED attribute, `None` when it is a
+        // boolean one. Binding the position in the same match that decides the
+        // case removes the `eq.expect("non-boolean branch has an '='")` that
+        // used to re-derive it below: the claim was true, but it was a claim
+        // about two expressions agreeing, kept true by nothing but proximity —
+        // and it sat on a path reached by attacker-shaped markup, where the
+        // release profile turned a wrong claim into an aborted host.
+        let valued_at = match (eq, next_space) {
+            (None, _) => None,
+            (Some(e), Some(sp)) if sp < e => None,
+            (Some(e), _) => Some(e),
         };
-        if is_boolean_attr {
+        let Some(eq) = valued_at else {
             // Boolean attribute like `onload` with no `=` — strip the name only.
             let stop_at = next_space.unwrap_or(s.len());
             s.drain(found..stop_at);
-        } else {
-            let eq = eq.expect("non-boolean branch has an '='");
+            continue;
+        };
+        {
             let mut v = eq + 1;
             while v < s.len() && (s[v] == ' ' || s[v] == '\t') {
                 v += 1;

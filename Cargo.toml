@@ -26,12 +26,25 @@ path = "src/lib.rs"
 # emitted into the cdylib + staticlib on every target.
 crate-type = ["lib", "cdylib", "staticlib"]
 
-# A small, deterministic `wasm32` artefact: optimise for size, abort on panic
-# (no unwinding tables in the browser module), strip debug symbols.
+# A small, deterministic `wasm32` artefact: optimise for size, strip debug
+# symbols.
+#
+# `panic = "abort"` was here and is deliberately GONE. A Cargo profile is not
+# target-scoped, so that one line governed every consumer of the release profile
+# — the native staticlib the Swift and Kotlin surfaces link included — and it
+# made a panic anywhere in this crate an abort of THEIR process, with no
+# recovery and no diagnosis. `src/ffi/` now installs a `catch_unwind` boundary
+# on every `extern "C"` entry point, and a boundary that cannot catch is not
+# one, so the native release profile unwinds.
+#
+# `wasm32-unknown-unknown` is unaffected: its target specification fixes the
+# panic strategy at `abort`, so the browser module still carries no unwinding
+# tables and pays nothing for this change. The consequence there is that the
+# guard is INERT (a panic traps the instance), which `include/fuaran.h` states
+# rather than leaving to be discovered.
 [profile.release]
 opt-level = "s"
 lto = true
-panic = "abort"
 strip = true
 
 [features]

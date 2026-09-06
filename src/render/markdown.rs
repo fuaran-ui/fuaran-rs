@@ -1024,8 +1024,14 @@ fn extract_ref_defs(lines: Vec<String>) -> (Refs, Vec<String>) {
                 if title_part.len() >= 2
                     && (title_part.starts_with('"') || title_part.starts_with('\''))
                 {
-                    let q = title_part.chars().next().expect("non-empty");
-                    if let Some(tc) = title_part[1..].find(q) {
+                    // READ the opening quote rather than re-derive it behind an
+                    // `expect("non-empty")`. The length test above made that
+                    // claim true; reading it makes the same code total, so a
+                    // later edit to the test cannot turn a reference definition
+                    // in a decoded document into a panic on the render path.
+                    if let Some(q) = title_part.chars().next()
+                        && let Some(tc) = title_part[1..].find(q)
+                    {
                         title = Some(title_part[1..1 + tc].to_string());
                     }
                 }
@@ -1082,10 +1088,14 @@ fn parse_blocks(lines: &[String]) -> Vec<Block> {
         let indent = leading_indent(line);
         let trimmed_start = trim_start_chars(line, " \t");
         if trimmed_start.starts_with("```") || trimmed_start.starts_with("~~~") {
-            let fence = if trimmed_start.starts_with("```") {
-                "```"
+            // The fence and its character are STATED together, once, rather
+            // than the character being re-derived per scanned line behind an
+            // `expect("non-empty fence")`. Both are literals here, so there is
+            // no derivation left that could be wrong.
+            let (fence, fence_char) = if trimmed_start.starts_with("```") {
+                ("```", '`')
             } else {
-                "~~~"
+                ("~~~", '~')
             };
             let info = trimmed_start[3..].trim();
             let lang = if info.is_empty() {
@@ -1098,7 +1108,6 @@ fn parse_blocks(lines: &[String]) -> Vec<Block> {
             let mut closed = false;
             while j < n && !closed {
                 let ln = &lines[j];
-                let fence_char = fence.chars().next().expect("non-empty fence");
                 if trim_start_chars(ln, " \t").starts_with(fence)
                     && trim_end_chars(ln.trim(), &fence_char.to_string()).is_empty()
                 {
@@ -1147,11 +1156,15 @@ fn parse_blocks(lines: &[String]) -> Vec<Block> {
             i = j;
         } else if line.contains('|')
             && i + 1 < n
-            && parse_align_row(&lines[i + 1])
-                .is_some_and(|aligns| aligns.len() == split_table_row(line).len())
+            && let Some(aligns) = parse_align_row(&lines[i + 1])
+            && aligns.len() == split_table_row(line).len()
         {
+            // The alignment row is parsed ONCE and BOUND by the test that admits
+            // the table, rather than tested here and re-parsed behind an
+            // `expect("checked above")`. The claim was true; keeping it true
+            // depended on two expressions staying in step, on a path that runs
+            // over decoded document text.
             let headers = split_table_row(line);
-            let aligns = parse_align_row(&lines[i + 1]).expect("checked above");
             let mut rows: Vec<Vec<String>> = Vec::new();
             let mut j = i + 2;
             while j < n && !is_blank(&lines[j]) && lines[j].contains('|') {

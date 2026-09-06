@@ -29,7 +29,7 @@ use crate::bounded::{
     first_divergence, normalise_expectation, parse_events, parse_expectation, run_scenario,
 };
 use crate::canonical::{JVal, parse, render_canonical};
-use crate::ffi::{FuaranBuf, borrow_str, pack_string};
+use crate::ffi::{FuaranBuf, borrow_failure_detail, borrow_str, guard_buf, pack_string};
 
 fn envelope(key: &str, value: &str) -> String {
     format!(
@@ -89,13 +89,15 @@ fn check(request: &str) -> Result<Option<String>, String> {
 /// [`crate::ffi`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fuaran_bounded_check_scenario(ptr: *const u8, len: usize) -> FuaranBuf {
-    // SAFETY: caller contract.
-    let Some(request) = (unsafe { borrow_str(ptr, len) }) else {
-        return pack_string(envelope("error", "the request is not valid UTF-8"));
-    };
-    pack_string(match check(request) {
-        Ok(None) => envelope("ok", ""),
-        Ok(Some(report)) => envelope("divergence", &report),
-        Err(message) => envelope("error", &message),
+    guard_buf("fuaran_bounded_check_scenario", || {
+        // SAFETY: caller contract.
+        let Some(request) = (unsafe { borrow_str(ptr, len) }) else {
+            return pack_string(envelope("error", borrow_failure_detail(ptr, len)));
+        };
+        pack_string(match check(request) {
+            Ok(None) => envelope("ok", ""),
+            Ok(Some(report)) => envelope("divergence", &report),
+            Err(message) => envelope("error", &message),
+        })
     })
 }

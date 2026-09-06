@@ -65,7 +65,11 @@ typedef struct FuaranBuf {
  * Allocate a zeroed INPUT buffer of `len` bytes. The caller writes UTF-8 into it,
  * passes (ptr, len) to a consuming call, then frees it with fuaran_dealloc AFTER
  * that call returns. Rust only borrows an input buffer for the call's duration.
- * Returns NULL only if the allocation of `len` bytes fails.
+ * Returns NULL only if the allocation of `len` bytes fails — CHECK IT. `len`
+ * usually arrives as a document's byte length, so an unsatisfiable request is an
+ * ordinary condition on this surface rather than an emergency; the allocation is
+ * fallible and this call never aborts the host on it. fuaran_alloc(0) returns a
+ * non-NULL, suitably aligned pointer owning no bytes; free it like any other.
  */
 uint8_t *fuaran_alloc(size_t len);
 
@@ -283,6 +287,39 @@ FuaranBuf fuaran_rosetta_encode(const uint8_t *ptr, size_t len);
  *                                     fuaran_session_free.
  *   Every buffer is freed exactly once through fuaran_dealloc; a session exactly
  *   once through fuaran_session_free. Output buffers carry NO trailing NUL.
+ *
+ * INPUT-BUFFER CONTRACT
+ *
+ *   Every (ptr, len) INPUT pair must be one of:
+ *     - a live buffer of `len` initialised bytes (from fuaran_alloc, or any
+ *       buffer the caller owns for the duration of the call), or
+ *     - (NULL, 0), which spells "no bytes" and is accepted as the empty string.
+ *   (NULL, len > 0) is REFUSED with the surface's ordinary decode envelope
+ *   ({"error":{"class":"decode","code":"INVALID_JSON",...}}) naming the mistake.
+ *   It is never read: doing so would be undefined behaviour whatever the length,
+ *   and it is the one input shape on this surface that could corrupt the host
+ *   rather than merely upset it.
+ *
+ * FAILURE CONTRACT — a panic does not cross this boundary
+ *
+ *   Every entry point declared here runs its body inside a panic boundary. An
+ *   internal defect that would otherwise unwind out of an extern "C" frame is
+ *   caught and returned as this surface's ordinary error envelope:
+ *
+ *     {"error":{"class":"internal","code":"PANIC","message":"...","path":"$"}}
+ *
+ *   ("internal" and "PANIC" are deliberately distinct from the decode / apply /
+ *   placement / lookup classes: a panic is a statement about THIS LIBRARY, not
+ *   about your input. Report one. It is always a defect here.) The session is
+ *   left as it was — the apply engine never partially mutates, it builds a whole
+ *   new tree and adopts it — so a caught panic does not end the session, and the
+ *   caller may keep using the handle. fuaran_session_new reports a caught panic
+ *   through its own channel: NULL, with the envelope in fuaran_last_error().
+ *
+ *   THE ONE EXCEPTION IS wasm32. That target's specification fixes the panic
+ *   strategy at "abort", so there is no unwind to catch and a panic traps the
+ *   module instance; the guard is present but inert. Native targets — the
+ *   audience for this header — unwind, so the guard is live there.
  *
  * THREADING CONTRACT
  *
