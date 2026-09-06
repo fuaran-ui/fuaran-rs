@@ -100,7 +100,7 @@ fn visible_true_renders_exactly_as_an_unconditional_node() {
 fn an_unresolved_predicate_renders_the_node() {
     // A query result the host never furnished. `Binding::State` cannot express
     // this — its own rule resolves a default-less unwritten key to `false` — so
-    // the fixture reaches for `Query`, which is exactly why FUARAN143 exists.
+    // the fixture reaches for `Query`, which is exactly why FUARAN148 exists.
     let html = render_to_html(
         &node(&wrapped(
             r#"{"id":"subject","kind":{"$type":"Markdown","text":"SUBJECT"},

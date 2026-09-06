@@ -273,7 +273,7 @@ impl Walker {
                         "Switch has an empty stateKey — it can never resolve a case and is stuck on its default; name the state key the switch selects on.".to_string(),
                     );
                 }
-                // Phase 1535 - FUARAN142: a case selects on a string `match`
+                // Phase 1535 - FUARAN147: a case selects on a string `match`
                 // XOR a `when` predicate. The PRE-EMIT twin of the decoder's own
                 // refusal, and it exists for the reason every pre-emit shape
                 // rule does: a tree authored in Rust never passes through the
@@ -290,7 +290,7 @@ impl Walker {
                     match (&case.match_value, &case.when) {
                         (Some(_), Some(_)) => self.push(
                             Severity::Error,
-                            "FUARAN142",
+                            "FUARAN147",
                             id,
                             format!(
                                 "Switch case {index} carries both 'match' and 'when' — exactly one selects a case; 'match' compares the switch's `on` selector against a literal, 'when' evaluates a Binding<bool> and needs no selector."
@@ -298,7 +298,7 @@ impl Walker {
                         ),
                         (None, None) => self.push(
                             Severity::Error,
-                            "FUARAN142",
+                            "FUARAN147",
                             id,
                             format!(
                                 "Switch case {index} carries neither 'match' nor 'when' — a case that names no condition can never be selected; give it a literal 'match' against the switch's `on` selector, or a 'when' Binding<bool> predicate."
