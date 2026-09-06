@@ -1471,13 +1471,30 @@ fn apply_one(op: &TreeOp, root: &Node, telem: &mut Vec<OpApplyTelemetryRecord>) 
                 );
             }
             let mut new_tree = root.clone();
-            let parent = find_node_mut(&mut new_tree, parent_id)
-                .expect("parent located above; the clone preserves it");
+            // The two lookups above located this parent and its children field
+            // in `root`, and `new_tree` is a clone of `root`, so both must be
+            // found again here. They are nonetheless REFUSED rather than
+            // asserted: this module's contract is that apply is total and never
+            // panics, an `expect` is a claim about two lookups agreeing across a
+            // clone, and the refusal is already spelled — `fail` costs nothing
+            // and cannot be wrong.
+            let Some(parent) = find_node_mut(&mut new_tree, parent_id) else {
+                return fail(
+                    ApplyErrorCode::ParentNotFound,
+                    format!("Parent node '{parent_id}' not found in tree."),
+                );
+            };
             // 0.4.0: InsertChild APPENDS. Placing a node anywhere else is
             // Batch [InsertChild, ReorderChildren] — order is stated by ids.
-            layout_children_mut(parent)
-                .expect("children located above; the clone preserves them")
-                .push(child.clone());
+            let Some(children) = layout_children_mut(parent) else {
+                return fail(
+                    ApplyErrorCode::ChildlessKind,
+                    format!(
+                        "Node '{parent_id}' has no children field — only child-bearing layout kinds accept structural child ops."
+                    ),
+                );
+            };
+            children.push(child.clone());
             telem.push(OpApplyTelemetryRecord {
                 op: "InsertChild",
                 target_id: parent_id.clone(),
@@ -1496,11 +1513,23 @@ fn apply_one(op: &TreeOp, root: &Node, telem: &mut Vec<OpApplyTelemetryRecord>) 
             };
             let parent_id = parent.id.clone();
             let mut new_tree = root.clone();
-            let parent = find_node_mut(&mut new_tree, &parent_id)
-                .expect("parent located above; the clone preserves it");
-            layout_children_mut(parent)
-                .expect("layout parent by construction")
-                .retain(|c| c.id != *target);
+            // Refused rather than asserted, for the reason InsertChild records
+            // above: apply is total, and the refusals are already spelled.
+            let Some(parent) = find_node_mut(&mut new_tree, &parent_id) else {
+                return fail(
+                    ApplyErrorCode::ParentNotFound,
+                    format!("Parent node '{parent_id}' not found in tree."),
+                );
+            };
+            let Some(children) = layout_children_mut(parent) else {
+                return fail(
+                    ApplyErrorCode::ChildlessKind,
+                    format!(
+                        "Node '{parent_id}' has no children field — only child-bearing layout kinds accept structural child ops."
+                    ),
+                );
+            };
+            children.retain(|c| c.id != *target);
             telem.push(OpApplyTelemetryRecord {
                 op: "RemoveNode",
                 target_id: target.clone(),
@@ -1601,9 +1630,24 @@ fn apply_one(op: &TreeOp, root: &Node, telem: &mut Vec<OpApplyTelemetryRecord>) 
                 .filter_map(|id| children.iter().find(|c| &c.id == id).cloned())
                 .collect();
             let mut new_tree = root.clone();
-            let parent = find_node_mut(&mut new_tree, parent_id)
-                .expect("parent located above; the clone preserves it");
-            *layout_children_mut(parent).expect("layout parent by construction") = reordered;
+            // Refused rather than asserted, for the reason InsertChild records
+            // above: apply is total, and the refusals these two lookups need are
+            // already spelled.
+            let Some(parent) = find_node_mut(&mut new_tree, parent_id) else {
+                return fail(
+                    ApplyErrorCode::ParentNotFound,
+                    format!("Parent node '{parent_id}' not found in tree."),
+                );
+            };
+            let Some(slot) = layout_children_mut(parent) else {
+                return fail(
+                    ApplyErrorCode::ChildlessKind,
+                    format!(
+                        "Node '{parent_id}' has no children field — only child-bearing layout kinds accept structural child ops."
+                    ),
+                );
+            };
+            *slot = reordered;
             telem.push(OpApplyTelemetryRecord {
                 op: "ReorderChildren",
                 target_id: parent_id.clone(),
