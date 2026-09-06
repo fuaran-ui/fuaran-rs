@@ -20,8 +20,9 @@ use fuaran_rs::render::chart_lowering::{
     ChartAxisUnitMode, ChartLowerStyle, ChartTitles, lower_chart_with, project_row,
 };
 use fuaran_rs::wire::{
-    Binding, ChartDataLabels, ChartKind, ChartLegendPosition, ChartXScale, Format, Node, NodeKind,
-    SemanticStyle, StateBehaviour, StaticValue, TextSource,
+    Binding, ChartAnnotation, ChartAnnotationRange, ChartAnnotationX, ChartDataLabels, ChartKind,
+    ChartLegendPosition, ChartXScale, Format, Node, NodeKind, SemanticStyle, StateBehaviour,
+    StaticValue, TextSource,
 };
 
 /// Walk up from the crate dir to the shared corpus (mirrors conformance.rs).
@@ -173,6 +174,89 @@ fn binding_of(j: &JVal) -> Binding {
     }
 }
 
+/// An annotation's x address, from the corpus's canonical wire JSON. An arm the
+/// family has not exercised panics rather than being approximated, on
+/// `text_source_of`'s reasoning: a silent fallback is what hides a drop.
+fn annotation_x_of(j: &JVal) -> ChartAnnotationX {
+    let tag = match j.field("$type") {
+        Some(JVal::Str(t)) => t.as_str(),
+        _ => panic!("chart-lowering input: ChartAnnotationX missing $type"),
+    };
+    match tag {
+        "Category" => match j.field("key") {
+            Some(JVal::Str(k)) => ChartAnnotationX::Category(k.clone()),
+            _ => panic!("chart-lowering input: Category address missing key"),
+        },
+        "Date" => match j.field("iso") {
+            Some(JVal::Str(s)) => ChartAnnotationX::Date(s.clone()),
+            _ => panic!("chart-lowering input: Date address missing iso"),
+        },
+        other => panic!("chart-lowering input: unsupported ChartAnnotationX arm {other}"),
+    }
+}
+
+/// A range band's pair — the case carries the AXIS as well as the pair.
+fn annotation_range_of(j: &JVal) -> ChartAnnotationRange {
+    let tag = match j.field("$type") {
+        Some(JVal::Str(t)) => t.as_str(),
+        _ => panic!("chart-lowering input: ChartAnnotationRange missing $type"),
+    };
+    let num = |key: &str| -> f64 {
+        match j.field(key) {
+            Some(JVal::Num(v)) => *v,
+            _ => panic!("chart-lowering input: ValueRange missing numeric {key}"),
+        }
+    };
+    let addr = |key: &str| -> ChartAnnotationX {
+        match j.field(key) {
+            Some(v) => annotation_x_of(v),
+            None => panic!("chart-lowering input: XRange missing {key}"),
+        }
+    };
+    match tag {
+        "ValueRange" => ChartAnnotationRange::ValueRange {
+            from: num("from"),
+            to: num("to"),
+        },
+        "XRange" => ChartAnnotationRange::XRange {
+            from: addr("from"),
+            to: addr("to"),
+        },
+        other => panic!("chart-lowering input: unsupported ChartAnnotationRange arm {other}"),
+    }
+}
+
+/// A chart's data-addressed annotation. Its LABEL rides `text_source_of`, so every
+/// arm crosses UNRESOLVED — the Phase 1143 contract at a new slot.
+fn annotation_of(j: &JVal) -> ChartAnnotation {
+    let tag = match j.field("$type") {
+        Some(JVal::Str(t)) => t.as_str(),
+        _ => panic!("chart-lowering input: ChartAnnotation missing $type"),
+    };
+    let label = j.field("label").map(text_source_of);
+    match tag {
+        "ReferenceLine" => match j.field("value") {
+            Some(JVal::Num(v)) => ChartAnnotation::ReferenceLine { value: *v, label },
+            _ => panic!("chart-lowering input: ReferenceLine missing numeric value"),
+        },
+        "EventMarker" => match j.field("at") {
+            Some(at) => ChartAnnotation::EventMarker {
+                at: annotation_x_of(at),
+                label,
+            },
+            None => panic!("chart-lowering input: EventMarker missing at"),
+        },
+        "RangeBand" => match j.field("range") {
+            Some(range) => ChartAnnotation::RangeBand {
+                range: annotation_range_of(range),
+                label,
+            },
+            None => panic!("chart-lowering input: RangeBand missing range"),
+        },
+        other => panic!("chart-lowering input: unsupported ChartAnnotation arm {other}"),
+    }
+}
+
 /// Lower one fixture input to the canonical Drawing-node wire JSON, mirroring the
 /// reference harness: lower → wrap in a Drawing node id `chart-<name>` → encode.
 fn lowered_json(name: &str, input: &str) -> String {
@@ -230,6 +314,16 @@ fn lowered_json(name: &str, input: &str) -> String {
         ),
         _ => None,
     };
+    // Phase 1490/1491/1492 — `annotations` is a WIRE field carried in canonical
+    // `$type` JSON, omitted when the case declares none (so every pre-1490 case
+    // AND every pre-1490 golden is unchanged). Every LABEL crosses UNRESOLVED,
+    // whichever arm it carries — the Phase 1143 text contract at a new slot, which
+    // is why `text_source_of` is reused rather than a bare-string reader.
+    let annotations: Vec<ChartAnnotation> = match spec.field("annotations") {
+        Some(JVal::Arr(items)) => items.iter().map(annotation_of).collect(),
+        None => Vec::new(),
+        Some(_) => panic!("chart-lowering input: annotations is not an array"),
+    };
     let rows: Vec<_> = match spec.field("data") {
         Some(JVal::Arr(items)) => items
             .iter()
@@ -270,6 +364,11 @@ fn lowered_json(name: &str, input: &str) -> String {
             legend_position,
             data_labels,
             x_scale,
+            annotations: if annotations.is_empty() {
+                None
+            } else {
+                Some(&annotations)
+            },
         },
         value_format.as_ref(),
         &style,

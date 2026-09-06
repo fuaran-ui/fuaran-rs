@@ -36,12 +36,12 @@ use crate::canonical::JVal;
 use crate::render::BindingSources;
 use crate::render::bindings::{try_scalar_number, try_scalar_string};
 use crate::wire::{
-    Binding, BoxSpec, CalloutSpec, ChartSpec, DisclosureSpec, DrawingSpec, ErrorBoundarySpec,
-    FactSpec, FilterSpec, FormField, FormSpec, FragmentArg, FragmentDeclSpec, FragmentRefSpec,
-    GridSpec, HeadingSpec, LabelValueRowSpec, LinkSpec, ListSpec, MarkdownSpec, MetricSpec,
-    ModalSpec, MountSpec, Node, NodeKind, ProgressSpec, ScrollAreaSpec, SelectSpec, Shape,
-    SplitPanelSpec, StaticRows, StaticValue, StepperSpec, SummaryListSpec, SwitchSpec, TabHeader,
-    TabsSpec, TextSource, ToastSpec,
+    Binding, BoxSpec, CalloutSpec, ChartAnnotation, ChartSpec, DisclosureSpec, DrawingSpec,
+    ErrorBoundarySpec, FactSpec, FilterSpec, FormField, FormSpec, FragmentArg, FragmentDeclSpec,
+    FragmentRefSpec, GridSpec, HeadingSpec, LabelValueRowSpec, LinkSpec, ListSpec, MarkdownSpec,
+    MetricSpec, ModalSpec, MountSpec, Node, NodeKind, ProgressSpec, ScrollAreaSpec, SelectSpec,
+    Shape, SplitPanelSpec, StaticRows, StaticValue, StepperSpec, SummaryListSpec, SwitchSpec,
+    TabHeader, TabsSpec, TextSource, ToastSpec,
 };
 
 /// Project a resolved copy of `tree` against the live `sources` — the entry
@@ -474,6 +474,31 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             data_labels: spec.data_labels,
             // Phase 882 — a scale declaration, not text; projects through untouched.
             x_scale: spec.x_scale,
+            // Phase 1490 — the data-addressed annotations. Their LABELS are text,
+            // so they project through this pass like every other `TextSource`
+            // chrome; the addresses are data coordinates and are untouched.
+            annotations: spec.annotations.as_ref().map(|list| {
+                list.iter()
+                    .map(|a| match a {
+                        ChartAnnotation::ReferenceLine { value, label } => {
+                            ChartAnnotation::ReferenceLine {
+                                value: *value,
+                                label: map_opt_text(sources, label),
+                            }
+                        }
+                        ChartAnnotation::EventMarker { at, label } => {
+                            ChartAnnotation::EventMarker {
+                                at: at.clone(),
+                                label: map_opt_text(sources, label),
+                            }
+                        }
+                        ChartAnnotation::RangeBand { range, label } => ChartAnnotation::RangeBand {
+                            range: range.clone(),
+                            label: map_opt_text(sources, label),
+                        },
+                    })
+                    .collect()
+            }),
             on_point_click: spec.on_point_click,
         }),
         NodeKind::Map(spec) => NodeKind::Map(spec.clone()),

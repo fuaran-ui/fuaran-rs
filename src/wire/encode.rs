@@ -2057,6 +2057,55 @@ fn grid_spec(spec: &GridSpec) -> String {
     obj(fields)
 }
 
+/// An annotation's x address (Phase 1491, §4l).
+fn chart_annotation_x(a: &ChartAnnotationX) -> String {
+    match a {
+        ChartAnnotationX::Category(key) => case_obj("Category", vec![field("key", s(key))]),
+        ChartAnnotationX::Date(iso) => case_obj("Date", vec![field("iso", s(iso))]),
+    }
+}
+
+/// A range band's pair (Phase 1492, §4l) — the case carries the AXIS.
+fn chart_annotation_range(r: &ChartAnnotationRange) -> String {
+    match r {
+        ChartAnnotationRange::ValueRange { from, to } => case_obj(
+            "ValueRange",
+            vec![field("from", num(*from)), field("to", num(*to))],
+        ),
+        ChartAnnotationRange::XRange { from, to } => case_obj(
+            "XRange",
+            vec![
+                field("from", chart_annotation_x(from)),
+                field("to", chart_annotation_x(to)),
+            ],
+        ),
+    }
+}
+
+/// A chart's data-addressed annotation (Phase 1490, §4l). An absent label omits
+/// its key; every label is carried unresolved, whichever arm it takes.
+fn chart_annotation(a: &ChartAnnotation) -> String {
+    let (tag, mut fields, label) = match a {
+        ChartAnnotation::ReferenceLine { value, label } => {
+            ("ReferenceLine", vec![field("value", num(*value))], label)
+        }
+        ChartAnnotation::EventMarker { at, label } => (
+            "EventMarker",
+            vec![field("at", chart_annotation_x(at))],
+            label,
+        ),
+        ChartAnnotation::RangeBand { range, label } => (
+            "RangeBand",
+            vec![field("range", chart_annotation_range(range))],
+            label,
+        ),
+    };
+    if let Some(t) = label {
+        fields.push(field("label", text_source(t)));
+    }
+    case_obj(tag, fields)
+}
+
 fn chart_spec(spec: &ChartSpec) -> String {
     let mut fields = vec![
         field("kind", s(spec.kind.as_str())),
@@ -2098,6 +2147,15 @@ fn chart_spec(spec: &ChartSpec) -> String {
     // chart stays byte-identical.
     if let Some(x_scale) = spec.x_scale {
         fields.push(field("xScale", s(x_scale.as_str())));
+    }
+    // Phase 1490 — the data-addressed annotations (canonical key order). Absent
+    // OMITS, so every pre-1490 chart encodes to the same bytes it always did; an
+    // EMPTY list is a different document and round-trips as `[]`.
+    if let Some(annotations) = &spec.annotations {
+        fields.push(field(
+            "annotations",
+            arr(annotations.iter().map(chart_annotation).collect()),
+        ));
     }
     if spec.on_point_click.is_some() {
         fields.push(field("onPointClick", CLOSURE.to_string()));

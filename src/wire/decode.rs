@@ -3931,6 +3931,221 @@ fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
     })
 }
 
+/// `true` when `text` is a canonical ISO-8601 date the temporal axis can place —
+/// `YYYY-MM-DD`, optionally followed by `T…` whose time-of-day is discarded.
+///
+/// STRICT by shape AND by calendar: four digits, two, two, both hyphens, a month
+/// in 1–12 and a day the month actually has. A locale spelling (`15/01/2026`) and
+/// a bare year are both refused — admitting either would be the string-sniffing
+/// the temporal axis exists to avoid.
+fn is_canonical_iso_day(text: &str) -> bool {
+    let b = text.as_bytes();
+    if b.len() < 10 || b[4] != b'-' || b[7] != b'-' {
+        return false;
+    }
+    if b.len() > 10 && b[10] != b'T' {
+        return false;
+    }
+    let digits = |start: usize, len: usize| -> Option<i64> {
+        let mut acc: i64 = 0;
+        for byte in &b[start..start + len] {
+            if !byte.is_ascii_digit() {
+                return None;
+            }
+            acc = acc * 10 + i64::from(byte - b'0');
+        }
+        Some(acc)
+    };
+    let (Some(y), Some(m), Some(d)) = (digits(0, 4), digits(5, 2), digits(8, 2)) else {
+        return false;
+    };
+    if !(1..=12).contains(&m) {
+        return false;
+    }
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let last = match m {
+        2 => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    (1..=last).contains(&d)
+}
+
+/// An annotation's X ADDRESS (Phase 1491, §4l "The three addressing forms").
+///
+/// THE DATE MUST BE A DATE, and this refusal is the twin of `ReferenceLine`'s
+/// finite-value narrowing rather than a new posture. The lowering's calendar is
+/// deliberately TOTAL — an unparseable x CELL reads as 1970-01-01, because
+/// FUARAN097 makes a non-date COLUMN loud upstream and refusing per-cell would be
+/// worse. An annotation has no column to be loud about: the string is authored
+/// directly, so nothing upstream can catch it. And because §4l rule 3 has a
+/// temporal address ENTER the axis extent before the ticks are chosen, a typo does
+/// not misplace one marker — it drags the domain back to the epoch and rescales
+/// the whole picture.
+fn decode_chart_annotation_x(path: &str, j: &JVal) -> DResult<ChartAnnotationX> {
+    let fields = as_obj(path, j)?;
+    match disc(path, fields)? {
+        "Category" => Ok(ChartAnnotationX::Category(req_string(
+            path,
+            fields,
+            "key",
+            "category key (the band's own label)",
+        )?)),
+        "Date" => {
+            let iso = req_string(path, fields, "iso", "ISO-8601 date (YYYY-MM-DD)")?;
+            if !is_canonical_iso_day(&iso) {
+                return Err(wrong_type(
+                    &format!("{path}.iso"),
+                    "a canonical ISO-8601 date (YYYY-MM-DD, optionally followed by a time) naming a real calendar day — an event marker's date is the address it is drawn at, and an unreadable one would place the marker at 1970-01-01 and drag the axis back with it",
+                ));
+            }
+            Ok(ChartAnnotationX::Date(iso))
+        }
+        other => Err(unknown_du_case(path, other, "Category, Date")),
+    }
+}
+
+/// A range band's PAIR (Phase 1492, §4l). The case carries the AXIS as well as
+/// the pair, so a value axis addressed by category keys is not a document this
+/// decoder has to refuse — it is one no encoder can write.
+///
+/// TWO REFUSALS, and they are the pair rules the WIRE can decide by itself. A
+/// non-finite endpoint is `ReferenceLine`'s narrowing at two slots instead of one,
+/// for its reason exactly: §4l rule 3 has both ends enter the value domain, so a
+/// NaN takes the nice-domain, every gridline and every mark with it. An UNORDERED
+/// pair is refused at the pair's own slot — the defect is the pair's, not either
+/// end's — rather than silently swapped.
+///
+/// A CATEGORY pair's order is NOT decided here: the order of two band keys is the
+/// ROWS' order, a cross-reference rather than a local property of the address.
+fn decode_chart_annotation_range(path: &str, j: &JVal) -> DResult<ChartAnnotationRange> {
+    let fields = as_obj(path, j)?;
+    match disc(path, fields)? {
+        "ValueRange" => {
+            let from = req_float(
+                path,
+                fields,
+                "from",
+                "range-band lower value (a finite JSON number)",
+            )?;
+            let to = req_float(
+                path,
+                fields,
+                "to",
+                "range-band upper value (a finite JSON number)",
+            )?;
+            for (slot, v) in [("from", from), ("to", to)] {
+                if !v.is_finite() {
+                    return Err(wrong_type(
+                        &format!("{path}.{slot}"),
+                        "a FINITE JSON number — a range band's end names a place on the value axis, and NaN / Infinity names none; give the value in the axis's own units, or drop the annotation",
+                    ));
+                }
+            }
+            if from > to {
+                return Err(wrong_type(
+                    path,
+                    "an ORDERED pair — a range band runs from its lower value to its upper one, and this pair runs backwards; swapping the ends silently would draw a band the author did not describe",
+                ));
+            }
+            Ok(ChartAnnotationRange::ValueRange { from, to })
+        }
+        "XRange" => {
+            let from_j = req(
+                path,
+                fields,
+                "from",
+                "range-band lower x address (a ChartAnnotationX)",
+            )?;
+            let from = decode_chart_annotation_x(&format!("{path}.from"), from_j)?;
+            let to_j = req(
+                path,
+                fields,
+                "to",
+                "range-band upper x address (a ChartAnnotationX)",
+            )?;
+            let to = decode_chart_annotation_x(&format!("{path}.to"), to_j)?;
+            // Both dates are already known canonical and calendar-valid (the
+            // address decoder refused anything else), and a canonical
+            // `YYYY-MM-DD` sorts lexicographically exactly as it sorts
+            // chronologically — so no calendar arithmetic is needed here.
+            if let (ChartAnnotationX::Date(a), ChartAnnotationX::Date(b)) = (&from, &to) {
+                if a > b {
+                    return Err(wrong_type(
+                        path,
+                        "an ORDERED pair — a range band runs from its earlier date to its later one, and this pair runs backwards; swapping the ends silently would draw a band the author did not describe",
+                    ));
+                }
+            }
+            Ok(ChartAnnotationRange::XRange { from, to })
+        }
+        other => Err(unknown_du_case(path, other, "ValueRange, XRange")),
+    }
+}
+
+/// A chart's data-addressed annotation (Phase 1490, §4l).
+///
+/// THE REFERENCE LINE'S VALUE MUST BE FINITE, and that is a slot-specific
+/// NARROWING of §7 rather than a disagreement with it. §7 admits the quoted
+/// `"NaN"` / `"Infinity"` / `"-Infinity"` sentinels at every float slot and
+/// `as_float` reads them — the widening is deliberate and stays. But a reference
+/// line addresses a place on the VALUE AXIS, and a non-finite value names no such
+/// place: it would enter the domain computation and put every gridline, tick and
+/// mark at a NaN coordinate. The picture is not merely wrong at the annotation, it
+/// is wrong everywhere, and nothing downstream can recover it.
+fn decode_chart_annotation(path: &str, j: &JVal) -> DResult<ChartAnnotation> {
+    let fields = as_obj(path, j)?;
+    let label = opt_text_source(path, fields, "label")?;
+    match disc(path, fields)? {
+        "ReferenceLine" => {
+            let value = req_float(
+                path,
+                fields,
+                "value",
+                "reference-line value (a finite JSON number)",
+            )?;
+            if !value.is_finite() {
+                return Err(wrong_type(
+                    &format!("{path}.value"),
+                    "a FINITE JSON number — a reference line names a place on the value axis, and NaN / Infinity names none; give the value in the axis's own units, or drop the annotation",
+                ));
+            }
+            Ok(ChartAnnotation::ReferenceLine { value, label })
+        }
+        "EventMarker" => {
+            let at_j = req(
+                path,
+                fields,
+                "at",
+                "event-marker x address (a ChartAnnotationX)",
+            )?;
+            let at = decode_chart_annotation_x(&format!("{path}.at"), at_j)?;
+            Ok(ChartAnnotation::EventMarker { at, label })
+        }
+        "RangeBand" => {
+            let range_j = req(
+                path,
+                fields,
+                "range",
+                "range-band pair (a ChartAnnotationRange)",
+            )?;
+            let range = decode_chart_annotation_range(&format!("{path}.range"), range_j)?;
+            Ok(ChartAnnotation::RangeBand { range, label })
+        }
+        other => Err(unknown_du_case(
+            path,
+            other,
+            "ReferenceLine, EventMarker, RangeBand",
+        )),
+    }
+}
+
 fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
     let fields = as_obj(path, j)?;
     let kind_j = req(path, fields, "kind", "ChartKind")?;
@@ -3993,6 +4208,27 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
         None => None,
         Some(j) => Some(decode_chart_x_scale(&format!("{path}.xScale"), j)?),
     };
+    // Phase 1490 — `annotations` (§4l): the data-addressed attachments — reference
+    // lines, event markers and range bands — as one closed union, so a further
+    // member is a case rather than a further widening of this record. Absent OMITS
+    // on the wire, so every pre-1490 document decodes and lowers byte-for-byte as
+    // it did. An EMPTY list is a different document from an absent field and is
+    // carried as such: it round-trips to `"annotations":[]`, which is what an
+    // author who declared a list and then removed its last member wrote.
+    let annotations = match get(fields, "annotations") {
+        None => None,
+        Some(j) => {
+            let items = as_arr(&format!("{path}.annotations"), j)?;
+            let mut out = Vec::with_capacity(items.len());
+            for (i, item) in items.iter().enumerate() {
+                out.push(decode_chart_annotation(
+                    &format!("{path}.annotations[{i}]"),
+                    item,
+                )?);
+            }
+            Some(out)
+        }
+    };
     Ok(ChartSpec {
         kind,
         source,
@@ -4007,6 +4243,7 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
         legend_position,
         data_labels,
         x_scale,
+        annotations,
         on_point_click: opt_closure(fields, "onPointClick"),
     })
 }

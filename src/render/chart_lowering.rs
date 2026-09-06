@@ -50,8 +50,9 @@
 
 use crate::canonical::format_number;
 use crate::wire::{
-    Binding, ChartDataLabels, ChartKind, ChartLegendPosition, ChartXScale, CurveCommand, DrawPoint,
-    DrawStyle, DrawingSpec, Emphasis, Format, Shape, StaticValue, TextAnchor, TextSource, ViewBox,
+    Binding, ChartAnnotation, ChartAnnotationRange, ChartAnnotationX, ChartDataLabels, ChartKind,
+    ChartLegendPosition, ChartXScale, CurveCommand, DrawPoint, DrawStyle, DrawingSpec, Emphasis,
+    Format, Shape, StaticValue, TextAnchor, TextSource, ViewBox,
 };
 
 // ─── Layout constants (the fixed canonical drawing space) ────────────────────
@@ -225,6 +226,56 @@ const DATA_LABEL_END_OFFSET_X: f64 = 6.0;
 // Rise from a line/area endpoint to its label's baseline — the nudge that takes
 // the text off the line it belongs to.
 const DATA_LABEL_END_NUDGE_Y: f64 = 5.0;
+
+// ── Annotation ink + geometry (Phase 1490/1491/1492 — §4l) ───────────────────
+//
+// §4l's "never geometry, never style" prohibition has two halves with two owners,
+// and this is the second: an annotation carries an ADDRESS and a LABEL, and every
+// pixel and every drop of ink it draws with comes from here. That is what makes a
+// data-addressed annotation survive a theme flip and a restyle where a placed
+// overlay does not.
+//
+// The LABEL constants are named for the FAMILY, not for the reference line: all
+// three members label under exactly the same rule (carried `TextSource`,
+// fit-gated, suppressed on no-fit), so one set serves them all and a later member
+// adds only its own INK. The four match their Phase-881 data-label counterparts by
+// VALUE rather than by reference.
+
+/// Stroke width of a reference line. Between the grid's and the series': an
+/// annotation is more than chrome and less than data.
+const REFERENCE_STROKE_WIDTH: f64 = 1.5;
+/// Per-role opacity for a reference line's ink. Well above `GRID_OPACITY` — a
+/// threshold a reader is meant to see — and below `AXIS_OPACITY`, because it is
+/// not a boundary of the space.
+const REFERENCE_OPACITY: f64 = 0.55;
+/// Phase 1491 — the event marker's ink, matching the reference line's by VALUE
+/// rather than by reference: the two are the same weight of statement across the
+/// two axes, but a host that wanted to distinguish them must be able to without
+/// moving the horizontal one.
+const EVENT_STROKE_WIDTH: f64 = 1.5;
+const EVENT_OPACITY: f64 = 0.55;
+/// Phase 1492 — the range band's FILL opacity. The LOWEST in this module, below
+/// `GRID_OPACITY`, and that is the point rather than timidity: every other role
+/// inks a hairline or a glyph, this one inks an AREA. A band is a tint of the
+/// surface saying "this region", not a fill saying "this value".
+const BAND_OPACITY: f64 = 0.08;
+/// Font size of an annotation's label — one step below the tick size.
+const ANNOTATION_LABEL_FONT_SIZE: f64 = 12.0;
+/// Inset from the plot's LEFT edge to an annotation label's left edge. Left, not
+/// right: the right edge is where the series-endpoint labels live.
+const ANNOTATION_LABEL_OFFSET_X: f64 = 6.0;
+/// Rise from an annotation's line to its label's baseline.
+const ANNOTATION_LABEL_NUDGE_Y: f64 = 5.0;
+/// Clearance an annotation label must keep from the edge of its budget. Feeds the
+/// fit gate only; a label that cannot hold it is SUPPRESSED.
+const ANNOTATION_LABEL_PADDING: f64 = 2.0;
+
+/// One range band as a PLOT RECTANGLE: `(per-case index, x0, y0, x1, y1, label)`.
+/// The index is the one both arms — value bands and x bands — were numbered with,
+/// so sorting on it makes the paint order and the `annotation|band|<n>` mark ids
+/// agree by construction rather than by the arms happening to be appended the
+/// right way round.
+type RangeBandRect<'a> = (usize, f64, f64, f64, f64, Option<&'a TextSource>);
 
 /// GEOMETRIC gap between consecutive segments of a stacked bar (Phase 875) —
 /// the segment is shortened on the side facing the next segment, so the
@@ -1468,6 +1519,13 @@ pub struct ChartTitles<'a> {
     /// spec block above. Absent lowers to the pre-882 picture byte-for-byte, and
     /// a `Temporal` declaration on a PIE is neutralised (a pie has no x axis).
     pub x_scale: Option<ChartXScale>,
+    /// Phase 1490 — the data-addressed annotations (§4l): reference lines, event
+    /// markers and range bands, one closed union. An annotation names a place in
+    /// the DATA's coordinates and, optionally, a label; it carries no geometry and
+    /// no style at all — every pixel comes from the constants above.
+    ///
+    /// Absent (and empty) draws nothing, so a pre-1490 spec lowers byte-for-byte.
+    pub annotations: Option<&'a [ChartAnnotation]>,
 }
 
 // ─── The accessible summary (Phase 921) ──────────────────────────────────────
@@ -1595,11 +1653,97 @@ pub fn lower_chart_with(
         out
     };
 
-    let all_values: Vec<f64> = if stacked {
+    // Hoisted here (Phase 1490): the annotation slots below are neutralised on the
+    // polar arm, so the answer is needed before the value domain rather than after
+    // it.
+    let is_pie = matches!(kind, ChartKind::Pie);
+    let declared: &[ChartAnnotation] = titles.annotations.unwrap_or(&[]);
+
+    // ── Data-addressed annotations (Phase 1490 — §4l) ────────────────────────
+    //
+    // The reference lines, in DOCUMENT ORDER, which is what `<n>` in the mark id
+    // `annotation|reference|<n>` indexes. The index is per CASE, so a later member
+    // of a different case never renumbers one of these.
+    //
+    // PIE IS EXCLUDED, and neutralised rather than half-applied: the polar arm has
+    // no value axis, so a value-axis address names nothing there.
+    //
+    // A NON-FINITE VALUE IS DROPPED HERE, and the lowering stays TOTAL. It cannot
+    // arrive from the wire (the decoder refuses it) and it is refused pre-emit on
+    // the authoring path, so this filter is the third gate and not the first: what
+    // it buys is that a lowering handed one anyway draws the chart it can rather
+    // than taking `nice_domain`, every gridline and every mark to NaN.
+    let reference_lines: Vec<(f64, Option<&TextSource>)> = if is_pie {
+        Vec::new()
+    } else {
+        declared
+            .iter()
+            .filter_map(|a| match a {
+                ChartAnnotation::ReferenceLine { value, label } if value.is_finite() => {
+                    Some((*value, label.as_ref()))
+                }
+                _ => None,
+            })
+            .collect()
+    };
+
+    // ── Range bands (Phase 1492 — §4l) ───────────────────────────────────────
+    //
+    // The band subsequence in DOCUMENT ORDER, carrying its per-case index — `<n>`
+    // in `annotation|band|<n>` — because the two arms are resolved in two different
+    // places and a band's identity must not depend on which. A value band's ends
+    // must join the value domain HERE, before `nice_domain`; an x band's addresses
+    // cannot be resolved until the axis form is known, further down. Numbering
+    // once, over the whole case, is what keeps the two halves from inventing two
+    // orderings of one list.
+    let range_bands_declared: Vec<(usize, &ChartAnnotationRange, Option<&TextSource>)> = if is_pie {
+        Vec::new()
+    } else {
+        declared
+            .iter()
+            .filter_map(|a| match a {
+                ChartAnnotation::RangeBand { range, label } => Some((range, label.as_ref())),
+                _ => None,
+            })
+            .enumerate()
+            .map(|(i, (range, label))| (i, range, label))
+            .collect()
+    };
+
+    // The VALUE-axis bands, as `(index, lo, hi, label)` in the axis's own units.
+    // `lo`/`hi` are the pair NORMALISED, not the pair as authored: an unordered
+    // pair is refused at the wire boundary and pre-emit, so what reaches here
+    // backwards came through a construction site neither gate sits on — and the
+    // lowering's job at that point is to stay TOTAL and draw the region the author
+    // named. A non-finite end drops the WHOLE band rather than half of it: half a
+    // band is not a smaller claim, it is a different one.
+    let value_bands: Vec<(usize, f64, f64, Option<&TextSource>)> = range_bands_declared
+        .iter()
+        .filter_map(|(i, range, label)| match range {
+            ChartAnnotationRange::ValueRange { from, to } if from.is_finite() && to.is_finite() => {
+                Some((*i, from.min(*to), from.max(*to), *label))
+            }
+            _ => None,
+        })
+        .collect();
+
+    let mut all_values: Vec<f64> = if stacked {
         (0..n).flat_map(&cums_for).collect()
     } else {
         series.iter().flatten().copied().collect()
     };
+    // §4l rule 3 — AN ADDRESS PARTICIPATES IN THE DOMAIN IT ADDRESSES, on the same
+    // terms the series data does, and BEFORE `nice_domain` runs. A threshold above
+    // every bar is still drawn, and the axis says so; clamping the line to the
+    // data's own domain would draw a line at a value that is not the value
+    // declared. A value band's BOTH ends join on exactly the same rule — clipping
+    // it at the data's own maximum would draw a band that ends where the author
+    // did not end it.
+    all_values.extend(reference_lines.iter().map(|(v, _)| *v));
+    for (_, lo, hi, _) in &value_bands {
+        all_values.push(*lo);
+        all_values.push(*hi);
+    }
     let all_values = if all_values.is_empty() {
         vec![0.0]
     } else {
@@ -1718,6 +1862,94 @@ pub fn lower_chart_with(
         vec![]
     };
 
+    // ── Event markers (Phase 1491 — §4l) ─────────────────────────────────────
+    //
+    // The vertical half of the annotation family, in DOCUMENT ORDER within its own
+    // case — which is what `<n>` in the mark id `annotation|event|<n>` indexes, and
+    // why a reference line landing between two of these never renumbers them.
+    //
+    // ONE FORM PER CHART, which is what lets the resolved address be a single
+    // `i64`. §4l rule 1 admits a `Category` key on a BAND axis and a `Date` under a
+    // TEMPORAL one, and those two axes are mutually exclusive — so every marker
+    // this lowering admits carries the chart's one form, and the integer is a BAND
+    // INDEX under `band_x` and a DAY NUMBER under `is_temporal`.
+    //
+    // PIE IS NEUTRALISED and Scatter's numeric x admits neither form: a polar arm
+    // has no x axis at all, and a continuous NUMERIC x has neither bands to name
+    // nor a calendar to name a day in.
+    //
+    // THE DROPS HERE ARE THE THIRD GATE, not the first — a mismatched form, an
+    // unparseable date and an ungrounded key are all refused upstream. A DUPLICATED
+    // key resolves to the FIRST matching band, deterministically.
+    let band_x = !is_temporal && !is_scatter && !is_pie;
+
+    let resolve_annotation_x = |at: &ChartAnnotationX| -> Option<i64> {
+        match at {
+            ChartAnnotationX::Category(key) if band_x => categories
+                .iter()
+                .position(|c| *c == key.as_str())
+                .map(|i| i as i64),
+            ChartAnnotationX::Date(iso) if is_temporal => temporal::try_parse_day(iso),
+            _ => None,
+        }
+    };
+
+    let event_markers: Vec<(i64, Option<&TextSource>)> = declared
+        .iter()
+        .filter_map(|a| match a {
+            ChartAnnotation::EventMarker { at, label } => {
+                resolve_annotation_x(at).map(|i| (i, label.as_ref()))
+            }
+            _ => None,
+        })
+        .collect();
+
+    // The X-AXIS bands (Phase 1492), as `(index, from, to, label)` with the two
+    // addresses RESOLVED to the chart's one form, exactly as `event_markers`
+    // resolves its single address and for the same reason.
+    //
+    // BOTH ENDS MUST BE THE SAME FORM. A `Category` paired with a `Date` is a
+    // mismatch the validator refuses; here it simply yields no band, because half a
+    // pair addresses no interval. The pair is NORMALISED, on `value_bands`'
+    // argument.
+    let x_bands: Vec<(usize, i64, i64, Option<&TextSource>)> = range_bands_declared
+        .iter()
+        .filter_map(|(i, range, label)| match range {
+            ChartAnnotationRange::XRange { from, to } => {
+                match (resolve_annotation_x(from), resolve_annotation_x(to)) {
+                    (Some(a), Some(b)) => Some((*i, a.min(b), a.max(b), *label)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect();
+
+    // §4l rule 3 on the X axis — A TEMPORAL ADDRESS ENTERS THE EXTENT, before the
+    // ticks are chosen, on the same terms the row dates do. A launch marked a month
+    // after the last datum is still drawn, and the axis says so; a recession band
+    // whose end lies past the last datum would otherwise be silently truncated at
+    // the plot's right edge, which reads as the recession ENDING there.
+    //
+    // A CATEGORY ADDRESS WIDENS NOTHING, and the asymmetry is §4l's rather than an
+    // inconsistency: a band axis's domain IS the set of keys in the rows, so a key
+    // outside it is not a wider axis but an ungrounded reference.
+    //
+    // This does NOT reopen §4h's no-nicing rule: the marker's day joins the data
+    // whose extent the domain is, and the domain is still not snapped outward to a
+    // calendar boundary.
+    let domain_days: Vec<i64> = if is_temporal {
+        let mut d = day_values.clone();
+        d.extend(event_markers.iter().map(|(at, _)| *at));
+        for (_, a, b, _) in &x_bands {
+            d.push(*a);
+            d.push(*b);
+        }
+        d
+    } else {
+        vec![]
+    };
+
     // The x axis is CONTINUOUS (Phase 903's split) on exactly two arms: the
     // Scatter arm's numeric x and a temporal x. Everything keyed off this — tick
     // marks AT the value, vertical gridlines, marks placed by value rather than by
@@ -1736,7 +1968,10 @@ pub fn lower_chart_with(
     // the tick positions and the label format, so the two cannot disagree about
     // the axis's granularity.
     let temporal_step: Option<TemporalStep> = if is_temporal {
-        let (lo, hi) = temporal::domain(&day_values);
+        // `domain_days`, not `day_values` — the extent the ticks are chosen for
+        // includes any annotation's own date (§4l rule 3), so a rung is picked for
+        // the axis the reader will actually see.
+        let (lo, hi) = temporal::domain(&domain_days);
         Some(temporal::choose_step(TARGET_TICK_COUNT as i64 + 1, lo, hi))
     } else {
         None
@@ -1748,7 +1983,7 @@ pub fn lower_chart_with(
         // `x_step` carries the rung's NOMINAL length, which is what the label
         // format reads.
         Some(step) => {
-            let (lo, hi) = temporal::domain(&day_values);
+            let (lo, hi) = temporal::domain(&domain_days);
             (
                 lo as f64,
                 hi as f64,
@@ -2597,6 +2832,73 @@ pub fn lower_chart_with(
         };
     }
 
+    // ── Range bands (Phase 1492 — §4l rung 1) ────────────────────────────────
+    //
+    // FIRST OF EVERYTHING: behind the series, and behind the grid and axes with
+    // it. In inline SVG z-order IS emission order, so a host that emitted a band
+    // after its series would draw a tinted rectangle OVER the data: a valid
+    // document, a different picture, and nothing in a schema or a validator could
+    // see it. Before the GRID too, not merely before the series — a gridline is
+    // chrome for reading positions off the plot, and chrome a band covered would go
+    // missing exactly where the band drew attention.
+    //
+    // The rectangles are ordered by the per-case index both arms were numbered
+    // with, so the paint order and the `annotation|band|<n>` ids agree by
+    // construction rather than by the arms happening to be appended the right way
+    // round.
+    //
+    // EACH BAND SPANS THE OTHER AXIS IN FULL, because the band's claim is about ONE
+    // axis: a tolerance band that stopped short of the plot's edge would be
+    // asserting something about x it was never given.
+    //
+    // THE X ARM TAKES PHASE 903'S BOUNDARIES, not its centres — which is where the
+    // band differs from the event marker drawn from the same address. A marker is a
+    // POSITION and a band is an EXTENT, so "Q2 to Q3" runs from Q2's band START to
+    // Q3's band END. On a continuous temporal axis a date IS a position, so the
+    // band runs between the two mapped days and there are no boundaries to take.
+    let mut range_band_rects: Vec<RangeBandRect<'_>> = value_bands
+        .iter()
+        .map(|(i, lo, hi, label)| {
+            (
+                *i,
+                r2(plot_x0),
+                y_scale(*hi),
+                r2(plot_x1),
+                y_scale(*lo),
+                *label,
+            )
+        })
+        .collect();
+    range_band_rects.extend(x_bands.iter().map(|(i, a, b, label)| {
+        let (x0, x1) = if is_temporal {
+            (x_scale(*a as f64), x_scale(*b as f64))
+        } else {
+            (boundary_x(*a as usize), boundary_x(*b as usize + 1))
+        };
+        (*i, x0, r2(plot_y0), x1, r2(plot_y1), *label)
+    }));
+    range_band_rects.sort_by_key(|(i, ..)| *i);
+
+    for (i, x0, y0, x1, y1, _) in &range_band_rects {
+        // The band's ink: `currentColor` as a FILL at `BAND_OPACITY`, with no
+        // stroke. §4l's prohibition is what makes this one line: the wire carries
+        // no colour, no opacity and no edge, so there is nothing here to read off
+        // the annotation.
+        let mut style = style_fill_opacity(INK, BAND_OPACITY);
+        style.mark_id = Some(format!("annotation|band|{i}"));
+        shapes.push(Shape::Rectangle {
+            x: *x0,
+            y: *y0,
+            width: r2(x1 - x0),
+            height: r2(y1 - y0),
+            // No corner radius. A band is a region of the SPACE, and a rounded
+            // region would read as an object drawn on the chart rather than as part
+            // of its ground.
+            corner_radius: None,
+            style,
+        });
+    }
+
     // ── Gridlines (painter's order: first) ──
     for &t in &ticks {
         let y = y_scale(t);
@@ -3281,11 +3583,214 @@ pub fn lower_chart_with(
         }
     }
 
+    // ── Annotation MARKS (Phase 1490/1491 — §4l rung 3) ──────────────────────
+    //
+    // In FRONT of the series. A threshold drawn under the bars it measures is a
+    // threshold the reader cannot check the bars against, and a shock drawn under
+    // the line it explains is a shock the reader cannot line the data up against.
+    // The labels are rung 4 and are emitted last, below.
+    for (i, (v, _)) in reference_lines.iter().enumerate() {
+        let y = y_scale(*v);
+        // Phase 642 identity: `annotation|<case>|<n>`, with `<n>` the
+        // document-order index within this case. NOT the value itself — a float has
+        // no canonical string form the wire defines, and an ordinal is unique by
+        // construction and moved by no data change.
+        let mut style = style_stroke_ink(REFERENCE_OPACITY, REFERENCE_STROKE_WIDTH);
+        style.mark_id = Some(format!("annotation|reference|{i}"));
+        shapes.push(Shape::Line {
+            x1: r2(plot_x0),
+            y1: y,
+            x2: r2(plot_x1),
+            y2: y,
+            style,
+        });
+    }
+
+    // The x an event marker's line stands at (Phase 1491). PHASE 903'S SPLIT,
+    // applied to an address rather than to a datum: a BAND axis has no positions,
+    // only extents, so the marker sits at the band's CENTRE — the same place the
+    // band's own label sits. A CONTINUOUS axis has positions, so the marker sits at
+    // the mapped value.
+    let event_marker_xs: Vec<f64> = event_markers
+        .iter()
+        .map(|(at, _)| {
+            if is_temporal {
+                x_scale(*at as f64)
+            } else {
+                centre_x(*at as usize)
+            }
+        })
+        .collect();
+
+    for (i, x) in event_marker_xs.iter().enumerate() {
+        let mut style = style_stroke_ink(EVENT_OPACITY, EVENT_STROKE_WIDTH);
+        style.mark_id = Some(format!("annotation|event|{i}"));
+        shapes.push(Shape::Line {
+            x1: *x,
+            y1: r2(plot_y0),
+            x2: *x,
+            y2: r2(plot_y1),
+            style,
+        });
+    }
+
     // ── Legend (Phase 880) — the shared emitter, in the slot it always had ──
     push_legend(&mut shapes);
 
     push_title(&mut shapes);
     push_subtitle(&mut shapes);
+
+    // ── Annotation LABELS (Phase 1490 — §4l rung 4) ──────────────────────────
+    //
+    // Every annotation label LAST, above all marks. Last literally, and not merely
+    // after the series: the label is the only part of an annotation that carries
+    // authored words, and a rung that put it under the legend column would suppress
+    // it on exactly the charts that are busiest.
+    //
+    // `Quiet` — the vocabulary's own word for subordinate text, and the only label
+    // in this lowering that takes it (the visible title is `Loud`, every other
+    // label `Normal`). An annotation label NAMES a line the picture has already
+    // drawn, so it should not compete with the values and the axis names that carry
+    // the data; it is also what makes an annotation label identifiable in a lowered
+    // drawing at all, since a `Start`-anchored muted 12px label is otherwise exactly
+    // what a Phase-881 endpoint data label is.
+    //
+    // The fit gate is Phase 881's rule and the Phase 1143 text contract at once:
+    // `text_fits_box` is the single predicate and a no-fit is a SUPPRESSION — never
+    // a clip, never an overlap, never a nudge onto a mark — but it can only be
+    // asked of a `Literal`, because the text behind a `Bound` or an `I18n` arm is
+    // not known here and measuring text that is not the text drawn is silently
+    // wrong. A suppressed label never suppresses its annotation: the line still
+    // draws.
+    let push_annotation_label = |shapes: &mut Vec<Shape>,
+                                 x: f64,
+                                 baseline: f64,
+                                 max_width: f64,
+                                 max_height: f64,
+                                 t: &TextSource| {
+        let fits = match t {
+            TextSource::Literal(s) => text_fits_box(
+                ANNOTATION_LABEL_FONT_SIZE,
+                TEXT_LINE_HEIGHT_FACTOR,
+                max_width,
+                max_height,
+                s,
+            ),
+            _ => true,
+        };
+        if fits {
+            shapes.push(Shape::Label {
+                x: r2(x),
+                y: r2(baseline),
+                text: t.clone(),
+                style: text_style(
+                    Some(LABEL_OPACITY),
+                    TextAnchor::Start,
+                    ANNOTATION_LABEL_FONT_SIZE,
+                    Emphasis::Quiet,
+                ),
+            });
+        }
+    };
+
+    for (v, label) in &reference_lines {
+        if let Some(t) = label {
+            let baseline = y_scale(*v) - ANNOTATION_LABEL_NUDGE_Y;
+            let x = plot_x0 + ANNOTATION_LABEL_OFFSET_X;
+            push_annotation_label(
+                &mut shapes,
+                x,
+                baseline,
+                // The width budget runs to the PLOT's right edge: beyond it lies
+                // the legend column or the right margin, and a label that ran into
+                // either is the collision the gate exists to refuse.
+                (plot_x1 - x - ANNOTATION_LABEL_PADDING).max(0.0),
+                (baseline - plot_y0 - ANNOTATION_LABEL_PADDING).max(0.0),
+                t,
+            );
+        }
+    }
+
+    // Phase 1491 — the event markers' labels, after the reference lines' and in
+    // document order within their own case. Both families are rung 4, so this is a
+    // tie inside a rung; ordering by case keeps every pre-1491 golden
+    // byte-identical, and §4l's tiebreak is honoured inside each run.
+    //
+    // The x each label must not reach is Phase 881's rule applied ALONG X, which is
+    // where this member earns its own phase. Markers close together are the normal
+    // case (five shocks in a decade land within a few pixels of each other), and
+    // the rule is: never overlapped, never nudged across another marker, SUPPRESSED
+    // on no fit. So a label's width budget runs to its NEIGHBOUR's line rather than
+    // to the plot edge, and the neighbour is the successor in `(x, document index)`
+    // order — total and stable, so the goldens pin one answer. Two markers on ONE
+    // position fall out of the same rule rather than needing one of their own: the
+    // earlier gets a budget of zero and is suppressed, the later runs to the next
+    // distinct position.
+    let event_label_right: Vec<f64> = {
+        let mut order: Vec<usize> = (0..event_marker_xs.len()).collect();
+        order.sort_by(|a, b| {
+            event_marker_xs[*a]
+                .partial_cmp(&event_marker_xs[*b])
+                .unwrap_or(core::cmp::Ordering::Equal)
+                .then(a.cmp(b))
+        });
+        let mut right = vec![plot_x1; event_marker_xs.len()];
+        for r in 0..order.len().saturating_sub(1) {
+            right[order[r]] = event_marker_xs[order[r + 1]];
+        }
+        right
+    };
+
+    for (i, (_, label)) in event_markers.iter().enumerate() {
+        if let Some(t) = label {
+            // AT THE TOP OF THE PLOT, beside the line. Top rather than beside the
+            // mark it names, because a vertical marker names no single datum — it
+            // names the whole column of the picture — and the top is the one place
+            // on that column no series occupies by construction.
+            let x = event_marker_xs[i] + ANNOTATION_LABEL_OFFSET_X;
+            let baseline = plot_y0 + ANNOTATION_LABEL_FONT_SIZE + ANNOTATION_LABEL_NUDGE_Y;
+            push_annotation_label(
+                &mut shapes,
+                x,
+                baseline,
+                (event_label_right[i] - x - ANNOTATION_LABEL_PADDING).max(0.0),
+                // The vertical budget is the plot's own height: one line always
+                // fits it, which is the honest statement — markers collide along X,
+                // and that is the axis the gate is really measuring.
+                (plot_y1 - plot_y0 - ANNOTATION_LABEL_PADDING).max(0.0),
+                t,
+            );
+        }
+    }
+
+    // Phase 1492 — the range bands' labels, after the other two cases'. All three
+    // are rung 4, so the case order here is a tie inside a rung and is chosen to
+    // keep every pre-1492 golden byte-identical.
+    for (_, bx0, by0, bx1, by1, label) in &range_band_rects {
+        if let Some(t) = label {
+            // INSIDE THE BAND'S TOP EDGE, which is one rule serving both arms
+            // rather than two placements: the top-left corner of the band's own
+            // rectangle is the one point every band has, whichever axis it spans,
+            // and it is where a reader looks for the name of a region. Inside and
+            // not above, deliberately — a label ABOVE a value band would sit over
+            // the series, and a label above an x band would leave the plot entirely.
+            let x = bx0 + ANNOTATION_LABEL_OFFSET_X;
+            let baseline = by0 + ANNOTATION_LABEL_FONT_SIZE + ANNOTATION_LABEL_NUDGE_Y;
+            push_annotation_label(
+                &mut shapes,
+                x,
+                baseline,
+                // BOTH BUDGETS ARE THE BAND'S OWN, not the plot's, and that is what
+                // makes this member's gate bite where the other two's do not. A
+                // narrow x band is the ordinary case — a fortnight on a decade axis
+                // — and its name will not fit inside it. Suppressed, per Phase 881,
+                // and the band still draws.
+                (bx1 - x - ANNOTATION_LABEL_PADDING).max(0.0),
+                (by1 - by0 - ANNOTATION_LABEL_PADDING).max(0.0),
+                t,
+            );
+        }
+    }
 
     DrawingSpec {
         view_box: ViewBox {

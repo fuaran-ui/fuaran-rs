@@ -3812,6 +3812,11 @@ fn render_chart(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &ChartSpec) -> Stri
             // Phase 882 — what the x column MEANS. Absent here means `Category`,
             // which is the default, so a pre-882 chart lowers unchanged.
             x_scale: spec.x_scale,
+            // Phase 1490 — the data-addressed annotations (§4l). Semantic through
+            // and through: WHERE in the data a threshold, an episode or a shock
+            // sits is the author's meaning, and the lowering owns every pixel that
+            // draws it. Each label crosses UNRESOLVED, whichever arm it carries.
+            annotations: spec.annotations.as_deref(),
         },
         spec.value_format.as_ref(),
         &super::chart_lowering::ChartLowerStyle::default(),

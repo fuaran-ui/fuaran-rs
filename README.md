@@ -380,6 +380,34 @@ cubic-approximated wedges); every data-bearing shape carries a derivation-based
 `markId` (emitted as `data-fuaran-mark` in the SVG) for object constancy.
 `Heatmap` yields an empty (but titled) drawing region, never a silent blank.
 
+**Data-addressed annotations** are lowered on the same terms. `ChartSpec.annotations`
+is an optional list over the closed `ChartAnnotation` enum — a horizontal
+`ReferenceLine` at a value, a vertical `EventMarker` at an x address (a category
+key or an ISO-8601 date), and a shaded `RangeBand` over a pair on either axis,
+where the pair's own enum case carries the axis. Modelling the three as native
+`enum`s is what this host's language buys here: each lowering arm is an
+exhaustive `match`, so a fourth member is a build error at every site rather than
+a silent omission at one.
+
+An annotation names a place in the *data's* coordinates and, optionally, a label;
+it carries no geometry and no style at all, so it survives a data change, a theme
+flip and a resize. Three rules, each pinned by the shared goldens: an address
+**participates in the domain it addresses** before the axis is nice-d; the **draw
+order is part of the lowering** — bands behind everything including the grid,
+lines and markers in front of the series, every label last, because in inline SVG
+z-order *is* emission order; and a label is **fit-gated and suppressed, never
+clipped**, with the gate asked only of the `Literal` arm since the text behind a
+`Bound` or `I18n` arm is not known at lowering time. A suppressed label never
+suppresses its annotation. `Pie` is neutralised for all three members.
+
+The decoder carries three refusals with the slot: a non-finite reference-line
+value or value-band end, an unparseable event date, and an unordered value or
+date pair — each refused at the wire boundary rather than normalised, because an
+address that participates in a domain takes the whole picture with it when it is
+nonsense. A CATEGORY pair's order is deliberately not decided there: two band
+keys order only through the rows, which is a cross-reference rather than a local
+property of the address.
+
 ## Retired wire vocabulary — the positional slot on `InsertChild` / `MoveNode`
 
 `InsertChild` and `MoveNode` both **append**; `ReorderChildren` states order by naming

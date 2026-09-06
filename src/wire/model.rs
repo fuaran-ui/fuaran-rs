@@ -1373,7 +1373,85 @@ pub struct ChartSpec {
     /// the column type (FUARAN097) — never an inference from the data, which would
     /// make the same tree draw differently depending on where its rows came from.
     pub x_scale: Option<ChartXScale>,
+    /// Phase 1490 — the data-addressed annotations (§4l of
+    /// `docs/CHARTS-DRAWING-PRIMITIVE-DESIGN.md`): reference lines, event markers
+    /// and range bands, one closed union so a further member is a case rather
+    /// than a further widening of this record. Semantic in the same way the
+    /// fields above are (D8): WHERE in the data a threshold or an episode sits is
+    /// the author's meaning; the stroke weights, opacities and label offsets that
+    /// draw it are the host's.
+    ///
+    /// Absent OMITS on the wire, so every pre-1490 chart is byte-identical on the
+    /// wire AND in the picture. An EMPTY list is a DIFFERENT document from an
+    /// absent field and round-trips as `"annotations":[]`.
+    pub annotations: Option<Vec<ChartAnnotation>>,
     pub on_point_click: Option<Closure>,
+}
+
+/// Phase 1491 — an annotation's X ADDRESS (§4l "The three addressing forms"), in
+/// the two forms the x axis already distinguishes: a `Category` key naming a
+/// band, and an ISO-8601 `Date` read under `ChartXScale::Temporal`.
+///
+/// Its own type rather than two inline fields, because Phase 1492's range band
+/// addresses an x-axis interval with a PAIR of these.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChartAnnotationX {
+    Category(String),
+    Date(String),
+}
+
+/// Phase 1492 — a `RangeBand`'s PAIR (§4l "The three addressing forms", third
+/// row): two of the same address form, on one axis.
+///
+/// THE AXIS IS THE CASE. §4l requires a band to declare which axis it sits on;
+/// carrying that as a separate flag beside an untyped pair would admit a document
+/// declaring the value axis and addressing it with two category keys. The union
+/// tag declares the axis AND types the pair with it, so that document cannot be
+/// written by any conformant emitter.
+///
+/// Both ends enter the domain before the axis is nice-d (§4l rule 3), and an
+/// UNORDERED pair is refused rather than silently normalised — a band written
+/// backwards is an author's mistake about their own data, and swapping the ends
+/// would draw a picture they did not describe.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChartAnnotationRange {
+    ValueRange {
+        from: f64,
+        to: f64,
+    },
+    XRange {
+        from: ChartAnnotationX,
+        to: ChartAnnotationX,
+    },
+}
+
+/// Phase 1490 — a chart's data-addressed annotation (§4l). One closed union, so
+/// the lowering's three arms are an EXHAUSTIVE `match` and a fourth member is a
+/// compile error at every site rather than a silent omission at one.
+///
+/// An annotation names a place in the DATA's coordinates and, optionally, a
+/// label; it carries no geometry and no style at all. That is what makes it
+/// survive a data change, a theme flip, a restyle and a resize.
+///
+/// `ReferenceLine` is a horizontal line at `value` in the VALUE axis's own units;
+/// `EventMarker` is a VERTICAL line at an x address, the mirror of the reference
+/// line across the axes; `RangeBand` is a shaded interval on either axis and is
+/// the one member that draws BEHIND every series. Every label rides the Phase
+/// 1143 text contract — carried, never resolved.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChartAnnotation {
+    ReferenceLine {
+        value: f64,
+        label: Option<TextSource>,
+    },
+    EventMarker {
+        at: ChartAnnotationX,
+        label: Option<TextSource>,
+    },
+    RangeBand {
+        range: ChartAnnotationRange,
+        label: Option<TextSource>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
