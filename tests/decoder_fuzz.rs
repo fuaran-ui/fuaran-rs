@@ -1267,7 +1267,24 @@ fn evidence_json(stats: &RunStats, cfg: Config, seed: u64, corpus_present: bool)
 
 // ─── The gate ───────────────────────────────────────────────────────────────
 
+/// The FIXED seed the bounded gate and the go-red self-tests run on: a red gate
+/// must be the same red gate on the next run. The long run is exploration and
+/// takes a fresh draw from the caller instead (`FUARAN_FUZZ_SEED`, the TypeScript
+/// leg's spelling), so two scheduled sweeps never repeat one stream.
 const SEED: u64 = 1023;
+
+/// `FUARAN_FUZZ_SEED` when set, else [`SEED`]. Only the gate test reads it; the
+/// mutant self-tests stay on the constant so their go-red proof does not depend on
+/// the caller's environment.
+fn seed_from_env() -> u64 {
+    match std::env::var("FUARAN_FUZZ_SEED") {
+        Ok(raw) if !raw.trim().is_empty() => raw
+            .trim()
+            .parse::<u64>()
+            .unwrap_or_else(|_| panic!("FUARAN_FUZZ_SEED: {raw:?} is not an unsigned integer")),
+        _ => SEED,
+    }
+}
 
 fn env_usize(name: &str, fallback: usize) -> usize {
     match std::env::var(name) {
@@ -1290,13 +1307,14 @@ fn the_refusal_contract_holds_over_generated_hostile_input() {
     let long = std::env::var("FUARAN_FUZZ_LONG").as_deref() == Ok("1");
     let cfg = if long { LONG_CONFIG } else { BOUNDED_CONFIG };
     let iterations = env_usize("FUARAN_FUZZ_ITERATIONS", if long { 250_000 } else { 4_000 });
+    let seed = seed_from_env();
 
     let subjects = real_subjects();
     let stats = run(
         &subjects,
         DEFAULT_BUDGETS,
         cfg,
-        SEED,
+        seed,
         iterations,
         &seeds,
         &vocab,
@@ -1310,7 +1328,7 @@ fn the_refusal_contract_holds_over_generated_hostile_input() {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("creating the evidence directory");
         }
-        std::fs::write(&path, evidence_json(&stats, cfg, SEED, corpus.is_some()))
+        std::fs::write(&path, evidence_json(&stats, cfg, seed, corpus.is_some()))
             .expect("writing the evidence record");
     }
 
@@ -1319,7 +1337,7 @@ fn the_refusal_contract_holds_over_generated_hostile_input() {
             .counterexamples
             .iter()
             .take(5)
-            .map(|c| c.describe(SEED, cfg.name))
+            .map(|c| c.describe(seed, cfg.name))
             .collect();
         panic!(
             "{} counterexample(s) — the decoder's refusal contract does not hold over \
