@@ -400,6 +400,16 @@ clipped**, with the gate asked only of the `Literal` arm since the text behind a
 `Bound` or `I18n` arm is not known at lowering time. A suppressed label never
 suppresses its annotation. `Pie` is neutralised for all three members.
 
+**Every annotation is named in the accessible summary**, after the four data
+clauses and one clause per member — `1 reference line: 0`, `3 events: …`,
+`1 band: Q2 to Q3 (Freeze)` — each address stated in its own axis's vocabulary
+and each `Literal` label bracketed after it. What is announced is what was
+DRAWN, so a member the lowering dropped is announced by nobody; and a marker
+whose label the fit gate suppressed is still announced, because suppression is a
+decision about ink rather than about meaning. Only the `Literal` label arm
+contributes, on exactly the boundary the fit gate draws, and the address is
+always stated, so the annotation is never unannounced.
+
 The decoder carries three refusals with the slot: a non-finite reference-line
 value or value-band end, an unparseable event date, and an unordered value or
 date pair — each refused at the wire boundary rather than normalised, because an

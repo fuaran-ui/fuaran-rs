@@ -55,6 +55,11 @@ pub mod wire;
 
 /// The pre-release version of the `fuaran-rs` host.
 ///
+/// `0.0.4-alpha` is ADDITIVE over `0.0.3-alpha`: the accessible summary (§4i)
+/// gains one clause per annotation member, so a chart CARRYING annotations
+/// lowers with a longer `description` and a chart carrying none lowers
+/// byte-for-byte as before. No type moves; the corpus goldens carry the change.
+///
 /// `0.0.3-alpha` is ADDITIVE over `0.0.2-alpha`: `ChartSpec.annotations` and the
 /// three closed enums behind it (`ChartAnnotation`, `ChartAnnotationX`,
 /// `ChartAnnotationRange`), their codec, and the lowering arms that draw them.
@@ -64,4 +69,4 @@ pub mod wire;
 /// surface (`dag::DagRecord`'s bare `user_id` becomes the typed `actor`, and
 /// pre-1144 DAG content addresses do not carry forward). Recorded in
 /// `README.md` — this host declares no `STABILITY.md`.
-pub const VERSION: &str = "0.0.3-alpha";
+pub const VERSION: &str = "0.0.4-alpha";

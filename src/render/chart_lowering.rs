@@ -1550,6 +1550,14 @@ const SUMMARY_CLAUSE_SEPARATOR: &str = ". ";
 /// count — a legibility bound, not a technical one.
 const SUMMARY_MAX_SERIES_NAMED: usize = 4;
 
+/// At most this many ANNOTATIONS are named in one annotation clause (Phase 1494)
+/// before that clause folds the rest into a count — the same legibility bound
+/// [`SUMMARY_MAX_SERIES_NAMED`] states, over a different list. A SEPARATE
+/// constant because the two lists are different things: a chart carrying twenty
+/// markers and four series is an ordinary chart, and a future decision to fold
+/// one list sooner must not silently move the other.
+const SUMMARY_MAX_ANNOTATIONS_NAMED: usize = 4;
+
 /// The per-NAME character cap (a series field, a category label) — untrusted
 /// strings straight off the data feed.
 const SUMMARY_MAX_NAME_CHARS: usize = 32;
@@ -2604,7 +2612,8 @@ pub fn lower_chart_with(
     // ── The accessible summary (Phase 921) ───────────────────────────────────
     //
     // The grammar is stated at the section head above and normatively in §4i;
-    // this is its four clauses in order. Computed HERE, ahead of the pie arm's
+    // this is its four data clauses in order, followed since Phase 1494 by one
+    // clause per annotation member. Computed HERE, ahead of the pie arm's
     // early return, so both return sites carry it. A REFUSED PIE announces
     // nothing, for the reason Phase 880 gave when it stopped emitting the
     // refused pie's legend: a claim about data the drawing declined to show.
@@ -2668,6 +2677,15 @@ pub fn lower_chart_with(
             extent_clause,
         ];
 
+        // The unit suffix is hoisted out of the peak clause (Phase 1494) because
+        // the annotation clauses below print numbers on the same axis and must
+        // say the same thing about their magnitude.
+        let unit_suffix = if y_display_unit.label.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", y_display_unit.label)
+        };
+
         // The peak is the largest SINGLE DATUM — never a stacked total, because
         // the clause names one series at one category and a total belongs to
         // neither. Ties resolve to the earliest category then the earliest
@@ -2691,11 +2709,6 @@ pub fn lower_chart_with(
                     }
                 }
             }
-            let unit_suffix = if y_display_unit.label.is_empty() {
-                String::new()
-            } else {
-                format!(" {}", y_display_unit.label)
-            };
             clauses.push(format!(
                 "Peak {} at {}, {}{unit_suffix}",
                 clamp_text(SUMMARY_MAX_NAME_CHARS, &y_fields[bj]),
@@ -2703,6 +2716,139 @@ pub fn lower_chart_with(
                 y_tick_text(bv)
             ));
         }
+
+        // ── The annotation clauses (Phase 1494 — §4i, extended) ──────────────
+        //
+        // One clause per MEMBER, appended after the four data clauses, in the
+        // `ChartAnnotation` declaration order: reference lines, event markers,
+        // range bands. After, because clauses 1–4 describe the DATA and an
+        // annotation is the author's mark ON that data — and because appending
+        // is what keeps every chart WITHOUT annotations byte-identical to its
+        // pre-1494 golden.
+        //
+        // WHAT IS ANNOUNCED IS WHAT WAS DRAWN. These read the RESOLVED lists, so
+        // a member the lowering dropped (non-finite, ungrounded key, mismatched
+        // axis form, or any member at all on the polar arm) is announced by
+        // nobody — §4i's refused-pie rule at the level of one annotation. And a
+        // marker whose label the fit gate SUPPRESSED is still announced:
+        // suppression is a decision about ink, not about meaning, and the
+        // summary is where suppressed meaning goes.
+
+        /// An annotation's label as summary words: ` (<label>)`, or "".
+        ///
+        /// ONLY THE `Literal` ARM CONTRIBUTES, which is the same honest boundary
+        /// the fit gate draws: the text behind a `Bound` or an `I18n` arm is not
+        /// known here, and announcing something that is not the text drawn is
+        /// silently wrong in exactly the way measuring it would be. The ADDRESS
+        /// is always stated, so the annotation is never unannounced. An empty
+        /// literal contributes nothing rather than empty brackets.
+        ///
+        /// The brackets are the delimiter, not decoration: a label is untrusted
+        /// text and may itself contain the `", "` the item list is joined with.
+        fn annotation_label_words(label: Option<&TextSource>) -> String {
+            match label {
+                Some(TextSource::Literal(s)) if !s.is_empty() => {
+                    format!(" ({})", clamp_text(SUMMARY_MAX_NAME_CHARS, s))
+                }
+                _ => String::new(),
+            }
+        }
+
+        /// `1 <noun>: <item>` or `<k> <plural>: <item>, …[, and <k−4> more]` —
+        /// Phase 921's fold exactly, the singular falling out of the arithmetic
+        /// rather than being a case.
+        fn annotation_clause(noun: &str, plural: &str, items: &[String]) -> Option<String> {
+            if items.is_empty() {
+                return None;
+            }
+            let k = items.len();
+            let head = if k == 1 {
+                format!("1 {noun}: ")
+            } else {
+                format!("{k} {plural}: ")
+            };
+            let named = items[..items.len().min(SUMMARY_MAX_ANNOTATIONS_NAMED)].join(", ");
+            Some(if k > SUMMARY_MAX_ANNOTATIONS_NAMED {
+                format!(
+                    "{head}{named}, and {} more",
+                    k - SUMMARY_MAX_ANNOTATIONS_NAMED
+                )
+            } else {
+                format!("{head}{named}")
+            })
+        }
+
+        // A resolved x address in the ADDRESS'S OWN VOCABULARY — a category key
+        // on a band axis, the axis's own Phase-882 tick label on a temporal one.
+        // Never the authored ISO string: clause 3 has already stated how this
+        // axis writes a date, and a summary that wrote it two ways would
+        // disagree with the picture about one of them.
+        let x_address_words = |i: i64| -> String {
+            if is_temporal {
+                x_tick_text(i as f64)
+            } else if i >= 0 && (i as usize) < categories.len() {
+                clamp_text(SUMMARY_MAX_NAME_CHARS, categories[i as usize])
+            } else {
+                String::new()
+            }
+        };
+
+        let reference_items: Vec<String> = reference_lines
+            .iter()
+            .map(|(v, label)| {
+                format!(
+                    "{}{unit_suffix}{}",
+                    y_tick_text(*v),
+                    annotation_label_words(*label)
+                )
+            })
+            .collect();
+        clauses.extend(annotation_clause(
+            "reference line",
+            "reference lines",
+            &reference_items,
+        ));
+
+        let event_items: Vec<String> = event_markers
+            .iter()
+            .map(|(at, label)| {
+                format!("{}{}", x_address_words(*at), annotation_label_words(*label))
+            })
+            .collect();
+        clauses.extend(annotation_clause("event", "events", &event_items));
+
+        // The two band arms rejoined on the per-case ordinal they were numbered
+        // with, so the clause cannot disagree with the mark ids about which band
+        // is which. A VALUE PAIR STATES ITS UNIT ONCE, after the second number:
+        // the pair is one measurement in one unit.
+        let mut band_pairs: Vec<(usize, String)> = value_bands
+            .iter()
+            .map(|(i, lo, hi, label)| {
+                (
+                    *i,
+                    format!(
+                        "{} to {}{unit_suffix}{}",
+                        y_tick_text(*lo),
+                        y_tick_text(*hi),
+                        annotation_label_words(*label)
+                    ),
+                )
+            })
+            .collect();
+        band_pairs.extend(x_bands.iter().map(|(i, a, b, label)| {
+            (
+                *i,
+                format!(
+                    "{} to {}{}",
+                    x_address_words(*a),
+                    x_address_words(*b),
+                    annotation_label_words(*label)
+                ),
+            )
+        }));
+        band_pairs.sort_by_key(|(i, _)| *i);
+        let band_items: Vec<String> = band_pairs.into_iter().map(|(_, s)| s).collect();
+        clauses.extend(annotation_clause("band", "bands", &band_items));
 
         Some(TextSource::Literal(clamp_text(
             SUMMARY_MAX_CHARS,
