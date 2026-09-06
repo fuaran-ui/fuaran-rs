@@ -1635,9 +1635,19 @@ pub struct ErrorBoundarySpec {
     pub fallback: Box<Node>,
 }
 
+/// One case in a [`SwitchSpec`]. EXACTLY ONE of `match_value` and `when` is
+/// `Some` — both together and neither at all are decode errors, the Phase 818
+/// `value` / `valueFrom` shape, where the "exactly one" rule is decoder policy
+/// rather than something the struct can express.
+///
+/// `match_value` (Phase 392) selects the case when the switch's resolved
+/// selector equals it; `when` (Phase 1535) selects it when the predicate
+/// resolves `true`, consulting no selector at all. The two interleave freely in
+/// one ordered list and first-match-wins runs over the AUTHORED order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SwitchCase {
-    pub match_value: String,
+    pub match_value: Option<String>,
+    pub when: Option<Binding>,
     pub child: Node,
 }
 
@@ -2236,6 +2246,16 @@ pub struct Node {
     /// rather than in any kind. It is a DESCRIPTION, never a NAME: a host
     /// projects it as `aria-describedby` and never as `aria-label`.
     pub tooltip: Option<TextSource>,
+    /// Phase 1535 - CONDITIONAL PRESENCE. A `Binding` (a `bool` slot) whose
+    /// resolved `false` removes this node from the rendered output ENTIRELY: no
+    /// element, no placeholder, no `aria-hidden`, nothing in the layout and
+    /// nothing in the accessibility tree.
+    ///
+    /// It is NOT `accessibility.hidden`, which is `aria-hidden` over a node that
+    /// IS rendered and DOES occupy space. Absence, an unresolved predicate and an
+    /// errored one all RENDER: a missing source silently hiding content is the
+    /// one failure a reader cannot see, cannot report and cannot work around.
+    pub visible: Option<Binding>,
 }
 
 // ─── TreeOp (§3.4) ───────────────────────────────────────────────────────────

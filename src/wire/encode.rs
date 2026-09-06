@@ -2550,11 +2550,18 @@ fn node_kind(k: &NodeKind) -> String {
                     arr(spec
                         .cases
                         .iter()
+                        // Phase 1535 - exactly one of `match` and `when` is
+                        // present, so exactly one is emitted. `obj` sorts, so
+                        // the pair's relative order here is immaterial.
                         .map(|c| {
-                            obj(vec![
-                                field("child", node(&c.child)),
-                                field("match", s(&c.match_value)),
-                            ])
+                            let mut cf = vec![field("child", node(&c.child))];
+                            if let Some(m) = &c.match_value {
+                                cf.push(field("match", s(m)));
+                            }
+                            if let Some(w) = &c.when {
+                                cf.push(field("when", binding(w)));
+                            }
+                            obj(cf)
                         })
                         .collect()),
                 ),
@@ -2723,6 +2730,11 @@ fn node(n: &Node) -> String {
     // `TextSource`'s transparent case wherever it appears.
     if let Some(t) = &n.tooltip {
         fields.push(field("tooltip", text_source(t)));
+    }
+    // Phase 1535 - the node-level visibility predicate, omitted when absent, so
+    // every node authored before it stays byte-identical.
+    if let Some(v) = &n.visible {
+        fields.push(field("visible", binding(v)));
     }
     obj(fields)
 }

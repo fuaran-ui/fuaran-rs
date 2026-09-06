@@ -105,6 +105,7 @@ fn encode_as_node(name: &str, drawing: fuaran_rs::wire::DrawingSpec) -> String {
         style: SemanticStyle::default(),
         accessibility: None,
         tooltip: None,
+        visible: None,
     };
     fuaran_rs::wire::encode_node(&node)
 }
@@ -233,6 +234,7 @@ fn render_series(values: &[f64]) -> String {
         style: SemanticStyle::default(),
         accessibility: None,
         tooltip: None,
+        visible: None,
     };
     fuaran_rs::render::render_to_html(&node, &BindingSources::default())
 }

@@ -61,6 +61,11 @@ fn project_node(sources: &BindingSources, node: &Node) -> Node {
         // Phase 1112 - projected like every other content slot, so the resolved
         // tree a native surface reads carries the hint's TEXT, not its binding.
         tooltip: map_opt_text(sources, &node.tooltip),
+        // Phase 1535 - the predicate travels UNRESOLVED, for the reason the
+        // projection exists: it lowers CONTENT for a native surface to draw, and
+        // a native surface takes the presence decision itself against the same
+        // rule. Baking a verdict in here would give two hosts two answers.
+        visible: node.visible.clone(),
     }
 }
 
@@ -513,8 +518,12 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             cases: spec
                 .cases
                 .iter()
+                // Phase 1535 - both selector slots are carried through and only
+                // the child is projected; naming `match_value` alone would have
+                // silently dropped `when` the moment it was added.
                 .map(|c| crate::wire::SwitchCase {
                     match_value: c.match_value.clone(),
+                    when: c.when.clone(),
                     child: project_node(sources, &c.child),
                 })
                 .collect(),

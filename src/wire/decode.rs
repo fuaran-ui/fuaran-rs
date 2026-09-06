@@ -5265,10 +5265,46 @@ fn decode_node_kind_g4(
                 for (i, item) in arr.iter().enumerate() {
                     let cp = format!("{path}.cases[{i}]");
                     let cf = as_obj(&cp, item)?;
-                    let match_value = req_string(&cp, cf, "match", "Switch case match string")?;
+                    // Phase 1535 — a case selects on a string `match` XOR a
+                    // `when` predicate (a Binding evaluated at render time).
+                    // Exactly one; both and neither are refused, naming both
+                    // fields, on the Phase 818 `value` / `valueFrom` precedent.
+                    //
+                    // "Neither" is refused rather than skipped at render because
+                    // a case that names no condition has no rendering that could
+                    // be right: skipping it renders the `default` and reports
+                    // nothing.
+                    let match_j = get(cf, "match");
+                    let when_j = get(cf, "when");
+                    let (match_value, when) = match (match_j, when_j) {
+                        (Some(_), Some(_)) => {
+                            return Err(wrong_type(
+                                &format!("{cp}.when"),
+                                "either 'match' (a literal string compared against the switch's `on` selector) or 'when' (a Binding<bool> predicate evaluated at render time, needing no selector); remove one",
+                            ));
+                        }
+                        (None, None) => {
+                            return Err(missing_field(
+                                &cp,
+                                "match",
+                                "a literal string under 'match' (compared against the switch's `on` selector), or a Binding<bool> under 'when' (a predicate evaluated at render time)",
+                            ));
+                        }
+                        (Some(_), None) => (
+                            Some(req_string(&cp, cf, "match", "Switch case match string")?),
+                            None,
+                        ),
+                        (None, Some(v)) => {
+                            (None, Some(decode_binding(&format!("{cp}.when"), v)?))
+                        }
+                    };
                     let child_j = req(&cp, cf, "child", "Switch case child Node")?;
                     let child = decode_node_ast(&format!("{cp}.child"), child_j)?;
-                    cases.push(SwitchCase { match_value, child });
+                    cases.push(SwitchCase {
+                        match_value,
+                        when,
+                        child,
+                    });
                 }
                 let default_j = req(path, fields, "default", "Switch default Node")?;
                 let default = decode_node_ast(&format!("{path}.default"), default_j)?;
@@ -5486,6 +5522,14 @@ fn decode_node_ast(path: &str, j: &JVal) -> DResult<Node> {
     // non-object value is `WRONG_TYPE` at `$.tooltip` - reported through the
     // shared `TextSource` decoder rather than by a second reading here.
     let tooltip = opt_text_source(path, fields, "tooltip")?;
+    // Phase 1535 - the node-level visibility predicate. An ordinary optional
+    // Binding, decoded by the shared binding decoder for the reason the tooltip
+    // above states: the one time a host read a node-envelope slot as its own
+    // narrower thing it took two hosts and a ruling to unwind.
+    let visible = match get(fields, "visible") {
+        None => None,
+        Some(v) => Some(decode_binding(&format!("{path}.visible"), v)?),
+    };
     Ok(Node {
         id: id.to_string(),
         kind,
@@ -5493,6 +5537,7 @@ fn decode_node_ast(path: &str, j: &JVal) -> DResult<Node> {
         style,
         accessibility,
         tooltip,
+        visible,
     })
 }
 

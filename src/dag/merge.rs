@@ -336,6 +336,7 @@ fn mk_node(
         style,
         accessibility,
         tooltip: None,
+        visible: None,
     }
 }
 

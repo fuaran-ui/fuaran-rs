@@ -46,7 +46,8 @@ use super::bindings::{
     BindingSources, EM_DASH, NumberResolution, ResolvedRows, accessibility_attributes,
     display_number, format_number, render_text, resolve_float_pair, resolve_float_seq,
     resolve_number, resolve_options, resolve_rows, resolve_scalar_number, resolve_string_pair,
-    static_display_string, try_bool, try_number, try_scalar_number, try_string,
+    is_node_visible, select_switch_case, static_display_string, try_bool, try_number,
+    try_scalar_number, try_scalar_string, try_string,
 };
 use super::class_names::{icon_size_class, node_class_name, tone_var, trend_sentiment};
 use super::egress::{
@@ -234,6 +235,19 @@ fn render_children(ctx: &Ctx<'_>, nodes: &[Node]) -> String {
 }
 
 fn render_node(ctx: &Ctx<'_>, node: &Node) -> String {
+    // Phase 1535 - CONDITIONAL PRESENCE, before anything else is computed. A
+    // resolved `false` on the envelope's `visible` predicate emits NOTHING: no
+    // element, no placeholder, no island wrapper, no `aria-hidden`, nothing in
+    // the layout and nothing in the accessibility tree. Absent, unresolved and
+    // errored predicates all render.
+    //
+    // The guard sits on this one function rather than at every call site that
+    // produces a child, so a kind added tomorrow inherits it without anyone
+    // remembering to. It sits ABOVE the island wrapper deliberately: a removed
+    // node has no boundary to hydrate.
+    if !is_node_visible(ctx.sources, node) {
+        return String::new();
+    }
     let inner = render_node_plain(ctx, node);
     if ctx.islands.contains(&node.id) {
         // The island boundary wrapper: its children are exactly the node's
@@ -1594,11 +1608,18 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
                     Some(JVal::Bool(b)) => if *b { "true" } else { "false" }.to_string(),
                     Some(other) => crate::canonical::render_canonical(other),
                 },
-                on => try_string(ctx.sources, on).unwrap_or_default(),
+                // Phase 1535 - the SCALAR resolver. `try_string`'s `Transform`
+                // arm is row-shaped and cannot serve a string slot, so a
+                // computed selector fell through to `default` with nothing
+                // saying why. Every other binding case resolves as before.
+                on => try_scalar_string(ctx.sources, on).unwrap_or_default(),
             };
-            let matched = spec.cases.iter().find(|c| c.match_value == value_str);
-            match matched {
-                Some(case) => render_node(ctx, &case.child),
+            // Phase 1535 - first-match-wins over both kinds of case, through the
+            // one shared definition, so this renderer cannot drift from the
+            // others on the order or on what a predicate that fails to resolve
+            // means.
+            match select_switch_case(ctx.sources, Some(value_str.as_str()), &spec.cases) {
+                Some(child) => render_node(ctx, child),
                 None => render_node(ctx, &spec.default),
             }
         }
@@ -3550,6 +3571,7 @@ fn render_grid_cell(ctx: &Ctx<'_>, col: &ColumnErased, row: &JVal) -> String {
                 style: crate::wire::SemanticStyle::default(),
                 accessibility: None,
                 tooltip: None,
+                visible: None,
             };
             render_node(ctx, &placeholder)
         }

@@ -381,6 +381,7 @@ fn lowered_json(name: &str, input: &str) -> String {
         style: SemanticStyle::default(),
         accessibility: None,
         tooltip: None,
+        visible: None,
     };
     fuaran_rs::wire::encode_node(&node)
 }

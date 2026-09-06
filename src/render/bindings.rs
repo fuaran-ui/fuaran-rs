@@ -28,8 +28,8 @@ use crate::canonical::{JVal, format_number as canonical_number};
 use crate::transform::{self, Table};
 use crate::wire::{
     Accessibility, AggFn, Binding, Cell, CellFormat, DataSource, DateStyle, DurationStyle,
-    DurationUnit, Format, LocaleSource, RelativeTimeUnit, SelectOption, StaticValue, TextSource,
-    TimeGrain, TransformParam, TransformSource, TransformStep,
+    DurationUnit, Format, LocaleSource, Node, RelativeTimeUnit, SelectOption, StaticValue,
+    SwitchCase, TextSource, TimeGrain, TransformParam, TransformSource, TransformStep,
 };
 
 /// The em-dash placeholder an unresolved value renders as.
@@ -629,6 +629,105 @@ pub fn try_bool(sources: &BindingSources, binding: &Binding) -> Option<bool> {
         Resolution::Resolved(Value::Json(JVal::Bool(b))) => Some(*b),
         _ => None,
     }
+}
+
+/// Best-effort BOOLEAN scalar resolution: the third of the trio beside
+/// [`try_scalar_string`] and [`try_scalar_number`], so a `Binding::Transform`
+/// reaches a boolean slot through the same 1x1 seam a text or numeric one does
+/// (Phase 1535).
+///
+/// STRICT: only a genuine `Bool` cell resolves. `0`, `""` and `"false"` are all
+/// `None` rather than `Some(false)`, because every language that has guessed at
+/// truthiness has guessed differently and five hosts agreeing on a rendering is
+/// the whole point of the corpus. The vocabulary already carries the total
+/// spellings (`isNull`, `=`, `not`), so refusing costs an author nothing but the
+/// explicit operator.
+pub fn try_scalar_bool(sources: &BindingSources, binding: &Binding) -> Option<bool> {
+    match binding {
+        Binding::Transform {
+            params,
+            pipeline,
+            source,
+        } => match resolve_scalar_transform(cell_to_bool, sources, params, pipeline, source) {
+            ScalarOutcome::Resolved(b) => Some(b),
+            ScalarOutcome::NotResolved | ScalarOutcome::Errored(_) => None,
+        },
+        _ => try_bool(sources, binding),
+    }
+}
+
+/// The boolean coercion for a result cell. Strict by the rule above.
+fn cell_to_bool(c: &Cell) -> Result<bool, String> {
+    match c {
+        Cell::Bool(b) => Ok(*b),
+        Cell::Null => Err("Transform yielded a null cell in a boolean slot".to_string()),
+        _ => Err(
+            "Transform yielded a non-boolean cell in a boolean slot — there is no truthiness rule here; compare explicitly (=, isNull, not)"
+                .to_string(),
+        ),
+    }
+}
+
+// ─── Conditional presence and predicate branching (Phase 1535) ───────────────
+//
+// Two decisions a renderer takes BEFORE it draws anything, stated once here so
+// every rendering surface in this crate takes them identically.
+
+/// THE rule for whether a node reaches the output at all (WIRE_FORMAT §3.1).
+///
+/// A node is removed ONLY on a resolved `false`. An absent predicate, an
+/// unresolved one and an errored one all RENDER, and the asymmetry is the design
+/// rather than a leniency: a `false` is an author saying "not now", and every
+/// other outcome is the renderer failing to answer the question. Content that
+/// vanishes because a source was missing is the one failure a reader cannot see,
+/// cannot report and cannot work around.
+pub fn is_node_visible(sources: &BindingSources, node: &Node) -> bool {
+    match &node.visible {
+        None => true,
+        Some(b) => try_scalar_bool(sources, b) != Some(false),
+    }
+}
+
+/// First-match-wins case selection over BOTH kinds of case: a literal `match`
+/// compared against the already-resolved selector, and a `when` predicate
+/// evaluated here (Phase 1535).
+///
+/// `selector` is the switch's resolved `on` value; `None` when it did not
+/// resolve, which is distinct from `Some("")` because the empty string is a
+/// legal match value. A predicate case ignores it entirely — which is why a
+/// switch whose cases are all predicates needs no selector at all.
+///
+/// A predicate case is taken ONLY on a resolved `true`; `false`, unresolved and
+/// errored all fall through to the next case and ultimately to `default`. That
+/// is the OPPOSITE default from [`is_node_visible`], and deliberately so:
+/// falling through here lands on a `default` branch the author wrote, so no
+/// content disappears — whereas a node with no verdict has no fallback.
+///
+/// A case carrying neither is unreachable from the wire (the decoder refuses it)
+/// and reported pre-emit; it is skipped rather than asserted away because a tree
+/// built in-process can still hold one.
+pub fn select_switch_case<'a>(
+    sources: &BindingSources,
+    selector: Option<&str>,
+    cases: &'a [SwitchCase],
+) -> Option<&'a Node> {
+    cases.iter().find_map(|c| match (&c.match_value, &c.when) {
+        (Some(m), _) => {
+            if selector == Some(m.as_str()) {
+                Some(&c.child)
+            } else {
+                None
+            }
+        }
+        (None, Some(predicate)) => {
+            if try_scalar_bool(sources, predicate) == Some(true) {
+                Some(&c.child)
+            } else {
+                None
+            }
+        }
+        (None, None) => None,
+    })
 }
 
 /// Best-effort display string (the `renderText` Bound coercion).
@@ -1250,8 +1349,13 @@ pub fn accessibility_attributes(
     if let Some(live) = &a11y.live_region {
         pairs.push(("aria-live", live.as_str().to_string()));
     }
+    // Phase 1535 - through the SCALAR resolver. `try_bool`'s `Transform` arm is
+    // row-shaped, so a pipeline yielding the 1x1 bool cell an author obviously
+    // meant here ("hide it when the grid is empty") could never resolve.
+    // `try_scalar_bool` reads the lone cell through the same seam every other
+    // scalar slot uses; every other binding case resolves exactly as before.
     if let Some(hidden) = &a11y.hidden
-        && try_bool(sources, hidden) == Some(true)
+        && try_scalar_bool(sources, hidden) == Some(true)
     {
         pairs.push(("aria-hidden", "true".to_string()));
     }

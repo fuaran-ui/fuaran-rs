@@ -273,16 +273,49 @@ impl Walker {
                         "Switch has an empty stateKey — it can never resolve a case and is stuck on its default; name the state key the switch selects on.".to_string(),
                     );
                 }
+                // Phase 1535 - FUARAN142: a case selects on a string `match`
+                // XOR a `when` predicate. The PRE-EMIT twin of the decoder's own
+                // refusal, and it exists for the reason every pre-emit shape
+                // rule does: a tree authored in Rust never passes through the
+                // decoder, so without it the one shape the wire refuses is
+                // reachable by construction.
+                //
+                // FUARAN082 below is over the MATCH cases only. Two predicate
+                // cases are not duplicates of each other: `when` carries a
+                // binding, two bindings equal today may resolve differently
+                // tomorrow, and structural equality of two predicates is not the
+                // question that rule asks.
                 let mut seen = std::collections::HashSet::new();
-                for case in &s.cases {
-                    if !seen.insert(&case.match_value) {
+                for (index, case) in s.cases.iter().enumerate() {
+                    match (&case.match_value, &case.when) {
+                        (Some(_), Some(_)) => self.push(
+                            Severity::Error,
+                            "FUARAN142",
+                            id,
+                            format!(
+                                "Switch case {index} carries both 'match' and 'when' — exactly one selects a case; 'match' compares the switch's `on` selector against a literal, 'when' evaluates a Binding<bool> and needs no selector."
+                            ),
+                        ),
+                        (None, None) => self.push(
+                            Severity::Error,
+                            "FUARAN142",
+                            id,
+                            format!(
+                                "Switch case {index} carries neither 'match' nor 'when' — a case that names no condition can never be selected; give it a literal 'match' against the switch's `on` selector, or a 'when' Binding<bool> predicate."
+                            ),
+                        ),
+                        _ => {}
+                    }
+                    if let Some(m) = &case.match_value
+                        && !seen.insert(m)
+                    {
                         self.push(
                             Severity::Warning,
                             "FUARAN082",
                             id,
                             format!(
                                 "Switch declares duplicate case match \"{}\" — first-match-wins shadows the later \n                 case; give each case a distinct match value.",
-                                case.match_value
+                                m
                             ),
                         );
                     }

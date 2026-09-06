@@ -119,6 +119,13 @@ pub fn resolve_tree(sources: &BindingSources, node: &Node) -> Node {
         // TextSource slot rather than travelling through unread: a `Bound`
         // tooltip must show the store's value, not its binding.
         tooltip: resolve_text_opt(sources, &node.tooltip),
+        // Phase 1535 - the predicate travels UNRESOLVED. This function preserves
+        // structure by contract ("no node added, removed or re-identified"), and
+        // a predicate is not content: resolving it here would either drop the
+        // node (breaking that contract) or bake a verdict into a tree the
+        // renderer resolves again. The renderer's own guard is where a `false`
+        // removes a node.
+        visible: node.visible.clone(),
     }
 }
 
