@@ -984,10 +984,13 @@ struct Measured {
 ///
 /// Every panic is caught HERE and nowhere else, which is what makes "no panic
 /// escapes" a measured property rather than a hope. Note the one boundary: this
-/// crate's RELEASE profile sets `panic = "abort"`, under which nothing is
-/// catchable — so this harness is meaningful in the test profile it runs in, and
-/// a release consumer's guarantee is that the decoder does not panic at all,
-/// which is precisely what these runs are evidence for.
+/// harness runs in the TEST profile, and what a release consumer gets is that
+/// the decoder does not panic at all — precisely what these runs are evidence
+/// for. The release profile no longer sets `panic = "abort"` (the C-ABI's panic
+/// boundary needs an unwinder to catch anything), so a NATIVE release consumer
+/// now has `src/ffi/`'s guard beneath this claim as well. On `wasm32` the target
+/// still fixes the strategy at `abort`, so there the evidence these runs provide
+/// remains the only line of defence.
 fn check(subject: &Subject, budgets: Budgets, input: &str) -> Measured {
     let before = allocated_bytes();
     let started = Instant::now();
