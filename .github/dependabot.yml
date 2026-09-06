@@ -1,0 +1,21 @@
+# Dependabot — the other half of SHA-pinning a GitHub Action.
+#
+# A digest pin removes the "a moved tag silently changed the credential-bearing
+# code in my publish job" hazard, and replaces it with "the pin is now frozen at
+# whatever was current the day it was written". This config is what keeps the
+# second from becoming permanent: Dependabot proposes each bump as a reviewable
+# PR carrying the new digest and the release notes behind it, so an upgrade is a
+# decision somebody made rather than one that happened.
+#
+# Scope is `github-actions` only. The language ecosystems in this repository are
+# pinned and reviewed through their own lockfiles/props and are deliberately not
+# on Dependabot's schedule here.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci

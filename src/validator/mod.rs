@@ -647,7 +647,7 @@ impl Walker {
             | Binding::Query { .. }
             | Binding::Selection { .. }
             | Binding::Computed
-            | Binding::Now
+            | Binding::Now { .. }
             | Binding::I18n { .. }
             | Binding::Format { .. }
             | Binding::Transform { .. }
@@ -720,7 +720,7 @@ impl Walker {
             | Binding::Filter { .. }
             | Binding::Selection { .. }
             | Binding::State { .. }
-            | Binding::Now
+            | Binding::Now { .. }
             | Binding::Invoke { .. } => {}
         }
     }

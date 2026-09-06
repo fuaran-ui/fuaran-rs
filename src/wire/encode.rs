@@ -490,8 +490,15 @@ fn binding(b: &Binding) -> String {
             case_obj("State", fields)
         }
         Binding::Computed => case_obj("Computed", vec![field("fn", CLOSURE.to_string())]),
-        // Phase 765 — no wire fields: the bare `{"$type":"Now"}` object.
-        Binding::Now => case_obj("Now", vec![]),
+        // Phase 765 — the INSTANT is never on the wire. Phase 1533 — the
+        // declared GRAIN is, and only when it is not the `Second` default, so a
+        // grain-less `Now` is the same bytes it has always been.
+        Binding::Now { grain } => case_obj(
+            "Now",
+            grain
+                .map(|g| vec![field("grain", s(g.as_str()))])
+                .unwrap_or_default(),
+        ),
         Binding::I18n { key, args } => {
             let mut fields = vec![];
             if let Some(args) = args {
@@ -747,6 +754,13 @@ fn format_intent(f: &Format) -> String {
                 field("style", s(style.as_str())),
                 field("unit", s(unit.as_str())),
             ],
+        ),
+        // Phase 1533 — `unit` omitted when absent: its absence is the
+        // auto-selection request, not a default that could be spelled out.
+        Format::Since { unit } => case_obj(
+            "Since",
+            unit.map(|u| vec![field("unit", s(u.as_str()))])
+                .unwrap_or_default(),
         ),
     }
 }

@@ -165,6 +165,12 @@ bare_enum!(LiveRegionKind { Polite => "polite", Assertive => "assertive", Off =>
 bare_enum!(SortDirection { Asc => "asc", Desc => "desc" });
 bare_enum!(DateStyle { Short => "Short", Medium => "Medium", Long => "Long", Full => "Full" });
 bare_enum!(RelativeTimeUnit { Second => "Second", Minute => "Minute", Hour => "Hour", Day => "Day", Week => "Week", Month => "Month", Year => "Year" });
+// Phase 1533 — the resolution a `Binding::Now` declares for the host-furnished
+// instant. FOUR members and not `RelativeTimeUnit`'s seven, deliberately: this
+// is a TRUNCATION of a calendar instant, and a week, a month or a year has no
+// truncation every host agrees on (which weekday starts a week; which
+// calendar). The four here truncate the canonical ISO-8601 form by prefix.
+bare_enum!(TimeGrain { Second => "Second", Minute => "Minute", Hour => "Hour", Day => "Day" });
 // Phase 819 — the Duration format enums (`Format.Duration` / `CellFormat.Duration`):
 // the numeric source counts `unit`s, rendered per the bounded `style`.
 bare_enum!(DurationUnit { Seconds => "Seconds", Minutes => "Minutes", Hours => "Hours" });
@@ -287,11 +293,19 @@ pub enum Binding {
         default_value: StaticValue,
     },
     Computed,
-    /// Phase 765 — the host-furnished current instant: the bare
-    /// `{"$type":"Now"}` object, no wire fields. Resolved once per render pass
-    /// from the host's pinned ISO-8601 string — never a clock read in the
-    /// renderer, so SSR output stays reproducible for a pinned instant.
-    Now,
+    /// Phase 765 — the host-furnished current INSTANT is never on the wire.
+    /// Resolved once per render pass from the host's pinned ISO-8601 string —
+    /// never a clock read in the renderer, so SSR output stays reproducible for
+    /// a pinned instant.
+    ///
+    /// Phase 1533 — `grain` is the one thing the wire DOES carry, and only when
+    /// it is not the `Second` default, so a grain-less `Now` is still the bare
+    /// `{"$type":"Now"}`. It declares the RESOLUTION the document wants: the
+    /// host truncates its instant before the value is read, so a `Day`-grain
+    /// `Now` is the `YYYY-MM-DD` a day-difference verb accepts.
+    Now {
+        grain: Option<TimeGrain>,
+    },
     I18n {
         key: String,
         /// Per-argument bindings; omitted when absent.
@@ -347,6 +361,18 @@ pub enum Format {
     Duration {
         style: DurationStyle,
         unit: DurationUnit,
+    },
+    /// Phase 1533 — the INSTANT-reading twin of `RelativeTime`.
+    ///
+    /// `RelativeTime`'s source is a signed COUNT of its unit, already computed
+    /// by whoever produced it; this one's source is an instant in whole
+    /// Unix-epoch seconds (`Date`'s convention) and the count is the delta the
+    /// HOST takes against its own furnished instant.
+    ///
+    /// `unit: None` is NOT a default — it is the auto-selection request,
+    /// resolved from the fixed threshold ladder in WIRE_FORMAT.md §4b.
+    Since {
+        unit: Option<RelativeTimeUnit>,
     },
 }
 
