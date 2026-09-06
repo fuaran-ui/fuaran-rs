@@ -538,6 +538,10 @@ decode_bare_enum!(
     RelativeTimeUnit,
     "RelativeTimeUnit"
 );
+// Phase 1533 — the `Binding::Now` grain: a strict SUBSET of RelativeTimeUnit.
+// `Week` / `Month` / `Year` are refused rather than quietly accepted, because a
+// calendar instant has no truncation to those that every host agrees on.
+decode_bare_enum!(decode_time_grain, TimeGrain, "TimeGrain");
 // Phase 819 — the Duration format enums (`decode_cell_format` /
 // `decode_format` share them).
 decode_bare_enum!(decode_duration_unit, DurationUnit, "DurationUnit");
@@ -1631,10 +1635,20 @@ fn decode_format(path: &str, j: &JVal) -> DResult<Format> {
             let style = decode_duration_style(&format!("{path}.style"), style_j)?;
             Ok(Format::Duration { style, unit })
         }
+        "Since" => {
+            // Phase 1533 — `unit` is OPTIONAL and its absence is the
+            // auto-selection request, not a default. Present-but-unreadable is
+            // still a refusal.
+            let unit = match get(fields, "unit") {
+                None => None,
+                Some(v) => Some(decode_relative_time_unit(&format!("{path}.unit"), v)?),
+            };
+            Ok(Format::Since { unit })
+        }
         other => Err(unknown_du_case(
             path,
             other,
-            "Number | Currency | Percent | Date | RelativeTime | Duration",
+            "Number | Currency | Percent | Date | RelativeTime | Duration | Since",
         )),
     }
 }
@@ -1885,11 +1899,23 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
             Ok(Binding::State { key, default_value })
         }
         "Computed" => Ok(Binding::Computed),
-        // Phase 765 — the host-furnished instant: no wire fields, the bare
-        // `{"$type":"Now"}` object. The instant is already the wire-shaped
-        // string, so a decoded reader receives it as-is (the sibling hosts'
-        // identity projection; this closure-free host has nothing to erase).
-        "Now" => Ok(Binding::Now),
+        // Phase 765 — the host-furnished INSTANT is never on the wire. The
+        // instant is already the wire-shaped string, so a decoded reader
+        // receives it as-is (the sibling hosts' identity projection; this
+        // closure-free host has nothing to erase).
+        //
+        // Phase 1533 — the declared `grain` is the one wire field, optional,
+        // absent meaning `Second`. Present-but-unreadable is a REFUSAL rather
+        // than a silent fallback to the default: a document that names a grain
+        // the host cannot honour must not be rendered at a neighbouring
+        // resolution in silence.
+        "Now" => {
+            let grain = match get(fields, "grain") {
+                None => None,
+                Some(v) => Some(decode_time_grain(&format!("{path}.grain"), v)?),
+            };
+            Ok(Binding::Now { grain })
+        }
         "I18n" => {
             let key = req_string(path, fields, "key", "i18n key string")?;
             let args = match get(fields, "args") {

@@ -29,7 +29,7 @@ use crate::transform::{self, Table};
 use crate::wire::{
     Accessibility, AggFn, Binding, Cell, CellFormat, DataSource, DateStyle, DurationStyle,
     DurationUnit, Format, LocaleSource, RelativeTimeUnit, SelectOption, StaticValue, TextSource,
-    TransformParam, TransformSource, TransformStep,
+    TimeGrain, TransformParam, TransformSource, TransformStep,
 };
 
 /// The em-dash placeholder an unresolved value renders as.
@@ -120,8 +120,18 @@ pub fn resolve<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Resolut
         Binding::Computed => Resolution::NotResolved,
         // Phase 765 — host-furnished, resolved once per render pass; never a
         // clock read here, so SSR output is reproducible for a pinned instant.
-        Binding::Now => match &sources.now {
-            Some(iso) if !iso.is_empty() => Resolution::Resolved(Value::Text(iso.clone())),
+        //
+        // Phase 1533 — the declared GRAIN truncates the instant BEFORE it is
+        // read. Before, not after: a `Transform` param would otherwise carry a
+        // full datetime into `dateDiffDays`, which reads only the leading
+        // `YYYY-MM-DD`, so the truncation has to be upstream of every use or it
+        // is not the document's declaration at all. Absent grain is `Second`,
+        // which is the identity.
+        Binding::Now { grain } => match &sources.now {
+            Some(iso) if !iso.is_empty() => Resolution::Resolved(Value::Text(match grain {
+                Some(g) => truncate_to_grain(*g, iso),
+                None => iso.clone(),
+            })),
             _ => Resolution::NotResolved,
         },
         Binding::I18n { key, .. } => match sources.i18n.get(key) {
@@ -135,7 +145,28 @@ pub fn resolve<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Resolut
             source,
         } => match resolve_number(sources, source) {
             NumberResolution::Resolved(v) => {
-                Resolution::Resolved(Value::Text(format_locale_value(locale, format, v)))
+                // Phase 1533 — `Since` is the one `Format` case whose rendering
+                // is a function of the HOST instant as well as of its source, so
+                // the delta is taken HERE, where the instant lives, and
+                // `format_locale_value` stays a pure projection of its
+                // arguments. An unset or unreadable instant is `NotResolved`,
+                // for the reason `Now` gives above: a relative time taken
+                // against an invented "now" is a plausible wrong answer, which
+                // is worse than a visible placeholder.
+                let projected = match format {
+                    Format::Since { .. } => sources
+                        .now
+                        .as_deref()
+                        .and_then(epoch_seconds_of_instant)
+                        .map(|now_epoch| v - now_epoch),
+                    _ => Some(v),
+                };
+                match projected {
+                    Some(n) => Resolution::Resolved(Value::Text(format_locale_value(
+                        locale, format, n,
+                    ))),
+                    None => Resolution::NotResolved,
+                }
             }
             NumberResolution::NotResolved | NumberResolution::Errored(_) => Resolution::NotResolved,
             NumberResolution::I18nUnresolved(key) => Resolution::I18nUnresolved(key),
@@ -903,6 +934,145 @@ pub fn format_duration(unit: DurationUnit, style: DurationStyle, value: f64) -> 
     format!("{sign}{body}")
 }
 
+// ─── The host instant: grain truncation + epoch conversion (Phase 1533) ──────
+//
+// Both halves are arithmetic over the canonical form's own digits, matching the
+// reference host's shared implementation exactly. NO CLOCK IS READ in this
+// section: every function here is a pure projection of a string the HOST
+// furnished, which is what keeps a tree a pure value.
+
+/// Truncate the canonical host instant (`YYYY-MM-DDTHH:MM:SS[.fff]Z`) to `grain`
+/// by PREFIX, zero-filling the finer components so the result stays a
+/// well-formed instant — except `Day`, which yields the bare `YYYY-MM-DD` that
+/// `dateDiffDays` reads.
+///
+/// `Second` is the identity, deliberately: it is the default grain, so a
+/// document that declares none resolves through exactly the bytes Phase 765
+/// shipped, including any sub-second precision a host chooses to furnish.
+///
+/// An instant too short to slice is returned VERBATIM rather than padded or
+/// refused: this is a host-furnished value, not wire data, and a renderer is the
+/// wrong place to adjudicate a host's clock format.
+pub fn truncate_to_grain(grain: TimeGrain, instant: &str) -> String {
+    // Byte indices are character indices here: the canonical form is ASCII, and
+    // a non-ASCII prefix cannot be a well-formed instant, so `is_char_boundary`
+    // guards the slice rather than an assumption doing it.
+    let slice_or = |n: usize, suffix: &str| -> String {
+        if instant.len() >= n && instant.is_char_boundary(n) {
+            format!("{}{}", &instant[..n], suffix)
+        } else {
+            instant.to_string()
+        }
+    };
+    match grain {
+        TimeGrain::Second => instant.to_string(),
+        TimeGrain::Minute => slice_or(16, ":00Z"),
+        TimeGrain::Hour => slice_or(13, ":00:00Z"),
+        TimeGrain::Day => slice_or(10, ""),
+    }
+}
+
+/// Days since 1970-01-01 for a proleptic-Gregorian civil date — Howard
+/// Hinnant's `days_from_civil`, the inverse of `civil_from_unix_seconds` below.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Parse a canonical instant (`YYYY-MM-DD`, optionally `THH:MM:SS…`) to whole
+/// Unix-epoch seconds — the representation `Format::Date` and `Format::Since`
+/// read their numeric source in. `None` when the leading date is not readable,
+/// which the caller surfaces as unresolved rather than as an invented instant.
+pub fn epoch_seconds_of_instant(instant: &str) -> Option<f64> {
+    let b = instant.as_bytes();
+    let digits = |from: usize, len: usize| -> Option<i64> {
+        if b.len() < from + len {
+            return None;
+        }
+        let mut acc: i64 = 0;
+        for &c in &b[from..from + len] {
+            if !c.is_ascii_digit() {
+                return None;
+            }
+            acc = acc * 10 + i64::from(c - b'0');
+        }
+        Some(acc)
+    };
+    let y = digits(0, 4)?;
+    let mo = digits(5, 2)?;
+    let d = digits(8, 2)?;
+    if y < 1 || !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let hh = digits(11, 2).unwrap_or(0);
+    let mi = digits(14, 2).unwrap_or(0);
+    let ss = digits(17, 2).unwrap_or(0);
+    Some((days_from_civil(y, mo, d) * 86_400 + hh * 3600 + mi * 60 + ss) as f64)
+}
+
+/// Seconds in one `RelativeTimeUnit`. `Month` and `Year` are the mean Gregorian
+/// lengths (365.2425 days / 12 and 365.2425 days) — FIXED constants rather than
+/// calendar arithmetic, because "2 months ago" is a rounded human phrase and a
+/// calendar-exact answer would make one delta read differently depending on
+/// which months it spanned, on hosts that must agree.
+fn relative_unit_seconds(u: RelativeTimeUnit) -> f64 {
+    match u {
+        RelativeTimeUnit::Second => 1.0,
+        RelativeTimeUnit::Minute => 60.0,
+        RelativeTimeUnit::Hour => 3600.0,
+        RelativeTimeUnit::Day => 86_400.0,
+        RelativeTimeUnit::Week => 604_800.0,
+        RelativeTimeUnit::Month => 2_629_746.0,
+        RelativeTimeUnit::Year => 31_556_952.0,
+    }
+}
+
+/// The `Format::Since` reduction: a signed delta in seconds becomes a
+/// `(unit, count)` pair the relative-time renderers already know how to say.
+///
+/// `declared == None` is the AUTO-SELECTION request (not a default): the unit is
+/// the largest whose length does not exceed the magnitude, from the fixed
+/// threshold ladder in WIRE_FORMAT.md §4b. The count TRUNCATES toward zero
+/// rather than rounding, so 3599 seconds is "59 minutes" and never "1 hour".
+pub fn since_unit_and_count(
+    declared: Option<RelativeTimeUnit>,
+    delta_seconds: f64,
+) -> (RelativeTimeUnit, f64) {
+    let unit = match declared {
+        Some(u) => u,
+        None => {
+            let m = delta_seconds.abs();
+            if m < 60.0 {
+                RelativeTimeUnit::Second
+            } else if m < 3600.0 {
+                RelativeTimeUnit::Minute
+            } else if m < 86_400.0 {
+                RelativeTimeUnit::Hour
+            } else if m < 604_800.0 {
+                RelativeTimeUnit::Day
+            } else if m < 2_629_746.0 {
+                RelativeTimeUnit::Week
+            } else if m < 31_556_952.0 {
+                RelativeTimeUnit::Month
+            } else {
+                RelativeTimeUnit::Year
+            }
+        }
+    };
+    // The zero normalisation is NOT redundant: IEEE truncation of a small
+    // negative quotient yields NEGATIVE zero, which compares equal to `0.0` but
+    // is a distinct value a formatter or a serialiser can tell apart — so a host
+    // that returned it would disagree with the reference host on a pair the
+    // specification says is one value, while rendering identically, which is
+    // precisely why it would go unnoticed.
+    let count = (delta_seconds / relative_unit_seconds(unit)).trunc();
+    (unit, if count == 0.0 { 0.0 } else { count })
+}
+
 /// English relative-time rendering over a signed count of `unit` — "in 2
 /// hours" / "3 minutes ago" / "this minute" (Phase 819). The cell vocabulary
 /// has no locale dimension, so the English form IS the canonical cell
@@ -1032,6 +1202,15 @@ pub fn format_locale_value(_locale: &LocaleSource, format: &Format, value: f64) 
             // above): the one Format case with exact cross-host parity, so it
             // does not go through the invariant-fallback caveat.
             format_duration(*unit, *style, value)
+        }
+        Format::Since { unit } => {
+            // Phase 1533 — `value` is the signed delta in SECONDS the resolver
+            // already took against the host instant. The (unit, count)
+            // REDUCTION is normative and identical on every host; the phrasing
+            // below is this host's own invariant fallback, exactly as
+            // `RelativeTime`'s is.
+            let (u, count) = since_unit_and_count(*unit, value);
+            format_relative_english(u, count)
         }
     }
 }
