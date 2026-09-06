@@ -79,8 +79,34 @@ impl SseChannel {
     }
 
     /// The accumulated SSE wire stream (every pushed frame, concatenated).
+    ///
+    /// This BORROWS and therefore retains. On a long-lived connection — which is
+    /// what SSE is for — every frame ever pushed stays in memory for the life of
+    /// the channel, because there is no way to observe the stream without
+    /// keeping it. Use [`SseChannel::take_stream`] in a host that writes the
+    /// bytes out; keep this one for tests and for a host that genuinely wants
+    /// the whole transcript.
     pub fn stream(&self) -> &str {
         &self.stream
+    }
+
+    /// Take the accumulated stream, leaving the channel empty — the DRAIN a
+    /// real SSE endpoint needs.
+    ///
+    /// A host writes these bytes to its response and has no further use for
+    /// them, so retaining them is pure growth: an hour-long connection pushing a
+    /// frame a second holds every one of those 3 600 frames' bytes with nothing
+    /// reading them. `stream()` could not offer this because a borrow cannot
+    /// clear what it lends. Call this after each push (or on a flush interval)
+    /// and the channel's memory tracks the unwritten tail rather than the
+    /// session.
+    pub fn take_stream(&mut self) -> String {
+        std::mem::take(&mut self.stream)
+    }
+
+    /// Bytes currently retained and not yet taken.
+    pub fn pending_bytes(&self) -> usize {
+        self.stream.len()
     }
 
     pub fn is_closed(&self) -> bool {

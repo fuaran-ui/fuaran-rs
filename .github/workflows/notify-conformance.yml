@@ -27,13 +27,21 @@ on:
   push:
     branches: [main]
 
+# Least privilege, stated rather than inherited. The cross-repo dispatch runs on
+# a SHORT-LIVED App installation token, never on the job's own token.
+permissions:
+  contents: read
+
 jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
       - name: Mint a workspace App installation token
         id: workspace-token
-        uses: actions/create-github-app-token@v2
+        # SHA-PINNED, not tag-pinned: this step receives the App private key and
+        # mints a write-scoped token on another repository, so a moved `v2` is
+        # credential-bearing code nobody reviewed. `# v2.2.2` names the release.
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
           app-id: 4797739 # fuaran-ui-workspace-broker
           private-key: ${{ secrets.FUARAN_WORKSPACE_APP_PRIVATE_KEY }}
