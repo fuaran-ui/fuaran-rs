@@ -651,6 +651,9 @@ impl Walker {
             | Binding::I18n { .. }
             | Binding::Format { .. }
             | Binding::Transform { .. }
+            // Phase 1534 - an `Expr` derives a value; it is no more a writable
+            // slot than a `Transform` is, so it joins the inert-control lint.
+            | Binding::Expr { .. }
             | Binding::Invoke { .. } => {
                 self.push(
                     Severity::Warning,
@@ -708,7 +711,10 @@ impl Walker {
                     }
                 }
             }
-            Binding::Transform { params, .. } => {
+            Binding::Transform { params, .. } | Binding::Expr { params, .. } => {
+                // Phase 1534 - an `Expr`'s params are `Binding`s like a
+                // `Transform`'s and get the same recursion; sharing the arm is
+                // what keeps a lint from reaching one case and not the other.
                 if let Some(params) = params {
                     for p in params {
                         self.check_binding(id, &p.from);

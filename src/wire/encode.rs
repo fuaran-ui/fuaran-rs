@@ -568,6 +568,31 @@ fn binding(b: &Binding) -> String {
             ));
             case_obj("Transform", fields)
         }
+        // Phase 1534 — the scalar expression. `expr` splices the SAME canonical
+        // `ColExpr` rendering the pipeline's steps use, and `params` is the same
+        // omitted-when-empty list; reusing both is what keeps the two cases from
+        // drifting into two dialects. `$type` (0x24) < `expr` < `params` under
+        // the Ordinal sort, so the composite is canonical.
+        Binding::Expr { expr, params } => {
+            let mut fields = vec![field("expr", col_expr(expr))];
+            if let Some(params) = params
+                && !params.is_empty()
+            {
+                fields.push(field(
+                    "params",
+                    arr(params
+                        .iter()
+                        .map(|p| {
+                            obj(vec![
+                                field("from", binding(&p.from)),
+                                field("name", s(&p.name)),
+                            ])
+                        })
+                        .collect()),
+                ));
+            }
+            case_obj("Expr", fields)
+        }
         Binding::Invoke {
             capability_id,
             args,

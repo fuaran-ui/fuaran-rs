@@ -200,6 +200,9 @@ fn is_reactive(b: &Binding) -> bool {
             | Binding::State { .. }
             | Binding::Computed
             | Binding::Transform { .. }
+            // Phase 1534 - an `Expr`'s params ARE its whole reactive edge: a
+            // write to any param source re-evaluates the expression.
+            | Binding::Expr { .. }
             | Binding::Invoke { .. }
     )
 }

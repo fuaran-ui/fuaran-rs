@@ -312,6 +312,21 @@ pub enum Binding {
         pipeline: Vec<TransformStep>,
         source: TransformSource,
     },
+    /// Phase 1534 — scalar logic over bound values: `Transform`'s sibling with
+    /// the ROW removed. One `ColExpr` evaluated against the param environment
+    /// alone, yielding one cell.
+    ///
+    /// It mints NO operator — the algebra is the same `ColExpr` the pipeline's
+    /// steps carry, in the same encoding — so an expression means here exactly
+    /// what it means inside a `derive`. Two decode refusals, both because an
+    /// `Expr` has no row: a `col` reference (whose remedy is
+    /// `Binding::Transform`, the case that HAS a frame) and a `param` this
+    /// binding's own `params` does not bind.
+    Expr {
+        expr: ColExpr,
+        /// The SAME slot `Transform` carries, deliberately; omitted when empty.
+        params: Option<Vec<TransformParam>>,
+    },
     Invoke {
         capability_id: String,
         args: Vec<InvokeArg>,

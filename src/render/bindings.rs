@@ -27,9 +27,10 @@ use std::collections::{BTreeSet, HashMap};
 use crate::canonical::{JVal, format_number as canonical_number};
 use crate::transform::{self, Table};
 use crate::wire::{
-    Accessibility, AggFn, Binding, Cell, CellFormat, DataSource, DateStyle, DurationStyle,
-    DurationUnit, Format, LocaleSource, RelativeTimeUnit, SelectOption, StaticValue, TextSource,
-    TransformParam, TransformSource, TransformStep,
+    Accessibility, AggFn, Binding, Cell, CellFormat, ColExpr, ColPair, ColumnType, DataColumn,
+    DataSource, DateStyle, DurationStyle, DurationUnit, Format, LocaleSource, RelativeTimeUnit,
+    SchemaEntry, SelectOption, StaticValue, TextSource, TransformParam, TransformSource,
+    TransformStep,
 };
 
 /// The em-dash placeholder an unresolved value renders as.
@@ -145,6 +146,12 @@ pub fn resolve<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Resolut
         // instead: `resolve_rows` (row contexts) and the scalar-slot path
         // (`resolve_scalar_number` / `try_scalar_string`). See the module doc.
         Binding::Transform { .. } => Resolution::NotResolved,
+        // Phase 1534 - an `Expr` yields an OWNED cell, which cannot ride the
+        // borrow-based `Resolution` any more than a `Transform`'s rows can. It
+        // is evaluated at the consumption seams instead
+        // (`resolve_scalar_number` / `try_scalar_string`), exactly as the case
+        // above is, and for the same reason. See the module doc.
+        Binding::Expr { .. } => Resolution::NotResolved,
         // A capability invoker seam is not wired on this host yet — behaves as
         // pending, exactly as an absent invoker does on the sibling hosts.
         Binding::Invoke { .. } => Resolution::NotResolved,
@@ -498,6 +505,45 @@ fn cell_to_float(c: &Cell) -> Result<f64, String> {
 /// result renders absence — except a trailing global single-`count` groupBy
 /// over an empty frame, which resolves 0 (the count of nothing is 0, the SQL
 /// global-aggregate semantic the strict fold leaves empty).
+/// Phase 1534 - a `Binding::Expr` as the equivalent one-row `Transform` frame.
+///
+/// The rewrite IS the implementation, on purpose: param resolution, list-param
+/// substitution and the evaluator are then literally the code the pipeline runs,
+/// so an expression cannot mean one thing inside a `derive` and another inside
+/// an `Expr`. A second evaluator here would be a second thing to specify,
+/// certify on five hosts, and keep in step.
+///
+/// The frame carries one column of one row so `derive` has a row to produce; the
+/// expression never reads it (a `col` reference is refused at decode), and the
+/// trailing `project` drops it so the result is 1x1 by construction rather than
+/// by inspection.
+fn expr_frame(expr: &ColExpr) -> (Vec<TransformStep>, TransformSource) {
+    let source = TransformSource::Data(DataSource::Embedded {
+        schema: vec![SchemaEntry {
+            name: "__unit".to_string(),
+            column_type: ColumnType::Bool,
+        }],
+        columns: vec![DataColumn {
+            name: "__unit".to_string(),
+            column_type: ColumnType::Bool,
+            cells: vec![Cell::Bool(true)],
+        }],
+    });
+    let pipeline = vec![
+        TransformStep::Derive {
+            name: "__value".to_string(),
+            expr: expr.clone(),
+        },
+        TransformStep::Project {
+            cols: vec![ColPair {
+                a: "__value".to_string(),
+                b: "__value".to_string(),
+            }],
+        },
+    ];
+    (pipeline, source)
+}
+
 fn resolve_scalar_transform<T>(
     coerce: impl Fn(&Cell) -> Result<T, String>,
     sources: &BindingSources,
@@ -555,6 +601,15 @@ pub fn resolve_scalar_number(sources: &BindingSources, binding: &Binding) -> Num
             ScalarOutcome::NotResolved => NumberResolution::NotResolved,
             ScalarOutcome::Errored(msg) => NumberResolution::Errored(msg),
         },
+        // Phase 1534 - the scalar expression, through the same 1x1 law.
+        Binding::Expr { expr, params } => {
+            let (pipeline, source) = expr_frame(expr);
+            match resolve_scalar_transform(cell_to_float, sources, params, &pipeline, &source) {
+                ScalarOutcome::Resolved(n) => NumberResolution::Resolved(n),
+                ScalarOutcome::NotResolved => NumberResolution::NotResolved,
+                ScalarOutcome::Errored(msg) => NumberResolution::Errored(msg),
+            }
+        }
         _ => resolve_number(sources, binding),
     }
 }
@@ -583,6 +638,14 @@ pub fn try_scalar_string(sources: &BindingSources, binding: &Binding) -> Option<
             ScalarOutcome::Resolved(s) => Some(s),
             ScalarOutcome::NotResolved | ScalarOutcome::Errored(_) => None,
         },
+        // Phase 1534 - the scalar expression, through the same 1x1 law.
+        Binding::Expr { expr, params } => {
+            let (pipeline, source) = expr_frame(expr);
+            match resolve_scalar_transform(cell_to_text, sources, params, &pipeline, &source) {
+                ScalarOutcome::Resolved(s) => Some(s),
+                ScalarOutcome::NotResolved | ScalarOutcome::Errored(_) => None,
+            }
+        }
         _ => try_string(sources, binding),
     }
 }

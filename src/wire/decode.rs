@@ -867,6 +867,123 @@ fn decode_data_source(j: &JVal) -> CResult<DataSource> {
     Ok(DataSource::Embedded { schema, columns })
 }
 
+/// Phase 1534 - the optional `params` slot, shared by `Binding::Transform`
+/// (Phase 424, where it started) and `Binding::Expr`. Absent yields `None`,
+/// which is byte-identical to the Phase-282 shape; the 3.6 name->binding MAP
+/// coercion rides along, so the leniency an author gets on one case they get on
+/// the other.
+fn decode_transform_params(
+    path: &str,
+    fields: &BTreeMap<String, JVal>,
+) -> Result<Option<Vec<TransformParam>>, DecodeError> {
+    match get(fields, "params") {
+        None => Ok(None),
+        // Lenient AI-ingest (3.6): a `{name: <Binding>}` MAP is accepted
+        // alongside the canonical `[{from, name}]` array - normalised to the
+        // array form sorted by name (the reference host's map iteration order).
+        Some(JVal::Obj(map_fields)) => {
+            let mut entries: Vec<(&String, &JVal)> =
+                map_fields.iter().map(|(k, v)| (k, v)).collect();
+            entries.sort_by_key(|(k, _)| *k);
+            let mut out = Vec::with_capacity(entries.len());
+            for (name, from_j) in entries {
+                let from = decode_binding(&format!("{path}.params.{name}.from"), from_j)?;
+                out.push(TransformParam {
+                    name: name.clone(),
+                    from,
+                });
+            }
+            Ok(Some(out))
+        }
+        Some(v) => {
+            let items = as_arr(&format!("{path}.params"), v)?;
+            let p = format!("{path}.params[]");
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                let pf = as_obj(&p, item)?;
+                let name = req_string(&p, pf, "name", "param name string")?;
+                let from_j = req(&p, pf, "from", "param source Binding")?;
+                let from = decode_binding(&format!("{p}.from"), from_j)?;
+                out.push(TransformParam { name, from });
+            }
+            Ok(Some(out))
+        }
+    }
+}
+
+/// Phase 1534 - walk one `ColExpr`, collecting its `param` names into `names`
+/// and counting its nodes into `count`; returns true when a `col` reference is
+/// present.
+///
+/// Written here rather than derived from the algebra because neither question
+/// is the ALGEBRA's: `col` is perfectly ordinary in a pipeline expression, and
+/// the node ceiling is this WIRE's limit. One traversal answers both, and it
+/// stops as soon as either verdict is settled - a hostile expression is exactly
+/// the input that must not be walked to the end.
+fn expr_walk(expr: &ColExpr, names: &mut Vec<String>, count: &mut usize) -> bool {
+    *count += 1;
+    if *count > crate::limits::MAX_EXPR_NODES {
+        return false;
+    }
+    fn push(n: &str, names: &mut Vec<String>) {
+        if !names.iter().any(|s| s == n) {
+            names.push(n.to_string());
+        }
+    }
+    match expr {
+        ColExpr::Col { .. } => true,
+        ColExpr::Param { name } => {
+            push(name, names);
+            false
+        }
+        ColExpr::Lit { .. } => false,
+        ColExpr::Binary { left, right, .. } => {
+            let l = expr_walk(left, names, count);
+            let r = expr_walk(right, names, count);
+            l || r
+        }
+        ColExpr::Not { expr } | ColExpr::Cast { expr, .. } | ColExpr::IsNull { expr } => {
+            expr_walk(expr, names, count)
+        }
+        ColExpr::Coalesce { exprs } => {
+            let mut saw = false;
+            for e in exprs {
+                saw |= expr_walk(e, names, count);
+            }
+            saw
+        }
+        ColExpr::Apply { args, .. } => {
+            let mut saw = false;
+            for e in args {
+                saw |= expr_walk(e, names, count);
+            }
+            saw
+        }
+        ColExpr::Case { cases, else_expr } => {
+            let mut saw = false;
+            for arm in cases {
+                saw |= expr_walk(&arm.when, names, count);
+                saw |= expr_walk(&arm.then, names, count);
+            }
+            saw | expr_walk(else_expr, names, count)
+        }
+        ColExpr::InList { subject, items } => {
+            let mut saw = expr_walk(subject, names, count);
+            for e in items {
+                saw |= expr_walk(e, names, count);
+            }
+            saw
+        }
+        // The `in`/`param` spelling names a LIST param in a `param` MEMBER
+        // rather than in a nested `Param` node, so the walk cannot see it.
+        ColExpr::InParam { subject, name } => {
+            let saw = expr_walk(subject, names, count);
+            push(name, names);
+            saw
+        }
+    }
+}
+
 fn decode_col_expr(j: &JVal) -> CResult<ColExpr> {
     let fields = c_obj(j)?;
     let tag = c_str_field(fields, "$type")?;
@@ -2069,45 +2186,80 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                     None,
                 )
             })?;
-            let params = match get(fields, "params") {
-                None => None,
-                // Lenient AI-ingest (§3.6): a `{name: <Binding>}` MAP is
-                // accepted alongside the canonical `[{from, name}]` array —
-                // normalised to the array form sorted by name (the reference
-                // host's map iteration order).
-                Some(JVal::Obj(map_fields)) => {
-                    let mut entries: Vec<(&String, &JVal)> =
-                        map_fields.iter().map(|(k, v)| (k, v)).collect();
-                    entries.sort_by_key(|(k, _)| *k);
-                    let mut out = Vec::with_capacity(entries.len());
-                    for (name, from_j) in entries {
-                        let from = decode_binding(&format!("{path}.params.{name}.from"), from_j)?;
-                        out.push(TransformParam {
-                            name: name.clone(),
-                            from,
-                        });
-                    }
-                    Some(out)
-                }
-                Some(v) => {
-                    let items = as_arr(&format!("{path}.params"), v)?;
-                    let p = format!("{path}.params[]");
-                    let mut out = Vec::with_capacity(items.len());
-                    for item in items {
-                        let pf = as_obj(&p, item)?;
-                        let name = req_string(&p, pf, "name", "param name string")?;
-                        let from_j = req(&p, pf, "from", "param source Binding")?;
-                        let from = decode_binding(&format!("{p}.from"), from_j)?;
-                        out.push(TransformParam { name, from });
-                    }
-                    Some(out)
-                }
-            };
+            let params = decode_transform_params(path, fields)?;
             Ok(Binding::Transform {
                 params,
                 pipeline,
                 source,
             })
+        }
+        // Phase 1534 - the scalar expression binding (WIRE_FORMAT 3.3.2). `expr`
+        // is one `ColExpr` in the SAME encoding the pipeline's steps carry - the
+        // case mints no operator - plus the same optional `params` list
+        // `Transform` carries, decoded by the same helper.
+        //
+        // Three refusals, all here because each wants a $-rooted path and a
+        // code: a `col` reference (an `Expr` has no row, so `col` names nothing,
+        // and the remedy is a different BINDING, which the message says), a
+        // `param` this binding's own `params` does not bind (decidable
+        // statically here where it is NOT for `Transform`, whose unbound filter
+        // params are pruned under the deliberate unset-chip leniency), and an
+        // expression over `MAX_EXPR_NODES`.
+        "Expr" => {
+            let expr_j = req(path, fields, "expr", "ColExpr object")?;
+            let expr = decode_col_expr(expr_j).map_err(|e| {
+                make_error(DecodeErrorCode::WrongType, format!("{path}.expr"), e, None)
+            })?;
+            let mut names: Vec<String> = Vec::new();
+            let mut count: usize = 0;
+            let saw_col = expr_walk(&expr, &mut names, &mut count);
+            if saw_col {
+                return Err(make_error(
+                    DecodeErrorCode::WrongType,
+                    format!("{path}.expr"),
+                    "a `col` reference is not admitted inside an Expr binding — an Expr evaluates against its params alone and has no row for a column name to read. Use `Binding.Transform`, whose source supplies the frame, and put the column expression in a `derive` step",
+                    Some("a ColExpr over `param` / `lit` / operators only (no `col`)".to_string()),
+                ));
+            }
+            if count > crate::limits::MAX_EXPR_NODES {
+                return Err(make_error(
+                    DecodeErrorCode::LimitExceeded,
+                    format!("{path}.expr"),
+                    format!(
+                        "expression exceeds the maximum of {} expression nodes (WIRE_FORMAT 21)",
+                        crate::limits::MAX_EXPR_NODES
+                    ),
+                    Some(format!(
+                        "at most {} ColExpr nodes in one Expr binding",
+                        crate::limits::MAX_EXPR_NODES
+                    )),
+                ));
+            }
+            let params = decode_transform_params(path, fields)?;
+            let bound: std::collections::BTreeSet<&str> = params
+                .as_ref()
+                .map(|ps| ps.iter().map(|p| p.name.as_str()).collect())
+                .unwrap_or_default();
+            let missing: Vec<String> = names
+                .iter()
+                .filter(|n| !bound.contains(n.as_str()))
+                .map(|n| format!("'{n}'"))
+                .collect();
+            if !missing.is_empty() {
+                return Err(make_error(
+                    DecodeErrorCode::WrongType,
+                    format!("{path}.expr"),
+                    format!(
+                        "the expression reads param(s) {} that this binding's `params` does not bind — an Expr has no rows and no filter to prune, so an unbound param has no value to take; add a params entry naming each, or drop the reference",
+                        missing.join(", ")
+                    ),
+                    Some(
+                        "{\"$type\":\"Expr\",\"expr\":…,\"params\":[{\"name\":\"<name>\",\"from\":<Binding>}]}"
+                            .to_string(),
+                    ),
+                ));
+            }
+            Ok(Binding::Expr { expr, params })
         }
         "Invoke" => {
             let capability_id = req_string(path, fields, "capabilityId", "capability id string")?;
@@ -2129,7 +2281,7 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
         other => Err(unknown_du_case(
             path,
             other,
-            "Static | Query | Filter | Selection | State | Computed | I18n | Local | Format | Transform | Invoke",
+            "Static | Query | Filter | Selection | State | Computed | I18n | Local | Format | Transform | Expr | Invoke",
         )),
     }
 }
