@@ -172,7 +172,9 @@ fn panic_envelope(entry: &str, payload: &(dyn std::any::Any + Send)) -> String {
         "internal error in {entry}: {detail} — this is a defect in the Fuaran \
          core, not a property of the input; the session is unchanged"
     )));
-    format!("{{\"error\":{{\"class\":\"{PANIC_CLASS}\",\"code\":\"PANIC\",\"message\":{message},\"path\":\"$\"}}}}")
+    format!(
+        "{{\"error\":{{\"class\":\"{PANIC_CLASS}\",\"code\":\"PANIC\",\"message\":{message},\"path\":\"$\"}}}}"
+    )
 }
 
 /// Run one `extern "C"` body inside a panic boundary, converting a caught
@@ -203,6 +205,20 @@ fn guard_buf(entry: &str, f: impl FnOnce() -> FuaranBuf) -> FuaranBuf {
     abi_guard(entry, pack_string, f)
 }
 
+/// A test-only entry point that panics on purpose — the go-red proof that the
+/// boundary is WIRED to a real `extern "C"` frame, which proving [`abi_guard`]
+/// in isolation cannot show: delete the guard from any body and a direct call
+/// to the helper still converts. Behind the `abi-panic-probe` feature, which
+/// only the crate's own dev-dependency enables; absent from `include/fuaran.h`
+/// by design, so no binding can reach it.
+#[cfg(feature = "abi-panic-probe")]
+#[unsafe(no_mangle)]
+pub extern "C" fn fuaran_abi_panic_probe() -> FuaranBuf {
+    guard_buf("fuaran_abi_panic_probe", || {
+        panic!("injected: the abi-panic-probe entry point panicked on purpose")
+    })
+}
+
 /// Borrow an input buffer the caller wrote (via [`fuaran_alloc`]) as a `&str`.
 /// Returns `None` when the pair is not readable as UTF-8 text.
 ///
@@ -231,7 +247,7 @@ pub(crate) unsafe fn borrow_str<'a>(ptr: *const u8, len: usize) -> Option<&'a st
 /// the `INVALID_JSON` code they have always returned — the code is part of the
 /// surface's contract and a consumer switches on it — but they are DIFFERENT
 /// caller mistakes with different repairs, so the message says which.
-pub(crate) fn borrow_failure_detail(ptr: *const u8, len: usize) -> &'static str {
+pub(crate) fn borrow_failure_detail(ptr: *const u8) -> &'static str {
     if ptr.is_null() {
         "input buffer is NULL with a non-zero length — pass (NULL, 0) for no bytes, \
          or a live fuaran_alloc buffer"
@@ -257,9 +273,7 @@ pub(crate) fn borrow_failure_detail(ptr: *const u8, len: usize) -> &'static str 
 /// through the raw allocator, which is why the case is answered before it.
 #[unsafe(no_mangle)]
 pub extern "C" fn fuaran_alloc(len: usize) -> *mut u8 {
-    abi_guard("fuaran_alloc", |_| std::ptr::null_mut(), || {
-        alloc_impl(len)
-    })
+    abi_guard("fuaran_alloc", |_| std::ptr::null_mut(), || alloc_impl(len))
 }
 
 fn alloc_impl(len: usize) -> *mut u8 {
@@ -290,14 +304,18 @@ pub unsafe extern "C" fn fuaran_dealloc(ptr: *mut u8, len: usize) {
     // double free or a foreign pointer is undefined behaviour, not a panic, and
     // no boundary catches that — the ownership contract is still the caller's
     // to keep.
-    abi_guard("fuaran_dealloc", |_| (), || {
-        if ptr.is_null() {
-            return;
-        }
-        // SAFETY: reconstruct the exact boxed slice we leaked, then drop it.
-        let slice = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
-        drop(unsafe { Box::from_raw(slice as *mut [u8]) });
-    })
+    abi_guard(
+        "fuaran_dealloc",
+        |_| (),
+        || {
+            if ptr.is_null() {
+                return;
+            }
+            // SAFETY: reconstruct the exact boxed slice we leaked, then drop it.
+            let slice = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
+            drop(unsafe { Box::from_raw(slice as *mut [u8]) });
+        },
+    )
 }
 
 /// Decode a canonical wire `Node` JSON into a new session. Returns an opaque
@@ -321,7 +339,7 @@ pub unsafe extern "C" fn fuaran_session_new(ptr: *const u8, len: usize) -> *mut 
         || {
             // SAFETY: caller contract.
             let Some(json) = (unsafe { borrow_str(ptr, len) }) else {
-                LAST_ERROR.with(|e| *e.borrow_mut() = Some(input_envelope(ptr, len)));
+                LAST_ERROR.with(|e| *e.borrow_mut() = Some(input_envelope(ptr)));
                 return std::ptr::null_mut();
             };
             match ClientSession::new(json) {
@@ -359,12 +377,16 @@ pub unsafe extern "C" fn fuaran_session_free(session: *mut ClientSession) {
     // nothing — so the guard's job here is narrower and still worth having: it
     // stops the unwind at the boundary instead of letting it cross an
     // `extern "C"` frame. The handle is consumed either way.
-    abi_guard("fuaran_session_free", |_| (), || {
-        if !session.is_null() {
-            // SAFETY: reconstruct the box we leaked, then drop it.
-            drop(unsafe { Box::from_raw(session) });
-        }
-    })
+    abi_guard(
+        "fuaran_session_free",
+        |_| (),
+        || {
+            if !session.is_null() {
+                // SAFETY: reconstruct the box we leaked, then drop it.
+                drop(unsafe { Box::from_raw(session) });
+            }
+        },
+    )
 }
 
 /// Render the session's current tree to a body-fragment HTML string (packed).
@@ -467,7 +489,7 @@ pub unsafe extern "C" fn fuaran_session_resolved_rows(
         // SAFETY: caller contract.
         let session = unsafe { &*session };
         let Some(node_id) = (unsafe { borrow_str(ptr, len) }) else {
-            return pack_string(input_envelope(ptr, len));
+            return pack_string(input_envelope(ptr));
         };
         let json = match session.resolved_rows(node_id) {
             RowsOutcome::Rows(rows) => render_canonical(&JVal::Obj(vec![
@@ -518,7 +540,7 @@ pub unsafe extern "C" fn fuaran_session_apply_op(
         // SAFETY: caller contract.
         let session = unsafe { &mut *session };
         let Some(op_json) = (unsafe { borrow_str(ptr, len) }) else {
-            return pack_string(input_envelope(ptr, len));
+            return pack_string(input_envelope(ptr));
         };
         match session.apply_op(op_json) {
             Ok(()) => pack_string(OK_RESULT.to_string()),
@@ -646,9 +668,9 @@ unsafe fn store_write(
             // VALUE sends the caller to repair the wrong argument, and both
             // pairs cross this boundary on every write.
             let detail = if unsafe { borrow_str(key_ptr, key_len) }.is_none() {
-                borrow_failure_detail(key_ptr, key_len)
+                borrow_failure_detail(key_ptr)
             } else {
-                borrow_failure_detail(val_ptr, val_len)
+                borrow_failure_detail(val_ptr)
             };
             return pack_string(decode_envelope(detail));
         };
@@ -698,6 +720,6 @@ pub(crate) fn decode_envelope(detail: &str) -> String {
 
 /// The refusal envelope for an unreadable `(ptr, len)` input pair — a NULL
 /// pointer with a non-zero length, or bytes that are not UTF-8.
-pub(crate) fn input_envelope(ptr: *const u8, len: usize) -> String {
-    decode_envelope(borrow_failure_detail(ptr, len))
+pub(crate) fn input_envelope(ptr: *const u8) -> String {
+    decode_envelope(borrow_failure_detail(ptr))
 }

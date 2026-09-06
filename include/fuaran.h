@@ -315,6 +315,12 @@ FuaranBuf fuaran_rosetta_encode(const uint8_t *ptr, size_t len);
  *   new tree and adopts it — so a caught panic does not end the session, and the
  *   caller may keep using the handle. fuaran_session_new reports a caught panic
  *   through its own channel: NULL, with the envelope in fuaran_last_error().
+ *   Three entry points have NO channel for one and are stated here so their
+ *   silence is not mistaken for a guarantee: fuaran_dealloc and
+ *   fuaran_session_free return void, so a caught panic there is swallowed and
+ *   the buffer or handle is LEAKED rather than freed twice or reached again;
+ *   fuaran_alloc returns NULL, which the caller cannot tell from an ordinary
+ *   allocation failure — both read as "the request did not happen".
  *
  *   THE ONE EXCEPTION IS wasm32. That target's specification fixes the panic
  *   strategy at "abort", so there is no unwind to catch and a panic traps the

@@ -269,7 +269,7 @@ unsafe fn dispatch(
             return pack_string(envelope(
                 "request",
                 "INVALID_REQUEST",
-                borrow_failure_detail(ptr, len),
+                borrow_failure_detail(ptr),
             ));
         };
         pack_string(run(session, request, verb))
@@ -322,7 +322,15 @@ pub unsafe extern "C" fn fuaran_session_duplicate(
     len: usize,
 ) -> FuaranBuf {
     // SAFETY: caller contract.
-    unsafe { dispatch(session, ptr, len, "fuaran_session_duplicate", duplicate_verb) }
+    unsafe {
+        dispatch(
+            session,
+            ptr,
+            len,
+            "fuaran_session_duplicate",
+            duplicate_verb,
+        )
+    }
 }
 
 /// Place a subtree lifted from ANOTHER tree: `{"subtree":{…node…},"parentId":…,

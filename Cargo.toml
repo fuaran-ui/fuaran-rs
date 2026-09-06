@@ -55,9 +55,21 @@ strip = true
 # declares: a conformance-harness entry point is not a contract a consumer
 # binding that surface should have to carry.
 driver-semantics-abi = []
+# OFF by default, and never part of `include/fuaran.h`. Adds ONE `extern "C"`
+# entry point that panics on purpose, so the crate's own suite can prove the
+# panic boundary is WIRED to a real C-ABI frame — not merely that the guard
+# helper converts when called directly. The self dev-dependency below is what
+# turns it on for `cargo test` and nothing else.
+abi-panic-probe = []
 
 [dependencies]
 # The runtime host uses the Rust standard library only — no third-party crates.
 # Rust's stdlib has no JSON, so the canonical JSON layer is hand-written for
 # byte-exact output regardless (the same "hand-write the hard part" stance every
 # host takes). Third-party crates appear only as dev tooling if ever.
+
+[dev-dependencies]
+# The crate as its own dev-dependency, feature-unified: this is the one sanctioned
+# way to compile a test-only `extern "C"` entry point into the library the
+# integration tests link, without shipping it. See `abi-panic-probe` above.
+fuaran-ui = { path = ".", features = ["abi-panic-probe"] }

@@ -92,7 +92,7 @@ pub unsafe extern "C" fn fuaran_bounded_check_scenario(ptr: *const u8, len: usiz
     guard_buf("fuaran_bounded_check_scenario", || {
         // SAFETY: caller contract.
         let Some(request) = (unsafe { borrow_str(ptr, len) }) else {
-            return pack_string(envelope("error", borrow_failure_detail(ptr, len)));
+            return pack_string(envelope("error", borrow_failure_detail(ptr)));
         };
         pack_string(match check(request) {
             Ok(None) => envelope("ok", ""),
