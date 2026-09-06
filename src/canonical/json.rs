@@ -269,15 +269,17 @@ impl<'a> Parser<'a> {
                 return self.fail_surrogate("HIGH", unit,
                     "a \\uD800-\\uDBFF escape must be followed immediately by a \\uDC00-\\uDFFF escape");
             }
-            let combined =
-                0x10000 + ((u32::from(unit) - 0xD800) << 10) + (u32::from(low) - 0xDC00);
+            let combined = 0x10000 + ((u32::from(unit) - 0xD800) << 10) + (u32::from(low) - 0xDC00);
             return Ok(char::from_u32(combined).expect("a paired surrogate is a valid scalar"));
         }
         if (0xDC00..=0xDFFF).contains(&unit) {
             // A low half is only ever consumed above, as the second element of a
             // pair, so reaching it here means it stands alone.
-            return self.fail_surrogate("LOW", unit,
-                "a \\uDC00-\\uDFFF escape must be preceded immediately by a \\uD800-\\uDBFF escape");
+            return self.fail_surrogate(
+                "LOW",
+                unit,
+                "a \\uDC00-\\uDFFF escape must be preceded immediately by a \\uD800-\\uDBFF escape",
+            );
         }
         Ok(char::from_u32(u32::from(unit)).expect("a non-surrogate BMP unit is a valid scalar"))
     }
@@ -574,7 +576,8 @@ pub fn parse(input: &str) -> Result<JVal, ParseError> {
     let value = p.parse_value()?;
     p.skip_ws();
     if p.pos < p.bytes.len() {
-        return p.fail("input carries content after the JSON document (WIRE_FORMAT.md §20.2 row 2)");
+        return p
+            .fail("input carries content after the JSON document (WIRE_FORMAT.md §20.2 row 2)");
     }
     Ok(value)
 }

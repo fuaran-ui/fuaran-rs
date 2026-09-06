@@ -199,16 +199,17 @@ fn concurrent_decodes_do_not_share_counters() {
 // shared corpus to assert one integer comparison is a poor trade (§21.6).
 
 fn markdown_node(text: &str) -> String {
-    format!(
-        r#"{{"id":"markdown-1","kind":{{"$type":"Markdown","text":"{text}"}}}}"#
-    )
+    format!(r#"{{"id":"markdown-1","kind":{{"$type":"Markdown","text":"{text}"}}}}"#)
 }
 
 #[test]
 fn accepts_a_bmp_string_at_exactly_the_limit() {
     let doc = markdown_node(&"a".repeat(MAX_STRING_LENGTH));
     let r = decode_node(&doc);
-    assert!(r.is_ok(), "a string at exactly the limit must decode: {r:?}");
+    assert!(
+        r.is_ok(),
+        "a string at exactly the limit must decode: {r:?}"
+    );
 }
 
 #[test]
@@ -228,7 +229,10 @@ fn accepts_an_astral_string_at_exactly_the_limit() {
     // carrying only the BMP pair above would not notice the unit was wrong.
     let doc = markdown_node(&"\u{1D11E}".repeat(MAX_STRING_LENGTH));
     let r = decode_node(&doc);
-    assert!(r.is_ok(), "an astral string at the limit must decode: {r:?}");
+    assert!(
+        r.is_ok(),
+        "an astral string at the limit must decode: {r:?}"
+    );
 }
 
 #[test]

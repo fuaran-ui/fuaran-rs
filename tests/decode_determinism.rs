@@ -65,9 +65,7 @@ fn the_same_key_in_sibling_objects_is_not_a_repeat() {
 #[test]
 fn content_after_the_root_value_is_refused() {
     assert_eq!(
-        refused(
-            r#"{"id":"markdown-1","kind":{"$type":"Markdown","text":"x"}} {"id":"second"}"#
-        ),
+        refused(r#"{"id":"markdown-1","kind":{"$type":"Markdown","text":"x"}} {"id":"second"}"#),
         "INVALID_JSON"
     );
     // A surplus closing brace is the same row.
@@ -90,9 +88,16 @@ fn numbers_outside_the_rfc_8259_grammar_are_refused() {
     // Rust's own accepts `+1`, `.5`, `1.` and `01` — which is why the grammar is
     // checked BEFORE the parse rather than delegated to it.
     for lit in ["+3", "03", "3.", "3e", "3e+", "0x10", "1.2.3"] {
-        assert_eq!(refused(&skeleton(lit)), "INVALID_JSON", "for the token {lit}");
+        assert_eq!(
+            refused(&skeleton(lit)),
+            "INVALID_JSON",
+            "for the token {lit}"
+        );
     }
-    assert_eq!(refused(r#"{"id":"m","kind":{"$type":"Markdown","text":"x"},"tooltip":.5}"#), "INVALID_JSON");
+    assert_eq!(
+        refused(r#"{"id":"m","kind":{"$type":"Markdown","text":"x"},"tooltip":.5}"#),
+        "INVALID_JSON"
+    );
 }
 
 #[test]
@@ -110,7 +115,9 @@ fn row_7_overflowing_exponent_is_still_accepted() {
     // the same three values written as bare literals. `1e999` is a well-formed
     // JSON number whose value is not representable, and IEEE-754 already says
     // what a finite decimal that overflows becomes.
-    accepted(r#"{"id":"m","kind":{"$type":"Metric","label":"x","value":{"$type":"Static","value":1e999}}}"#);
+    accepted(
+        r#"{"id":"m","kind":{"$type":"Metric","label":"x","value":{"$type":"Static","value":1e999}}}"#,
+    );
 }
 
 // ── row 4: bare NaN / Infinity ──────────────────────────────────────────────
@@ -227,7 +234,14 @@ fn integers_within_the_identity_range_re_encode_in_the_integer_layout() {
     //
     // This asserts the property rather than assuming it, because it is what the
     // absence of an i64 arm here rests on.
-    for lit in ["0", "1", "-1", "9007199254740991", "-9007199254740991", "42"] {
+    for lit in [
+        "0",
+        "1",
+        "-1",
+        "9007199254740991",
+        "-9007199254740991",
+        "42",
+    ] {
         let doc = format!(
             r#"{{"id":"c","kind":{{"$type":"Custom","componentId":"x","moduleId":"m","props":{{"n":{lit}}}}}}}"#
         );
