@@ -124,3 +124,91 @@ jobs:
       # coverage silently, and a gate nobody trusts to be complete is not a gate.
       - name: Test (gated)
         run: cargo test --no-fail-fast
+
+  # ── The wasm32 client module + its three C-ABI legs ────────────────────────
+  #
+  # WHY THIS IS A JOB AND NOT A STEP OF THE ONE ABOVE. `cargo test` compiles and
+  # runs the NATIVE target only. The `wasm32` cdylib has no native codegen path
+  # at all — `src/client/wasm.rs` is behind `#[cfg(target_arch = "wasm32")]` — so
+  # until this job existed the browser-native half of a dual-role host was built
+  # nowhere but a developer's box, and the packed-`u64` `(ptr, len)` return form
+  # the browser ABI depends on (`src/ffi/mod.rs`: a packed u64 on wasm32, a
+  # two-word struct natively) was never once EXECUTED under automation. A build
+  # break there reached a browser consumer before it reached this gate.
+  #
+  # The three `.mjs` legs are the ones `run.ps1 -SkipWasm:$false` already drives.
+  # Each reads a request set and its recorded envelopes out of a fixture the
+  # NATIVE leg reads too, hands each request to the module, and compares byte for
+  # byte — it decides nothing itself, so the two targets are certified against
+  # one oracle rather than against each other.
+  #
+  # It is a separate job so a wasm break and a native break are told apart at a
+  # glance, and so the native gate is not serialised behind a second toolchain.
+  wasm:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fuaran-rs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: fuaran-rs
+
+      - name: Set up Rust + the wasm32 target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+          rustc --version && cargo --version
+          rustup target list --installed
+
+      # NOT optional, and not conditional. `run.ps1` skips this build when the
+      # target is not installed, which is right for a dev box and wrong here: the
+      # step above installs the target, so a skip could only mean the install
+      # failed silently.
+      - name: Build the client module (cdylib, wasm32)
+        run: cargo build --target wasm32-unknown-unknown --release
+
+      # A build that produced nothing would leave the legs below failing with an
+      # unreadable module-load error. Name the real fault instead.
+      - name: Assert the module was produced
+        run: test -s target/wasm32-unknown-unknown/release/fuaran_rs.wasm
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Placement C-ABI conformance (wasm32 leg)
+        run: node js/placement-abi.mjs
+
+      - name: List-param conformance (wasm32 leg)
+        run: node js/list-param.mjs
+
+      - name: Platform-baseline conformance (wasm32 leg)
+        run: node js/platform-baseline.mjs
+
+      # The go-red proof. Each leg above compares the module's answers against a
+      # committed fixture, so perturbing the fixture must make it fail — a leg
+      # that cannot be made to fail is one nobody can tell from a no-op. The
+      # fixture is restored whatever happens, so this leaves the tree as it found
+      # it and the earlier legs' verdicts stand.
+      - name: Go-red proof (a perturbed fixture must fail a leg)
+        run: |
+          set -u
+          fixture=tests/fixtures/placement-abi.json
+          cp "$fixture" /tmp/placement-abi.json.bak
+          trap 'cp /tmp/placement-abi.json.bak "$fixture"' EXIT
+          # Perturb the recorded final tree — the one value the leg compares byte
+          # for byte after replaying every request (js/placement-abi.mjs). Whatever
+          # the module answers, it can no longer be this.
+          node -e '
+            const fs = require("fs"), p = process.argv[1];
+            const f = JSON.parse(fs.readFileSync(p, "utf8"));
+            f.finalTree = f.finalTree.replace(/"root"/, '"'"'"ZZ-PERTURBED-root"'"'"');
+            fs.writeFileSync(p, JSON.stringify(f, null, 2));
+          ' "$fixture"
+          if node js/placement-abi.mjs; then
+            echo "::error::the placement-ABI leg PASSED a perturbed fixture — it is not comparing anything"
+            exit 1
+          fi
+          echo "go-red proof: the perturbed fixture was refused."
