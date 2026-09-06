@@ -560,11 +560,16 @@ fn merge3(conflicts: &mut Vec<MergeConflict>, base: &Node, a: &Node, b: &Node) -
     let a_map: HashMap<&str, &Node> = children_of(a).iter().map(|c| (c.id.as_str(), c)).collect();
     let b_map: HashMap<&str, &Node> = children_of(b).iter().map(|c| (c.id.as_str(), c)).collect();
 
-    let recurse_child = |conflicts: &mut Vec<MergeConflict>, cid: &str| -> Node {
+    // Returns `None` for an id present in NONE of base / A / B. Every call site
+    // below draws its ids from `base_ids` / `a_ids` / `b_ids`, so that cannot
+    // happen — which is exactly why it used to be an `unreachable!`. An
+    // `Option` states the same fact without a panic reachable from decoded
+    // data through the C-ABI, and the callers simply skip the phantom id.
+    let recurse_child = |conflicts: &mut Vec<MergeConflict>, cid: &str| -> Option<Node> {
         if let Some(bc) = base_map.get(cid) {
             let ac = a_map.get(cid).copied().unwrap_or(bc);
             let bb = b_map.get(cid).copied().unwrap_or(bc);
-            merge3(conflicts, bc, ac, bb)
+            Some(merge3(conflicts, bc, ac, bb))
         } else {
             match (a_map.get(cid), b_map.get(cid)) {
                 (Some(ac), Some(bb)) => {
@@ -578,7 +583,7 @@ fn merge3(conflicts: &mut Vec<MergeConflict>, base: &Node, a: &Node, b: &Node) -
                     let ac_c = encode_node(ac);
                     let bb_c = encode_node(bb);
                     if ac_c == bb_c {
-                        return (*ac).clone();
+                        return Some((*ac).clone());
                     }
                     conflicts.push(two_sided(
                         cid,
@@ -596,14 +601,16 @@ fn merge3(conflicts: &mut Vec<MergeConflict>, base: &Node, a: &Node, b: &Node) -
                     // first either. Same doctrine as the insert tie-break:
                     // order by canonical bytes.
                     if ordinal_cmp(&ac_c, &bb_c) != std::cmp::Ordering::Greater {
-                        (*ac).clone()
+                        Some((*ac).clone())
                     } else {
-                        (*bb).clone()
+                        Some((*bb).clone())
                     }
                 }
-                (Some(ac), None) => (*ac).clone(),
-                (None, Some(bb)) => (*bb).clone(),
-                (None, None) => unreachable!("merge3: child id {cid} vanished"),
+                (Some(ac), None) => Some((*ac).clone()),
+                (None, Some(bb)) => Some((*bb).clone()),
+                // Unreachable from every call site below; skipped rather than
+                // asserted so no input can panic this path.
+                (None, None) => None,
             }
         }
     };
@@ -611,17 +618,17 @@ fn merge3(conflicts: &mut Vec<MergeConflict>, base: &Node, a: &Node, b: &Node) -
     let merged_children: Vec<Node> = if !a_struct && !b_struct {
         base_ids
             .iter()
-            .map(|cid| recurse_child(conflicts, cid))
+            .filter_map(|cid| recurse_child(conflicts, cid))
             .collect()
     } else if a_struct && !b_struct {
         a_ids
             .iter()
-            .map(|cid| recurse_child(conflicts, cid))
+            .filter_map(|cid| recurse_child(conflicts, cid))
             .collect()
     } else if !a_struct && b_struct {
         b_ids
             .iter()
-            .map(|cid| recurse_child(conflicts, cid))
+            .filter_map(|cid| recurse_child(conflicts, cid))
             .collect()
     } else if a_ids == b_ids {
         // Both sides changed the children to the SAME id list — agreement, not
@@ -632,7 +639,7 @@ fn merge3(conflicts: &mut Vec<MergeConflict>, base: &Node, a: &Node, b: &Node) -
         // rather than defaulting to a side.
         a_ids
             .iter()
-            .map(|cid| recurse_child(conflicts, cid))
+            .filter_map(|cid| recurse_child(conflicts, cid))
             .collect()
     } else {
         let base_set: HashSet<&String> = base_ids.iter().collect();
@@ -653,7 +660,7 @@ fn merge3(conflicts: &mut Vec<MergeConflict>, base: &Node, a: &Node, b: &Node) -
         if disjoint {
             let mut merged: Vec<Node> = base_ids
                 .iter()
-                .map(|cid| recurse_child(conflicts, cid))
+                .filter_map(|cid| recurse_child(conflicts, cid))
                 .collect();
             let mut new_ids: Vec<String> = a_new;
             for id in b_new {
@@ -663,7 +670,9 @@ fn merge3(conflicts: &mut Vec<MergeConflict>, base: &Node, a: &Node, b: &Node) -
             }
             new_ids.sort_by(|x, y| ordinal_cmp(x, y));
             for cid in &new_ids {
-                merged.push(recurse_child(conflicts, cid));
+                if let Some(child) = recurse_child(conflicts, cid) {
+                    merged.push(child);
+                }
             }
             merged
         } else {
@@ -677,7 +686,7 @@ fn merge3(conflicts: &mut Vec<MergeConflict>, base: &Node, a: &Node, b: &Node) -
             ));
             base_ids
                 .iter()
-                .map(|cid| recurse_child(conflicts, cid))
+                .filter_map(|cid| recurse_child(conflicts, cid))
                 .collect()
         }
     };
