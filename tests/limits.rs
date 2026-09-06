@@ -18,7 +18,7 @@
 //! at-the-limit cases are not padding: they are the half this host actually
 //! failed, and a refusal-only suite would have passed throughout.
 
-use fuaran_rs::limits::{MAX_JSON_DEPTH, MAX_NODE_DEPTH};
+use fuaran_rs::limits::{MAX_ARRAY_LENGTH, MAX_JSON_DEPTH, MAX_NODE_DEPTH, MAX_STRING_LENGTH};
 use fuaran_rs::wire::{decode_node, decode_op};
 
 const BOX_OPEN: &str = r#"{"id":"n","kind":{"$type":"Box","role":"Group","layout":{"$type":"Flex","direction":"Vertical","wrap":false},"children":["#;
@@ -185,4 +185,74 @@ fn concurrent_decodes_do_not_share_counters() {
     for h in handles {
         assert!(h.join().unwrap(), "a concurrent decode saw the wrong bound");
     }
+}
+
+// ── the linear bounds: string length and container width ────────────────────
+//
+// Declared since §21 landed and never READ — the constants existed, nothing
+// consulted them, so this host accepted a string and an array of any size while
+// its own limits module named a ceiling for each. That is the shape of gap a
+// conformance suite cannot see from the outside: the numbers are right, and
+// there is no code path that reaches them.
+//
+// The vectors are host-local by design: a megabyte of padding committed to the
+// shared corpus to assert one integer comparison is a poor trade (§21.6).
+
+fn markdown_node(text: &str) -> String {
+    format!(
+        r#"{{"id":"markdown-1","kind":{{"$type":"Markdown","text":"{text}"}}}}"#
+    )
+}
+
+#[test]
+fn accepts_a_bmp_string_at_exactly_the_limit() {
+    let doc = markdown_node(&"a".repeat(MAX_STRING_LENGTH));
+    let r = decode_node(&doc);
+    assert!(r.is_ok(), "a string at exactly the limit must decode: {r:?}");
+}
+
+#[test]
+fn refuses_a_bmp_string_one_code_point_past_the_limit() {
+    let doc = markdown_node(&"a".repeat(MAX_STRING_LENGTH + 1));
+    let e = decode_node(&doc).unwrap_err();
+    assert_eq!(e.code.as_str(), "LIMIT_EXCEEDED");
+    assert_ne!(e.code.as_str(), "INVALID_JSON");
+}
+
+#[test]
+fn accepts_an_astral_string_at_exactly_the_limit() {
+    // MAX_STRING_LENGTH astral characters: that many CODE POINTS, twice as many
+    // UTF-16 units, four times as many UTF-8 bytes. §21.6 pins the unit as code
+    // points, so this document is conformant and rule 1 requires it to decode —
+    // and it is the case a byte-counting or UTF-16-counting host fails. A suite
+    // carrying only the BMP pair above would not notice the unit was wrong.
+    let doc = markdown_node(&"\u{1D11E}".repeat(MAX_STRING_LENGTH));
+    let r = decode_node(&doc);
+    assert!(r.is_ok(), "an astral string at the limit must decode: {r:?}");
+}
+
+#[test]
+fn refuses_an_astral_string_one_code_point_past_the_limit() {
+    let doc = markdown_node(&"\u{1D11E}".repeat(MAX_STRING_LENGTH + 1));
+    let e = decode_node(&doc).unwrap_err();
+    assert_eq!(e.code.as_str(), "LIMIT_EXCEEDED");
+}
+
+#[test]
+fn refuses_an_array_past_max_array_length() {
+    // A bare array is not a node, so the SHAPE failure would mask a missing
+    // limit — which is exactly why the assertion is on the code rather than on
+    // failure alone.
+    let items = vec!["1"; MAX_ARRAY_LENGTH + 1].join(",");
+    let doc = format!("[{items}]");
+    let e = decode_node(&doc).unwrap_err();
+    assert_eq!(e.code.as_str(), "LIMIT_EXCEEDED");
+}
+
+#[test]
+fn an_array_at_exactly_max_array_length_fails_on_shape_not_on_the_limit() {
+    let items = vec!["1"; MAX_ARRAY_LENGTH].join(",");
+    let doc = format!("[{items}]");
+    let e = decode_node(&doc).unwrap_err();
+    assert_ne!(e.code.as_str(), "LIMIT_EXCEEDED");
 }

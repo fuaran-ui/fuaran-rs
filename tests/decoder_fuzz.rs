@@ -307,6 +307,15 @@ const HOSTILE_TOKENS: &[&str] = &[
     "5.",
     r"\u0000",
     r"\uD800",
+    // §20.2 row 6, the shapes `\uD800` alone does not reach: the LOW half on
+    // its own; both halves present but SEPARATED, which a host counting
+    // surrogates rather than pairing them adjacently reassembles into a scalar
+    // nobody wrote; and a WELL-FORMED pair, which must still be ACCEPTED — an
+    // alphabet carrying only refusals is satisfied by a decoder that refuses
+    // every escape.
+    r"\uDC00",
+    r"\uD800x\uDC00",
+    r"\uD800\uDC00",
     r"\uFFFF",
     r"\x41",
     r"\",

@@ -47,10 +47,27 @@ pub const MAX_NODE_DEPTH: usize = 24;
 /// payload.
 pub const MAX_JSON_DEPTH: usize = 256;
 
-/// Maximum length in bytes of a single decoded JSON string.
+/// Maximum length of a single decoded JSON string, in Unicode CODE POINTS
+/// (§21.6).
+///
+/// Not bytes, and not UTF-16 code units. "Character" is not a unit, and the
+/// five hosts counted in three: a 600 000-character CJK string is 600 000 code
+/// points, 600 000 UTF-16 units and 1 800 000 UTF-8 bytes, so three hosts
+/// accepted it and one refused it, each believing it enforced the same number.
+/// Code points are the only candidate that is a property of the TEXT rather
+/// than of a host's string representation or of the author's alphabet. A
+/// surrogate pair counts as one, which costs nothing here: §20.2 row 6 refuses
+/// an unpaired half at the parser, so every code point in a document this host
+/// accepts is a Unicode scalar value.
+///
+/// Enforced in `canonical::json`'s string parser as the literal is built, per
+/// §21.2 rule 4 — a bound checked on the finished string has already paid the
+/// allocation it exists to refuse.
 pub const MAX_STRING_LENGTH: usize = 1_048_576;
 
-/// Maximum elements in a single JSON array, and members in a single JSON object.
+/// Maximum elements in a single JSON array, and members in a single JSON
+/// object. Enforced in `canonical::json`'s array and object parsers, as the
+/// container is built.
 pub const MAX_ARRAY_LENGTH: usize = 100_000;
 
 /// Maximum total node count of one document, summed across the whole tree.

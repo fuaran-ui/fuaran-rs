@@ -152,9 +152,51 @@ fn as_float(path: &str, j: &JVal) -> DResult<f64> {
     }
 }
 
+/// The width of every typed integer slot this format declares (§7.1). A
+/// different bound from §2 rule 5's ±(2⁵³−1), answering a different question:
+/// that one is where integer IDENTITY stops in an untyped payload position,
+/// this one is the width of the SLOT, and a value the slot cannot hold has
+/// nowhere to land.
+const INT_SLOT_MIN: f64 = -2_147_483_648.0;
+const INT_SLOT_MAX: f64 = 2_147_483_647.0;
+
+/// The §7.1 integer-slot accept set: a finite JSON number with no fractional
+/// part, inside the signed 32-bit range.
+///
+/// `2.0` decodes as `2` — the two denote the same integer, and refusing the
+/// first refuses a document whose intent is unambiguous, for its spelling.
+/// `2.5` is a `WRONG_TYPE` rather than the `trunc()` this host used to apply,
+/// which silently discarded the author's value at a slot the author chose to
+/// type as an integer. And `1e10` is a `WRONG_TYPE` rather than a cast: that is
+/// the row that was measured, since `as i64` saturates here and the equivalent
+/// is implementation-defined elsewhere, so the same bytes became
+/// `Int32.MinValue` on one runtime and `1410065408` on another.
 fn as_int(path: &str, j: &JVal) -> DResult<i64> {
     match unwrap_static_envelope(j) {
-        JVal::Num(n) => Ok(n.trunc() as i64),
+        JVal::Num(n) => {
+            if !n.is_finite() {
+                Err(wrong_type(
+                    path,
+                    "a finite integral JSON number within the signed 32-bit range \
+                     (an integer slot has no non-finite form)",
+                ))
+            } else if n.trunc() != *n {
+                Err(wrong_type(
+                    path,
+                    "a finite integral JSON number within the signed 32-bit range \
+                     (an integer slot holds no fraction, and truncating would discard \
+                     a value the author typed)",
+                ))
+            } else if *n < INT_SLOT_MIN || *n > INT_SLOT_MAX {
+                Err(wrong_type(
+                    path,
+                    "a finite integral JSON number within the signed 32-bit range \
+                     (a value the slot cannot hold is not a value to be reinterpreted)",
+                ))
+            } else {
+                Ok(*n as i64)
+            }
+        }
         _ => Err(wrong_type(path, "JSON number (integer)")),
     }
 }
@@ -617,9 +659,22 @@ fn c_arr(j: &JVal) -> CResult<&[JVal]> {
     }
 }
 
+/// The coercion-bridge integer reader, held to the same §7.1 accept set as
+/// `as_int`. A second reader with a looser rule would be an undeclared divergent
+/// entry point under §20.1 — the coercion bridge is reached from
+/// `TreeOp::UpdateProp`, which is wire input like any other.
 fn c_int(j: &JVal) -> CResult<i64> {
     match j {
-        JVal::Num(n) => Ok(n.trunc() as i64),
+        JVal::Num(n) if !n.is_finite() => {
+            Err("malformed: expected a finite integer, got a non-finite number".to_string())
+        }
+        JVal::Num(n) if n.trunc() != *n => Err(format!(
+            "malformed: expected an integer, got {n} — an integer slot holds no fraction"
+        )),
+        JVal::Num(n) if *n < INT_SLOT_MIN || *n > INT_SLOT_MAX => Err(format!(
+            "malformed: {n} is outside the signed 32-bit range a typed integer slot can hold"
+        )),
+        JVal::Num(n) => Ok(*n as i64),
         _ => Err(format!("malformed: expected int, got {}", ast_kind(j))),
     }
 }
