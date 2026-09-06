@@ -24,10 +24,23 @@ function mem(exports) {
   return new Uint8Array(exports.memory.buffer);
 }
 
-/** Copy a JS string into a fresh module-owned input buffer; returns {ptr, len}. */
+/** Copy a JS string into a fresh module-owned input buffer; returns {ptr, len}.
+ *
+ *  The NULL check is load-bearing, not defensive noise. `fuaran_alloc` is
+ *  fallible and returns 0 when the request cannot be satisfied — which is what
+ *  the C header has always promised and what the module now actually does. In
+ *  linear memory, address 0 is a VALID offset: writing there would silently
+ *  scribble over the module's own low memory and corrupt the session rather
+ *  than fail. So an unsatisfiable request is refused here, loudly, at the one
+ *  place that would otherwise do the writing. */
 function writeString(exports, str) {
   const bytes = ENCODER.encode(str);
   const ptr = exports.fuaran_alloc(bytes.length);
+  if (ptr === 0 && bytes.length > 0) {
+    throw new Error(
+      `fuaran: could not allocate ${bytes.length} bytes in the module's memory`,
+    );
+  }
   mem(exports).set(bytes, ptr);
   return { ptr, len: bytes.length };
 }

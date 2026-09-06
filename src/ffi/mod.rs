@@ -48,6 +48,7 @@
 //! the `thread_local` degenerates to a single global there.)
 
 use std::cell::RefCell;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::canonical::{JVal, render_canonical};
 use crate::client::{ClientError, ClientSession, RowsOutcome};
@@ -127,8 +128,107 @@ pub(crate) fn pack_string(s: String) -> FuaranBuf {
     make_buf(ptr, len)
 }
 
+// ─── The panic boundary ─────────────────────────────────────────────────────
+//
+// A Rust panic that crosses an `extern "C"` frame is undefined behaviour, and
+// under the previous `panic = "abort"` release profile it killed the host
+// process outright: a Swift or Kotlin app rendering an unusual tree lost its
+// whole process, and a `wasm32` session trapped with no recovery. Neither is
+// acceptable at a boundary whose entire purpose is to hand a *decode-only*
+// surface a *typed* result.
+//
+// So every `extern "C"` body in this module runs inside [`abi_guard`], which
+// catches an unwind and converts it into the surface's ordinary error envelope
+// — the same shape every other refusal on this ABI already returns, so a
+// consumer needs no new parsing to survive one. The native release profile
+// therefore UNWINDS (see `Cargo.toml`); `wasm32-unknown-unknown` has no
+// unwinder at all, so a panic there still traps and the guard is inert. That
+// asymmetry is stated in `include/fuaran.h` rather than left to be discovered.
+//
+// The guard is a RECOVERY of last resort, not a licence to panic. Every panic
+// it catches is a defect in this crate, and the `PANIC` code exists so a
+// consumer can tell one from a legitimate refusal and report it. The apply
+// engine never partially mutates a session (it builds a whole new tree and
+// assigns), so a caught panic leaves the held tree untouched — which is what
+// makes "the session is still usable after a caught panic" a claim rather than
+// a hope.
+
+/// The error class + code a caught panic is reported under. Deliberately not
+/// one of the decode / apply / placement / lookup classes: a panic is not a
+/// statement about the caller's input, it is a statement about this library.
+const PANIC_CLASS: &str = "internal";
+
+/// Build the error envelope a caught panic returns, naming the entry point and
+/// carrying the panic payload when it is a string (the common case — `panic!`,
+/// `unreachable!`, `expect`). Canonically rendered, so the message is escaped
+/// by the same encoder every other envelope on this surface uses.
+fn panic_envelope(entry: &str, payload: &(dyn std::any::Any + Send)) -> String {
+    let detail = payload
+        .downcast_ref::<&'static str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panic with a non-string payload".to_string());
+    let message = render_canonical(&JVal::Str(format!(
+        "internal error in {entry}: {detail} — this is a defect in the Fuaran \
+         core, not a property of the input; the session is unchanged"
+    )));
+    format!(
+        "{{\"error\":{{\"class\":\"{PANIC_CLASS}\",\"code\":\"PANIC\",\"message\":{message},\"path\":\"$\"}}}}"
+    )
+}
+
+/// Run one `extern "C"` body inside a panic boundary, converting a caught
+/// unwind into `on_panic(envelope)`.
+///
+/// `AssertUnwindSafe` is deliberate and is the honest position rather than a
+/// silenced warning: the values crossing this boundary are raw pointers the
+/// caller owns, so `UnwindSafe` cannot be derived for them and the compiler has
+/// nothing to check. What makes the assertion sound is the layer below — a
+/// session mutation is a whole-tree replacement, so there is no half-written
+/// state for an unwind to expose.
+///
+/// `#[doc(hidden)]` and `pub` only so the crate's own test suite can prove the
+/// boundary converts a panic rather than propagating it (the go-red proof).
+/// It is a plain Rust function: it exports no C symbol and does not widen the
+/// ABI surface `include/fuaran.h` declares.
+#[doc(hidden)]
+pub fn abi_guard<T>(entry: &str, on_panic: impl FnOnce(String) -> T, f: impl FnOnce() -> T) -> T {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(value) => value,
+        Err(payload) => on_panic(panic_envelope(entry, payload.as_ref())),
+    }
+}
+
+/// [`abi_guard`] for the common case: an entry point returning a text
+/// [`FuaranBuf`], where a caught panic becomes the envelope in that buffer.
+fn guard_buf(entry: &str, f: impl FnOnce() -> FuaranBuf) -> FuaranBuf {
+    abi_guard(entry, pack_string, f)
+}
+
+/// A test-only entry point that panics on purpose — the go-red proof that the
+/// boundary is WIRED to a real `extern "C"` frame, which proving [`abi_guard`]
+/// in isolation cannot show: delete the guard from any body and a direct call
+/// to the helper still converts. Behind the `abi-panic-probe` feature, which
+/// only the crate's own dev-dependency enables; absent from `include/fuaran.h`
+/// by design, so no binding can reach it.
+#[cfg(feature = "abi-panic-probe")]
+#[unsafe(no_mangle)]
+pub extern "C" fn fuaran_abi_panic_probe() -> FuaranBuf {
+    guard_buf("fuaran_abi_panic_probe", || {
+        panic!("injected: the abi-panic-probe entry point panicked on purpose")
+    })
+}
+
 /// Borrow an input buffer the caller wrote (via [`fuaran_alloc`]) as a `&str`.
-/// Returns `None` on invalid UTF-8.
+/// Returns `None` when the pair is not readable as UTF-8 text.
+///
+/// A NULL `ptr` with `len == 0` is the empty string — that pair is how a caller
+/// spells "no bytes", and `fuaran_alloc(0)` is not required to have been called
+/// for it. A NULL `ptr` with `len > 0` is REFUSED (`None`) rather than read: it
+/// is a caller mistake that previously reached `slice::from_raw_parts(null,
+/// len)`, which is undefined behaviour whatever the length — the one input
+/// shape on this surface that could corrupt the host rather than merely upset
+/// it. Refusing it costs a null check per call and closes that entirely.
 ///
 /// # Safety
 /// `ptr` must point at `len` initialised bytes that outlive the borrow — true
@@ -136,19 +236,59 @@ pub(crate) fn pack_string(s: String) -> FuaranBuf {
 /// call.
 pub(crate) unsafe fn borrow_str<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
     if ptr.is_null() {
-        return Some("");
+        return if len == 0 { Some("") } else { None };
     }
     // SAFETY: caller contract — `ptr`/`len` name a live initialised buffer.
     let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
     std::str::from_utf8(bytes).ok()
 }
 
+/// The reason a [`borrow_str`] refusal happened, as a message. Both cases keep
+/// the `INVALID_JSON` code they have always returned — the code is part of the
+/// surface's contract and a consumer switches on it — but they are DIFFERENT
+/// caller mistakes with different repairs, so the message says which.
+pub(crate) fn borrow_failure_detail(ptr: *const u8) -> &'static str {
+    if ptr.is_null() {
+        "input buffer is NULL with a non-zero length — pass (NULL, 0) for no bytes, \
+         or a live fuaran_alloc buffer"
+    } else {
+        "input is not valid UTF-8"
+    }
+}
+
 /// Allocate a zeroed input buffer of `len` bytes; the caller writes UTF-8 into
 /// it and frees it with [`fuaran_dealloc`] after the call that consumes it.
+///
+/// **Returns NULL when the allocation fails**, which is what `include/fuaran.h`
+/// has always promised and what this did not do: `vec![0u8; len]` calls the
+/// infallible allocation path, so an out-of-memory request ABORTED the host
+/// process instead of handing the caller the NULL its own header told it to
+/// check for. `len` is caller-supplied and reaches this from a decoded
+/// document's byte length, so "the request is absurd" is an ordinary condition
+/// on this surface, not an emergency.
+///
+/// `len == 0` returns a non-null, suitably-aligned dangling pointer — the same
+/// value an empty `Box<[u8]>` carries, so [`fuaran_dealloc`] reclaims it by the
+/// identical path it always has. A zero-size allocation is undefined behaviour
+/// through the raw allocator, which is why the case is answered before it.
 #[unsafe(no_mangle)]
 pub extern "C" fn fuaran_alloc(len: usize) -> *mut u8 {
-    let boxed = vec![0u8; len].into_boxed_slice();
-    Box::into_raw(boxed) as *mut u8
+    abi_guard("fuaran_alloc", |_| std::ptr::null_mut(), || alloc_impl(len))
+}
+
+fn alloc_impl(len: usize) -> *mut u8 {
+    if len == 0 {
+        return std::ptr::NonNull::<u8>::dangling().as_ptr();
+    }
+    let Ok(layout) = std::alloc::Layout::from_size_align(len, 1) else {
+        return std::ptr::null_mut();
+    };
+    // SAFETY: `len > 0`, so the layout is non-zero-sized. `alloc_zeroed` returns
+    // null on failure rather than aborting, and the (len, align 1) layout is
+    // exactly the one an owning `Box<[u8]>` of this length carries — which is
+    // what keeps `fuaran_dealloc`'s `Box::from_raw` reclamation valid for a
+    // buffer from either source.
+    unsafe { std::alloc::alloc_zeroed(layout) }
 }
 
 /// Free a buffer (an input buffer, or an output buffer returned packed). `ptr`
@@ -159,12 +299,23 @@ pub extern "C" fn fuaran_alloc(len: usize) -> *mut u8 {
 /// module, freed exactly once.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fuaran_dealloc(ptr: *mut u8, len: usize) {
-    if ptr.is_null() {
-        return;
-    }
-    // SAFETY: reconstruct the exact boxed slice we leaked, then drop it.
-    let slice = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
-    drop(unsafe { Box::from_raw(slice as *mut [u8]) });
+    // Guarded like every other entry point, so the claim in `include/fuaran.h`
+    // is exact rather than approximately true. Note what it does NOT buy: a
+    // double free or a foreign pointer is undefined behaviour, not a panic, and
+    // no boundary catches that — the ownership contract is still the caller's
+    // to keep.
+    abi_guard(
+        "fuaran_dealloc",
+        |_| (),
+        || {
+            if ptr.is_null() {
+                return;
+            }
+            // SAFETY: reconstruct the exact boxed slice we leaked, then drop it.
+            let slice = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
+            drop(unsafe { Box::from_raw(slice as *mut [u8]) });
+        },
+    )
 }
 
 /// Decode a canonical wire `Node` JSON into a new session. Returns an opaque
@@ -175,27 +326,35 @@ pub unsafe extern "C" fn fuaran_dealloc(ptr: *mut u8, len: usize) {
 /// `ptr`/`len` must name a live UTF-8 buffer per the memory contract.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fuaran_session_new(ptr: *const u8, len: usize) -> *mut ClientSession {
-    // SAFETY: caller contract.
-    let Some(json) = (unsafe { borrow_str(ptr, len) }) else {
-        LAST_ERROR.with(|e| {
-            *e.borrow_mut() = Some(
-                "{\"error\":{\"class\":\"decode\",\"code\":\"INVALID_JSON\",\"message\":\"input is not valid UTF-8\",\"path\":\"$\"}}"
-                    .to_string(),
-            );
-        });
-        return std::ptr::null_mut();
-    };
-    match ClientSession::new(json) {
-        Ok(session) => {
-            LAST_ERROR.with(|e| *e.borrow_mut() = None);
-            Box::into_raw(Box::new(session))
-        }
-        Err(err) => {
-            let envelope = ClientError::Decode(err).to_json();
+    // A caught panic reports through this entry point's OWN failure channel:
+    // the last-error slot plus a null handle, exactly as a decode refusal does,
+    // so a caller that already handles "new returned null, read last_error"
+    // survives one with no new code path.
+    abi_guard(
+        "fuaran_session_new",
+        |envelope| {
             LAST_ERROR.with(|e| *e.borrow_mut() = Some(envelope));
             std::ptr::null_mut()
-        }
-    }
+        },
+        || {
+            // SAFETY: caller contract.
+            let Some(json) = (unsafe { borrow_str(ptr, len) }) else {
+                LAST_ERROR.with(|e| *e.borrow_mut() = Some(input_envelope(ptr)));
+                return std::ptr::null_mut();
+            };
+            match ClientSession::new(json) {
+                Ok(session) => {
+                    LAST_ERROR.with(|e| *e.borrow_mut() = None);
+                    Box::into_raw(Box::new(session))
+                }
+                Err(err) => {
+                    let envelope = ClientError::Decode(err).to_json();
+                    LAST_ERROR.with(|e| *e.borrow_mut() = Some(envelope));
+                    std::ptr::null_mut()
+                }
+            }
+        },
+    )
 }
 
 /// The last `fuaran_session_new` failure envelope (packed), or an empty string
@@ -203,7 +362,9 @@ pub unsafe extern "C" fn fuaran_session_new(ptr: *const u8, len: usize) -> *mut 
 /// the failing `new`.
 #[unsafe(no_mangle)]
 pub extern "C" fn fuaran_last_error() -> FuaranBuf {
-    LAST_ERROR.with(|e| pack_string(e.borrow().clone().unwrap_or_default()))
+    guard_buf("fuaran_last_error", || {
+        LAST_ERROR.with(|e| pack_string(e.borrow().clone().unwrap_or_default()))
+    })
 }
 
 /// Free a session handle.
@@ -212,10 +373,20 @@ pub extern "C" fn fuaran_last_error() -> FuaranBuf {
 /// `session` must be a handle from `fuaran_session_new`, freed exactly once.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fuaran_session_free(session: *mut ClientSession) {
-    if !session.is_null() {
-        // SAFETY: reconstruct the box we leaked, then drop it.
-        drop(unsafe { Box::from_raw(session) });
-    }
+    // A panic in a `Drop` impl has nowhere to report — this entry point returns
+    // nothing — so the guard's job here is narrower and still worth having: it
+    // stops the unwind at the boundary instead of letting it cross an
+    // `extern "C"` frame. The handle is consumed either way.
+    abi_guard(
+        "fuaran_session_free",
+        |_| (),
+        || {
+            if !session.is_null() {
+                // SAFETY: reconstruct the box we leaked, then drop it.
+                drop(unsafe { Box::from_raw(session) });
+            }
+        },
+    )
 }
 
 /// Render the session's current tree to a body-fragment HTML string (packed).
@@ -224,12 +395,14 @@ pub unsafe extern "C" fn fuaran_session_free(session: *mut ClientSession) {
 /// `session` must be a live handle from `fuaran_session_new`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fuaran_session_render(session: *mut ClientSession) -> FuaranBuf {
-    if session.is_null() {
-        return pack_string(String::new());
-    }
-    // SAFETY: caller contract — live handle, single-owner confinement.
-    let session = unsafe { &*session };
-    pack_string(session.render())
+    guard_buf("fuaran_session_render", || {
+        if session.is_null() {
+            return pack_string(String::new());
+        }
+        // SAFETY: caller contract — live handle, single-owner confinement.
+        let session = unsafe { &*session };
+        pack_string(session.render())
+    })
 }
 
 /// The session's current tree, re-encoded to canonical wire JSON (packed).
@@ -238,12 +411,14 @@ pub unsafe extern "C" fn fuaran_session_render(session: *mut ClientSession) -> F
 /// `session` must be a live handle from `fuaran_session_new`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fuaran_session_tree_json(session: *mut ClientSession) -> FuaranBuf {
-    if session.is_null() {
-        return pack_string(String::new());
-    }
-    // SAFETY: caller contract.
-    let session = unsafe { &*session };
-    pack_string(session.tree_json())
+    guard_buf("fuaran_session_tree_json", || {
+        if session.is_null() {
+            return pack_string(String::new());
+        }
+        // SAFETY: caller contract.
+        let session = unsafe { &*session };
+        pack_string(session.tree_json())
+    })
 }
 
 /// The session's current tree as a **resolved projection**, re-encoded to
@@ -258,12 +433,14 @@ pub unsafe extern "C" fn fuaran_session_tree_json(session: *mut ClientSession) -
 /// `session` must be a live handle from `fuaran_session_new`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fuaran_session_project_resolved(session: *mut ClientSession) -> FuaranBuf {
-    if session.is_null() {
-        return pack_string(String::new());
-    }
-    // SAFETY: caller contract.
-    let session = unsafe { &*session };
-    pack_string(session.project_resolved())
+    guard_buf("fuaran_session_project_resolved", || {
+        if session.is_null() {
+            return pack_string(String::new());
+        }
+        // SAFETY: caller contract.
+        let session = unsafe { &*session };
+        pack_string(session.project_resolved())
+    })
 }
 
 /// The **resolved rows** of one row-bearing node (`DataGrid` / `Chart` / `Map` /
@@ -305,26 +482,28 @@ pub unsafe extern "C" fn fuaran_session_resolved_rows(
     ptr: *const u8,
     len: usize,
 ) -> FuaranBuf {
-    if session.is_null() {
-        return pack_string(String::new());
-    }
-    // SAFETY: caller contract.
-    let session = unsafe { &*session };
-    let Some(node_id) = (unsafe { borrow_str(ptr, len) }) else {
-        return pack_string(invalid_utf8_envelope());
-    };
-    let json = match session.resolved_rows(node_id) {
-        RowsOutcome::Rows(rows) => render_canonical(&JVal::Obj(vec![
-            ("resolved".to_string(), JVal::Bool(true)),
-            ("rows".to_string(), JVal::Arr(rows)),
-        ])),
-        RowsOutcome::NotResolved => render_canonical(&JVal::Obj(vec![(
-            "resolved".to_string(),
-            JVal::Bool(false),
-        )])),
-        RowsOutcome::NoRowSource => no_row_source_envelope(node_id),
-    };
-    pack_string(json)
+    guard_buf("fuaran_session_resolved_rows", || {
+        if session.is_null() {
+            return pack_string(String::new());
+        }
+        // SAFETY: caller contract.
+        let session = unsafe { &*session };
+        let Some(node_id) = (unsafe { borrow_str(ptr, len) }) else {
+            return pack_string(input_envelope(ptr));
+        };
+        let json = match session.resolved_rows(node_id) {
+            RowsOutcome::Rows(rows) => render_canonical(&JVal::Obj(vec![
+                ("resolved".to_string(), JVal::Bool(true)),
+                ("rows".to_string(), JVal::Arr(rows)),
+            ])),
+            RowsOutcome::NotResolved => render_canonical(&JVal::Obj(vec![(
+                "resolved".to_string(),
+                JVal::Bool(false),
+            )])),
+            RowsOutcome::NoRowSource => no_row_source_envelope(node_id),
+        };
+        pack_string(json)
+    })
 }
 
 /// The lookup-failure envelope, shaped like the decode/apply ones the other
@@ -354,18 +533,20 @@ pub unsafe extern "C" fn fuaran_session_apply_op(
     ptr: *const u8,
     len: usize,
 ) -> FuaranBuf {
-    if session.is_null() {
-        return pack_string(String::new());
-    }
-    // SAFETY: caller contract.
-    let session = unsafe { &mut *session };
-    let Some(op_json) = (unsafe { borrow_str(ptr, len) }) else {
-        return pack_string(invalid_utf8_envelope());
-    };
-    match session.apply_op(op_json) {
-        Ok(()) => pack_string(OK_RESULT.to_string()),
-        Err(err) => pack_string(err.to_json()),
-    }
+    guard_buf("fuaran_session_apply_op", || {
+        if session.is_null() {
+            return pack_string(String::new());
+        }
+        // SAFETY: caller contract.
+        let session = unsafe { &mut *session };
+        let Some(op_json) = (unsafe { borrow_str(ptr, len) }) else {
+            return pack_string(input_envelope(ptr));
+        };
+        match session.apply_op(op_json) {
+            Ok(()) => pack_string(OK_RESULT.to_string()),
+            Err(err) => pack_string(err.to_json()),
+        }
+    })
 }
 
 /// Write a `$state.<key>` slot from a JSON value. `{"ok":true}` or an error
@@ -450,6 +631,19 @@ enum StoreKind {
     Query,
 }
 
+impl StoreKind {
+    /// The `extern "C"` entry point this kind is reached through — what the
+    /// panic envelope names, so a caught panic identifies the call the consumer
+    /// actually made rather than the shared helper it funnels into.
+    fn entry(&self) -> &'static str {
+        match self {
+            StoreKind::State => "fuaran_session_set_state",
+            StoreKind::Filter => "fuaran_session_set_filter",
+            StoreKind::Query => "fuaran_session_set_query",
+        }
+    }
+}
+
 /// # Safety
 /// `session` must be live; the two `ptr`/`len` pairs live UTF-8 buffers.
 unsafe fn store_write(
@@ -460,25 +654,36 @@ unsafe fn store_write(
     val_len: usize,
     kind: StoreKind,
 ) -> FuaranBuf {
-    if session.is_null() {
-        return pack_string(String::new());
-    }
-    // SAFETY: caller contract.
-    let session = unsafe { &mut *session };
-    let (Some(key), Some(value)) = (unsafe { borrow_str(key_ptr, key_len) }, unsafe {
-        borrow_str(val_ptr, val_len)
-    }) else {
-        return pack_string(invalid_utf8_envelope());
-    };
-    let result = match kind {
-        StoreKind::State => session.set_state(key, value),
-        StoreKind::Filter => session.set_filter(key, value),
-        StoreKind::Query => session.set_query(key, value),
-    };
-    match result {
-        Ok(()) => pack_string(OK_RESULT.to_string()),
-        Err(err) => pack_string(err.to_json()),
-    }
+    let entry = kind.entry();
+    guard_buf(entry, || {
+        if session.is_null() {
+            return pack_string(String::new());
+        }
+        // SAFETY: caller contract.
+        let session = unsafe { &mut *session };
+        let (Some(key), Some(value)) = (unsafe { borrow_str(key_ptr, key_len) }, unsafe {
+            borrow_str(val_ptr, val_len)
+        }) else {
+            // Name the pair that failed. Reporting the key's diagnosis for a bad
+            // VALUE sends the caller to repair the wrong argument, and both
+            // pairs cross this boundary on every write.
+            let detail = if unsafe { borrow_str(key_ptr, key_len) }.is_none() {
+                borrow_failure_detail(key_ptr)
+            } else {
+                borrow_failure_detail(val_ptr)
+            };
+            return pack_string(decode_envelope(detail));
+        };
+        let result = match kind {
+            StoreKind::State => session.set_state(key, value),
+            StoreKind::Filter => session.set_filter(key, value),
+            StoreKind::Query => session.set_query(key, value),
+        };
+        match result {
+            Ok(()) => pack_string(OK_RESULT.to_string()),
+            Err(err) => pack_string(err.to_json()),
+        }
+    })
 }
 
 /// Encode the public Rosetta parity demo's exemplar tree from its six scalar
@@ -494,14 +699,27 @@ unsafe fn store_write(
 /// `ptr`/`len` must name a live UTF-8 buffer per the memory contract.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fuaran_rosetta_encode(ptr: *const u8, len: usize) -> FuaranBuf {
-    // SAFETY: caller contract.
-    let Some(json) = (unsafe { borrow_str(ptr, len) }) else {
-        return pack_string(String::new());
-    };
-    pack_string(rosetta::encode_from_holes(json).unwrap_or_default())
+    guard_buf("fuaran_rosetta_encode", || {
+        // SAFETY: caller contract.
+        let Some(json) = (unsafe { borrow_str(ptr, len) }) else {
+            return pack_string(String::new());
+        };
+        pack_string(rosetta::encode_from_holes(json).unwrap_or_default())
+    })
 }
 
-fn invalid_utf8_envelope() -> String {
-    "{\"error\":{\"class\":\"decode\",\"code\":\"INVALID_JSON\",\"message\":\"input is not valid UTF-8\",\"path\":\"$\"}}"
-        .to_string()
+/// The decode-class refusal envelope, under the `INVALID_JSON` code every
+/// consumer of this surface already switches on. `detail` says which caller
+/// mistake it was.
+pub(crate) fn decode_envelope(detail: &str) -> String {
+    let message = render_canonical(&JVal::Str(detail.to_string()));
+    format!(
+        "{{\"error\":{{\"class\":\"decode\",\"code\":\"INVALID_JSON\",\"message\":{message},\"path\":\"$\"}}}}"
+    )
+}
+
+/// The refusal envelope for an unreadable `(ptr, len)` input pair — a NULL
+/// pointer with a non-zero length, or bytes that are not UTF-8.
+pub(crate) fn input_envelope(ptr: *const u8) -> String {
+    decode_envelope(borrow_failure_detail(ptr))
 }
