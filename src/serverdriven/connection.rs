@@ -16,6 +16,21 @@ use super::frame::{Event, Frame};
 /// gets a partial replay.
 pub const DEFAULT_REPLAY_BUFFER_CAPACITY: usize = 512;
 
+/// Bounds the per-connection reject trail, in rejects. At capacity the OLDEST
+/// reject is evicted.
+///
+/// The trail was an unbounded `Vec`, and rejects are the one thing a hostile or
+/// merely broken client can produce at will: every check that refuses an event —
+/// a forged node id, an illegitimate event name, a denied capability — appends
+/// one and pushes no frame, so the cheapest possible client behaviour grows
+/// server memory forever while doing nothing a server would notice as traffic.
+/// The replay buffer next to it was bounded for exactly this reason; the audit
+/// trail was not.
+///
+/// Larger than the frame buffer on purpose: a burst of rejects is the situation
+/// the trail exists to record, so it should retain more of one, not less.
+pub const DEFAULT_REJECT_TRAIL_CAPACITY: usize = 1024;
+
 /// Drives one [`Session`] through one [`Channel`], buffering frames for
 /// reconnect-replay. Single-threaded per connection (a real transport serialises
 /// a connection's inbound events).
@@ -27,6 +42,12 @@ pub struct Connection<C: Channel> {
     buffer: Vec<Frame>,
     buffer_cap: usize,
     rejects: Vec<Reject>,
+    reject_cap: usize,
+    /// Rejects evicted from the trail. The count is kept because a trail that
+    /// silently forgets is worse than a short one: an operator reading 1 024
+    /// rejects must be able to tell "these are all of them" from "these are the
+    /// most recent of very many".
+    rejects_dropped: u64,
 }
 
 impl<C: Channel> Connection<C> {
@@ -40,7 +61,26 @@ impl<C: Channel> Connection<C> {
             buffer: Vec::new(),
             buffer_cap: DEFAULT_REPLAY_BUFFER_CAPACITY,
             rejects: Vec::new(),
+            reject_cap: DEFAULT_REJECT_TRAIL_CAPACITY,
+            rejects_dropped: 0,
         }
+    }
+
+    /// Override the reject-trail capacity (builder-style). A zero is ignored
+    /// rather than meaning "unbounded" — an unbounded trail is the defect this
+    /// cap closes, and a zero arriving from an uninitialised config must not
+    /// silently reinstate it.
+    pub fn with_reject_trail_capacity(mut self, capacity: usize) -> Self {
+        if capacity > 0 {
+            self.reject_cap = capacity;
+        }
+        self
+    }
+
+    /// How many rejects were evicted from the trail because it was full.
+    /// Non-zero means [`Connection::rejects`] is a tail, not the whole record.
+    pub fn rejects_dropped(&self) -> u64 {
+        self.rejects_dropped
     }
 
     /// Override the replay-buffer capacity (builder-style).
@@ -70,7 +110,8 @@ impl<C: Channel> Connection<C> {
         &self.channel
     }
 
-    /// Every rejected step recorded, in order (the audit trail).
+    /// The RETAINED rejected steps, oldest first — the bounded audit trail.
+    /// Check [`Connection::rejects_dropped`] before reading this as complete.
     pub fn rejects(&self) -> &[Reject] {
         &self.rejects
     }
@@ -85,7 +126,7 @@ impl<C: Channel> Connection<C> {
         }
         match self.session.step(ev) {
             Err(reject) => {
-                self.rejects.push(reject);
+                self.record_reject(reject);
                 Ok(())
             }
             Ok(ops) if ops.is_empty() => Ok(()), // legitimate no-op — no frame, no seq advance.
@@ -96,6 +137,15 @@ impl<C: Channel> Connection<C> {
                 self.channel.push(&frame)
             }
         }
+    }
+
+    /// Append to the reject trail, evicting the oldest at capacity.
+    fn record_reject(&mut self, reject: Reject) {
+        if self.rejects.len() >= self.reject_cap && !self.rejects.is_empty() {
+            self.rejects.remove(0);
+            self.rejects_dropped += 1;
+        }
+        self.rejects.push(reject);
     }
 
     fn buffer_frame(&mut self, frame: Frame) {

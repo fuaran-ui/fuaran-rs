@@ -110,20 +110,39 @@ export class FuaranSession {
   }
 
   _mutate(fnName, json) {
+    // The dealloc is in a `finally`. Without it, a module-side trap — the exact
+    // case the guest is untrusted for — unwound past the free and leaked the
+    // input buffer inside the module's linear memory, which nothing on the JS
+    // side can reclaim afterwards. A page driving a session in a loop lost that
+    // memory permanently, once per trapping call.
     const { ptr, len } = writeString(this._x, json);
-    const result = readPacked(this._x, this._x[fnName](this._handle, ptr, len));
-    this._x.fuaran_dealloc(ptr, len);
+    let result;
+    try {
+      result = readPacked(this._x, this._x[fnName](this._handle, ptr, len));
+    } finally {
+      this._x.fuaran_dealloc(ptr, len);
+    }
     const parsed = JSON.parse(result);
     if (parsed.error) throw new FuaranClientError(parsed);
     return parsed;
   }
 
   _store(fnName, key, value) {
+    // JSON.stringify on both branches of the ternary: the condition decided
+    // nothing, so it read as a deliberate distinction where none existed, and a
+    // reader had to prove that to themselves before touching the line. A string
+    // value IS stringified — the module expects a JSON document, so a bare
+    // string must arrive quoted — which is what the dead branch was accidentally
+    // right about.
     const k = writeString(this._x, key);
-    const v = writeString(this._x, typeof value === 'string' ? JSON.stringify(value) : JSON.stringify(value));
-    const result = readPacked(this._x, this._x[fnName](this._handle, k.ptr, k.len, v.ptr, v.len));
-    this._x.fuaran_dealloc(k.ptr, k.len);
-    this._x.fuaran_dealloc(v.ptr, v.len);
+    const v = writeString(this._x, JSON.stringify(value));
+    let result;
+    try {
+      result = readPacked(this._x, this._x[fnName](this._handle, k.ptr, k.len, v.ptr, v.len));
+    } finally {
+      this._x.fuaran_dealloc(k.ptr, k.len);
+      this._x.fuaran_dealloc(v.ptr, v.len);
+    }
     const parsed = JSON.parse(result);
     if (parsed.error) throw new FuaranClientError(parsed);
     return parsed;

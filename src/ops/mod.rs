@@ -21,6 +21,7 @@
 pub mod placement;
 
 use crate::canonical::{JVal, ordinal_cmp};
+use crate::limits::{MAX_NODE_DEPTH, MAX_NODES};
 use crate::wire::coerce;
 use crate::wire::{Binding, Node, NodeKind, TreeOp};
 
@@ -41,6 +42,10 @@ pub enum ApplyErrorCode {
     PathNotSupportedYet,
     OrderingMismatch,
     BatchAborted,
+    /// The applied tree breaches a §21 wire limit (node depth or node count).
+    /// Named identically on every host, so a client recovering from it need not
+    /// know which engine refused.
+    LimitExceeded,
 }
 
 impl ApplyErrorCode {
@@ -58,6 +63,7 @@ impl ApplyErrorCode {
             ApplyErrorCode::PathNotSupportedYet => "PathNotSupportedYet",
             ApplyErrorCode::OrderingMismatch => "OrderingMismatch",
             ApplyErrorCode::BatchAborted => "BatchAborted",
+            ApplyErrorCode::LimitExceeded => "LimitExceeded",
         }
     }
 }
@@ -1642,10 +1648,87 @@ fn apply_one(op: &TreeOp, root: &Node, telem: &mut Vec<OpApplyTelemetryRecord>) 
 pub fn apply(tree: &Node, op: &TreeOp) -> Result<ApplyOutcome, ApplyError> {
     let mut telem = Vec::new();
     let new_tree = apply_one(op, tree, &mut telem)?;
+    // The §21 apply-time guard. Only the ops that can grow the tree pay for it,
+    // and it runs on the RESULT because the op alone does not determine either
+    // figure — the same insert is fine under a shallow parent and over the line
+    // under a deep one.
+    if op_can_grow(op) {
+        check_tree_limits(&new_tree)?;
+    }
     Ok(ApplyOutcome {
         new_tree,
         emitted_telemetry: telem,
     })
+}
+
+/// Apply-time §21 limits.
+///
+/// The decoder bounds what ARRIVES; nothing bounded what an apply produces. A
+/// tree assembled op by op — a progressive stream of small frames, a replay, a
+/// driven session, a WASM client — can grow past `MAX_NODE_DEPTH` or
+/// `MAX_NODES` without any single op looking unusual, and the result is a tree
+/// this host holds happily and NO host can decode, itself included on the next
+/// round trip.
+///
+/// The failure was previously found late and attributed to nothing: a renderer
+/// walking the tree refused at whichever node it happened to reach, naming a
+/// node that is not at fault and an operation long finished. This names the op
+/// that crossed the line, at the moment it crossed it.
+///
+/// ONLY THE THREE GROWING OPS ARE CHECKED — `InsertChild`, `ReplaceRoot`, and a
+/// `Batch` containing either. The rest rewrite a node in place or shrink the
+/// tree, so charging them a full walk would establish what their own semantics
+/// already guarantee. `MoveNode` is the one worth naming: it relocates a
+/// subtree and so CAN deepen the tree, but only within a total node count that
+/// cannot change and to a depth the tree already passed.
+fn op_can_grow(op: &TreeOp) -> bool {
+    match op {
+        TreeOp::InsertChild { .. } | TreeOp::ReplaceRoot { .. } => true,
+        TreeOp::Batch(inner) => inner.iter().any(op_can_grow),
+        _ => false,
+    }
+}
+
+/// One walk yielding both axes: `(depth, count)`. Two walks would pay twice for
+/// the same traversal.
+fn tree_metrics(n: &Node) -> (usize, usize) {
+    let mut depth = 1;
+    let mut count = 1;
+    for child in child_nodes(n) {
+        let (d, c) = tree_metrics(child);
+        count += c;
+        if d + 1 > depth {
+            depth = d + 1;
+        }
+    }
+    (depth, count)
+}
+
+fn check_tree_limits(tree: &Node) -> Result<(), ApplyError> {
+    let (depth, count) = tree_metrics(tree);
+    if depth > MAX_NODE_DEPTH {
+        return Err(ApplyError {
+            code: ApplyErrorCode::LimitExceeded,
+            message: format!(
+                "Applying this op would nest nodes {depth} levels deep, past the \
+                 wire limit MAX_NODE_DEPTH = {MAX_NODE_DEPTH}. The resulting tree \
+                 would not decode on any host."
+            ),
+            batch_index: None,
+        });
+    }
+    if count > MAX_NODES {
+        return Err(ApplyError {
+            code: ApplyErrorCode::LimitExceeded,
+            message: format!(
+                "Applying this op would produce a tree of {count} nodes, past the \
+                 wire limit MAX_NODES = {MAX_NODES}. The resulting tree would not \
+                 decode on any host."
+            ),
+            batch_index: None,
+        });
+    }
+    Ok(())
 }
 
 /// Dry-run: whether `op` would apply cleanly against `tree`. By construction

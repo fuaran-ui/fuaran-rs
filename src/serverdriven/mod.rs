@@ -23,6 +23,8 @@ mod driver;
 mod frame;
 
 pub use channel::{Channel, ChannelError, InMemoryChannel, SseChannel};
-pub use connection::{Connection, DEFAULT_REPLAY_BUFFER_CAPACITY};
+pub use connection::{
+    Connection, DEFAULT_REJECT_TRAIL_CAPACITY, DEFAULT_REPLAY_BUFFER_CAPACITY,
+};
 pub use driver::{Handler, Reject, RejectReason, Session, op_gate_decision};
 pub use frame::{Event, EventDecodeError, Frame, decode_event, encode_frame_json, encode_sse};
