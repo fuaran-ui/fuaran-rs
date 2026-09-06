@@ -128,10 +128,13 @@ pub fn resolve<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Resolut
         // is not the document's declaration at all. Absent grain is `Second`,
         // which is the identity.
         Binding::Now { grain } => match &sources.now {
-            Some(iso) if !iso.is_empty() => Resolution::Resolved(Value::Text(match grain {
-                Some(g) => truncate_to_grain(*g, iso),
-                None => iso.clone(),
-            })),
+            Some(iso) if !iso.is_empty() => {
+                let instant = match grain {
+                    Some(g) => truncate_to_grain(*g, iso),
+                    None => iso.clone(),
+                };
+                Resolution::Resolved(Value::Text(instant))
+            }
             _ => Resolution::NotResolved,
         },
         Binding::I18n { key, .. } => match sources.i18n.get(key) {
@@ -162,9 +165,10 @@ pub fn resolve<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Resolut
                     _ => Some(v),
                 };
                 match projected {
-                    Some(n) => Resolution::Resolved(Value::Text(format_locale_value(
-                        locale, format, n,
-                    ))),
+                    Some(n) => {
+                        let text = format_locale_value(locale, format, n);
+                        Resolution::Resolved(Value::Text(text))
+                    }
                     None => Resolution::NotResolved,
                 }
             }
@@ -959,7 +963,7 @@ pub fn truncate_to_grain(grain: TimeGrain, instant: &str) -> String {
     // guards the slice rather than an assumption doing it.
     let slice_or = |n: usize, suffix: &str| -> String {
         if instant.len() >= n && instant.is_char_boundary(n) {
-            format!("{}{}", &instant[..n], suffix)
+            format!("{}{suffix}", &instant[..n])
         } else {
             instant.to_string()
         }
