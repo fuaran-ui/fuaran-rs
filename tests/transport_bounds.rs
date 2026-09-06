@@ -112,7 +112,10 @@ fn take_stream_drains_the_pushed_frames() {
     assert!(ch.pending_bytes() > 0);
 
     let taken = ch.take_stream();
-    assert!(taken.contains("id: 1"), "the drained bytes are the SSE frame");
+    assert!(
+        taken.contains("id: 1"),
+        "the drained bytes are the SSE frame"
+    );
     assert_eq!(
         ch.pending_bytes(),
         0,
