@@ -46,7 +46,7 @@ use crate::canonical::JVal;
 use crate::render::BindingSources;
 use crate::render::bindings::{Resolution, Value, resolve, try_resolve_text_source};
 use crate::render::sanitize::sanitize_url;
-use crate::wire::{Action, FileReadEncoding, NavigateTarget, StaticValue, TextSource};
+use crate::wire::{Action, FileReadEncoding, NavigateTarget, StaticValue};
 
 use super::effect::ClientEffect;
 
@@ -427,7 +427,7 @@ mod tests {
         let outcome = run_bounded_action(
             "n",
             &Action::Navigate {
-                route: TextSource::Literal("javascript:alert(1)".into()),
+                route: crate::wire::TextSource::Literal("javascript:alert(1)".into()),
                 target: NavigateTarget::Current,
             },
             BindingSources::default(),
