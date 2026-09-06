@@ -821,6 +821,31 @@ pub fn render_text(sources: &BindingSources, text: &TextSource) -> String {
     }
 }
 
+/// Phase 1536 — resolve a `TextSource` for a slot where an UNRESOLVED source
+/// must not degrade into a value; `None` when it does not resolve.
+///
+/// [`render_text`] above is the RENDERING dispatch, and its degradations are
+/// right for rendering: an unresolved binding renders empty (an empty label, not
+/// a broken page) and a missing translation renders the loud `[i18n:<key>]`
+/// sentinel so it is visible in the UI. Both are the wrong answer for a
+/// DESTINATION — navigating to `""` is navigating to the current document with
+/// its query and fragment stripped, and `[i18n:route]` is a relative path a
+/// permissive policy would fetch.
+///
+/// It deliberately does not judge the resolved string: whether a destination is
+/// permitted is the URL floor's question, asked after this one and never
+/// instead of it.
+pub fn try_resolve_text_source(sources: &BindingSources, text: &TextSource) -> Option<String> {
+    match text {
+        TextSource::Literal(value) => Some(value.clone()),
+        TextSource::Bound(binding) => try_scalar_string(sources, binding),
+        TextSource::I18n { key, .. } => sources
+            .i18n
+            .get(key)
+            .map(|_| render_text(sources, text)),
+    }
+}
+
 // ─── Number / cell formatting ────────────────────────────────────────────────
 
 /// The deterministic display layout for a number (shared shortest-round-trip

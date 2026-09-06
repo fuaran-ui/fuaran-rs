@@ -561,6 +561,12 @@ decode_bare_enum!(decode_track_kind, TrackKind, "TrackKind");
 decode_bare_enum!(decode_embed_permission, EmbedPermission, "EmbedPermission");
 // WIRE_FORMAT.md 3.6.11 / Phase 1472 - the modality and direction tokens.
 decode_bare_enum!(decode_modality_kind, ModalityKind, "ModalityKind");
+// Phase 1536 — `Action.Navigate.target`. No alias arm, deliberately: HTML's
+// `_self` / `_blank` / `_parent` / `_top` are not accepted, because two of them
+// are frame-busting gestures a hosted tree must not be able to ask for and
+// accepting the two harmless ones would teach an emitter that the HTML
+// vocabulary is the one in force here.
+decode_bare_enum!(decode_navigate_target, NavigateTarget, "NavigateTarget");
 decode_bare_enum!(decode_text_direction, TextDirection, "TextDirection");
 decode_bare_enum!(decode_link_protection, LinkProtection, "LinkProtection");
 decode_bare_enum!(decode_math_display, MathDisplay, "MathDisplay");
@@ -2332,16 +2338,33 @@ fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
             let payload = decode_jval(&format!("{path}.payload"), payload_j)?;
             Ok(Action::Notify { channel, payload })
         }
-        "Navigate" => Ok(Action::Navigate {
+        "Navigate" => {
             // Field aliases: href (the dominant web name) / url / to → route.
-            route: req_string_aliased(
+            //
+            // Phase 1536 — the route is a `TextSource`, not a bare string, so a
+            // tree can name a destination it computes from what the reader is
+            // looking at. `decode_text_source` already accepts a bare JSON
+            // string as `Literal` (the §16 shorthand every text slot shares),
+            // so every pre-1536 document — including one using an alias —
+            // decodes unchanged and re-encodes to the same bytes. The aliases
+            // are resolved before the value is decoded, so there is still
+            // exactly one canonical field a router can be reached through.
+            //
+            // `target` is omitted at `Self`, so absence is the pre-1536
+            // behaviour.
+            let route = req_text_source_aliased(
                 path,
                 fields,
                 "route",
                 &["href", "url", "to"],
-                "route string",
-            )?,
-        }),
+                "route TextSource",
+            )?;
+            let target = match get(fields, "target") {
+                None => NavigateTarget::Current,
+                Some(v) => decode_navigate_target(&format!("{path}.target"), v)?,
+            };
+            Ok(Action::Navigate { route, target })
+        }
         "SetState" => {
             // Phase 818 — `value` (a literal JSON value, written verbatim) XOR
             // `valueFrom` (a Binding evaluated at dispatch time inside the

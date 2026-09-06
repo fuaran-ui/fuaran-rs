@@ -142,6 +142,16 @@ bare_enum!(EmbedPermission {
 // WIRE_FORMAT.md 3.6.11 - the modality a `Modal` declares. Omitted at `Modal`,
 // which is the blocking modality every pre-modality document meant.
 bare_enum!(ModalityKind { Modal => "Modal", Popover => "Popover" });
+/// Phase 1536 — which browsing context an [`Action::Navigate`] lands in. `Current`
+/// is the identity, spelled `"Self"` on the wire and omitted at it; `Blank` opens a
+/// fresh context, which every renderer opens with `noopener,noreferrer`.
+///
+/// The variant is `Current` rather than `Self` because `Self` is a Rust keyword;
+/// the WIRE spelling is unchanged, which is the half that has to match. Two cases
+/// and no lenient spelling: HTML's `_parent` and `_top` are frame-busting gestures
+/// a hosted tree must not be able to ask for, and a named frame is an addressing
+/// scheme this format does not have.
+bare_enum!(NavigateTarget { Current => "Self", Blank => "Blank" });
 // Phase 1472 - the node-level declared text direction (WIRE_FORMAT.md 3.1).
 // Lower-case on the wire, like `LiveRegionKind` and `SortDirection`, because
 // these are the HTML `dir` tokens themselves. Omitted at `Auto`, which leaves
@@ -434,8 +444,13 @@ pub enum Action {
         channel: String,
         payload: JVal,
     },
+    /// Phase 1536 — the route is a [`TextSource`], so a tree can name a
+    /// destination it computes from what the reader is looking at. A literal
+    /// route's bytes did not move: `TextSource::Literal` IS the bare JSON
+    /// string. `target` is omitted at [`NavigateTarget::Current`].
     Navigate {
-        route: String,
+        route: TextSource,
+        target: NavigateTarget,
     },
     /// Phase 818 — `value` (a literal, written verbatim) XOR `value_from` (a
     /// Binding evaluated at dispatch time inside the existing gate); decode

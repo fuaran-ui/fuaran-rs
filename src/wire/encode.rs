@@ -621,7 +621,16 @@ fn action(a: &Action) -> String {
                 field("payload", json_value(payload)),
             ],
         ),
-        Action::Navigate { route } => case_obj("Navigate", vec![field("route", s(route))]),
+        Action::Navigate { route, target } => {
+            // Phase 1536 — `target` rides only when it is not the identity, so
+            // every pre-1536 document's bytes are unchanged (route < target
+            // stays Ordinal-sorted either way).
+            let mut fields = vec![field("route", text_source(route))];
+            if *target != NavigateTarget::Current {
+                fields.push(field("target", s(target.as_str())));
+            }
+            case_obj("Navigate", fields)
+        }
         // Phase 818 — `value` / `valueFrom` are XOR siblings; each is emitted
         // only when present (keys sort, so field order stays alphabetical).
         Action::SetState {

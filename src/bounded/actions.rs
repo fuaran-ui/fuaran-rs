@@ -44,9 +44,9 @@
 
 use crate::canonical::JVal;
 use crate::render::BindingSources;
-use crate::render::bindings::{Resolution, Value, resolve};
+use crate::render::bindings::{Resolution, Value, resolve, try_resolve_text_source};
 use crate::render::sanitize::sanitize_url;
-use crate::wire::{Action, FileReadEncoding, StaticValue};
+use crate::wire::{Action, FileReadEncoding, NavigateTarget, StaticValue, TextSource};
 
 use super::effect::ClientEffect;
 
@@ -288,15 +288,46 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
         // declined effect dropped in the fold is indistinguishable from one that
         // was never reached, which is the one thing the denial record exists to
         // tell apart.
-        Action::Navigate { route } => match sanitize_url(route) {
-            Some(safe) => emitted(
-                store,
-                ClientEffect::Navigate {
-                    route: safe.into_owned(),
-                },
-            ),
-            None => refused(node_id, action, "the route is not a safe URL", store),
-        },
+        // Phase 1536 — RESOLVE, THEN judge. The route is a `TextSource`, so it
+        // may be computed from the sources this fold already holds; the URL
+        // floor is then applied to the RESOLVED string. Checking the
+        // declaration would judge a template nobody navigates to while the
+        // string the host receives went unexamined.
+        //
+        // An unresolved or empty resolution is REFUSED rather than shipped:
+        // `""` is a real navigation (the current document with its query and
+        // fragment stripped), so degrading to it would perform something the
+        // tree never asked for.
+        //
+        // A `Blank` target is likewise REFUSED, and audibly. This channel's
+        // `Navigate` envelope carries no target member, so shipping the effect
+        // anyway would navigate IN PLACE when the tree asked for a fresh
+        // browsing context — a silent wrong behaviour, where a named refusal is
+        // one the host can see and act on. See the host-adoption note in
+        // WIRE_FORMAT §3.6.21: a loud failure is the one to prefer.
+        Action::Navigate { route, target } => {
+            if *target != NavigateTarget::Current {
+                refused(
+                    node_id,
+                    action,
+                    "the bounded client-effect channel carries no navigation target, so a Blank target cannot be honoured here",
+                    store,
+                )
+            } else {
+                let safe = try_resolve_text_source(&store, route)
+                    .filter(|r| !r.trim().is_empty())
+                    .and_then(|r| sanitize_url(&r).map(|c| c.into_owned()));
+                match safe {
+                    Some(route) => emitted(store, ClientEffect::Navigate { route }),
+                    None => refused(
+                        node_id,
+                        action,
+                        "the route did not resolve to a safe destination",
+                        store,
+                    ),
+                }
+            }
+        }
         Action::WriteToClipboard { text } => {
             emitted(store, ClientEffect::WriteToClipboard { text: text.clone() })
         }
@@ -396,7 +427,8 @@ mod tests {
         let outcome = run_bounded_action(
             "n",
             &Action::Navigate {
-                route: "javascript:alert(1)".into(),
+                route: TextSource::Literal("javascript:alert(1)".into()),
+                target: NavigateTarget::Current,
             },
             BindingSources::default(),
         );
