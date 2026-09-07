@@ -200,8 +200,22 @@ fn contains_unwired_action(action: &Action) -> bool {
         Action::Dispatch
         | Action::CommitLocal { .. }
         | Action::WriteToClipboard { .. }
+        // Phase 1537 — `.focus()` is the browser's own, so it routes through no
+        // substrate a host could fail to wire.
+        | Action::Focus { .. }
         | Action::ReadFileBody { .. } => false,
         Action::Chain(actions) => actions.iter().any(contains_unwired_action),
+        // Phase 1537 — a confirm is "unwired" exactly when its own
+        // CONTINUATIONS are: the dialogue always works, so what the reader would
+        // be asking for is whatever the yes branch would do.
+        Action::Confirm {
+            on_confirm,
+            on_cancel,
+            ..
+        } => {
+            contains_unwired_action(on_confirm)
+                || on_cancel.as_deref().is_some_and(contains_unwired_action)
+        }
         Action::Call { .. }
         | Action::Notify { .. }
         | Action::Navigate { .. }

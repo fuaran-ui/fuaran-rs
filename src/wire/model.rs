@@ -465,6 +465,30 @@ pub enum Action {
         capability_id: String,
         args: Vec<InvokeArg>,
     },
+    /// Phase 1537 — ask the reader `prompt`, then dispatch `on_confirm` on
+    /// acceptance or `on_cancel` (when present) on refusal.
+    ///
+    /// The SECOND recursive variant after `Chain`, and the first that recurses
+    /// into NAMED members rather than a list, so the two continuations are
+    /// boxed. `on_cancel` is omitted from the wire when absent, and an absent
+    /// cancel branch means *nothing happens*: a host must not substitute one.
+    ///
+    /// Confirmation is bounded at DEPTH ONE — a `Confirm` reachable from either
+    /// continuation, through a `Chain` included, is refused at decode. And a
+    /// confirmation is never an authorisation: the answer comes from the client,
+    /// and a hostile client answers yes without asking anyone.
+    Confirm {
+        prompt: TextSource,
+        on_confirm: Box<Action>,
+        on_cancel: Option<Box<Action>>,
+    },
+    /// Phase 1537 — move keyboard focus to the addressed node. A bare string and
+    /// never a `TextSource`: it addresses a node in this document, which the
+    /// author wrote. What this does not claim: nothing about scrolling, and
+    /// nothing about selection.
+    Focus {
+        node_id: NodeId,
+    },
 }
 
 // ─── Shared spec fragments ───────────────────────────────────────────────────

@@ -125,6 +125,8 @@ pub fn describe_action(action: &Action) -> &'static str {
         Action::WriteToClipboard { .. } => "WriteToClipboard",
         Action::ReadFileBody { .. } => "ReadFileBody",
         Action::Invoke { .. } => "Invoke",
+        Action::Confirm { .. } => "Confirm",
+        Action::Focus { .. } => "Focus",
     }
 }
 
@@ -300,6 +302,37 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
         Action::WriteToClipboard { text } => {
             emitted(store, ClientEffect::WriteToClipboard { text: text.clone() })
         }
+        // Phase 1537 — the `Action` counterpart of an effect this closed
+        // vocabulary has always carried, so it lowers with nothing new to
+        // specify.
+        Action::Focus { node_id } => emitted(
+            store,
+            ClientEffect::Focus {
+                node_id: node_id.clone(),
+            },
+        ),
+        // Phase 1537 — REFUSED BY NAME on this placement, and the refusal is the
+        // honest answer rather than a gap left open.
+        //
+        // `ClientEffect` is a CLOSED, specified vocabulary whose arms are
+        // enumerated in `CLIENT_EFFECT_ARMS` and whose byte layout is a wire a
+        // host's coverage declaration is written against. There is no `Confirm`
+        // arm, so a dialogue cannot be expressed here at all — and the ways of
+        // pretending otherwise are each worse than saying so. Running
+        // `on_confirm` unasked would perform the destructive act the question
+        // exists to guard; running nothing silently would report a dispatched
+        // gesture that dispatched nothing; and widening the effect vocabulary is
+        // a specification change with its own vectors and its own version, which
+        // this phase does not own.
+        //
+        // A refusal is recorded against the node, so a host sees exactly which
+        // control asked for something this placement cannot give it.
+        Action::Confirm { .. } => refused(
+            node_id,
+            action,
+            "this placement's client-effect vocabulary carries no Confirm arm, so the reader cannot be asked; the continuation is NOT run unasked",
+            store,
+        ),
         // `nodeId` is the node the EVENT came from, which §5.2 now states: the
         // surface holds the selected file against that node, so a reference
         // taken from the action would name something it cannot resolve.

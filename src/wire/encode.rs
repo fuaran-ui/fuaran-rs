@@ -655,6 +655,24 @@ fn action(a: &Action) -> String {
         Action::WriteToClipboard { text } => {
             case_obj("WriteToClipboard", vec![field("text", s(text))])
         }
+        // Phase 1537 — the SECOND recursive arm after `Chain`, and the first
+        // that recurses into named members: both continuations go through
+        // `action` itself. Keys sort to onCancel < onConfirm < prompt, and
+        // `onCancel` rides only when present.
+        Action::Confirm {
+            prompt,
+            on_confirm,
+            on_cancel,
+        } => {
+            let mut fields = Vec::new();
+            if let Some(cancel) = on_cancel {
+                fields.push(field("onCancel", action(cancel)));
+            }
+            fields.push(field("onConfirm", action(on_confirm)));
+            fields.push(field("prompt", text_source(prompt)));
+            case_obj("Confirm", fields)
+        }
+        Action::Focus { node_id } => case_obj("Focus", vec![field("nodeId", s(node_id))]),
         Action::ReadFileBody { file_ref, encoding } => case_obj(
             "ReadFileBody",
             vec![

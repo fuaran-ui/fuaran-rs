@@ -2294,6 +2294,32 @@ fn opt_text_source(path: &str, fields: &Fields, key: &str) -> DResult<Option<Tex
 
 // ─── Action ──────────────────────────────────────────────────────────────────
 
+/// Refuse a `Confirm` reachable from `action` (Phase 1537). Confirmation is
+/// bounded at ONE question: a dialogue that answers a dialogue is a modal stack
+/// the reader cannot escape, and it expresses no intent a single question does
+/// not.
+///
+/// It walks the DECODED action rather than raw JSON, and descends `Chain`,
+/// because a chain is otherwise a hiding place — a check written against the
+/// continuation's immediate `$type` passes a nested confirm one level down.
+fn refuse_nested_confirm(path: &str, action: &Action) -> DResult<()> {
+    match action {
+        Action::Confirm { .. } => Err(make_error(
+            DecodeErrorCode::WrongType,
+            path.to_string(),
+            "a Confirm may not appear inside another Confirm's continuation — confirmation is bounded at one question (WIRE_FORMAT.md §3.6.22)".to_string(),
+            Some("any action but Confirm".to_string()),
+        )),
+        Action::Chain(inner) => {
+            for (i, a) in inner.iter().enumerate() {
+                refuse_nested_confirm(&format!("{path}.ops[{i}]"), a)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
 fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
     let fields = as_obj(path, j)?;
     match disc(path, fields)? {
@@ -2399,6 +2425,46 @@ fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
         "WriteToClipboard" => Ok(Action::WriteToClipboard {
             text: req_string(path, fields, "text", "clipboard payload string")?,
         }),
+        "Confirm" => {
+            // Phase 1537 — ask, then act. `prompt` is a `TextSource` (so the
+            // question can name what the reader selected), `onConfirm` is
+            // required and `onCancel` optional; an author who declares no cancel
+            // branch means "nothing happens", which an absent action already
+            // expresses.
+            //
+            // THE DEPTH-ONE REFUSAL is the substance of this arm. A `Confirm`
+            // reachable from either continuation is refused, and the check walks
+            // the DECODED continuation rather than its immediate `$type`, so a
+            // nested confirm inside a `Chain` is caught by the same line that
+            // catches a bare one. A dialogue that answers a dialogue is a modal
+            // stack the reader cannot escape.
+            //
+            // `WrongType` follows the `SetState` value/valueFrom precedent: a
+            // decoder POLICY refusal reuses it rather than minting a code every
+            // host in the roster would owe an adoption for.
+            let prompt_j = req(path, fields, "prompt", "confirm prompt TextSource")?;
+            let prompt = decode_text_source(&format!("{path}.prompt"), prompt_j)?;
+            let confirm_j = req(path, fields, "onConfirm", "Action to dispatch on acceptance")?;
+            let on_confirm = decode_action(&format!("{path}.onConfirm"), confirm_j)?;
+            refuse_nested_confirm(&format!("{path}.onConfirm"), &on_confirm)?;
+            let on_cancel = match get(fields, "onCancel") {
+                None => None,
+                Some(cancel_j) => {
+                    let decoded = decode_action(&format!("{path}.onCancel"), cancel_j)?;
+                    refuse_nested_confirm(&format!("{path}.onCancel"), &decoded)?;
+                    Some(Box::new(decoded))
+                }
+            };
+            Ok(Action::Confirm {
+                prompt,
+                on_confirm: Box::new(on_confirm),
+                on_cancel,
+            })
+        }
+        "Focus" => Ok(Action::Focus {
+            // A bare node id, the `CommitLocal` shape above.
+            node_id: req_string(path, fields, "nodeId", "NodeId string of the node to focus")?,
+        }),
         "ReadFileBody" => {
             let file_ref = req_string(path, fields, "fileRef", "FileRef id string")?;
             let enc_j = req(path, fields, "encoding", "FileReadEncoding")?;
@@ -2417,7 +2483,7 @@ fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
         other => Err(unknown_du_case(
             path,
             other,
-            "Dispatch | Call | Notify | Navigate | SetState | AiTool | Chain | CommitLocal | WriteToClipboard | ReadFileBody | Invoke",
+            "Dispatch | Call | Notify | Navigate | SetState | AiTool | Chain | CommitLocal | WriteToClipboard | Confirm | Focus | ReadFileBody | Invoke",
         )),
     }
 }

@@ -745,6 +745,20 @@ impl Walker {
                     self.check_action(id, inner);
                 }
             }
+            // Phase 1537 — the second recursive variant, so the lints reach
+            // both continuations exactly as they reach a chain's members. A
+            // fire-and-forget `Call` behind a confirmation is the same defect
+            // as one in front of it.
+            Action::Confirm {
+                on_confirm,
+                on_cancel,
+                ..
+            } => {
+                self.check_action(id, on_confirm);
+                if let Some(cancel) = on_cancel {
+                    self.check_action(id, cancel);
+                }
+            }
             Action::Dispatch
             | Action::Notify { .. }
             | Action::Navigate { .. }
@@ -753,6 +767,7 @@ impl Walker {
             | Action::CommitLocal { .. }
             | Action::WriteToClipboard { .. }
             | Action::ReadFileBody { .. }
+            | Action::Focus { .. }
             | Action::Invoke { .. } => {}
         }
     }

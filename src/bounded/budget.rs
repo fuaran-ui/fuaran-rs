@@ -59,6 +59,22 @@ pub fn action_cascade_cost(action: &Action) -> u64 {
     while let Some(current) = pending.pop() {
         match current {
             Action::Chain(inner) => pending.extend(inner.iter()),
+            // Phase 1537 — the second branching arm. A confirm costs ONE (the
+            // dialogue) plus whichever branch runs; both are pushed because the
+            // budget prices the WORST case a tree can reach, not the path it
+            // happens to take, and pricing only the confirm would let a tree
+            // hide an unbounded cascade one level down.
+            Action::Confirm {
+                on_confirm,
+                on_cancel,
+                ..
+            } => {
+                total = total.saturating_add(1);
+                pending.push(on_confirm);
+                if let Some(cancel) = on_cancel {
+                    pending.push(cancel);
+                }
+            }
             _ => total = total.saturating_add(1),
         }
         if total == u64::MAX {
