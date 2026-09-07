@@ -403,6 +403,14 @@ impl<'a> Parser<'a> {
         self.expect(b'{')?;
         self.skip_ws();
         let mut fields: Vec<(String, JVal)> = Vec::new();
+        // The duplicate-member check below used to scan every earlier member
+        // for each new one, which made a wide object quadratic to parse: the
+        // long fuzz run of 2026-09-06 (seed 20260906) found half-megabyte flat
+        // objects of tens of thousands of members taking 15 to 16 seconds in
+        // both decode entry points, where the width ceiling below only fires
+        // after the scan. A set of the keys seen keeps the same refusal at a
+        // cost linear in width.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         if self.peek() == b'}' {
             self.pos += 1;
             return Ok(JVal::Obj(fields));
@@ -419,7 +427,7 @@ impl<'a> Parser<'a> {
             // host kept the LAST occurrence and the reference host the FIRST,
             // so a vetting host and a rendering host read different trees
             // from identical bytes with no error raised anywhere.
-            if fields.iter().any(|(k, _)| *k == key) {
+            if !seen.insert(key.clone()) {
                 return self.fail(format!(
                     "the object member '{key}' appears more than once \
                      (WIRE_FORMAT.md §20.2 row 1): hosts disagreed on which \
