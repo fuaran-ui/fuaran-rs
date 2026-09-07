@@ -2124,10 +2124,16 @@ fn chart_spec(spec: &ChartSpec) -> String {
     let mut fields = vec![
         field("kind", s(spec.kind.as_str())),
         field("source", binding(&spec.source)),
-        field("stacked", boolean(spec.stacked)),
         field("xField", s(&spec.x_field)),
         field("yFields", arr(spec.y_fields.iter().map(|y| s(y)).collect())),
     ];
+    // Phase 1585 — `stacked` is omitted-when-false. Every host's decoder already
+    // restored `false` on absence, so the omission is now the contract rather
+    // than a courtesy; an explicit `"stacked": false` on input still decodes and
+    // normalises to this form.
+    if spec.stacked {
+        fields.push(field("stacked", boolean(true)));
+    }
     if let Some(title) = &spec.title {
         fields.push(field("title", text_source(title)));
     }

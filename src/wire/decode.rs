@@ -4248,8 +4248,10 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
         y_fields.push(as_str(&format!("{path}.yFields[{i}]"), item)?.to_string());
     }
     let title = opt_text_source(path, fields, "title")?;
-    // `stacked` round-trips (carried since the fixture corpus pinned it);
-    // absent — the legacy wire — defaults to false.
+    // `stacked` round-trips (carried since the fixture corpus pinned it).
+    // Absent restores `false` BY CONTRACT since Phase 1585 made the member
+    // omit-at-default — not, as this note read until then, as tolerance of the
+    // legacy wire that predated the field.
     let stacked = opt_bool(path, fields, "stacked")?.unwrap_or(false);
     // Phase 876 — `valueFormat`: the value axis's number format, reusing the
     // existing `Format` vocabulary. Absent is the ordinary shape.
