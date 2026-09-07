@@ -638,10 +638,38 @@ impl Walker {
     }
 
     /// FUARAN069 — the write-back default only arms when the control's own
-    /// value binding is directly `State` or `Filter`; `Local` is exempt (its
-    /// commit pipeline carries the change). Anything else is an inert control.
+    /// value binding is directly `State` or `Filter`.
+    ///
+    /// `Local` is exempt only when it carries a commit DESTINATION: an
+    /// `onCommit` closure, a declared `commitTo` key, or a re-sync source that
+    /// is itself writable. One carrying none of the three buffers a value and
+    /// then has nowhere to put it, which is exactly the inert-control condition
+    /// this rule is about — the blanket exemption predated `commitTo` and read
+    /// "its commit pipeline carries the change" of a binding that might have no
+    /// pipeline at all.
     fn check_writable(&mut self, id: &str, slot: &str, binding: &Binding) {
         match binding {
+            Binding::Local {
+                commit_to,
+                has_on_commit,
+                initial_from,
+                ..
+            } if commit_to.is_none()
+                && !*has_on_commit
+                && !matches!(
+                    **initial_from,
+                    Binding::State { .. } | Binding::Filter { .. }
+                ) =>
+            {
+                self.push(
+                    Severity::Warning,
+                    "FUARAN069",
+                    id,
+                    format!(
+                        "Inert control: the '{slot}' binding is a Binding.Local with no commit destination — no onCommit closure, no declared commitTo key, and an initialFrom that is not itself a writable State/Filter slot — so the buffer holds an edit and has nowhere to put it. Declare 'commitTo', or re-sync from Binding.State / Binding.Filter."
+                    ),
+                );
+            }
             Binding::State { .. } | Binding::Filter { .. } | Binding::Local { .. } => {}
             Binding::Static { .. }
             | Binding::Query { .. }

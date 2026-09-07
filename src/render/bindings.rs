@@ -115,8 +115,19 @@ pub fn resolve<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Resolut
             Some(raw) => Resolution::Resolved(Value::Json(raw)),
             None => Resolution::Resolved(Value::Static(default_value)),
         },
-        // Host-only on the wire (§5.1): a decoded Computed is an inert
-        // placeholder — resolve as not-resolved so the loading surface shows.
+        // Host-only on the wire (§5.1). A decoded `Computed` has nothing to
+        // compute WITH — the case's whole payload is a host closure and it
+        // crosses the wire as the sentinel — so it must never answer the slot's
+        // zero. It resolves as not-resolved and the loading surface shows.
+        //
+        // KNOWN LIMIT, stated rather than implied: `Resolution` carries no error
+        // variant, so this host shows the empty state where the F# and
+        // TypeScript hosts show an error naming `Binding::Expr` / `Transform` /
+        // `State` as the replacement. That is strictly better than the silent
+        // DEFAULT those hosts used to produce and strictly worse than the error
+        // they now do; closing it means widening this enum and every match over
+        // it, which is a change to this host's rendering contract rather than to
+        // its codec.
         Binding::Computed => Resolution::NotResolved,
         // Phase 765 — host-furnished, resolved once per render pass; never a
         // clock read here, so SSR output is reproducible for a pinned instant.

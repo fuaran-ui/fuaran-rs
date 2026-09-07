@@ -511,18 +511,31 @@ fn binding(b: &Binding) -> String {
             case_obj("I18n", fields)
         }
         Binding::Local {
+            codec,
+            commit_to,
             flush_on,
+            has_on_commit,
             initial_from,
-        } => case_obj(
-            "Local",
-            vec![
+        } => {
+            let mut local_fields = vec![
                 field("flushOn", flush_trigger(flush_on)),
                 field("format", CLOSURE.to_string()),
                 field("initialFrom", binding(initial_from)),
-                field("onCommit", CLOSURE.to_string()),
                 field("parse", CLOSURE.to_string()),
-            ],
-        ),
+            ];
+            if let Some(c) = codec {
+                local_fields.push(field("codec", format_intent(c)));
+            }
+            if let Some(k) = commit_to {
+                local_fields.push(field("commitTo", s(k)));
+            }
+            // Presence, not a constant: a document that never wrote the key must
+            // not gain one on re-encode.
+            if *has_on_commit {
+                local_fields.push(field("onCommit", CLOSURE.to_string()));
+            }
+            case_obj("Local", local_fields)
+        }
         Binding::Format {
             format,
             locale,

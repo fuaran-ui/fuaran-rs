@@ -1987,6 +1987,55 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
             Ok(Binding::I18n { key, args })
         }
         "Local" => {
+            // The declarative half (WIRE_FORMAT.md Section 3.3.3), and the two
+            // refusals it brings — each a COMBINATION that a structural pass
+            // would admit silently.
+            //
+            // A `codec` whose Format case has no total, LOCALE-INDEPENDENT
+            // inverse. `Binding.Format` carries a LocaleSource because it renders
+            // for reading; a Local codec carries none, because whatever it
+            // renders it must also parse back from what the reader typed.
+            // `Currency` prepends a locale-chosen symbol, `Date`'s four styles
+            // are locale renditions, and `RelativeTime` / `Since` / `Duration`
+            // render a phrase rather than a number. `Percent` is refused for a
+            // narrower reason worth recording, since it looks admissible: its
+            // inverse needs a x100 scale whose IEEE round-trip is not exact.
+            let codec = match get(fields, "codec") {
+                None => None,
+                Some(v) => {
+                    let decoded = decode_format(&format!("{path}.codec"), v)?;
+                    match decoded {
+                        Format::Number { .. } => Some(decoded),
+                        _ => {
+                            return Err(make_error(
+                                DecodeErrorCode::WrongType,
+                                format!("{path}.codec"),
+                                "Binding.Local 'codec' must be a Format case with a total, locale-independent inverse - only 'Number' has one",
+                                Some("use {\"$type\":\"Number\",\"decimals\":2}, or drop the codec and let the buffer use the identity; a locale-rendered format (Currency / Date / RelativeTime / Since / Duration) cannot be parsed back from what the reader typed".to_string()),
+                            ));
+                        }
+                    }
+                }
+            };
+            let has_on_commit = get(fields, "onCommit").is_some();
+            // Two commit destinations. Not resolved by a precedence rule,
+            // because the wire cannot carry the closure at all: a host honouring
+            // `onCommit` and a host honouring `commitTo` would write to
+            // different places from identical bytes.
+            let commit_to = match get(fields, "commitTo") {
+                None => None,
+                Some(v) => {
+                    if has_on_commit {
+                        return Err(make_error(
+                            DecodeErrorCode::WrongType,
+                            format!("{path}.commitTo"),
+                            "Binding.Local carries both 'onCommit' and 'commitTo' - exactly one commit destination is allowed",
+                            Some("either 'onCommit' (a host closure, which crosses the wire only as the closure sentinel) or 'commitTo' (the State key the flush writes); a decoding host can honour only the second, so keeping both makes the same document commit to two different places depending on who read it".to_string()),
+                        ));
+                    }
+                    Some(as_str(&format!("{path}.commitTo"), v)?.to_string())
+                }
+            };
             let initial_j = req(path, fields, "initialFrom", "Local InitialFrom Binding")?;
             let initial_from =
                 decode_binding_slot(&format!("{path}.initialFrom"), initial_j, slot)?;
@@ -1995,7 +2044,10 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                 Some(v) => decode_local_flush_trigger(&format!("{path}.flushOn"), v)?,
             };
             Ok(Binding::Local {
+                codec,
+                commit_to,
                 flush_on,
+                has_on_commit,
                 initial_from: Box::new(initial_from),
             })
         }

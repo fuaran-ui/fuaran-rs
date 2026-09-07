@@ -311,8 +311,28 @@ pub enum Binding {
         /// Per-argument bindings; omitted when absent.
         args: Option<Vec<(String, Binding)>>,
     },
+    /// A controlled input's edit buffer (WIRE_FORMAT.md Section 3.3.3).
+    ///
+    /// `format` / `parse` / `onCommit` are host closures on the reference tier
+    /// and cross the wire as the `"<closure>"` sentinel, so this closure-free
+    /// host models them as DATA:
+    ///
+    /// * `codec` is the declared, locale-free edit-buffer codec. Only
+    ///   `Format::Number` is admitted — the one case with a total,
+    ///   locale-independent inverse — and every other case is a decode refusal.
+    /// * `commit_to` is the State key a flush writes to, and it is mutually
+    ///   exclusive with the closure.
+    /// * `has_on_commit` records the closure's PRESENCE, which is all the wire
+    ///   carries of it. It exists so a re-encode reproduces the document: before
+    ///   the declarative members, this host emitted the sentinel
+    ///   unconditionally, which was invisible while every `Local` carried a
+    ///   closure and becomes a byte divergence the moment one declares
+    ///   `commit_to` instead.
     Local {
+        codec: Option<Format>,
+        commit_to: Option<String>,
         flush_on: LocalFlushTrigger,
+        has_on_commit: bool,
         initial_from: Box<Binding>,
     },
     Format {
