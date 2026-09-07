@@ -4711,7 +4711,9 @@ fn decode_tabs_spec(path: &str, j: &JVal) -> DResult<TabsSpec> {
         }
     };
     let active_tag = opt_binding_slot(path, fields, "activeTag", StaticSlot::Str)?;
-    // `activeIndex` round-trips; absent (legacy wire) defaults to Static 0.
+    // `activeIndex` round-trips. Absent restores `Static 0` BY CONTRACT since
+    // Phase 1585 made the member omit-at-default — not, as this note read until
+    // then, as tolerance of the legacy wire that predated the field.
     let active_index = match get(fields, "activeIndex") {
         None => Binding::Static {
             value: StaticValue::Ast(JVal::Num(0.0)),

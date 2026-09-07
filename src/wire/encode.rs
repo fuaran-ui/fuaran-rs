@@ -2280,10 +2280,29 @@ fn tab_header(h: &TabHeader) -> String {
 fn tabs_spec(spec: &TabsSpec) -> String {
     // 0.2.0 — `orientation` omitted-when-default (Horizontal),
     // encoder-symmetric (unlike SegmentedChoice, which always emits it).
-    let mut fields = vec![
-        field("children", arr(spec.children.iter().map(node).collect())),
-        field("activeIndex", binding(&spec.active_index)),
-    ];
+    let mut fields = vec![field(
+        "children",
+        arr(spec.children.iter().map(node).collect()),
+    )];
+    // Phase 1585 — `activeIndex` is omit-at-default at the identity `Static 0`.
+    // Every host's decoder restores it on absence, so a tab strip opening on its
+    // first tab pays no key for it. The test is on the CASE and its PAYLOAD,
+    // unlike `Chart.stacked`'s: the identity is one inhabitant of a union with
+    // an unbounded payload domain, so a `Static` carrying any other index still
+    // rides, and so does every `Query` / `Filter` / `Selection` / `State`
+    // binding — dropping on the tag alone would discard a document's authored
+    // tab, and for a writable binding its write-back destination with it.
+    // `*n == 0.0` rather than a bit comparison: `format_number(-0.0)` is `"0"`,
+    // so `-0.0` IS this identity on the wire and normalises to the same bytes.
+    let is_identity = matches!(
+        &spec.active_index,
+        Binding::Static {
+            value: StaticValue::Ast(JVal::Num(n)),
+        } if *n == 0.0
+    );
+    if !is_identity {
+        fields.push(field("activeIndex", binding(&spec.active_index)));
+    }
     if spec.orientation != Orientation::Horizontal {
         fields.push(field("orientation", s(spec.orientation.as_str())));
     }
