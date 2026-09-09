@@ -1377,6 +1377,29 @@ pub struct FileUploadSpec {
     /// whether an id is registered is a fact about the HOST, so a decoder that
     /// judged it would make one document's validity depend on who read it.
     pub destination: Option<String>,
+    /// Phase 1548 — the largest single file this control accepts, in bytes
+    /// (§3.6.23). PER FILE, not per selection: it bounds each file the reader
+    /// picks, which is what makes it the quantity the `file-read` route can be
+    /// measured against and what makes it meaningful on a single-file upload. A
+    /// control bounding a whole multiple selection states both members and
+    /// declares `max_bytes * max_files`.
+    ///
+    /// Absent declares NO ceiling — the pre-1548 control, bounded only by
+    /// whatever the host already enforces. A present value is POSITIVE, and the
+    /// floor is a decode rule rather than a type because this wire has no
+    /// refined-integer form; zero is refused as firmly as a negative, since a
+    /// ceiling of zero is a control that can accept nothing.
+    ///
+    /// `i64` here carries a slot the format declares as a signed 32-BIT integer
+    /// (§7.1), exactly as every other integer member of this model does — the
+    /// range is enforced at decode, not by the Rust type.
+    pub max_bytes: Option<i64>,
+    /// Phase 1548 — how many files this control accepts in one selection.
+    /// Absent declares no ceiling. Meaningful only alongside `multiple`: a
+    /// single-file upload admits one file by construction, so a ceiling there is
+    /// INERT rather than wrong, and is documented rather than refused. Positive
+    /// on the same terms as `max_bytes`.
+    pub max_files: Option<i64>,
     // `onSelect` is an always-emitted closure — no field.
 }
 

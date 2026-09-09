@@ -419,6 +419,10 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             accept_paste: spec.accept_paste,
             capture: spec.capture,
             destination: spec.destination.clone(),
+            // Phase 1548 — the two declared ceilings are plain integers and
+            // carry no bindable text; the projection is the identity on both.
+            max_bytes: spec.max_bytes,
+            max_files: spec.max_files,
         }),
         NodeKind::Select(spec) => NodeKind::Select(SelectSpec {
             label: map_text(sources, &spec.label),

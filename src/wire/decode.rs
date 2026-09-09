@@ -3967,6 +3967,27 @@ fn decode_file_upload_spec(path: &str, j: &JVal) -> DResult<FileUploadSpec> {
         }
         other => other,
     };
+    // Phase 1548 — the two declared ceilings (§3.6.23). Absent declares no
+    // ceiling, which is the pre-1548 control and the wire identity. Both go
+    // through `opt_int` FIRST, so §7.1's slot rule decides the shape — a
+    // fractional value is not truncated, and a value beyond the signed 32-bit
+    // slot is refused naming the slot's range rather than wrapped into one the
+    // author never wrote — and only then does the positive floor decide the
+    // sign. Zero is refused as firmly as a negative: a ceiling of zero is not a
+    // small ceiling but a control that can accept nothing, and the author who
+    // means "no ceiling" omits the member.
+    let ceiling = |key: &str, n: Option<i64>| -> DResult<Option<i64>> {
+        match n {
+            Some(v) if v <= 0 => Err(wrong_type(
+                &format!("{path}.{key}"),
+                "a positive integer ceiling — an absent member is already the spelling for \
+                 an upload that declares no ceiling",
+            )),
+            other => Ok(other),
+        }
+    };
+    let max_bytes = ceiling("maxBytes", opt_int(path, fields, "maxBytes")?)?;
+    let max_files = ceiling("maxFiles", opt_int(path, fields, "maxFiles")?)?;
     Ok(FileUploadSpec {
         accept,
         label,
@@ -3976,6 +3997,8 @@ fn decode_file_upload_spec(path: &str, j: &JVal) -> DResult<FileUploadSpec> {
         accept_paste,
         capture,
         destination,
+        max_bytes,
+        max_files,
     })
 }
 

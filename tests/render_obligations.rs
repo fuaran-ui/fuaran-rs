@@ -989,6 +989,52 @@ fn owes_file_upload_picker_always_present() {
     }
 }
 
+// ─── Phase 1548 — FileUpload declared ceilings (§3.6.23) ─────────────────────
+
+/// §3.6.23 obligation 4 — each declared ceiling is recorded as READ, and never
+/// by VALUE.
+///
+/// TWO claims in one, and the second is what a marker-emission test alone would
+/// miss: the marker records only THAT a ceiling was declared, so a renderer that
+/// put the NUMBER in the markup would pass an emission assertion while telling a
+/// reader this tier enforces a bound it cannot enforce at all. Nothing on this
+/// path can act on the number — HTML has no attribute for a byte ceiling, and
+/// `multiple` is a boolean rather than a count. Both directions are asserted, so
+/// a renderer emitting either marker unconditionally does not pass.
+#[test]
+fn owes_file_upload_ceiling_recorded_never_enforced() {
+    for (bytes, files) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut members = String::new();
+        if bytes {
+            members.push_str(r#""maxBytes":5242880,"#);
+        }
+        if files {
+            members.push_str(r#""maxFiles":3,"#);
+        }
+        let html = render(&format!(
+            r#"{{"id":"u","kind":{{"$type":"FileUpload","accept":["application/pdf"],"label":"Attach a scan",{members}"multiple":true,"onSelect":"<closure>"}}}}"#
+        ));
+        assert_eq!(
+            html.contains("data-fuaran-upload-max-bytes"),
+            bytes,
+            "the byte ceiling is recorded exactly when the document declares it \n             (bytes={bytes}, files={files}): {html}"
+        );
+        assert_eq!(
+            html.contains("data-fuaran-upload-max-files"),
+            files,
+            "the count ceiling is recorded exactly when the document declares it \n             (bytes={bytes}, files={files}): {html}"
+        );
+        assert!(
+            !html.contains("5242880"),
+            "the VALUE is never emitted — carrying it would claim an enforcement \n             that is not there: {html}"
+        );
+        assert!(
+            html.contains(r#"type="file""#),
+            "and a declared ceiling changes nothing about the control itself: {html}"
+        );
+    }
+}
+
 // ─── §3.6.11 — Modal / Popover modality ──────────────────────────────────────
 
 /// §3.6.11 — the `aria-modal` inertness claim is emitted for the BLOCKING
@@ -1099,6 +1145,10 @@ const CHECKERS: &[(&str, fn())] = &[
     (
         "FileUpload/picker-always-present",
         owes_file_upload_picker_always_present,
+    ),
+    (
+        "FileUpload/ceiling-recorded-never-enforced",
+        owes_file_upload_ceiling_recorded_never_enforced,
     ),
     (
         "Modal/aria-modal-only-when-blocking",

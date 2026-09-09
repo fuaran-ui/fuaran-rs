@@ -1571,6 +1571,20 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
             if spec.accept_paste {
                 wrapper.push(("data-fuaran-upload-paste", s("declared")));
             }
+            // Phase 1548 obligation 4: one read-marker per declared ceiling.
+            // This floor degrades ENTIRELY and for a plainer reason than the
+            // ingress routes' — HTML has no attribute for a byte ceiling, and
+            // `multiple` is a boolean rather than a count — so there is nothing
+            // a zero-JS document could enforce. The marker therefore records
+            // only THAT a ceiling was declared and never its VALUE: nothing on
+            // this path can act on the number, so carrying it would claim an
+            // enforcement that is not there.
+            if spec.max_bytes.is_some() {
+                wrapper.push(("data-fuaran-upload-max-bytes", s("declared")));
+            }
+            if spec.max_files.is_some() {
+                wrapper.push(("data-fuaran-upload-max-files", s("declared")));
+            }
             el(
                 "label",
                 &wrapper,

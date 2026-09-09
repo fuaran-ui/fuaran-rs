@@ -2018,6 +2018,15 @@ fn file_upload_spec(spec: &FileUploadSpec) -> String {
     if let Some(destination) = &spec.destination {
         fields.push(field("destination", s(destination)));
     }
+    // Phase 1548 — the two declared ceilings, ordinary optionals on the same
+    // terms, so an upload declaring neither is byte-identical to what it always
+    // was.
+    if let Some(max_bytes) = spec.max_bytes {
+        fields.push(field("maxBytes", int(max_bytes)));
+    }
+    if let Some(max_files) = spec.max_files {
+        fields.push(field("maxFiles", int(max_files)));
+    }
     obj(fields)
 }
 
