@@ -53,7 +53,19 @@ pub mod transform;
 pub mod validator;
 pub mod wire;
 
-/// The pre-release version of the `fuaran-rs` host.
+/// The pre-release version of this host — DERIVED from `Cargo.toml`, never
+/// written out here.
+///
+/// It was a hand-written literal until it read `0.0.4-alpha` against a manifest
+/// two releases further on, with nothing anywhere asserting the two against each
+/// other: a constant that restates a number the build system already owns will
+/// drift, and a stale one is worse than none, since a consumer reading it pins
+/// deliberately on a value that is wrong. `tests/version.rs` reads the manifest
+/// text and pins the equality, so re-introducing a literal fails the gate.
+///
+/// The per-release notes below record the releases that carried a contract
+/// change and stop at `0.0.4-alpha`; they are not a complete changelog, and the
+/// manifest — not this list — says which version the crate is.
 ///
 /// `0.0.4-alpha` is ADDITIVE over `0.0.3-alpha`: the accessible summary (§4i)
 /// gains one clause per annotation member, so a chart CARRYING annotations
@@ -69,4 +81,4 @@ pub mod wire;
 /// surface (`dag::DagRecord`'s bare `user_id` becomes the typed `actor`, and
 /// pre-1144 DAG content addresses do not carry forward). Recorded in
 /// `README.md` — this host declares no `STABILITY.md`.
-pub const VERSION: &str = "0.0.4-alpha";
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

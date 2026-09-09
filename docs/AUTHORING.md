@@ -300,9 +300,11 @@ Dependencies: **none**. Rust's standard library has no JSON, so the canonical
 layer is hand-written — which it would have to be anyway, since no general
 serialiser produces the byte-exact number and key layout the wire requires.
 
-Edition 2024, `rust-version = "1.85"`. The host is pre-1.0 (`fuaran_rs::VERSION`
-is `0.0.2-alpha`) and declares no `STABILITY.md`; that version carries a breaking
-change to the DAG record surface, so pin deliberately.
+Edition 2024, `rust-version = "1.85"`. The host is pre-1.0 and declares no
+`STABILITY.md`; read the version off `fuaran_rs::VERSION`, which is derived from
+`Cargo.toml` rather than restated (this paragraph named `0.0.2-alpha` for two
+releases after the crate had left it). `0.0.2-alpha` carried a breaking change to
+the DAG record surface, so pin deliberately.
 
 ## Verifying
 
