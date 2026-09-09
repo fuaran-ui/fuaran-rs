@@ -571,6 +571,10 @@ decode_bare_enum!(decode_date_variant, DateVariant, "DateVariant");
 // `_parent` and `_top`, which are frame-busting gestures a hosted tree must not
 // be able to ask for.
 decode_bare_enum!(decode_navigate_target, NavigateTarget, "NavigateTarget");
+// Phase 1116 — the recording device. BARE, so `"Screen"` reports at
+// `$.kind.capture` with no `.$type` suffix, and a host MUST NOT fall back to
+// either device on an unrecognised value.
+decode_bare_enum!(decode_capture_source, CaptureSource, "CaptureSource");
 decode_bare_enum!(decode_text_format, TextFormat, "TextFormat");
 decode_bare_enum!(decode_compare_op, CompareOp, "CompareOp");
 decode_bare_enum!(
@@ -2059,7 +2063,23 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
             let default_value = slot
                 .parse(&format!("{path}.defaultValue"), raw)
                 .unwrap_or_else(|_| slot.placeholder());
-            Ok(Binding::State { key, default_value })
+            // The WIRE fact, kept separately from the resolution default above.
+            // An explicit `null` reads as UNDECLARED, which is what the legacy
+            // spelling always meant and what `static_is_absent` used to stand
+            // in for — the difference is that the stand-in could not tell an
+            // undeclared default at a NUMERIC or BOOL slot from a declared
+            // zero, and so re-encoded a `defaultValue` the document never
+            // carried. `nodes/node-visible` and `nodes/switch-predicate` are
+            // the first fixtures with a bare `State` at a typed slot and are
+            // what surfaced it; `tests/state_seeding.rs` had it pinned.
+            let default_declared =
+                get_aliased(fields, "defaultValue", &["initialValue", "default"])
+                    .is_some_and(|v| !matches!(v, JVal::Null));
+            Ok(Binding::State {
+                key,
+                default_value,
+                default_declared,
+            })
         }
         "Computed" => Ok(Binding::Computed),
         // Phase 765 — the host-furnished INSTANT is never on the wire. The
@@ -2246,6 +2266,7 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                         // key is omitted again on re-encode.
                         let binding = match (has_carried, b) {
                             (false, Binding::State { key, .. }) => Binding::State {
+                                default_declared: false,
                                 key,
                                 default_value: StaticValue::Ast(JVal::Null),
                             },
@@ -3374,6 +3395,8 @@ impl ControlAutoBind<'_> {
                 default_value: None,
             },
             ControlAutoBind::FormFieldId(id) => Binding::State {
+                // The auto-binding is SYNTHESISED, so it declares nothing.
+                default_declared: false,
                 key: id.to_string(),
                 default_value: placeholder,
             },
@@ -3923,6 +3946,27 @@ fn decode_file_upload_spec(path: &str, j: &JVal) -> DResult<FileUploadSpec> {
     // alike.
     let drop_target = opt_bool(path, fields, "dropTarget")?.unwrap_or(false);
     let accept_paste = opt_bool(path, fields, "acceptPaste")?.unwrap_or(false);
+    // Phase 1116 — OPTIONAL, not omit-at-default: an absent member asks for the
+    // ordinary picker, which is not one of the two devices wearing a default.
+    let capture = match get(fields, "capture") {
+        None => None,
+        Some(v) => Some(decode_capture_source(&format!("{path}.capture"), v)?),
+    };
+    // Phase 1117 — the empty string is a name no host registers, so a document
+    // carrying it describes an upload that can never stream. Refused rather
+    // than read as absence: that coercion silently turns an upload the author
+    // meant to stream into a client-only one, while every visible thing about
+    // the control still works.
+    let destination = match opt_string(path, fields, "destination")? {
+        Some(name) if name.is_empty() => {
+            return Err(wrong_type(
+                &format!("{path}.destination"),
+                "a registered destination name — an absent member is already the spelling for \
+                 an upload that streams nowhere",
+            ));
+        }
+        other => other,
+    };
     Ok(FileUploadSpec {
         accept,
         label,
@@ -3930,6 +3974,8 @@ fn decode_file_upload_spec(path: &str, j: &JVal) -> DResult<FileUploadSpec> {
         disabled,
         drop_target,
         accept_paste,
+        capture,
+        destination,
     })
 }
 
@@ -4415,6 +4461,13 @@ fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
         // Phase 1473 — the DataGrid arm of the same refusal.
         keep_rows_together: opt_bool(path, fields, "keepRowsTogether")?.unwrap_or(false),
         repeat_header: opt_bool(path, fields, "repeatHeader")?.unwrap_or(false),
+        // Phase 1123 — a bool, omitted at `false`, never truthiness-coerced:
+        // the slot decides whether a whole affordance exists.
+        exportable: opt_bool(path, fields, "exportable")?.unwrap_or(false),
+        // Phase 1125 — separate decoder arms, so a wrong type on either is
+        // reported at its own path.
+        transfer_in_key: opt_string(path, fields, "transferInKey")?,
+        transfer_out_key: opt_string(path, fields, "transferOutKey")?,
     })
 }
 
@@ -5667,6 +5720,10 @@ fn decode_node_kind_g4(
                     None => Binding::State {
                         key: req_string(path, fields, "stateKey", "Switch stateKey string")?,
                         default_value: StaticValue::Ast(JVal::Null),
+                        // The compact `stateKey` spelling carries no default by
+                        // construction, which is exactly what lets the encoder
+                        // collapse back to it.
+                        default_declared: false,
                     },
                 };
                 let cases_j = req(path, fields, "cases", "Switch cases array")?;
@@ -5675,17 +5732,76 @@ fn decode_node_kind_g4(
                 for (i, item) in arr.iter().enumerate() {
                     let cp = format!("{path}.cases[{i}]");
                     let cf = as_obj(&cp, item)?;
-                    let match_value = req_string(&cp, cf, "match", "Switch case match string")?;
+                    // Phase 1535 — EXACTLY ONE of `match` and `when`. "Both" is
+                    // refused rather than resolved by precedence (a precedence
+                    // rule would have to be specified, agreed on every host and
+                    // remembered by every author, for a document nobody meant
+                    // to write); "neither" keeps the pre-1535 MISSING_FIELD at
+                    // `.match`, which is what the corpus pins — a case naming
+                    // no condition is not one that never matches, and skipping
+                    // it silently is the class of silence the predicate form
+                    // was added to remove.
+                    let condition = match (get(cf, "match"), get(cf, "when")) {
+                        (Some(_), Some(_)) => {
+                            return Err(wrong_type(
+                                &format!("{cp}.when"),
+                                "exactly one of 'match' and 'when' — a precedence rule between                                  them would have to be agreed on every host for a document                                  nobody meant to write",
+                            ));
+                        }
+                        (None, Some(when_j)) => SwitchCondition::When(decode_binding_slot(
+                            &format!("{cp}.when"),
+                            when_j,
+                            StaticSlot::Bool,
+                        )?),
+                        _ => SwitchCondition::Match(req_string(
+                            &cp,
+                            cf,
+                            "match",
+                            "Switch case match string",
+                        )?),
+                    };
                     let child_j = req(&cp, cf, "child", "Switch case child Node")?;
                     let child = decode_node_ast(&format!("{cp}.child"), child_j)?;
-                    cases.push(SwitchCase { match_value, child });
+                    cases.push(SwitchCase { condition, child });
                 }
                 let default_j = req(path, fields, "default", "Switch default Node")?;
                 let default = decode_node_ast(&format!("{path}.default"), default_j)?;
+                // Phase 1122 — a POSITIVE INTEGER count of milliseconds.
+                // Non-positive is refused rather than canonicalised: `0` is
+                // what an emitter reaches for to mean "off" and absence is
+                // already that spelling, so rewriting it would make two
+                // document shapes mean one thing and tell the emitter nothing
+                // about its misreading. Fractional is refused separately — the
+                // slot is an integer count, and a decoder truncating where
+                // another rounded would leave two hosts disagreeing about a
+                // document neither refused.
+                let auto_advance_ms = match get(fields, "autoAdvanceMs") {
+                    None => None,
+                    Some(v) => {
+                        let ms_path = format!("{path}.autoAdvanceMs");
+                        let ms = opt_int(path, fields, "autoAdvanceMs")?.ok_or_else(|| {
+                            wrong_type(&ms_path, "an integer millisecond interval")
+                        })?;
+                        if !matches!(v, JVal::Num(n) if n.fract() == 0.0) {
+                            return Err(wrong_type(
+                                &ms_path,
+                                "a whole millisecond interval — the slot is an integer count, and                                  a decoder truncating where another rounded would leave two hosts                                  disagreeing",
+                            ));
+                        }
+                        if ms < 1 {
+                            return Err(wrong_type(
+                                &ms_path,
+                                "a positive millisecond interval — an absent key is already the                                  spelling for off",
+                            ));
+                        }
+                        Some(ms)
+                    }
+                };
                 Ok(NodeKind::Switch(SwitchSpec {
                     on,
                     cases,
                     default: Box::new(default),
+                    auto_advance_ms,
                 }))
             }
         })(),
@@ -5896,6 +6012,10 @@ fn decode_node_ast(path: &str, j: &JVal) -> DResult<Node> {
     // non-object value is `WRONG_TYPE` at `$.tooltip` - reported through the
     // shared `TextSource` decoder rather than by a second reading here.
     let tooltip = opt_text_source(path, fields, "tooltip")?;
+    // Phase 1535 — the conditional-presence TRAIT, an ordinary `Binding<bool>`
+    // slot beside `tooltip`. The §3.6 bare-scalar coercion reaches it like any
+    // other binding slot.
+    let visible = opt_binding_slot(path, fields, "visible", StaticSlot::Bool)?;
     Ok(Node {
         id: id.to_string(),
         kind,
@@ -5903,6 +6023,7 @@ fn decode_node_ast(path: &str, j: &JVal) -> DResult<Node> {
         style,
         accessibility,
         tooltip,
+        visible,
     })
 }
 

@@ -518,6 +518,7 @@ mod tests {
             key: "copy".into(),
             value: None,
             value_from: Some(Box::new(crate::wire::Binding::State {
+                default_declared: false,
                 key: "msg".into(),
                 default_value: StaticValue::Ast(JVal::Str("fallback".into())),
             })),

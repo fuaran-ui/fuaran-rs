@@ -161,6 +161,13 @@ bare_enum!(FileReadEncoding { Text => "Text", Base64 => "Base64", DataUrl => "Da
 // any of it would teach an emitter the wrong vocabulary. Omitted at `Self_`,
 // which is the pre-1536 behaviour.
 bare_enum!(NavigateTarget { Self_ => "Self", Blank => "Blank" });
+// Phase 1116 — the recording device a `FileUpload` asks the platform for
+// (WIRE_FORMAT.md §3.6.18). A BARE enum, so an unrecognised spelling reports at
+// `$.kind.capture` with no `.$type` suffix. There is deliberately no
+// display-capture case and there will not be one by widening this member: a
+// screen capture reaches every window the reader has open rather than one
+// device behind the picker, so it is a different class of thing.
+bare_enum!(CaptureSource { Camera => "Camera", Microphone => "Microphone" });
 // `FormFieldKind` names the CONTROL; `FormField.rule` names the ACCEPTED SET.
 bare_enum!(TextFormat { Email => "email", Url => "url", Tel => "tel" });
 bare_enum!(CompareOp {
@@ -295,9 +302,23 @@ pub enum Binding {
         /// when `None`.
         field: Option<String>,
     },
+    /// `default_value` is the RESOLUTION default — the slot's typed
+    /// representation an unwritten key yields (§3.3), which at `bool` is
+    /// `false` and at a numeric slot is `0`. `default_declared` is the separate
+    /// WIRE fact: whether the document actually carried a `defaultValue`.
+    ///
+    /// They are two different facts and conflating them cost a byte-level
+    /// round trip: with only the value, an absent default at a typed slot
+    /// re-encoded as the fabricated placeholder, so
+    /// `{"$type":"State","key":k}` came back as
+    /// `{"$type":"State","defaultValue":0,"key":k}`. Carrying the placeholder
+    /// AND the declaration keeps resolution unchanged — `visible` on an
+    /// unwritten key still resolves `false` and removes the node, per §3.6 —
+    /// while the encoder emits only what the document wrote.
     State {
         key: String,
         default_value: StaticValue,
+        default_declared: bool,
     },
     Computed,
     /// Phase 765 — the host-furnished current INSTANT is never on the wire.
@@ -1334,6 +1355,28 @@ pub struct FileUploadSpec {
     pub drop_target: bool,
     /// Phase 1115 - the paste ingress route. Same polarity, same reason.
     pub accept_paste: bool,
+    /// Phase 1116 — WHICH of the reader's own recording devices the platform
+    /// should open in place of the file browser (WIRE_FORMAT.md §3.6.18). The
+    /// third ingress route, and the only one that PRODUCES a file rather than
+    /// moving one that already exists.
+    ///
+    /// OPTIONAL rather than omit-at-default, and the distinction is real: "say
+    /// nothing" is a state of its own, because an upload naming no device is
+    /// asking for the file browser, which is not one of the two devices wearing
+    /// a default.
+    pub capture: Option<CaptureSource>,
+    /// Phase 1117 — the host-registered destination an upload streams to
+    /// (§3.6.20). A NAME, and a name because it must never be an ADDRESS: a
+    /// wire document comes from an arbitrary emitter, and a URL here would let
+    /// that emitter choose where a reader's file goes.
+    ///
+    /// The empty string is REFUSED rather than read as absence — reading it as
+    /// absence silently turns an upload the author meant to stream into a
+    /// client-only one while every visible thing about the control still works.
+    /// An UNREGISTERED non-empty id is deliberately not a decode refusal:
+    /// whether an id is registered is a fact about the HOST, so a decoder that
+    /// judged it would make one document's validity depend on who read it.
+    pub destination: Option<String>,
     // `onSelect` is an always-emitted closure — no field.
 }
 
@@ -1462,6 +1505,15 @@ pub struct GridSpec {
     /// grid's ROWS, never to the grid as a whole — which is why it is a separate
     /// member from `BoxSpec.keep_together` rather than reachable by wrapping.
     pub keep_rows_together: bool,
+    /// Phase 1123 — this grid's rows may be taken out of the page as a file.
+    /// Omitted at `false`, so every pre-1123 document is byte-identical.
+    pub exportable: bool,
+    /// Phase 1125 — the two sides of ONE shared State key. A grid declaring
+    /// `transfer_out_key` K may RELEASE rows onto K; one declaring
+    /// `transfer_in_key` K ACCEPTS rows arriving on it. They are separate
+    /// decoder arms, and the corpus vectors them separately for that reason.
+    pub transfer_in_key: Option<String>,
+    pub transfer_out_key: Option<String>,
     /// Phase 1473 — the column headers repeat at the top of every page the grid
     /// continues onto. What survives on `DataGrid` is precisely what no
     /// arrangement of existing kinds reaches.
@@ -1766,8 +1818,36 @@ pub struct ErrorBoundarySpec {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SwitchCase {
-    pub match_value: String,
+    /// EXACTLY ONE of `match_value` and `when` is present (WIRE_FORMAT.md
+    /// §3.6) — both together and neither at all are decode errors, the same
+    /// shape and the same reasoning as `SetState`'s `value` / `valueFrom` pair.
+    ///
+    /// A case naming no condition is not a case that never matches; it is a
+    /// document whose author meant something the wire cannot say, and a host
+    /// that silently skipped it would render the `default` and report nothing.
+    /// A precedence rule for "both" would have to be specified, agreed on every
+    /// host and remembered by every author, for a document nobody meant to
+    /// write.
+    pub condition: SwitchCondition,
     pub child: Node,
+}
+
+/// Phase 1535 — the two spellings of a case's condition. They interleave
+/// freely in one ordered `cases` array, and first-match-wins runs over the
+/// array in AUTHORED order: a host evaluates case *n* fully before considering
+/// case *n+1*, and must not batch all the matches ahead of all the predicates.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SwitchCondition {
+    /// Compares the switch's resolved selector against a literal string.
+    Match(String),
+    /// Evaluates a `Binding<bool>` and takes the case on a RESOLVED `true`
+    /// only — a resolved `false`, an unresolved binding and an errored one all
+    /// fall through. There is no truthiness rule: `0`, `""` and `"false"` are
+    /// refused by the coercion rather than read as `false`.
+    ///
+    /// It consults no selector at all, so a switch whose cases are ALL
+    /// predicates needs no `on` and has no state key for anything to write.
+    When(Binding),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1781,6 +1861,17 @@ pub struct SwitchSpec {
     pub on: Binding,
     pub cases: Vec<SwitchCase>,
     pub default: Box<Node>,
+    /// Phase 1122 — the timed carousel: advance to the next case every
+    /// this-many milliseconds, omitted at absence. It declares the one fact a
+    /// host cannot recover from the tree — every other half of a carousel was
+    /// already composable, and nothing in any arrangement of those says a timer
+    /// exists.
+    ///
+    /// A DURATION, never a flag: "advances" with no interval would make a host
+    /// invent a period. Non-positive and fractional values are REFUSED rather
+    /// than canonicalised — `0` is what an emitter reaches for to mean "off"
+    /// and the language already has a spelling for off, an absent key.
+    pub auto_advance_ms: Option<i64>,
 }
 
 // Parameterised fragments (holes / effect / args).
@@ -2368,6 +2459,22 @@ pub struct Node {
     /// rather than in any kind. It is a DESCRIPTION, never a NAME: a host
     /// projects it as `aria-describedby` and never as `aria-label`.
     pub tooltip: Option<TextSource>,
+    /// Phase 1535 — whether the node is PRESENT in the rendered output at all
+    /// (WIRE_FORMAT.md §3.6). A node-level trait for the reason the trait tier
+    /// exists: "should this be here at all" is uniform across every kind, and
+    /// forty-odd per-spec spellings of it would be forty-odd independently
+    /// driftable decisions about one concept.
+    ///
+    /// It is NOT `accessibility.hidden`, and the two have opposite polarity: a
+    /// resolved `false` here emits NOTHING — no element, no layout, no
+    /// accessibility-tree entry — where `hidden` is `aria-hidden` over a node
+    /// that IS rendered. Content the reader should not have now takes this;
+    /// decoration the reader should never hear takes `hidden`.
+    ///
+    /// Any outcome other than a resolved `false` renders the node, unresolved
+    /// and errored included: hiding on absence is the one failure a reader
+    /// cannot see, cannot report and cannot work around.
+    pub visible: Option<Binding>,
 }
 
 // ─── TreeOp (§3.4) ───────────────────────────────────────────────────────────

@@ -70,6 +70,7 @@ fn metric(id: &str, label: &str, value: f64) -> Node {
         style: SemanticStyle::default(),
         accessibility: None,
         tooltip: None,
+        visible: None,
     }
 }
 
@@ -100,6 +101,7 @@ fn flex_box(
         style: SemanticStyle::default(),
         accessibility: None,
         tooltip: None,
+        visible: None,
     }
 }
 

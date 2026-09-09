@@ -1111,6 +1111,16 @@ fn reference_vocabulary() -> Option<(std::collections::BTreeSet<String>, Vec<Str
         root.join("src")
             .join("Fuaran.UI.Renderer.Core")
             .join("Css.fs"),
+        // Phase 1499 — RatingModel.fs is the SAME class of omission Css.fs was,
+        // and it presented identically: the reference EXTRACTED the rating's
+        // per-position fill classes there so the three spellings could not
+        // drift between its two renderers, and this list not naming the file
+        // made every one of them read as absent from a vocabulary that has
+        // carried them since Phase 1130. Adopting the kind is what surfaced it,
+        // exactly as adopting a kind surfaced the Css.fs gap.
+        root.join("src")
+            .join("Fuaran.UI.Renderer.Core")
+            .join("RatingModel.fs"),
         // Markdown.fs and MathMl.fs likewise compose emitted classes for the two
         // sub-renderers whose output this host also emits.
         root.join("src")

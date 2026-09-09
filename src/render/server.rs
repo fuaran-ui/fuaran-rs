@@ -38,8 +38,8 @@ use crate::wire::{
     GridSpec, HeadingVariant, ImageAspect, ImageFit, ImageLoading, ImageVariant, MapSpec,
     MathDisplay, MediaKind, ModalSpec, ModalityKind, Node, NodeKind, Orientation, ScrollAreaSpec,
     ScrollOrientation, SelectOption, SelectSpec, SrcSetEntry, StateBehaviour, StaticRows,
-    StaticValue, TabsSpec, TextDirection, TextSource, ToneVariant, TrackKind, TreeItem, TreeSpec,
-    encode_node,
+    StaticValue, SwitchCondition, TabsSpec, TextDirection, TextSource, ToneVariant, TrackKind,
+    TreeItem, TreeSpec, encode_node,
 };
 
 use super::bindings::{
@@ -47,7 +47,7 @@ use super::bindings::{
     accessibility_attributes, display_number, format_number, render_text, resolve,
     resolve_float_pair, resolve_float_seq, resolve_number, resolve_options, resolve_rows,
     resolve_scalar_number, resolve_string_pair, static_display_string, try_bool, try_number,
-    try_scalar_number, try_string,
+    try_scalar_bool, try_scalar_number, try_string,
 };
 use super::class_names::{icon_size_class, node_class_name, tone_var, trend_sentiment};
 use super::egress::{
@@ -248,6 +248,26 @@ fn render_children(ctx: &Ctx<'_>, nodes: &[Node]) -> String {
 }
 
 fn render_node(ctx: &Ctx<'_>, node: &Node) -> String {
+    // Phase 1535 — conditional presence, resolved through the SCALAR path so a
+    // `Transform` yielding one cell and an `Expr` both work here.
+    //
+    // A resolved `false` emits NOTHING for this node and its whole subtree: no
+    // element, no placeholder, no comment marker, no `aria-hidden`. Every OTHER
+    // outcome renders — an unresolved predicate is not a `false`, and hiding on
+    // absence is the one failure a reader cannot see, cannot report and cannot
+    // work around, so the failure is left visible to somebody instead.
+    //
+    // Note what this deliberately does NOT special-case: a `State` binding with
+    // no declared `defaultValue` on an unwritten key resolves `false` under the
+    // ordinary §3.3 rule and the node is removed. Carving `visible` out of that
+    // would make one slot the exception to a position-independent rule; the
+    // spelling for "visible unless something says otherwise" is an explicit
+    // `defaultValue: true`.
+    if let Some(predicate) = &node.visible
+        && try_scalar_bool(ctx.sources, predicate) == Some(false)
+    {
+        return String::new();
+    }
     let inner = render_node_plain(ctx, node);
     if ctx.islands.contains(&node.id) {
         // The island boundary wrapper: its children are exactly the node's
@@ -1600,7 +1620,9 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
             // bindings resolve through the resolver, so an SSR switch on a
             // pre-seeded Selection renders the branch the client will.
             let value_str = match &spec.on {
-                Binding::State { key, default_value } => match ctx.sources.state.get(key) {
+                Binding::State {
+                    key, default_value, ..
+                } => match ctx.sources.state.get(key) {
                     None => static_display_string(default_value).unwrap_or_default(),
                     Some(JVal::Null) => String::new(),
                     Some(JVal::Str(v)) => v.clone(),
@@ -1610,7 +1632,21 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
                 },
                 on => try_string(ctx.sources, on).unwrap_or_default(),
             };
-            let matched = spec.cases.iter().find(|c| c.match_value == value_str);
+            // Phase 1535 — first-match-wins runs over the array in AUTHORED
+            // order, and case *n* is evaluated FULLY before case *n+1* is
+            // considered: the two condition forms interleave freely, so
+            // batching all the matches ahead of all the predicates would take
+            // a different case from the same document.
+            //
+            // A `when` case is taken on a RESOLVED `true` only. A resolved
+            // `false`, an unresolved binding and an errored one all fall
+            // through — and there is no truthiness rule, so `0`, `""` and
+            // `"false"` are refused by `try_bool`'s coercion rather than read
+            // as `false`.
+            let matched = spec.cases.iter().find(|c| match &c.condition {
+                SwitchCondition::Match(value) => *value == value_str,
+                SwitchCondition::When(b) => try_scalar_bool(ctx.sources, b) == Some(true),
+            });
             match matched {
                 Some(case) => render_node(ctx, &case.child),
                 None => render_node(ctx, &spec.default),
@@ -3792,6 +3828,7 @@ fn render_grid_cell(ctx: &Ctx<'_>, col: &ColumnErased, row: &JVal) -> String {
                 style: crate::wire::SemanticStyle::default(),
                 accessibility: None,
                 tooltip: None,
+                visible: None,
             };
             render_node(ctx, &placeholder)
         }

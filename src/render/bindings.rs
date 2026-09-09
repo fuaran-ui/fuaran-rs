@@ -111,7 +111,9 @@ pub fn resolve<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Resolut
                 None => Resolution::NotResolved,
             },
         },
-        Binding::State { key, default_value } => match sources.state.get(key) {
+        Binding::State {
+            key, default_value, ..
+        } => match sources.state.get(key) {
             Some(raw) => Resolution::Resolved(Value::Json(raw)),
             None => Resolution::Resolved(Value::Static(default_value)),
         },
@@ -514,6 +516,19 @@ fn cell_to_text(c: &Cell) -> Result<String, String> {
     Ok(transform::cell_string(c))
 }
 
+/// Coerce a result cell to a BOOLEAN-slot bool. Every non-bool cell is an
+/// error, null included: there is NO truthiness rule here, so a number, a
+/// string or a null is not a boolean and a host must refuse rather than guess.
+fn cell_to_bool(c: &Cell) -> Result<bool, String> {
+    match c {
+        Cell::Bool(b) => Ok(*b),
+        other => Err(format!(
+            "a boolean slot took a {} cell — there is no truthiness rule; use isNull for presence, = for a value, or not for negation",
+            transform::cell_string(other)
+        )),
+    }
+}
+
 /// Coerce a result cell to a numeric-slot number (a non-numeric / null cell is
 /// a loud didactic).
 fn cell_to_float(c: &Cell) -> Result<f64, String> {
@@ -716,6 +731,35 @@ pub fn try_bool(sources: &BindingSources, binding: &Binding) -> Option<bool> {
         Resolution::Resolved(Value::Static(StaticValue::Ast(JVal::Bool(b)))) => Some(*b),
         Resolution::Resolved(Value::Json(JVal::Bool(b))) => Some(*b),
         _ => None,
+    }
+}
+
+/// Best-effort BOOL through the SCALAR path — the `try_scalar_string` twin at
+/// the boolean type, for the two slots §3.6 and §3.3.2 require it at: a node's
+/// `visible` predicate and a `Switch` case's `when`. A `Transform` yielding
+/// one cell and a `Binding::Expr` both have to work there, and `try_bool`
+/// alone reaches neither.
+///
+/// There is NO TRUTHINESS RULE, and that is the point of routing through the
+/// cell coercion rather than reading the value loosely: `0`, `""` and
+/// `"false"` yield `None` rather than `Some(false)`, because every language
+/// that has guessed at this has guessed differently and the vocabulary already
+/// carries the total spellings (`isNull`, `=`, `not`).
+pub fn try_scalar_bool(sources: &BindingSources, binding: &Binding) -> Option<bool> {
+    match binding {
+        Binding::Transform {
+            params,
+            pipeline,
+            source,
+        } => match resolve_scalar_transform(cell_to_bool, sources, params, pipeline, source) {
+            ScalarOutcome::Resolved(b) => Some(b),
+            ScalarOutcome::NotResolved | ScalarOutcome::Errored(_) => None,
+        },
+        Binding::Expr { expr, params } => match eval_binding_expr(sources, expr, params) {
+            Ok(Some(cell)) => cell_to_bool(&cell).ok(),
+            Ok(None) | Err(_) => None,
+        },
+        _ => try_bool(sources, binding),
     }
 }
 

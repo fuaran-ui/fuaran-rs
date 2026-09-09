@@ -61,6 +61,11 @@ fn project_node(sources: &BindingSources, node: &Node) -> Node {
         // Phase 1112 - projected like every other content slot, so the resolved
         // tree a native surface reads carries the hint's TEXT, not its binding.
         tooltip: map_opt_text(sources, &node.tooltip),
+        // Phase 1535 — carried through unresolved. The projection is what a
+        // native surface DECODES; whether the node is present is decided by the
+        // renderer that consumes it, and folding the answer in here would strip
+        // a node from a tree that is also used for editing.
+        visible: node.visible.clone(),
     }
 }
 
@@ -412,6 +417,8 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             disabled: spec.disabled.clone(),
             drop_target: spec.drop_target,
             accept_paste: spec.accept_paste,
+            capture: spec.capture,
+            destination: spec.destination.clone(),
         }),
         NodeKind::Select(spec) => NodeKind::Select(SelectSpec {
             label: map_text(sources, &spec.label),
@@ -428,6 +435,9 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
         NodeKind::DataGrid(spec) => NodeKind::DataGrid(GridSpec {
             columns: spec.columns.clone(),
             editable: spec.editable,
+            exportable: spec.exportable,
+            transfer_in_key: spec.transfer_in_key.clone(),
+            transfer_out_key: spec.transfer_out_key.clone(),
             source: spec.source.clone(),
             on_row_click: spec.on_row_click,
             row_key: spec.row_key,
@@ -514,11 +524,12 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
                 .cases
                 .iter()
                 .map(|c| crate::wire::SwitchCase {
-                    match_value: c.match_value.clone(),
+                    condition: c.condition.clone(),
                     child: project_node(sources, &c.child),
                 })
                 .collect(),
             default: Box::new(project_node(sources, &spec.default)),
+            auto_advance_ms: spec.auto_advance_ms,
         }),
         NodeKind::FragmentDecl(spec) => NodeKind::FragmentDecl(FragmentDeclSpec {
             name: spec.name.clone(),

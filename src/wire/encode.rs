@@ -499,11 +499,19 @@ fn binding(b: &Binding) -> String {
             fields.push(field("nodeId", s(node_id)));
             case_obj("Selection", fields)
         }
-        Binding::State { key, default_value } => {
+        Binding::State {
+            key,
+            default_value,
+            default_declared,
+        } => {
             // Phase 677 — same rule as `Static`: absence omits, never null.
+            // The DECLARATION decides, not the value: a typed slot's decoded
+            // default is the placeholder an unwritten key resolves to, and
+            // emitting that would put a `defaultValue` on the wire the document
+            // never carried.
             let mut fields = vec![];
 
-            if !static_is_absent(default_value) {
+            if *default_declared && !static_is_absent(default_value) {
                 fields.push(field("defaultValue", static_value(default_value)));
             }
 
@@ -1527,9 +1535,17 @@ fn control_value_field(
                 default_value: None,
             },
         ) => name == n,
-        (ControlAutoBind::FormFieldId(id), Binding::State { key, default_value }) => {
-            key == id && *default_value == placeholder
-        }
+        (
+            ControlAutoBind::FormFieldId(id),
+            // The declaration is deliberately NOT consulted here. This
+            // asks "is this binding exactly the auto-binding", and a
+            // document that spells the auto-binding out in full still
+            // IS it — which is precisely what
+            // `lenient/lenient-596-form-explicit-auto-state` pins.
+            Binding::State {
+                key, default_value, ..
+            },
+        ) => key == id && *default_value == placeholder,
         _ => false,
     };
     if is_auto {
@@ -1632,9 +1648,17 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
                         default_value: None,
                     },
                 ) => name == n,
-                (ControlAutoBind::FormFieldId(id), Binding::State { key, default_value }) => {
-                    key == id && *default_value == control_value_defaults::range()
-                }
+                (
+                    ControlAutoBind::FormFieldId(id),
+                    // The declaration is deliberately NOT consulted here. This
+                    // asks "is this binding exactly the auto-binding", and a
+                    // document that spells the auto-binding out in full still
+                    // IS it — which is precisely what
+                    // `lenient/lenient-596-form-explicit-auto-state` pins.
+                    Binding::State {
+                        key, default_value, ..
+                    },
+                ) => key == id && *default_value == control_value_defaults::range(),
                 _ => false,
             };
             if !is_auto {
@@ -1758,9 +1782,17 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
                         default_value: None,
                     },
                 ) => name == n,
-                (ControlAutoBind::FormFieldId(id), Binding::State { key, default_value }) => {
-                    key == id && *default_value == control_value_defaults::date_range()
-                }
+                (
+                    ControlAutoBind::FormFieldId(id),
+                    // The declaration is deliberately NOT consulted here. This
+                    // asks "is this binding exactly the auto-binding", and a
+                    // document that spells the auto-binding out in full still
+                    // IS it — which is precisely what
+                    // `lenient/lenient-596-form-explicit-auto-state` pins.
+                    Binding::State {
+                        key, default_value, ..
+                    },
+                ) => key == id && *default_value == control_value_defaults::date_range(),
                 _ => false,
             };
             if !is_auto {
@@ -1978,6 +2010,14 @@ fn file_upload_spec(spec: &FileUploadSpec) -> String {
     if spec.drop_target {
         fields.push(field("dropTarget", boolean(true)));
     }
+    // Phase 1116/1117 — both OPTIONAL and emitted only when declared, so a
+    // pre-1116 upload carries neither key and stays byte-identical.
+    if let Some(capture) = spec.capture {
+        fields.push(field("capture", s(capture.as_str())));
+    }
+    if let Some(destination) = &spec.destination {
+        fields.push(field("destination", s(destination)));
+    }
     obj(fields)
 }
 
@@ -2186,6 +2226,18 @@ fn grid_spec(spec: &GridSpec) -> String {
     }
     if spec.repeat_header {
         fields.push(field("repeatHeader", boolean(true)));
+    }
+    // Phase 1123 — omits at `false`; Phase 1125's pair omits at absence, and
+    // the `archive` fixture that declares `transferInKey` ALONE is what pins
+    // that polarity.
+    if spec.exportable {
+        fields.push(field("exportable", boolean(true)));
+    }
+    if let Some(key) = &spec.transfer_in_key {
+        fields.push(field("transferInKey", s(key)));
+    }
+    if let Some(key) = &spec.transfer_out_key {
+        fields.push(field("transferOutKey", s(key)));
     }
     obj(fields)
 }
@@ -2686,35 +2738,44 @@ fn node_kind(k: &NodeKind) -> String {
                 field("fallback", node(&spec.fallback)),
             ],
         ),
-        NodeKind::Switch(spec) => case_obj(
-            "Switch",
-            vec![
-                field(
-                    "cases",
-                    arr(spec
-                        .cases
-                        .iter()
-                        .map(|c| {
-                            obj(vec![
-                                field("child", node(&c.child)),
-                                field("match", s(&c.match_value)),
-                            ])
-                        })
-                        .collect()),
-                ),
-                field("default", node(&spec.default)),
-                // Phase 768 collapse rule — the no-default State selector
-                // keeps the compact canonical `stateKey` spelling (existing
-                // fixtures stay byte-identical); any other selector encodes
-                // as `on`.
-                match &spec.on {
-                    Binding::State { key, default_value } if static_is_absent(default_value) => {
-                        field("stateKey", s(key))
-                    }
-                    other => field("on", binding(other)),
-                },
-            ],
-        ),
+        NodeKind::Switch(spec) => {
+            let mut fields = vec![];
+            // Phase 1122 — omitted at absence, so a document that never
+            // declared it is byte-identical to what it was before the member
+            // existed.
+            if let Some(ms) = spec.auto_advance_ms {
+                fields.push(field("autoAdvanceMs", int(ms)));
+            }
+            fields.push(field(
+                "cases",
+                arr(spec
+                    .cases
+                    .iter()
+                    .map(|c| {
+                        // Phase 1535 — exactly one condition key rides, and
+                        // which one is the case's own discriminator.
+                        let condition = match &c.condition {
+                            SwitchCondition::Match(value) => field("match", s(value)),
+                            SwitchCondition::When(b) => field("when", binding(b)),
+                        };
+                        obj(vec![field("child", node(&c.child)), condition])
+                    })
+                    .collect()),
+            ));
+            fields.push(field("default", node(&spec.default)));
+            // Phase 768 collapse rule — the no-default State selector keeps
+            // the compact canonical `stateKey` spelling (existing fixtures stay
+            // byte-identical); any other selector encodes as `on`.
+            fields.push(match &spec.on {
+                Binding::State {
+                    key,
+                    default_declared: false,
+                    ..
+                } => field("stateKey", s(key)),
+                other => field("on", binding(other)),
+            });
+            case_obj("Switch", fields)
+        }
         NodeKind::FragmentDecl(spec) => {
             let mut fields = vec![
                 field("body", node(&spec.body)),
@@ -2867,6 +2928,11 @@ fn node(n: &Node) -> String {
     // `TextSource`'s transparent case wherever it appears.
     if let Some(t) = &n.tooltip {
         fields.push(field("tooltip", text_source(t)));
+    }
+    // Phase 1535 — omitted when absent, so a document that never declared it is
+    // byte-identical to what it was before the trait existed.
+    if let Some(v) = &n.visible {
+        fields.push(field("visible", binding(v)));
     }
     obj(fields)
 }

@@ -36,7 +36,8 @@
 
 use crate::canonical::JVal;
 use crate::wire::{
-    Action, Binding, FormFieldKind, MediaKind, Node, NodeKind, StaticValue, TextSource, TreeOp,
+    Action, Binding, FormFieldKind, MediaKind, Node, NodeKind, StaticValue, SwitchCondition,
+    TextSource, TreeOp,
 };
 
 /// Finding severity, matching the sibling validators' two-level surface.
@@ -273,18 +274,25 @@ impl Walker {
                         "Switch has an empty stateKey — it can never resolve a case and is stuck on its default; name the state key the switch selects on.".to_string(),
                     );
                 }
+                // Only the literal spelling can DUPLICATE: two predicate cases
+                // are two different questions even where they happen to resolve
+                // alike, and a pre-emit walk cannot tell whether they do.
                 let mut seen = std::collections::HashSet::new();
                 for case in &s.cases {
-                    if !seen.insert(&case.match_value) {
-                        self.push(
-                            Severity::Warning,
-                            "FUARAN082",
-                            id,
-                            format!(
-                                "Switch declares duplicate case match \"{}\" — first-match-wins shadows the later \n                 case; give each case a distinct match value.",
-                                case.match_value
-                            ),
-                        );
+                    match &case.condition {
+                        SwitchCondition::Match(value) => {
+                            if !seen.insert(value) {
+                                self.push(
+                                    Severity::Warning,
+                                    "FUARAN082",
+                                    id,
+                                    format!(
+                                        "Switch declares duplicate case match \"{value}\" — first-match-wins shadows the later \n                 case; give each case a distinct match value."
+                                    ),
+                                );
+                            }
+                        }
+                        SwitchCondition::When(binding) => self.check_binding(id, binding),
                     }
                 }
             }

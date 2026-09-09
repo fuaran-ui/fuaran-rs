@@ -70,16 +70,17 @@ fn metric(id: &str, key: &str, declaration: &str) -> String {
 /// A reader that declares NOTHING: a `Badge` label bound to a bare
 /// `{"$type":"State","key":k}`.
 ///
-/// A `Badge` label rather than the obvious `Metric` value, and the choice is
-/// forced rather than stylistic. This host's decoder cannot represent an ABSENT
-/// `State.defaultValue`: `Binding::State` holds a plain `StaticValue`, so an
-/// absent one decodes to the slot's typed placeholder, and at a NUMERIC slot
-/// that placeholder (`0`) is re-encoded as a real `"defaultValue":0` — which is
-/// a declaration to anything reading the document, including this walk. See
-/// `a_bare_state_at_a_numeric_slot_is_re_encoded_with_a_fabricated_default`,
-/// which pins that as a named pre-existing defect rather than leaving it to be
-/// rediscovered. A text-shaped slot's placeholder IS the absent sentinel, so
-/// the encoder omits it and the bare spelling survives the round trip intact.
+/// A `Badge` label rather than the obvious `Metric` value, and the choice was
+/// FORCED until Phase 1499 rather than stylistic: this host could not represent
+/// an ABSENT `State.defaultValue`, so at a NUMERIC slot the typed placeholder
+/// (`0`) was re-encoded as a real `"defaultValue":0` — a declaration to
+/// anything reading the document, including this walk — while a text-shaped
+/// slot's placeholder IS the absent sentinel and survived intact.
+///
+/// The case now carries the declaration as its own wire fact, so either slot
+/// would do. The `Badge` is kept because it is the shape every OTHER test in
+/// this file was written against, and rewriting them to prove the fix would
+/// have deleted the evidence that the rules hold at a text slot too.
 fn badge_bound(id: &str, key: &str) -> String {
     format!(
         r#"{{"id":"{id}","kind":{{"$type":"Badge","label":{{"$type":"Bound","binding":{{"$type":"State","key":"{key}"}}}},"variant":"Info"}}}}"#
@@ -332,47 +333,64 @@ fn rule5_a_host_reserved_key_is_never_seeded() {
     );
 }
 
-// ── A named pre-existing defect this pass surfaced ───────────────────────────
+// ── The defect this pass surfaced, and the property that closed it ──────────
 
-/// This host cannot represent an ABSENT `State.defaultValue`, and at a NUMERIC
-/// slot that loses information the wire carried.
+/// A bare `State.defaultValue` survives its round trip at a NUMERIC slot, and
+/// the seeding walk still sees the typed default. Both halves, because the
+/// second is what the first had to be closed WITHOUT breaking.
 ///
-/// `Binding::State` holds a plain `StaticValue`, so an absent `defaultValue`
-/// decodes to the slot's typed placeholder. Where that placeholder is the
-/// absent sentinel (`StringOpt(None)` / `Ast(Null)`) the encoder omits it again
-/// and the round trip is faithful, which is why the corpus is green: its five
-/// bare-`State` occurrences all sit at such slots. At a `Float` / `Int` slot the
-/// placeholder is `0`, and the encoder emits it — so
-/// `{"$type":"State","key":k}` re-encodes as `{"$type":"State","defaultValue":0,
-/// "key":k}`, a byte-level round-trip failure no fixture exercises.
+/// This was a named pinned defect until Phase 1499. `Binding::State` held a
+/// plain `StaticValue`, so an absent `defaultValue` decoded to the slot's typed
+/// placeholder. Where that placeholder is the absent sentinel
+/// (`StringOpt(None)` / `Ast(Null)`) the encoder omitted it again and the round
+/// trip was faithful, which is why the corpus was green — its bare-`State`
+/// occurrences all sat at such slots. At a `Float` / `Int` slot the placeholder
+/// is `0` and the encoder emitted it, so `{"$type":"State","key":k}` re-encoded
+/// as `{"$type":"State","defaultValue":0,"key":k}`.
 ///
-/// Pinned rather than fixed, and pinned rather than left silent. It PREDATES
-/// §24.4 — the seeding pass surfaced it, having to ask "did this reader
-/// declare?" of every binding in the tree — and closing it means giving
-/// `Binding::State` an optional default, which changes what `resolve` yields for
-/// every unwritten numeric state slot on this host. That is a decoder change
-/// with its own parity argument, not a footnote to a renderer rule.
+/// The corpus reached it in the end — `nodes/node-visible` and
+/// `nodes/switch-predicate` carry a bare `State` at a BOOL slot, where the
+/// placeholder is `false` and the same fabrication appears — which is what
+/// forced the fix the pin named: the case now carries the resolution default
+/// AND a separate `default_declared` wire fact.
 ///
-/// The seeding consequence is stated plainly: a bare `State` at a numeric slot
-/// seeds `0` here and seeds nothing on the hosts that model absence. This test
-/// is what makes that a known number rather than a surprise.
+/// The second assertion is the SEEDING half, and the pin named it as the cost:
+/// "a bare `State` at a numeric slot seeds `0` here and seeds nothing on the
+/// hosts that model absence." It now seeds nothing, which is §24.4 rule 1 — a
+/// reader that declares nothing declares nothing — and this host in agreement
+/// with the rest of the roster. The walk reads the canonical re-encode, so it
+/// stopped seeing a declaration the moment the encoder stopped writing one.
+///
+/// RESOLUTION is untouched, and that separation is the whole point of carrying
+/// the two facts apart: an unwritten numeric state slot still resolves to `0`
+/// and an unwritten bool one to `false`, which is what keeps §3.6's `visible`
+/// rule removing a node whose unwritten predicate resolves `false`. Only the
+/// ENCODER moved, and only to stop writing a `defaultValue` no document carried.
 #[test]
-fn a_bare_state_at_a_numeric_slot_is_re_encoded_with_a_fabricated_default() {
+fn a_bare_state_round_trips_and_declares_nothing_to_seed() {
     let doc = metric("m", "users", "");
     let t = tree(&doc);
-    assert_ne!(
+    assert_eq!(
         fuaran_rs::wire::encode_node(&t),
         doc,
-        "the round trip is faithful now — delete this pin and the comment above it"
+        "a bare State at a numeric slot must not gain a fabricated defaultValue"
     );
     assert_eq!(
         seeds_of(&doc).get("users"),
-        Some(&JVal::Num(0.0)),
-        "the fabricated default is what this walk sees; if it no longer does, the decoder was fixed"
+        None,
+        "rule 1 — a reader that declares nothing declares nothing; the fabricated default is gone"
+    );
+    // RESOLUTION still yields the slot's typed default, which is the half the
+    // encoder fix had to leave alone — asserted end to end through the render
+    // rather than through an accessor, because it is the rendered figure a
+    // reader sees that the parity argument is about.
+    assert!(
+        fuaran_rs::render::render_to_html(&t, &fuaran_rs::render::BindingSources::default())
+            .contains(">0<"),
+        "an unwritten numeric state slot still resolves to the slot's typed default"
     );
 
-    // The text-shaped slot the rule tests use is faithful, which is what makes
-    // the divergence a slot-typing question rather than a walk defect.
+    // The text-shaped slot the rule tests use, faithful before and after.
     let bare = badge_bound("b", "users");
     assert_eq!(fuaran_rs::wire::encode_node(&tree(&bare)), bare);
 }

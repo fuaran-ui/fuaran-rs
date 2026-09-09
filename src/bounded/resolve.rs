@@ -119,6 +119,10 @@ pub fn resolve_tree(sources: &BindingSources, node: &Node) -> Node {
         // TextSource slot rather than travelling through unread: a `Bound`
         // tooltip must show the store's value, not its binding.
         tooltip: resolve_text_opt(sources, &node.tooltip),
+        // Phase 1535 — the presence predicate is a BINDING, not content: it is
+        // resolved at render, where a `false` removes the node, so re-resolving
+        // it here would substitute an answer for the question.
+        visible: node.visible.clone(),
     }
 }
 
