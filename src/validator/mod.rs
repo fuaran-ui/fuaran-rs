@@ -497,6 +497,34 @@ impl Walker {
                 self.check_binding(id, options);
                 self.check_binding(id, value);
             }
+            // Phase 1130 — `Rating` and `Color` carry the same handler/write-back
+            // lint as every other single-slot control: an omitted handler arms
+            // the write-back default and so needs a WRITABLE value slot.
+            FormFieldKind::Rating {
+                value, on_change, ..
+            }
+            | FormFieldKind::Color { value, on_change } => {
+                if on_change.is_none() {
+                    self.check_writable(id, "value", value);
+                }
+                self.check_binding(id, value);
+            }
+            // Phase 1121 — `suggestions` is OPTIONAL (the difference from
+            // `Combobox.options`), so it is checked only when present.
+            FormFieldKind::Tokens {
+                value,
+                suggestions,
+                on_change,
+                ..
+            } => {
+                if on_change.is_none() {
+                    self.check_writable(id, "value", value);
+                }
+                if let Some(suggestions) = suggestions {
+                    self.check_binding(id, suggestions);
+                }
+                self.check_binding(id, value);
+            }
         }
     }
 
@@ -745,6 +773,18 @@ impl Walker {
                     self.check_action(id, inner);
                 }
             }
+            // Phase 1537 — both continuations carry ordinary actions, so the
+            // lints owed to them are owed inside a confirmation too.
+            Action::Confirm {
+                on_confirm,
+                on_cancel,
+                ..
+            } => {
+                self.check_action(id, on_confirm);
+                if let Some(on_cancel) = on_cancel {
+                    self.check_action(id, on_cancel);
+                }
+            }
             Action::Dispatch
             | Action::Notify { .. }
             | Action::Navigate { .. }
@@ -753,6 +793,8 @@ impl Walker {
             | Action::CommitLocal { .. }
             | Action::WriteToClipboard { .. }
             | Action::ReadFileBody { .. }
+            | Action::Print
+            | Action::Focus { .. }
             | Action::Invoke { .. } => {}
         }
     }

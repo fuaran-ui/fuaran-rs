@@ -565,6 +565,12 @@ decode_bare_enum!(decode_text_direction, TextDirection, "TextDirection");
 decode_bare_enum!(decode_link_protection, LinkProtection, "LinkProtection");
 decode_bare_enum!(decode_math_display, MathDisplay, "MathDisplay");
 decode_bare_enum!(decode_date_variant, DateVariant, "DateVariant");
+// Phase 1536 — `Action::Navigate`'s destination window. BARE, so `"_blank"`
+// reports at `$.kind.onClick.target` with no `.$type` suffix, and is refused
+// rather than aliased: the HTML vocabulary it comes from also contains
+// `_parent` and `_top`, which are frame-busting gestures a hosted tree must not
+// be able to ask for.
+decode_bare_enum!(decode_navigate_target, NavigateTarget, "NavigateTarget");
 decode_bare_enum!(decode_text_format, TextFormat, "TextFormat");
 decode_bare_enum!(decode_compare_op, CompareOp, "CompareOp");
 decode_bare_enum!(
@@ -2334,13 +2340,24 @@ fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
         }
         "Navigate" => Ok(Action::Navigate {
             // Field aliases: href (the dominant web name) / url / to → route.
-            route: req_string_aliased(
+            //
+            // Phase 1536 — the route is a `TextSource`, so a tree can name a
+            // destination it computes from what the reader is looking at. The
+            // bare JSON string IS `Literal`'s canonical form, so every document
+            // written before the widening decodes exactly as it did — aliases
+            // included, since they resolve before the value is decoded.
+            route: req_text_source_aliased(
                 path,
                 fields,
                 "route",
                 &["href", "url", "to"],
-                "route string",
+                "route TextSource",
             )?,
+            // Omitted at `Self`, so absence is the pre-1536 behaviour.
+            target: match get(fields, "target") {
+                None => NavigateTarget::Self_,
+                Some(v) => decode_navigate_target(&format!("{path}.target"), v)?,
+            },
         }),
         "SetState" => {
             // Phase 818 — `value` (a literal JSON value, written verbatim) XOR
@@ -2396,8 +2413,78 @@ fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
         "CommitLocal" => Ok(Action::CommitLocal {
             node_id: req_string(path, fields, "nodeId", "Local-bound input NodeId string")?,
         }),
+        // Phase 1126 — the payload is a `TextSource`; the bare JSON string IS
+        // `Literal`'s canonical form, so the explicit `{"$type":"Literal",…}`
+        // envelope normalises down to it here as at every other text slot
+        // (§16). Never coerced from a non-text JSON value: a host that read the
+        // widening as "this member is now open" would put a JSON literal on the
+        // reader's clipboard, which the reader later pastes with authority.
         "WriteToClipboard" => Ok(Action::WriteToClipboard {
-            text: req_string(path, fields, "text", "clipboard payload string")?,
+            text: req_text_source(path, fields, "text", "clipboard payload TextSource")?,
+        }),
+        // Phase 1124 — the payload-free print, and the ONE `Action` arm strict
+        // about unrecognised members. Everywhere else in this format an unknown
+        // member is one the reading host has not learned yet, and dropping it is
+        // the forward-compatible answer; here there is nothing to learn — page
+        // range, size, margins and copies are the host's page setup and the
+        // reader's dialogue — so accepting `{"$type":"Print","pageRange":"1-3"}`
+        // would leave the emitter believing it had constrained a printing it had
+        // not, with no error anywhere saying otherwise. The refusal names the
+        // offending member's own path, taking the FIRST in sorted order so which
+        // member is named is deterministic.
+        "Print" => {
+            let mut extras: Vec<&str> = fields
+                .iter()
+                .map(|(k, _)| k.as_str())
+                .filter(|k| *k != "$type")
+                .collect();
+            if !extras.is_empty() {
+                extras.sort_unstable();
+                return Err(wrong_type(
+                    &format!("{path}.{}", extras[0]),
+                    "no member beside $type — Print takes no payload",
+                ));
+            }
+            Ok(Action::Print)
+        }
+        // Phase 1537 — ask, then act. The DEPTH-ONE REFUSAL is the substance of
+        // this arm: a `Confirm` reachable from either continuation is refused,
+        // and the check walks the DECODED continuation rather than its immediate
+        // `$type`, so a nested confirm inside a `Chain` is caught by the same
+        // line that catches a bare one. A dialogue that answers a dialogue is a
+        // modal stack the reader cannot escape, and it says nothing one question
+        // does not.
+        //
+        // `WRONG_TYPE` follows the `SetState` value/valueFrom and
+        // `Print`-with-payload precedents: a decoder POLICY refusal reuses it
+        // rather than minting a code every host in the roster would owe an
+        // adoption for.
+        "Confirm" => {
+            let prompt = req_text_source(path, fields, "prompt", "confirmation prompt TextSource")?;
+            let on_confirm_j = req(path, fields, "onConfirm", "Action (onConfirm)")?;
+            let on_confirm_path = format!("{path}.onConfirm");
+            let on_confirm = decode_action(&on_confirm_path, on_confirm_j)?;
+            refuse_nested_confirm(&on_confirm, &on_confirm_path)?;
+            let on_cancel = match get(fields, "onCancel") {
+                None => None,
+                Some(v) => {
+                    let on_cancel_path = format!("{path}.onCancel");
+                    let action = decode_action(&on_cancel_path, v)?;
+                    refuse_nested_confirm(&action, &on_cancel_path)?;
+                    Some(Box::new(action))
+                }
+            };
+            Ok(Action::Confirm {
+                prompt,
+                on_confirm: Box::new(on_confirm),
+                on_cancel,
+            })
+        }
+        // Phase 1537 — a bare node id, the `CommitLocal` shape above. It
+        // addresses a node in THIS document, so there is nothing for a binding
+        // to compute and no `TextSource` here.
+        "Focus" => Ok(Action::Focus {
+            node_id: req_string(path, fields, "nodeId", "focus target NodeId string")?,
         }),
         "ReadFileBody" => {
             let file_ref = req_string(path, fields, "fileRef", "FileRef id string")?;
@@ -2417,8 +2504,33 @@ fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
         other => Err(unknown_du_case(
             path,
             other,
-            "Dispatch | Call | Notify | Navigate | SetState | AiTool | Chain | CommitLocal | WriteToClipboard | ReadFileBody | Invoke",
+            "Dispatch | Call | Notify | Navigate | SetState | AiTool | Chain | CommitLocal | WriteToClipboard | Print | Confirm | Focus | ReadFileBody | Invoke",
         )),
+    }
+}
+
+/// Phase 1537 — fail when a `Confirm` is reachable from `action`. Confirmation
+/// is bounded at ONE question: a dialogue that answers a dialogue is a modal
+/// stack the reader cannot escape, and it expresses no intent a single question
+/// does not.
+///
+/// It walks the DECODED action rather than raw JSON, and descends `Chain`,
+/// because a chain is otherwise a hiding place — a check written against the
+/// continuation's immediate `$type` passes a nested confirm one level down.
+fn refuse_nested_confirm(action: &Action, path: &str) -> DResult<()> {
+    match action {
+        Action::Confirm { .. } => Err(wrong_type(
+            path,
+            "no Confirm inside another Confirm's continuation — confirmation is bounded at one \
+             question",
+        )),
+        Action::Chain(ops) => {
+            for (i, inner) in ops.iter().enumerate() {
+                refuse_nested_confirm(inner, &format!("{path}.ops[{i}]"))?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
     }
 }
 
@@ -3097,6 +3209,31 @@ mod control_value_defaults {
     pub fn date_range() -> StaticValue {
         StaticValue::StringPair(String::new(), String::new())
     }
+    /// Phase 1121 — the EMPTY LIST. The token list is ordered and the order is
+    /// the reader's, so an auto-bound token field starts with no chips rather
+    /// than with a placeholder one.
+    pub fn tokens() -> StaticValue {
+        StaticValue::StringList(Vec::new())
+    }
+    /// Phase 1130 — `Rating` shares `Number`'s zero placeholder: an auto-bound
+    /// rating starts unrated.
+    pub fn rating() -> StaticValue {
+        StaticValue::Ast(JVal::Num(0.0))
+    }
+    /// Phase 1130 — the unset swatch. A native colour input substitutes its own
+    /// default when handed nothing, and `#000000` is that default's wire
+    /// spelling — the one `#rrggbb` form the control can hold.
+    pub fn color() -> StaticValue {
+        StaticValue::Ast(JVal::Str("#000000".to_string()))
+    }
+}
+
+/// `#rrggbb` — six hexadecimal digits after a `#`, either case
+/// (WIRE_FORMAT.md §3.6.17). Deliberately narrower than CSS: it is the one
+/// shape a native colour input can hold or return.
+pub fn is_hex_colour(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    bytes.len() == 7 && bytes[0] == b'#' && bytes[1..].iter().all(u8::is_ascii_hexdigit)
 }
 
 fn decode_form_field_kind(
@@ -3262,6 +3399,75 @@ fn decode_form_field_kind(
                 step: opt_float(path, fields, "step")?,
                 on_change,
             })
+        }
+        // Phase 1121 — the multi-token input. Every member is OPTIONAL, and
+        // `allowFreeText` omits at TRUE (the opposite polarity to `Combobox`,
+        // whose option source is required). The one decode refusal is the
+        // control that cannot exist: free text denied AND no suggestion source,
+        // so no gesture could ever put a token in. It is refused at
+        // `allowFreeText` rather than at `suggestions`, because the member that
+        // was written is the one that names the impossible state — an absent
+        // `suggestions` is the ordinary open token box.
+        "Tokens" => {
+            let suggestions = opt_binding_slot(path, fields, "suggestions", StaticSlot::Options)?;
+            let allow_free_text = opt_bool(path, fields, "allowFreeText")?.unwrap_or(true);
+            if !allow_free_text && suggestions.is_none() {
+                return Err(wrong_type(
+                    &format!("{path}.allowFreeText"),
+                    "a Tokens field admitting no free text needs a suggestion source — with \
+                     neither, no gesture could ever put a token into it",
+                ));
+            }
+            Ok(FormFieldKind::Tokens {
+                value: value_or(StaticSlot::StringList, control_value_defaults::tokens())?,
+                suggestions,
+                allow_free_text,
+                on_change,
+            })
+        }
+        // Phase 1130 — the score. `max` IS the scale, so it is required and a
+        // value below 1 is refused rather than clamped: a scale with no
+        // positions names a control that cannot exist. Note the asymmetry the
+        // corpus pins — the SCALE is refused here and the VALUE is not, because
+        // a bound value is invisible to a decoder and a rule enforced only on
+        // literals would be two rules wearing one name.
+        "Rating" => {
+            let max = req_int(path, fields, "max", "rating scale integer")?;
+            if max < 1 {
+                return Err(wrong_type(
+                    &format!("{path}.max"),
+                    "a rating scale of at least 1 — a scale with no positions has nothing to \
+                     draw and no keystroke that could change anything",
+                ));
+            }
+            Ok(FormFieldKind::Rating {
+                value: value_or(StaticSlot::Float, control_value_defaults::rating())?,
+                max,
+                // Governs ENTRY granularity, never display: a host must not
+                // quantise a resolved value to it.
+                allow_half: opt_bool(path, fields, "allowHalf")?.unwrap_or(false),
+                on_change,
+            })
+        }
+        // Phase 1130 — the swatch. Only the STATIC case is judged here, and the
+        // split is recorded rather than hidden: a State / Query / Selection
+        // binding carries its text from outside the document, where a decoder
+        // cannot see it. The same rule is owed by the pre-emit validator and by
+        // the server-side submission floor.
+        "Color" => {
+            let value = value_or(StaticSlot::Str, control_value_defaults::color())?;
+            if let Binding::Static {
+                value: StaticValue::Ast(JVal::Str(literal)),
+            } = &value
+                && !is_hex_colour(literal)
+            {
+                return Err(wrong_type(
+                    &format!("{path}.value"),
+                    "a `#rrggbb` colour — the one shape a native colour input can hold, so a \
+                     literal outside it names a colour this control could never carry",
+                ));
+            }
+            Ok(FormFieldKind::Color { value, on_change })
         }
         // The hint is DERIVED from the canonical vocabulary, never hand-typed —
         // the hand-typed form had already drifted (Phase 746).

@@ -621,7 +621,16 @@ fn action(a: &Action) -> String {
                 field("payload", json_value(payload)),
             ],
         ),
-        Action::Navigate { route } => case_obj("Navigate", vec![field("route", s(route))]),
+        // Phase 1536 — the route is a `TextSource` (the bare string being
+        // `Literal`'s canonical form), and `target` omits at `Self`, so a
+        // pre-1536 document re-encodes byte-identically.
+        Action::Navigate { route, target } => {
+            let mut fields = vec![field("route", text_source(route))];
+            if *target != NavigateTarget::Self_ {
+                fields.push(field("target", s(target.as_str())));
+            }
+            case_obj("Navigate", fields)
+        }
         // Phase 818 — `value` / `valueFrom` are XOR siblings; each is emitted
         // only when present (keys sort, so field order stays alphabetical).
         Action::SetState {
@@ -652,9 +661,29 @@ fn action(a: &Action) -> String {
         Action::CommitLocal { node_id } => {
             case_obj("CommitLocal", vec![field("nodeId", s(node_id))])
         }
+        // Phase 1126 — the payload is a `TextSource`; `text_source` renders the
+        // `Literal` case as the bare string, which is the canonical spelling.
         Action::WriteToClipboard { text } => {
-            case_obj("WriteToClipboard", vec![field("text", s(text))])
+            case_obj("WriteToClipboard", vec![field("text", text_source(text))])
         }
+        // Phase 1124 — the payload-free print: `$type` and nothing else.
+        Action::Print => case_obj("Print", vec![]),
+        // Phase 1537 — `onCancel` omits when absent (an author who declares no
+        // cancel branch means "nothing happens", which absence already says).
+        Action::Confirm {
+            prompt,
+            on_confirm,
+            on_cancel,
+        } => {
+            let mut fields = vec![];
+            if let Some(cancel) = on_cancel {
+                fields.push(field("onCancel", action(cancel)));
+            }
+            fields.push(field("onConfirm", action(on_confirm)));
+            fields.push(field("prompt", text_source(prompt)));
+            case_obj("Confirm", fields)
+        }
+        Action::Focus { node_id } => case_obj("Focus", vec![field("nodeId", s(node_id))]),
         Action::ReadFileBody { file_ref, encoding } => case_obj(
             "ReadFileBody",
             vec![
@@ -1445,6 +1474,15 @@ mod control_value_defaults {
     pub fn date_range() -> StaticValue {
         StaticValue::StringPair(String::new(), String::new())
     }
+    pub fn tokens() -> StaticValue {
+        StaticValue::StringList(Vec::new())
+    }
+    pub fn rating() -> StaticValue {
+        StaticValue::Ast(JVal::Num(0.0))
+    }
+    pub fn color() -> StaticValue {
+        StaticValue::Ast(JVal::Str("#000000".to_string()))
+    }
 }
 
 /// The `value` field for a control slot: omitted when it is exactly the
@@ -1718,6 +1756,60 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
                 fields.push(field("step", num(*step)));
             }
             case_obj("DateRange", fields)
+        }
+        // Phase 1121 — `allowFreeText` omits at TRUE here (the opposite of
+        // `Combobox`), so the shortest document `{"$type":"Tokens"}` is the
+        // plain open token box.
+        FormFieldKind::Tokens {
+            value,
+            suggestions,
+            allow_free_text,
+            on_change,
+        } => {
+            let mut fields = handler_field("onChange", on_change);
+            if !*allow_free_text {
+                fields.push(field("allowFreeText", boolean(false)));
+            }
+            if let Some(suggestions) = suggestions {
+                fields.push(field("suggestions", binding(suggestions)));
+            }
+            fields.extend(control_value_field(
+                auto_bind,
+                control_value_defaults::tokens(),
+                value,
+            ));
+            case_obj("Tokens", fields)
+        }
+        // Phase 1130 — `max` is the scale and always emits; `allowHalf` omits
+        // at false, the SHORTEST rating document being the whole-star one.
+        FormFieldKind::Rating {
+            value,
+            max,
+            allow_half,
+            on_change,
+        } => {
+            let mut fields = handler_field("onChange", on_change);
+            if *allow_half {
+                fields.push(field("allowHalf", boolean(true)));
+            }
+            fields.push(field("max", int(*max)));
+            fields.extend(control_value_field(
+                auto_bind,
+                control_value_defaults::rating(),
+                value,
+            ));
+            case_obj("Rating", fields)
+        }
+        // Phase 1130 — case is PRESERVED, never normalised: `#FFAA00` rides
+        // through the ordinary string binding unchanged.
+        FormFieldKind::Color { value, on_change } => {
+            let mut fields = handler_field("onChange", on_change);
+            fields.extend(control_value_field(
+                auto_bind,
+                control_value_defaults::color(),
+                value,
+            ));
+            case_obj("Color", fields)
         }
     }
 }

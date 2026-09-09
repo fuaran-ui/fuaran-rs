@@ -154,6 +154,13 @@ bare_enum!(LinkProtection { Email => "email" });
 bare_enum!(MathDisplay { Inline => "Inline", Block => "Block" });
 bare_enum!(DateVariant { Date => "Date", Time => "Time", DateTime => "DateTime" });
 bare_enum!(FileReadEncoding { Text => "Text", Base64 => "Base64", DataUrl => "DataUrl" });
+// Phase 1536 — `Action::Navigate`'s destination window. A CLOSED enum of two,
+// deliberately not HTML's `target` attribute: that vocabulary also carries
+// `_parent` and `_top`, which are frame-busting gestures a hosted tree must not
+// be able to ask for, so `_blank` is refused rather than aliased — accepting
+// any of it would teach an emitter the wrong vocabulary. Omitted at `Self_`,
+// which is the pre-1536 behaviour.
+bare_enum!(NavigateTarget { Self_ => "Self", Blank => "Blank" });
 // `FormFieldKind` names the CONTROL; `FormField.rule` names the ACCEPTED SET.
 bare_enum!(TextFormat { Email => "email", Url => "url", Tel => "tel" });
 bare_enum!(CompareOp {
@@ -434,8 +441,17 @@ pub enum Action {
         channel: String,
         payload: JVal,
     },
+    /// Phase 1536 — `route` is a `TextSource`, not a bare string, so a tree can
+    /// name a destination it computes from what the reader is looking at. The
+    /// bare JSON string IS `Literal`'s canonical form, so every document
+    /// written before the widening decodes exactly as it did.
+    ///
+    /// `target` is the CLOSED enum `Self | Blank`, not HTML's `target`
+    /// attribute: that vocabulary also contains `_parent` and `_top`, which are
+    /// frame-busting gestures a hosted tree must not be able to ask for.
     Navigate {
-        route: String,
+        route: TextSource,
+        target: NavigateTarget,
     },
     /// Phase 818 — `value` (a literal, written verbatim) XOR `value_from` (a
     /// Binding evaluated at dispatch time inside the existing gate); decode
@@ -453,8 +469,37 @@ pub enum Action {
     CommitLocal {
         node_id: NodeId,
     },
+    /// Phase 1126 — the payload is a `TextSource`. A `text` that is neither a
+    /// string nor a `$type`-tagged `TextSource` is `WRONG_TYPE` and is never
+    /// coerced: a host that read the widening as "this member is now open"
+    /// would put a JSON literal on the reader's clipboard, and a clipboard is a
+    /// channel the reader later pastes somewhere with authority.
     WriteToClipboard {
-        text: String,
+        text: TextSource,
+    },
+    /// Phase 1124 — the payload-free print. The ONE `Action` arm strict about
+    /// unrecognised members: page range, size, margins and copies are the
+    /// host's page setup and the reader's dialogue, so there is nothing here a
+    /// future host could learn, and accepting a member would leave the emitter
+    /// believing it had constrained a printing it had not.
+    Print,
+    /// Phase 1537 — ask, then act. `prompt` is a `TextSource` so the question
+    /// can name what the reader selected; an absent `on_cancel` means "nothing
+    /// happens", which an absent action already expresses.
+    ///
+    /// Confirmation is bounded at ONE question — a `Confirm` reachable from
+    /// either continuation is refused, and the check walks the DECODED
+    /// continuation so a `Chain` cannot hide the nesting.
+    Confirm {
+        prompt: TextSource,
+        on_confirm: Box<Action>,
+        on_cancel: Option<Box<Action>>,
+    },
+    /// Phase 1537 — a bare node id, the `CommitLocal` shape. It addresses a node
+    /// in THIS document, so there is nothing for a binding to compute and no
+    /// `TextSource` here.
+    Focus {
+        node_id: NodeId,
     },
     /// Only the file id + encoding cross the wire; the blob and `onRead` do not.
     ReadFileBody {
@@ -1110,6 +1155,53 @@ pub enum FormFieldKind {
         min: Option<String>,
         max: Option<String>,
         step: Option<f64>,
+        on_change: Option<Closure>,
+    },
+    /// Phase 1121 — SEVERAL values accumulated as removable chips, over a
+    /// suggestion set that may be open, searchable, asynchronous, or absent
+    /// entirely (WIRE_FORMAT.md §3.6.19).
+    ///
+    /// Every member is optional, so `{"$type":"Tokens"}` is a complete
+    /// document. `allow_free_text` omits at **`true`** — the OPPOSITE polarity
+    /// to `Combobox`, and the one thing about this case a host is most likely
+    /// to get wrong: `Combobox.options` is required so "constrained" is its
+    /// resting state, where `suggestions` is optional so "open" is this one's.
+    /// The default follows the required-ness of the set.
+    ///
+    /// `value` is a `Binding<string list>` and the list is ORDERED — chips
+    /// appear where the reader added them, so a host must not sort or
+    /// de-duplicate it.
+    Tokens {
+        value: Binding,
+        suggestions: Option<Binding>,
+        allow_free_text: bool,
+        on_change: Option<Closure>,
+    },
+    /// Phase 1130 — a subjective score on a small ordinal scale
+    /// (WIRE_FORMAT.md §3.6.17). The line against `RangedNumber` is who the
+    /// number belongs to: a rating is a judgement a person GIVES, a ranged
+    /// number is a measurement they REPORT.
+    ///
+    /// `max` is the case's only required member and is refused below 1 — a
+    /// scale with no positions has nothing to draw and no keystroke that could
+    /// change anything. `value` is a float even where nothing can type a
+    /// fraction, because the commonest rating a reader sees is an AVERAGE
+    /// arriving through a `Query`. `allow_half` governs ENTRY, never display.
+    Rating {
+        value: Binding,
+        max: i64,
+        allow_half: bool,
+        on_change: Option<Closure>,
+    },
+    /// Phase 1130 — the platform's own colour picker (WIRE_FORMAT.md §3.6.17).
+    /// A CONTROL, not a `rule.format`: a swatch that opens the operating
+    /// system's picker, which no format on a text field can produce.
+    ///
+    /// Both members optional. The value is `#rrggbb` and nothing else — the one
+    /// form a native colour input can hold or return — and case is PRESERVED
+    /// rather than normalised, so `#FFAA00` round-trips byte-identically.
+    Color {
+        value: Binding,
         on_change: Option<Closure>,
     },
 }
@@ -2155,6 +2247,9 @@ pub const CANONICAL_FORM_FIELD_KINDS: &[&str] = &[
     "Date",
     "DateRange",
     "Combobox",
+    "Tokens",
+    "Rating",
+    "Color",
 ];
 
 // ─── Node envelope (§3.1) ────────────────────────────────────────────────────

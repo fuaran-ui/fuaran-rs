@@ -11,7 +11,7 @@ mod result;
 
 pub(crate) use decode::coerce;
 pub(crate) use decode::live_data_source;
-pub use decode::{decode_node, decode_op};
+pub use decode::{decode_node, decode_op, is_hex_colour};
 pub use encode::{encode_node, encode_op};
 pub use model::*;
 pub use result::{DecodeError, DecodeErrorCode};

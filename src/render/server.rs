@@ -43,10 +43,11 @@ use crate::wire::{
 };
 
 use super::bindings::{
-    BindingSources, EM_DASH, NumberResolution, ResolvedRows, accessibility_attributes,
-    display_number, format_number, render_text, resolve_float_pair, resolve_float_seq,
-    resolve_number, resolve_options, resolve_rows, resolve_scalar_number, resolve_string_pair,
-    static_display_string, try_bool, try_number, try_scalar_number, try_string,
+    BindingSources, EM_DASH, NumberResolution, Resolution, ResolvedRows, Value,
+    accessibility_attributes, display_number, format_number, render_text, resolve,
+    resolve_float_pair, resolve_float_seq, resolve_number, resolve_options, resolve_rows,
+    resolve_scalar_number, resolve_string_pair, static_display_string, try_bool, try_number,
+    try_scalar_number, try_string,
 };
 use super::class_names::{icon_size_class, node_class_name, tone_var, trend_sentiment};
 use super::egress::{
@@ -197,11 +198,24 @@ fn namespace_kind_in_place(prefix: &str, kind: &mut NodeKind) {
 
 fn contains_unwired_action(action: &Action) -> bool {
     match action {
+        // Phases 1124/1537 — `Print` and `Focus` are host affordances the
+        // client performs directly, and a `Confirm` is unwired exactly when
+        // its own continuations are, so it delegates rather than declaring.
         Action::Dispatch
         | Action::CommitLocal { .. }
         | Action::WriteToClipboard { .. }
-        | Action::ReadFileBody { .. } => false,
+        | Action::ReadFileBody { .. }
+        | Action::Print
+        | Action::Focus { .. } => false,
         Action::Chain(actions) => actions.iter().any(contains_unwired_action),
+        Action::Confirm {
+            on_confirm,
+            on_cancel,
+            ..
+        } => {
+            contains_unwired_action(on_confirm)
+                || on_cancel.as_deref().is_some_and(contains_unwired_action)
+        }
         Action::Call { .. }
         | Action::Notify { .. }
         | Action::Navigate { .. }
@@ -3104,6 +3118,234 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
                 ),
             )
         }
+        // Phase 1130 — the score. Two shapes, and which one is emitted is
+        // decided by whether anything can WRITE the value (WIRE_FORMAT.md
+        // §3.6.17 obligations 3 and 4):
+        //
+        //   * a rating nothing can write is `role="img"` carrying the whole
+        //     reading as its accessible name and taking no focus — a slider a
+        //     reader can focus and can never move is a fake affordance, and the
+        //     honest markup for a picture of a score is a picture;
+        //   * a WRITABLE rating floors on native RADIOS, one per enterable
+        //     position. Zero-JS, a `role="slider"` element can be neither
+        //     adjusted nor submitted, and NO hand-written ARIA is emitted here
+        //     for §3.6.9's reason — a static `aria-valuenow` that can never
+        //     change replaces the user agent's correct semantics with a claim
+        //     inert markup cannot keep.
+        //
+        // RECORDED KNOWN LIMIT, matching the reference host's: a writable
+        // rating whose current value is a fraction landing on no enterable
+        // position checks no radio. The floor shows the positions a reader can
+        // choose, not the average; the exact figure rides as
+        // `data-fuaran-rating-value` so it is visibly not dropped, and it is
+        // NOT claimed as coverage.
+        FormFieldKind::Rating {
+            value,
+            max,
+            allow_half,
+            on_change,
+        } => {
+            let scale = *max;
+            let current = try_number(ctx.sources, value).unwrap_or(0.0);
+            let shown = current.clamp(0.0, scale as f64);
+            let reading = format!("{} out of {}", display_number(shown), scale);
+            let star_row: String = (1..=scale)
+                .map(|position| {
+                    // Whole / partial / empty, per position — the reference
+                    // host's `RatingModel.fills`. A fractional value MUST draw
+                    // a partial position rather than round: rounding would show
+                    // the reader a figure the document did not state.
+                    let fill = if shown >= position as f64 {
+                        "fuaran-rating-star-full"
+                    } else if shown > (position - 1) as f64 {
+                        "fuaran-rating-star-partial"
+                    } else {
+                        "fuaran-rating-star-empty"
+                    };
+                    void_el(
+                        "span",
+                        &[
+                            ("class", s(format!("fuaran-rating-star {fill}"))),
+                            ("aria-hidden", s("true")),
+                        ],
+                    )
+                })
+                .collect();
+            if on_change.is_none() && !is_write_back_target(value) {
+                el(
+                    "span",
+                    &[
+                        (
+                            "class",
+                            s("fuaran-form-field-control fuaran-rating fuaran-rating-static"),
+                        ),
+                        ("role", s("img")),
+                        ("aria-label", s(reading)),
+                        ("data-fuaran-field", s(field.id.clone())),
+                    ],
+                    &star_row,
+                )
+            } else {
+                let step = if *allow_half { 0.5 } else { 1.0 };
+                let positions = (scale as f64 / step).round() as i64;
+                let choices: String = (1..=positions)
+                    .map(|i| {
+                        let target = i as f64 * step;
+                        let radio = void_el(
+                            "input",
+                            &[
+                                ("type", s("radio")),
+                                ("name", s(field.id.clone())),
+                                ("value", s(display_number(target))),
+                                ("checked", AttrVal::Flag((target - shown).abs() < 1e-9)),
+                            ],
+                        );
+                        let caption = text_el(
+                            "span",
+                            &[("class", s("fuaran-rating-choice-label"))],
+                            &format!("{} out of {}", display_number(target), scale),
+                        );
+                        el(
+                            "label",
+                            &[("class", s("fuaran-rating-choice"))],
+                            &format!("{radio}{caption}"),
+                        )
+                    })
+                    .collect();
+                el(
+                    "span",
+                    &[
+                        (
+                            "class",
+                            s("fuaran-form-field-control fuaran-rating fuaran-rating-choices"),
+                        ),
+                        ("data-fuaran-field", s(field.id.clone())),
+                        (
+                            "data-fuaran-rating-value",
+                            s(format!("{} out of {}", display_number(shown), scale)),
+                        ),
+                    ],
+                    &format!("{star_row}{choices}"),
+                )
+            }
+        }
+        // Phase 1130 — the swatch. The platform's native colour input carries
+        // both the ARIA and the keyboard model, so there is nothing to
+        // hand-write. A value that resolves to something the element cannot
+        // hold falls back to the unset default rather than being passed
+        // through: a native input substitutes its own default silently, so
+        // handing it a bad literal would show a colour the document did not
+        // choose while the tree still said otherwise.
+        FormFieldKind::Color { value, .. } => {
+            let current = try_string(ctx.sources, value)
+                .filter(|c| crate::wire::is_hex_colour(c))
+                .unwrap_or_else(|| "#000000".to_string());
+            void_el(
+                "input",
+                &[
+                    ("class", s("fuaran-form-field-control fuaran-color-input")),
+                    ("data-fuaran-field", s(field.id.clone())),
+                    ("type", s("color")),
+                    ("id", s(field.id.clone())),
+                    ("required", AttrVal::Flag(field.required)),
+                    ("value", s(current)),
+                ],
+            )
+        }
+        // Phase 1121 — the token floor: ONE comma-separated text input,
+        // optionally backed by a `<datalist>` when a suggestion source
+        // resolves. The datalist is a real gain rather than decoration — it
+        // lets the user agent suggest tokens as the reader types, with no
+        // script, which is the trade the combobox floor makes too.
+        //
+        // The constraint marker is DECLARED, never claimed: nothing inert can
+        // enforce it, and `data-fuaran-tokens-constrained` says what the
+        // document asked for without pretending the floor honours it.
+        FormFieldKind::Tokens {
+            value,
+            suggestions,
+            allow_free_text,
+            ..
+        } => {
+            let list_id = format!("{}-suggestions", field.id);
+            let current = resolve_token_list(ctx.sources, value).join(", ");
+            let mut attrs: Vec<Attr> = vec![
+                ("class", s("fuaran-form-field-control fuaran-tokens-input")),
+                ("data-fuaran-field", s(field.id.clone())),
+                ("type", s("text")),
+            ];
+            if suggestions.is_some() {
+                attrs.push(("list", s(list_id.clone())));
+            }
+            // The browser's own history dropdown would otherwise compete with
+            // the datalist popup for the same gesture.
+            attrs.push(("autocomplete", s("off")));
+            attrs.push((
+                "data-fuaran-tokens-constrained",
+                s(if *allow_free_text { "false" } else { "true" }),
+            ));
+            attrs.push(("id", s(field.id.clone())));
+            attrs.push(("required", AttrVal::Flag(field.required)));
+            attrs.push(("value", s(current)));
+            let list = match suggestions {
+                None => String::new(),
+                Some(suggestions) => el(
+                    "datalist",
+                    &[("id", s(list_id))],
+                    &resolve_options(ctx.sources, suggestions)
+                        .iter()
+                        .filter(|o| o.value != "<opaque>")
+                        .map(|o| {
+                            text_el(
+                                "option",
+                                &[("value", s(o.value.clone()))],
+                                &render_text(ctx.sources, &o.label),
+                            )
+                        })
+                        .collect::<String>(),
+                ),
+            };
+            el(
+                "span",
+                &[("class", s("fuaran-tokens"))],
+                &format!("{}{}", void_el("input", &attrs), list),
+            )
+        }
+    }
+}
+
+/// Whether the declarative write-back can arm on this slot — a `State`, a
+/// bare `Filter` chip, or a `Local` buffer. Only the rating control consults
+/// it, because it is the only control whose ARIA ROLE changes with the answer;
+/// every other control renders the same markup either way and lets the
+/// validator do the complaining.
+fn is_write_back_target(binding: &Binding) -> bool {
+    matches!(
+        binding,
+        Binding::State { .. }
+            | Binding::Filter {
+                default_value: None,
+                ..
+            }
+            | Binding::Local { .. }
+    )
+}
+
+/// The token list a `Binding<string list>` slot resolves to, in the DOCUMENT'S
+/// OWN ORDER — never sorted, never de-duplicated (WIRE_FORMAT.md §3.6.19): both
+/// would rewrite a fact the reader can see, and de-duplication would silently
+/// repair a document the specification says is wrong.
+fn resolve_token_list(sources: &BindingSources, binding: &Binding) -> Vec<String> {
+    match resolve(sources, binding) {
+        Resolution::Resolved(Value::Static(StaticValue::StringList(items))) => items.clone(),
+        Resolution::Resolved(Value::Json(JVal::Arr(items))) => items
+            .iter()
+            .filter_map(|item| match item {
+                JVal::Str(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => vec![],
     }
 }
 

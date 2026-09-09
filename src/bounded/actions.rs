@@ -44,9 +44,9 @@
 
 use crate::canonical::JVal;
 use crate::render::BindingSources;
-use crate::render::bindings::{Resolution, Value, resolve};
+use crate::render::bindings::{Resolution, Value, resolve, try_string};
 use crate::render::sanitize::sanitize_url;
-use crate::wire::{Action, FileReadEncoding, StaticValue};
+use crate::wire::{Action, FileReadEncoding, NavigateTarget, StaticValue, TextSource};
 
 use super::effect::ClientEffect;
 
@@ -123,6 +123,9 @@ pub fn describe_action(action: &Action) -> &'static str {
         Action::Chain(_) => "Chain",
         Action::CommitLocal { .. } => "CommitLocal",
         Action::WriteToClipboard { .. } => "WriteToClipboard",
+        Action::Print => "Print",
+        Action::Confirm { .. } => "Confirm",
+        Action::Focus { .. } => "Focus",
         Action::ReadFileBody { .. } => "ReadFileBody",
         Action::Invoke { .. } => "Invoke",
     }
@@ -161,6 +164,24 @@ fn refused(
             action: describe_action(action).to_string(),
             reason: reason.into(),
         }],
+    }
+}
+
+/// A `TextSource` resolved at DISPATCH time, through the same binding
+/// resolution the host renders text slots with (§3.6.16 / §3.6's Navigate
+/// obligation). `None` means the source did not resolve — the two call sites
+/// answer that differently, and the difference is the specification's rather
+/// than this function's: an unresolvable clipboard payload is the empty string,
+/// where an unresolvable route navigates nowhere.
+///
+/// An `I18n` source is `None` here for the same reason: the loud
+/// `[i18n:<key>]` sentinel a label renders is a relative path at a route slot,
+/// which a permissive policy would fetch.
+fn resolve_text_source(store: &BindingSources, text: &TextSource) -> Option<String> {
+    match text {
+        TextSource::Literal(literal) => Some(literal.clone()),
+        TextSource::Bound(binding) => try_string(store, binding),
+        TextSource::I18n { .. } => None,
     }
 }
 
@@ -288,18 +309,76 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
         // declined effect dropped in the fold is indistinguishable from one that
         // was never reached, which is the one thing the denial record exists to
         // tell apart.
-        Action::Navigate { route } => match sanitize_url(route) {
-            Some(safe) => emitted(
+        //
+        // Phase 1536 — RESOLVE, THEN GATE, in that order. A bound route is
+        // resolved when the reader raises the action, and the scheme floor is
+        // applied to the RESOLVED string: checking the declaration would
+        // consult the floor about a template nobody navigates to while the
+        // string the router actually receives went unexamined.
+        //
+        // An UNRESOLVED route performs no navigation, and this is where the
+        // obligation differs from the clipboard's. At an ordinary text slot an
+        // unresolvable binding resolves to the empty string; here `""` is a
+        // real navigation — the current document with its query and fragment
+        // stripped — so the honest answer is a diagnostic and nothing else.
+        //
+        // A `Blank` target is REFUSED on this placement rather than navigated
+        // in place. This placement's client-effect envelope carries a route and
+        // nothing else, and its wire is specified elsewhere, so honouring the
+        // second context is not possible here and mint-a-member is not this
+        // phase's to do. Navigating in place would perform a different act from
+        // the one the document asked for, silently — and §3.6's own reasoning
+        // for making `noopener` / `noreferrer` a RENDERER obligation is exactly
+        // that a seam which cannot open a second context must not pretend to.
+        Action::Navigate {
+            route,
+            target: NavigateTarget::Blank,
+        } => {
+            let _ = route;
+            refused(
+                node_id,
+                action,
+                "a Blank target opens a second context, which this placement's effect envelope                  cannot carry",
                 store,
-                ClientEffect::Navigate {
-                    route: safe.into_owned(),
-                },
-            ),
-            None => refused(node_id, action, "the route is not a safe URL", store),
-        },
-        Action::WriteToClipboard { text } => {
-            emitted(store, ClientEffect::WriteToClipboard { text: text.clone() })
+            )
         }
+        Action::Navigate {
+            route,
+            target: NavigateTarget::Self_,
+        } => match resolve_text_source(&store, route) {
+            None => refused(
+                node_id,
+                action,
+                "the route did not resolve — an unresolved route navigates nowhere",
+                store,
+            ),
+            Some(resolved) => match sanitize_url(&resolved) {
+                Some(safe) => emitted(
+                    store,
+                    ClientEffect::Navigate {
+                        route: safe.into_owned(),
+                    },
+                ),
+                None => refused(node_id, action, "the route is not a safe URL", store),
+            },
+        },
+        // Phase 1126 — resolution happens at DISPATCH time, so what is copied is
+        // what the reader was looking at. Unlike the route above, an
+        // unresolvable payload resolves to the EMPTY STRING, as it does at every
+        // text slot: the asymmetry is the specification's, and it is why the two
+        // arms read differently.
+        Action::WriteToClipboard { text } => {
+            let resolved = resolve_text_source(&store, text).unwrap_or_default();
+            emitted(store, ClientEffect::WriteToClipboard { text: resolved })
+        }
+        // Phase 1537 — the focus move: a bare node id in THIS document, so
+        // there is nothing to resolve and nothing to gate.
+        Action::Focus { node_id: target } => emitted(
+            store,
+            ClientEffect::Focus {
+                node_id: target.clone(),
+            },
+        ),
         // `nodeId` is the node the EVENT came from, which §5.2 now states: the
         // surface holds the selected file against that node, so a reference
         // taken from the action would name something it cannot resolve.
@@ -333,10 +412,21 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
         // does not have; a dispatch carries only an erased payload and there is
         // no update function to fold it through; a local-buffer commit is a host
         // concern whose flushed value arrives as the event payload instead.
+        //
+        // `Print` and `Confirm` are documented no-ops here for a NARROWER
+        // reason, and it is a boundary rather than an omission. This
+        // placement's client-effect vocabulary is CLOSED and its wire is
+        // specified elsewhere, so neither a print gesture nor a modal
+        // round-trip has an effect to reach — and inventing one would mint
+        // vocabulary on a wire this phase does not own. A no-op with the
+        // `UnsupportedOnBoundedPath` diagnostic is what says so out loud;
+        // silently succeeding would tell an author a printing happened.
         Action::Notify { .. }
         | Action::AiTool { .. }
         | Action::Invoke { .. }
         | Action::Dispatch
+        | Action::Print
+        | Action::Confirm { .. }
         | Action::CommitLocal { .. } => no_op(node_id, action, store),
 
         // A call that ALSO declares where its answer should land is refused
@@ -396,7 +486,8 @@ mod tests {
         let outcome = run_bounded_action(
             "n",
             &Action::Navigate {
-                route: "javascript:alert(1)".into(),
+                route: TextSource::Literal("javascript:alert(1)".to_string()),
+                target: NavigateTarget::Self_,
             },
             BindingSources::default(),
         );
