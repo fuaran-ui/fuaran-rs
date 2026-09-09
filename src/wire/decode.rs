@@ -932,6 +932,108 @@ fn decode_data_source(j: &JVal) -> CResult<DataSource> {
     Ok(DataSource::Embedded { schema, columns })
 }
 
+/// Every direct sub-expression of `e`, so the three walks below share one
+/// definition of the shape and cannot disagree about which arms recurse.
+/// The `params` slot shared by `Binding::Transform` and `Binding::Expr` —
+/// ONE decoder, because §3.3.2 makes it the SAME slot following the same rules,
+/// and two copies would drift on the lenient form below.
+///
+/// Lenient AI-ingest (§3.6): a `{name: <Binding>}` MAP is accepted alongside
+/// the canonical `[{from, name}]` array — normalised to the array form sorted
+/// by name (the reference host's map iteration order). Omitted when empty.
+fn decode_binding_params(path: &str, fields: &Fields) -> DResult<Option<Vec<TransformParam>>> {
+    match get(fields, "params") {
+        None => Ok(None),
+        Some(JVal::Obj(map_fields)) => {
+            let mut entries: Vec<(&String, &JVal)> =
+                map_fields.iter().map(|(k, v)| (k, v)).collect();
+            entries.sort_by_key(|(k, _)| *k);
+            let mut out = Vec::with_capacity(entries.len());
+            for (name, from_j) in entries {
+                let from = decode_binding(&format!("{path}.params.{name}.from"), from_j)?;
+                out.push(TransformParam {
+                    name: name.clone(),
+                    from,
+                });
+            }
+            Ok(Some(out))
+        }
+        Some(v) => {
+            let items = as_arr(&format!("{path}.params"), v)?;
+            let p = format!("{path}.params[]");
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                let pf = as_obj(&p, item)?;
+                let name = req_string(&p, pf, "name", "param name string")?;
+                let from_j = req(&p, pf, "from", "param source Binding")?;
+                let from = decode_binding(&format!("{p}.from"), from_j)?;
+                out.push(TransformParam { name, from });
+            }
+            Ok(Some(out))
+        }
+    }
+}
+
+fn expr_children(e: &ColExpr) -> Vec<&ColExpr> {
+    match e {
+        ColExpr::Col { .. } | ColExpr::Param { .. } | ColExpr::Lit { .. } => vec![],
+        ColExpr::Binary { left, right, .. } => vec![left, right],
+        ColExpr::Not { expr } | ColExpr::Cast { expr, .. } | ColExpr::IsNull { expr } => vec![expr],
+        ColExpr::Coalesce { exprs } | ColExpr::Apply { args: exprs, .. } => exprs.iter().collect(),
+        ColExpr::Case { cases, else_expr } => {
+            let mut out: Vec<&ColExpr> = Vec::with_capacity(cases.len() * 2 + 1);
+            for arm in cases {
+                out.push(&arm.when);
+                out.push(&arm.then);
+            }
+            out.push(else_expr);
+            out
+        }
+        ColExpr::InList { subject, items } => {
+            let mut out: Vec<&ColExpr> = vec![subject];
+            out.extend(items.iter());
+            out
+        }
+        ColExpr::InParam { subject, .. } => vec![subject],
+    }
+}
+
+/// The `ColExpr` node count of one expression — the subject of §21.8's
+/// `MaxExprNodes`, which is counted per EXPRESSION rather than per document.
+fn count_expr_nodes(e: &ColExpr) -> usize {
+    1 + expr_children(e)
+        .into_iter()
+        .map(count_expr_nodes)
+        .sum::<usize>()
+}
+
+/// The first `col` reference reachable in `e`, if any (§3.3.2 refusal 1).
+fn first_col_reference(e: &ColExpr) -> Option<&str> {
+    if let ColExpr::Col { name } = e {
+        return Some(name);
+    }
+    expr_children(e).into_iter().find_map(first_col_reference)
+}
+
+/// The first param name `e` references that `bound` does not carry, if any
+/// (§3.3.2 refusal 2). `InParam`'s name is a param too — it is the LIST
+/// spelling of the same reference, so leaving it out would admit an unbound
+/// membership test through the one arm that reads a param without being one.
+fn first_unbound_param<'a>(e: &'a ColExpr, bound: &[&str]) -> Option<&'a str> {
+    let named = match e {
+        ColExpr::Param { name } | ColExpr::InParam { name, .. } => Some(name.as_str()),
+        _ => None,
+    };
+    if let Some(name) = named
+        && !bound.contains(&name)
+    {
+        return Some(name);
+    }
+    expr_children(e)
+        .into_iter()
+        .find_map(|child| first_unbound_param(child, bound))
+}
+
 fn decode_col_expr(j: &JVal) -> CResult<ColExpr> {
     let fields = c_obj(j)?;
     let tag = c_str_field(fields, "$type")?;
@@ -2000,9 +2102,49 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                 None => LocalFlushTrigger::OnBlur,
                 Some(v) => decode_local_flush_trigger(&format!("{path}.flushOn"), v)?,
             };
+            // WIRE_FORMAT.md §3.3.3 — the buffer's own codec REPLACES the
+            // identity on both sides: `format` renders through it, `parse`
+            // inverts it. The admitted set is therefore the `Format` cases with
+            // a TOTAL, LOCALE-INDEPENDENT inverse, and today that is `Number`
+            // alone. Every other case is refused with a stated reason rather
+            // than by omission — `Currency` prepends a locale-chosen symbol,
+            // `Date`'s styles are locale renditions with no parse, and
+            // `Percent` (the one that looks admissible) needs a ×100 scale
+            // whose IEEE round trip is not exact, so admitting it would mean
+            // specifying a rounding to the bit on every host.
+            let codec = match get(fields, "codec") {
+                None => None,
+                Some(v) => {
+                    let codec_path = format!("{path}.codec");
+                    let format = decode_format(&codec_path, v)?;
+                    if !matches!(format, Format::Number { .. }) {
+                        return Err(wrong_type(
+                            &codec_path,
+                            "a Format with a total, locale-independent inverse — Number alone,                              since whatever the buffer renders it must also parse back from what                              the reader typed",
+                        ));
+                    }
+                    Some(format)
+                }
+            };
+            let on_commit = opt_closure(fields, "onCommit");
+            let commit_to = opt_string(path, fields, "commitTo")?;
+            // Mutually exclusive, and a refusal rather than a precedence rule:
+            // the wire cannot carry the closure — it is `"<closure>"` and
+            // nothing more — so a host honouring `onCommit` and a host
+            // honouring `commitTo` would write to different places from
+            // identical bytes.
+            if on_commit.is_some() && commit_to.is_some() {
+                return Err(wrong_type(
+                    &format!("{path}.commitTo"),
+                    "exactly one of 'onCommit' and 'commitTo' — the wire cannot carry the                      closure, so two hosts would write to different places from identical bytes",
+                ));
+            }
             Ok(Binding::Local {
+                codec,
+                commit_to,
                 flush_on,
                 initial_from: Box::new(initial_from),
+                on_commit,
             })
         }
         "Format" => {
@@ -2195,6 +2337,64 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                 pipeline,
                 source,
             })
+        }
+        // Phase 1534 — ONE scalar expression evaluated to ONE value (§3.3.2).
+        // The expression is the SAME `ColExpr` algebra a `Transform` pipeline
+        // step carries, decoded by the same codec, so there is one algebra to
+        // specify, certify and teach rather than two that drift apart.
+        "Expr" => {
+            let expr_j = req(path, fields, "expr", "ColExpr object")?;
+            let expr_path = format!("{path}.expr");
+            let expr = decode_col_expr(expr_j)
+                .map_err(|e| make_error(DecodeErrorCode::WrongType, expr_path.clone(), e, None))?;
+            // §21.8 — the evaluation bound, counted per EXPRESSION rather than
+            // per document. Its scope is `Binding::Expr` and nothing else: a
+            // `ColExpr` inside a pipeline is deliberately not covered.
+            let nodes = count_expr_nodes(&expr);
+            if nodes > crate::limits::MAX_EXPR_NODES {
+                return Err(make_error(
+                    DecodeErrorCode::LimitExceeded,
+                    expr_path,
+                    format!(
+                        "expression carries {nodes} nodes, above the {} a single Binding.Expr may hold",
+                        crate::limits::MAX_EXPR_NODES
+                    ),
+                    None,
+                ));
+            }
+            let params = decode_binding_params(path, fields)?;
+            // The two refusals, both because an `Expr` HAS NO ROW. Left
+            // admitted, each would decode to an expression whose evaluation
+            // could only ever fail, once per render, on every host — so they
+            // are decode-time and unconditional rather than resolution-time.
+            if let Some(offender) = first_col_reference(&expr) {
+                return Err(wrong_type(
+                    &expr_path,
+                    &format!(
+                        "no column reference — a Binding.Expr evaluates against its params alone                          and has no frame for '{offender}' to read; the remedy is a different                          BINDING, not a different spelling, and Binding.Transform is the case                          that supplies the frame"
+                    ),
+                ));
+            }
+            let bound: Vec<&str> = params
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect();
+            // Statically decidable HERE where it is not for `Transform`, whose
+            // unbound filter params are PRUNED under the deliberate "unset chip
+            // ⇒ no constraint" leniency: an `Expr` has no step to prune and no
+            // rows to fall back on, so an unbound reference has no value it
+            // could ever take.
+            if let Some(unbound) = first_unbound_param(&expr, &bound) {
+                return Err(wrong_type(
+                    &expr_path,
+                    &format!(
+                        "every referenced param to be bound by the binding's own params list —                          '{unbound}' is not"
+                    ),
+                ));
+            }
+            Ok(Binding::Expr { expr, params })
         }
         "Invoke" => {
             let capability_id = req_string(path, fields, "capabilityId", "capability id string")?;

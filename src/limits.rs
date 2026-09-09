@@ -79,6 +79,19 @@ pub const MAX_ARRAY_LENGTH: usize = 100_000;
 /// in memory than the bytes that produced it.
 pub const MAX_NODES: usize = 100_000;
 
+/// Maximum `ColExpr` nodes in ONE `Binding::Expr` expression (§21.8).
+///
+/// The other limits bound the SIZE of a document; this one bounds what a host
+/// must EVALUATE, which is why it exists beside them rather than being derived
+/// from them. Counted per expression rather than per document — a tree may
+/// carry many `Expr` bindings, each bounded here, with the whole still bounded
+/// by `MAX_NODES`.
+///
+/// Its scope is `Binding::Expr` and nothing else: a `ColExpr` inside a
+/// `Binding::Transform` PIPELINE is deliberately not covered, because a
+/// pipeline's cost is already bounded by its own rows and steps.
+pub const MAX_EXPR_NODES: usize = 512;
+
 use std::cell::Cell;
 
 thread_local! {

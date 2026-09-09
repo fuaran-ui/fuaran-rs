@@ -234,6 +234,27 @@ fn cell_lit(c: &Cell) -> String {
     }
 }
 
+/// The `params` field shared by `Binding::Transform` and `Binding::Expr`, or
+/// no field at all — §3.3 omits the slot when empty, and `Some(vec![])` is the
+/// same fact as `None` on the wire.
+fn binding_params_field(params: Option<&[TransformParam]>) -> Vec<Field> {
+    match params {
+        Some(params) if !params.is_empty() => vec![field(
+            "params",
+            arr(params
+                .iter()
+                .map(|p| {
+                    obj(vec![
+                        field("from", binding(&p.from)),
+                        field("name", s(&p.name)),
+                    ])
+                })
+                .collect()),
+        )],
+        _ => vec![],
+    }
+}
+
 fn col_expr(e: &ColExpr) -> String {
     match e {
         ColExpr::Col { name } => case_obj("col", vec![field("name", s(name))]),
@@ -510,19 +531,34 @@ fn binding(b: &Binding) -> String {
             fields.push(field("key", s(key)));
             case_obj("I18n", fields)
         }
+        // §3.3.3 — `codec` and `commitTo` are the wire-carried alternatives to
+        // the closures, each omitted when absent. `onCommit` is the one closure
+        // slot that OMITS rather than always emitting its sentinel, because it
+        // is mutually exclusive with `commitTo`: a document that declared the
+        // key must not re-encode carrying both.
         Binding::Local {
+            codec,
+            commit_to,
             flush_on,
             initial_from,
-        } => case_obj(
-            "Local",
-            vec![
-                field("flushOn", flush_trigger(flush_on)),
-                field("format", CLOSURE.to_string()),
-                field("initialFrom", binding(initial_from)),
-                field("onCommit", CLOSURE.to_string()),
-                field("parse", CLOSURE.to_string()),
-            ],
-        ),
+            on_commit,
+        } => {
+            let mut fields = vec![];
+            if let Some(codec) = codec {
+                fields.push(field("codec", format_intent(codec)));
+            }
+            if let Some(commit_to) = commit_to {
+                fields.push(field("commitTo", s(commit_to)));
+            }
+            fields.push(field("flushOn", flush_trigger(flush_on)));
+            fields.push(field("format", CLOSURE.to_string()));
+            fields.push(field("initialFrom", binding(initial_from)));
+            if on_commit.is_some() {
+                fields.push(field("onCommit", CLOSURE.to_string()));
+            }
+            fields.push(field("parse", CLOSURE.to_string()));
+            case_obj("Local", fields)
+        }
         Binding::Format {
             format,
             locale,
@@ -535,28 +571,19 @@ fn binding(b: &Binding) -> String {
                 field("source", binding(source)),
             ],
         ),
+        // Phase 1534 — the scalar expression rides the same `ColExpr` encoder a
+        // pipeline step uses, and `params` the same emitter as `Transform`'s.
+        Binding::Expr { expr, params } => {
+            let mut fields = vec![field("expr", col_expr(expr))];
+            fields.extend(binding_params_field(params.as_deref()));
+            case_obj("Expr", fields)
+        }
         Binding::Transform {
             params,
             pipeline,
             source,
         } => {
-            let mut fields = vec![];
-            if let Some(params) = params
-                && !params.is_empty()
-            {
-                fields.push(field(
-                    "params",
-                    arr(params
-                        .iter()
-                        .map(|p| {
-                            obj(vec![
-                                field("from", binding(&p.from)),
-                                field("name", s(&p.name)),
-                            ])
-                        })
-                        .collect()),
-                ));
-            }
+            let mut fields = binding_params_field(params.as_deref());
             fields.push(field(
                 "pipeline",
                 arr(pipeline.iter().map(transform_step).collect()),

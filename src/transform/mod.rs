@@ -1755,6 +1755,25 @@ fn substitute_list_params_expr(list_env: &ListEnv, e: &ColExpr) -> ColExpr {
     }
 }
 
+/// Substitute every `InParam` bound in `list_env` through ONE expression — the
+/// `Binding::Expr` entry point (§3.3.2), where there is no pipeline to walk.
+/// The rule is the pipeline's, applied to the one expression the case carries.
+pub fn substitute_list_params_in_expr(list_env: &ListEnv, e: &ColExpr) -> ColExpr {
+    substitute_list_params_expr(list_env, e)
+}
+
+/// Evaluate ONE scalar expression against `env` alone — the `Binding::Expr`
+/// evaluator (§3.3.2). It is `eval_expr` over an EMPTY frame, which is exactly
+/// what the case means: an `Expr` evaluates against its params and has no row.
+///
+/// A `col` reference is therefore unresolvable here, and that is not a gap this
+/// function papers over — the decoder refuses one before a tree carrying it can
+/// exist, so reaching this path with a `Col` means the two disagree, and the
+/// unknown-column error the shared walk raises is the honest report of that.
+pub fn eval_scalar_expr(e: &ColExpr, env: &EvalEnv) -> Result<Cell, EvalError> {
+    eval_expr(&[], &[], e, env)
+}
+
 /// Substitute every `InParam` bound in `list_env` through the whole pipeline —
 /// the Rust mirror of Core `Transform.substituteListParams`. Only `Filter` /
 /// `Derive` carry a `ColExpr`; every other step is returned unchanged.

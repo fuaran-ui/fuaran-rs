@@ -679,6 +679,9 @@ impl Walker {
             | Binding::I18n { .. }
             | Binding::Format { .. }
             | Binding::Transform { .. }
+            // Phase 1534 — an `Expr` DERIVES a value; it is not a slot anything
+            // can write back to, exactly as a `Transform` is not.
+            | Binding::Expr { .. }
             | Binding::Invoke { .. } => {
                 self.push(
                     Severity::Warning,
@@ -736,7 +739,12 @@ impl Walker {
                     }
                 }
             }
-            Binding::Transform { params, .. } => {
+            // Phase 1534 — an `Expr` carries the SAME params slot a `Transform`
+            // does, so it owes the same recursion. Its own two well-formedness
+            // rules (no `col`, no unbound `param`) are DECODE refusals, so a
+            // decoded tree cannot carry either and there is nothing left for
+            // the validator to say about the expression itself.
+            Binding::Transform { params, .. } | Binding::Expr { params, .. } => {
                 if let Some(params) = params {
                     for p in params {
                         self.check_binding(id, &p.from);

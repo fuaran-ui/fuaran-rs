@@ -318,9 +318,28 @@ pub enum Binding {
         /// Per-argument bindings; omitted when absent.
         args: Option<Vec<(String, Binding)>>,
     },
+    /// The controlled input's edit buffer (WIRE_FORMAT.md §3.3.3). `format` /
+    /// `parse` / `on_commit` are closures and never arrive at a decoding host,
+    /// so a decoded `Local` uses the IDENTITY codec unless `codec` replaces it.
+    ///
+    /// `codec` is a `Format` restricted to the cases with a TOTAL,
+    /// LOCALE-INDEPENDENT inverse — `Number` alone today — because whatever the
+    /// buffer renders it must also parse back from what the reader typed. It
+    /// carries no `LocaleSource` for that reason: a buffer writing `1,234.5`
+    /// where the reader types `1.234,5` is the round-trip hole the slot exists
+    /// to close.
+    ///
+    /// `commit_to` is the State key the flush writes to, and is MUTUALLY
+    /// EXCLUSIVE with the `on_commit` closure — carrying both is a refusal
+    /// rather than a precedence rule, because the wire cannot carry the closure
+    /// and two hosts would write to different places from identical bytes.
     Local {
+        codec: Option<Format>,
+        commit_to: Option<String>,
         flush_on: LocalFlushTrigger,
         initial_from: Box<Binding>,
+        /// Presence only — the closure never crosses the wire (§4).
+        on_commit: Option<Closure>,
     },
     Format {
         format: Format,
@@ -332,6 +351,24 @@ pub enum Binding {
         params: Option<Vec<TransformParam>>,
         pipeline: Vec<TransformStep>,
         source: TransformSource,
+    },
+    /// Phase 1534 — ONE scalar expression evaluated to ONE value
+    /// (WIRE_FORMAT.md §3.3.2). `expr` is the SAME `ColExpr` algebra a
+    /// `Transform` pipeline step carries, in the same encoding: this case
+    /// introduces no operator and no expression language of its own, so an
+    /// expression means here exactly what it means inside a `derive`.
+    ///
+    /// `params` is the same slot `Transform` carries, omitted when empty, and
+    /// it is the reactive edge — a write to any param's source re-evaluates.
+    ///
+    /// Two DECODE refusals, both because an `Expr` has no row: a `col`
+    /// reference anywhere in `expr`, and a `param` the binding's own list does
+    /// not bind. Left admitted, each would decode to an expression whose
+    /// evaluation could only ever fail, once per render, on every host.
+    Expr {
+        expr: ColExpr,
+        /// Omitted when empty, exactly as `Transform`'s is.
+        params: Option<Vec<TransformParam>>,
     },
     Invoke {
         capability_id: String,

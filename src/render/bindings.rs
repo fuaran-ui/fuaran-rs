@@ -27,7 +27,7 @@ use std::collections::{BTreeSet, HashMap};
 use crate::canonical::{JVal, format_number as canonical_number};
 use crate::transform::{self, Table};
 use crate::wire::{
-    Accessibility, AggFn, Binding, Cell, CellFormat, DataSource, DateStyle, DurationStyle,
+    Accessibility, AggFn, Binding, Cell, CellFormat, ColExpr, DataSource, DateStyle, DurationStyle,
     DurationUnit, Format, LocaleSource, RelativeTimeUnit, SelectOption, StaticValue, TextSource,
     TimeGrain, TransformParam, TransformSource, TransformStep,
 };
@@ -179,7 +179,11 @@ pub fn resolve<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Resolut
         // borrow-based `Resolution` — it is evaluated at the consumption seams
         // instead: `resolve_rows` (row contexts) and the scalar-slot path
         // (`resolve_scalar_number` / `try_scalar_string`). See the module doc.
-        Binding::Transform { .. } => Resolution::NotResolved,
+        //
+        // Phase 1534 — `Binding::Expr` takes the identical posture for the
+        // identical reason: it yields one OWNED `Cell`, so it is evaluated at
+        // the same scalar seams rather than here.
+        Binding::Transform { .. } | Binding::Expr { .. } => Resolution::NotResolved,
         // A capability invoker seam is not wired on this host yet — behaves as
         // pending, exactly as an absent invoker does on the sibling hosts.
         Binding::Invoke { .. } => Resolution::NotResolved,
@@ -590,7 +594,85 @@ pub fn resolve_scalar_number(sources: &BindingSources, binding: &Binding) -> Num
             ScalarOutcome::NotResolved => NumberResolution::NotResolved,
             ScalarOutcome::Errored(msg) => NumberResolution::Errored(msg),
         },
+        Binding::Expr { expr, params } => match eval_binding_expr(sources, expr, params) {
+            Ok(None) => NumberResolution::NotResolved,
+            Ok(Some(cell)) => match cell_to_float(&cell) {
+                Ok(n) => NumberResolution::Resolved(n),
+                Err(e) => NumberResolution::Errored(e),
+            },
+            Err(e) => NumberResolution::Errored(e),
+        },
         _ => resolve_number(sources, binding),
+    }
+}
+
+/// Evaluate a `Binding::Expr` (§3.3.2): resolve each param to a `Cell`,
+/// substitute the list params, evaluate the expression in that environment.
+///
+/// `Ok(None)` is the NULL result, which is ABSENCE rather than an error — the
+/// slot renders its empty state, exactly as a null cell out of a scalar
+/// `Transform` does. `Err` is the genuine failure.
+///
+/// The two RESOLUTION-time outcomes §3.3.2 insists on keeping apart both live
+/// here, and the distinction is not this function's to make — each source
+/// case's already-specified resolution decides it. A param whose source
+/// produces NO VALUE (an unwritten `Filter` with no declared default, an
+/// unresolved `Query`) leaves the name UNBOUND and evaluation is an ERROR: a
+/// wrong number rendered confidently is worse than a slot saying it could not
+/// be computed. A param whose source resolves to a value that is ABSENT (the
+/// `State` rule, where an unwritten key yields the slot's default) binds a NULL
+/// cell, and null propagates by the algebra's own rules. Collapsing them would
+/// put an error surface on an untouched form.
+fn eval_binding_expr(
+    sources: &BindingSources,
+    expr: &ColExpr,
+    params: &Option<Vec<TransformParam>>,
+) -> Result<Option<Cell>, String> {
+    let mut env = transform::EvalEnv::new();
+    let mut list_env = transform::ListEnv::new();
+    for p in params.as_deref().unwrap_or(&[]) {
+        match resolve(sources, &p.from) {
+            Resolution::Resolved(value) => match value_to_cell(&value) {
+                Some(cell) => {
+                    env.insert(p.name.clone(), cell);
+                }
+                None => match value_to_cells(&value) {
+                    Some(cells) => {
+                        list_env.insert(p.name.clone(), cells);
+                    }
+                    None => {
+                        return Err(format!(
+                            "Expr param '{}' resolved to a non-scalar value",
+                            p.name
+                        ));
+                    }
+                },
+            },
+            // UNBOUND. Unlike a `Transform`, there is no step to prune and no
+            // rows to fall back on, so this is an error rather than a leniency.
+            Resolution::NotResolved => {
+                return Err(format!(
+                    "Expr param '{}' did not resolve, so the expression cannot be evaluated",
+                    p.name
+                ));
+            }
+            Resolution::I18nUnresolved(key) => {
+                return Err(format!(
+                    "Expr param '{}' source is an unresolved i18n key '{key}'",
+                    p.name
+                ));
+            }
+        }
+    }
+    let substituted = if list_env.is_empty() {
+        std::borrow::Cow::Borrowed(expr)
+    } else {
+        std::borrow::Cow::Owned(transform::substitute_list_params_in_expr(&list_env, expr))
+    };
+    match transform::eval_scalar_expr(&substituted, &env) {
+        Err(e) => Err(transform::eval_error_string(&e)),
+        Ok(Cell::Null) => Ok(None),
+        Ok(cell) => Ok(Some(cell)),
     }
 }
 
@@ -617,6 +699,12 @@ pub fn try_scalar_string(sources: &BindingSources, binding: &Binding) -> Option<
         } => match resolve_scalar_transform(cell_to_text, sources, params, pipeline, source) {
             ScalarOutcome::Resolved(s) => Some(s),
             ScalarOutcome::NotResolved | ScalarOutcome::Errored(_) => None,
+        },
+        // Phase 1534 — the same seam, the same `?? ''` behaviour: a null or
+        // errored expression yields an empty text slot.
+        Binding::Expr { expr, params } => match eval_binding_expr(sources, expr, params) {
+            Ok(Some(cell)) => cell_to_text(&cell).ok(),
+            Ok(None) | Err(_) => None,
         },
         _ => try_string(sources, binding),
     }
