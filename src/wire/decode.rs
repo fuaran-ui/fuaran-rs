@@ -633,6 +633,44 @@ fn decode_jval_map(path: &str, j: &JVal) -> DResult<Vec<(String, JVal)>> {
     Ok(out)
 }
 
+/// A `TextSource.I18n` argument bag — discriminated BY INSPECTION (§5, Phase 1661).
+///
+/// An object carrying a `$type` member is a BINDING and decodes as one, so an
+/// unrecognised case and a known case missing a required member refuse at the
+/// argument's own path rather than passing as an unrecognised object literal;
+/// every other JSON value is the LITERAL argument, rule-12 strict.
+///
+/// A tagged `Static` is read here rather than left to `decode_binding`, so the
+/// two spellings of a literal agree. A PRESENT value collapses to
+/// `I18nArg::Literal` under the same strict decoder the bare spelling takes —
+/// one payload position under two spellings cannot have two null postures, and
+/// routing it through the binding decoder would additionally put it on the
+/// `StaticValue::Ast` rule-11 path. A missing or null value stays a binding:
+/// absence is structural (Phase 677), has no bare spelling, and `decode_binding`
+/// is already this host's one implementation of it.
+fn decode_i18n_args(path: &str, j: &JVal) -> DResult<Vec<(String, I18nArg)>> {
+    let fields = as_obj(path, j)?;
+    let mut out = Vec::with_capacity(fields.len());
+    for (k, v) in fields {
+        let arg_path = format!("{path}.{k}");
+        let arg = match v {
+            JVal::Obj(arg_fields) if get(arg_fields, "$type").is_some() => {
+                match (get(arg_fields, "$type"), get(arg_fields, "value")) {
+                    (Some(JVal::Str(t)), Some(raw))
+                        if t == "Static" && !matches!(raw, JVal::Null) =>
+                    {
+                        I18nArg::Literal(decode_jval(&format!("{arg_path}.value"), raw)?)
+                    }
+                    _ => I18nArg::Bound(decode_binding(&arg_path, v)?),
+                }
+            }
+            literal => I18nArg::Literal(decode_jval(&arg_path, literal)?),
+        };
+        out.push((k.clone(), arg));
+    }
+    Ok(out)
+}
+
 // ─── Compute layer (Core-style string errors) ────────────────────────────────
 
 type CResult<T> = Result<T, String>;
@@ -1009,6 +1047,47 @@ fn count_expr_nodes(e: &ColExpr) -> usize {
         .into_iter()
         .map(count_expr_nodes)
         .sum::<usize>()
+}
+
+/// §21.8's expression-node bound over the expressions a `Binding::Transform`
+/// PIPELINE embeds (Phase 1662) — the first breach, as the `(index, slot)` of
+/// the offending step member, or `None`.
+///
+/// `MAX_EXPR_NODES` bounded `Binding::Expr` alone until now, which made it
+/// bypassable by wrapping the expression in a Transform: a `derive`'s
+/// expression and a `filter`'s predicate reach the same evaluator and carried
+/// no ceiling on any host.
+///
+/// `Filter` and `Derive` are the whole surface — the only `TransformStep` arms
+/// carrying a `ColExpr`; a `Join` / `Union` operand is a `DataSource` (embedded
+/// table or named ref), never another pipeline — so there is no recursive axis
+/// to descend. The match is written arm-by-arm with no catch-all so that a new
+/// expression-bearing step is a build error here rather than a silent hole.
+///
+/// Same budget, counted per EMBEDDED EXPRESSION, refused with `LIMIT_EXCEEDED`
+/// at the path of the offending `pred` / `expr` member so an author is told
+/// which STEP to come back under. The first breach wins. `count_expr_nodes` is
+/// reused rather than re-derived — its figure is exactly what this bound wants,
+/// and the `col` verdict `Binding::Expr` also needs is irrelevant here, since a
+/// `col` is perfectly ordinary in a pipeline expression.
+fn first_pipeline_expr_breach(pipeline: &[TransformStep]) -> Option<(usize, &'static str)> {
+    pipeline.iter().enumerate().find_map(|(i, step)| {
+        let (slot, expr) = match step {
+            TransformStep::Filter { pred } => ("pred", pred),
+            TransformStep::Derive { expr, .. } => ("expr", expr),
+            TransformStep::Project { .. }
+            | TransformStep::GroupBy { .. }
+            | TransformStep::Join { .. }
+            | TransformStep::Window { .. }
+            | TransformStep::Pivot { .. }
+            | TransformStep::Unpivot { .. }
+            | TransformStep::Sort { .. }
+            | TransformStep::Distinct
+            | TransformStep::Limit { .. }
+            | TransformStep::Union { .. } => return None,
+        };
+        (count_expr_nodes(expr) > crate::limits::MAX_EXPR_NODES).then_some((i, slot))
+    })
 }
 
 /// The first `col` reference reachable in `e`, if any (§3.3.2 refusal 1).
@@ -2333,6 +2412,23 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                     None,
                 )
             })?;
+            // Phase 1662 — §21.8's expression-node bound over the pipeline's own
+            // embedded expressions, at DECODE and not at validation: a document
+            // that decodes must not be able to name an unbounded evaluation.
+            if let Some((i, slot)) = first_pipeline_expr_breach(&pipeline) {
+                return Err(make_error(
+                    DecodeErrorCode::LimitExceeded,
+                    format!("{path}.pipeline[{i}].{slot}"),
+                    format!(
+                        "expression exceeds the maximum of {} expression nodes (WIRE_FORMAT 21.8)",
+                        crate::limits::MAX_EXPR_NODES
+                    ),
+                    Some(format!(
+                        "at most {} ColExpr nodes in one pipeline expression",
+                        crate::limits::MAX_EXPR_NODES
+                    )),
+                ));
+            }
             let params = match get(fields, "params") {
                 None => None,
                 // Lenient AI-ingest (§3.6): a `{name: <Binding>}` MAP is
@@ -2513,7 +2609,7 @@ fn decode_text_source(path: &str, j: &JVal) -> DResult<TextSource> {
             let key = req_string(path, fields, "key", "i18n key string")?;
             let args = match get(fields, "args") {
                 None => vec![],
-                Some(v) => decode_jval_map(&format!("{path}.args"), v)?,
+                Some(v) => decode_i18n_args(&format!("{path}.args"), v)?,
             };
             Ok(TextSource::I18n { key, args })
         }

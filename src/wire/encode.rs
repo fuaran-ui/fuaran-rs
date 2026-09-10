@@ -752,6 +752,25 @@ fn action(a: &Action) -> String {
     }
 }
 
+/// One `TextSource.I18n` argument (§5, Phase 1661). A LITERAL argument emits the
+/// BARE value through the faithful rule-12 renderer — that is the whole reason
+/// the widening moves no shipped byte — and a bound argument emits its own
+/// `$type` object, a valueless `Static` included, since absence is structural
+/// and has no bare spelling.
+fn i18n_arg(a: &I18nArg) -> String {
+    match a {
+        I18nArg::Literal(v) => json_value(v),
+        I18nArg::Bound(b) => binding(b),
+    }
+}
+
+fn i18n_arg_map(entries: &[(String, I18nArg)]) -> String {
+    obj(entries
+        .iter()
+        .map(|(k, v)| (k.clone(), i18n_arg(v)))
+        .collect())
+}
+
 fn text_source(t: &TextSource) -> String {
     match t {
         // 0.2.0 direction-flip: the bare JSON string IS the canonical Literal
@@ -761,7 +780,7 @@ fn text_source(t: &TextSource) -> String {
         TextSource::Bound(b) => case_obj("Bound", vec![field("binding", binding(b))]),
         TextSource::I18n { key, args } => case_obj(
             "I18n",
-            vec![field("args", json_map(args)), field("key", s(key))],
+            vec![field("args", i18n_arg_map(args)), field("key", s(key))],
         ),
     }
 }
