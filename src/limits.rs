@@ -79,17 +79,37 @@ pub const MAX_ARRAY_LENGTH: usize = 100_000;
 /// in memory than the bytes that produced it.
 pub const MAX_NODES: usize = 100_000;
 
-/// Maximum `ColExpr` nodes in ONE `Binding::Expr` expression (§21.8).
+/// Maximum `ColExpr` nodes in ONE expression (§21.8).
 ///
 /// The other limits bound the SIZE of a document; this one bounds what a host
 /// must EVALUATE, which is why it exists beside them rather than being derived
 /// from them. Counted per expression rather than per document — a tree may
-/// carry many `Expr` bindings, each bounded here, with the whole still bounded
-/// by `MAX_NODES`.
+/// carry many bounded expressions, with the whole still bounded by `MAX_NODES`.
 ///
-/// Its scope is `Binding::Expr` and nothing else: a `ColExpr` inside a
-/// `Binding::Transform` PIPELINE is deliberately not covered, because a
-/// pipeline's cost is already bounded by its own rows and steps.
+/// Its scope is EVERY expression a decoded document can name (Phase 1662): a
+/// `Binding::Expr`'s expression, and the `ColExpr` a `Binding::Transform`
+/// pipeline embeds — a `derive`'s expression, a `filter`'s predicate. Those two
+/// are the whole surface: `Filter` and `Derive` are the only `TransformStep`
+/// arms carrying a `ColExpr`, and a `join` / `union` operand is a `DataSource`,
+/// never another pipeline.
+///
+/// Until 1662 the pipeline surface was deliberately not covered, on the reading
+/// that a pipeline's cost is already bounded by its own rows and steps. That
+/// reading was wrong about the expression: a `derive`'s expression is evaluated
+/// PER ROW and its own size is bounded by nothing, so saying the pipeline was
+/// out of scope made this limit bypassable by wrapping the expression in a
+/// Transform — the one shape from which a decoded document could still name an
+/// unbounded evaluation. Closing it changes what an already-shipped decoder
+/// accepts, so the refusal is stated in §21.8 rather than left to be read off
+/// the code: a document past the bound is refused OUTRIGHT, with no profile
+/// boundary and no grandfathering, because §21.2 rules 1 and 2 admit no second
+/// acceptance class.
+///
+/// ONE budget for both surfaces, not two. The thing bounded is identical — the
+/// evaluation named by one `ColExpr` — so a second constant would be one more
+/// figure to keep in step across five hosts while refusing nothing this one
+/// does not. And PER EXPRESSION rather than per pipeline: twenty `derive` steps
+/// of ten nodes each are twenty cheap evaluations, not one expensive one.
 pub const MAX_EXPR_NODES: usize = 512;
 
 /// Maximum UTF-8 **byte** length of one whole input document (§21.7).

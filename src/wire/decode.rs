@@ -1011,6 +1011,47 @@ fn count_expr_nodes(e: &ColExpr) -> usize {
         .sum::<usize>()
 }
 
+/// §21.8's expression-node bound over the expressions a `Binding::Transform`
+/// PIPELINE embeds (Phase 1662) — the first breach, as the `(index, slot)` of
+/// the offending step member, or `None`.
+///
+/// `MAX_EXPR_NODES` bounded `Binding::Expr` alone until now, which made it
+/// bypassable by wrapping the expression in a Transform: a `derive`'s
+/// expression and a `filter`'s predicate reach the same evaluator and carried
+/// no ceiling on any host.
+///
+/// `Filter` and `Derive` are the whole surface — the only `TransformStep` arms
+/// carrying a `ColExpr`; a `Join` / `Union` operand is a `DataSource` (embedded
+/// table or named ref), never another pipeline — so there is no recursive axis
+/// to descend. The match is written arm-by-arm with no catch-all so that a new
+/// expression-bearing step is a build error here rather than a silent hole.
+///
+/// Same budget, counted per EMBEDDED EXPRESSION, refused with `LIMIT_EXCEEDED`
+/// at the path of the offending `pred` / `expr` member so an author is told
+/// which STEP to come back under. The first breach wins. `count_expr_nodes` is
+/// reused rather than re-derived — its figure is exactly what this bound wants,
+/// and the `col` verdict `Binding::Expr` also needs is irrelevant here, since a
+/// `col` is perfectly ordinary in a pipeline expression.
+fn first_pipeline_expr_breach(pipeline: &[TransformStep]) -> Option<(usize, &'static str)> {
+    pipeline.iter().enumerate().find_map(|(i, step)| {
+        let (slot, expr) = match step {
+            TransformStep::Filter { pred } => ("pred", pred),
+            TransformStep::Derive { expr, .. } => ("expr", expr),
+            TransformStep::Project { .. }
+            | TransformStep::GroupBy { .. }
+            | TransformStep::Join { .. }
+            | TransformStep::Window { .. }
+            | TransformStep::Pivot { .. }
+            | TransformStep::Unpivot { .. }
+            | TransformStep::Sort { .. }
+            | TransformStep::Distinct
+            | TransformStep::Limit { .. }
+            | TransformStep::Union { .. } => return None,
+        };
+        (count_expr_nodes(expr) > crate::limits::MAX_EXPR_NODES).then_some((i, slot))
+    })
+}
+
 /// The first `col` reference reachable in `e`, if any (§3.3.2 refusal 1).
 fn first_col_reference(e: &ColExpr) -> Option<&str> {
     if let ColExpr::Col { name } = e {
@@ -2333,6 +2374,23 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                     None,
                 )
             })?;
+            // Phase 1662 — §21.8's expression-node bound over the pipeline's own
+            // embedded expressions, at DECODE and not at validation: a document
+            // that decodes must not be able to name an unbounded evaluation.
+            if let Some((i, slot)) = first_pipeline_expr_breach(&pipeline) {
+                return Err(make_error(
+                    DecodeErrorCode::LimitExceeded,
+                    format!("{path}.pipeline[{i}].{slot}"),
+                    format!(
+                        "expression exceeds the maximum of {} expression nodes (WIRE_FORMAT 21.8)",
+                        crate::limits::MAX_EXPR_NODES
+                    ),
+                    Some(format!(
+                        "at most {} ColExpr nodes in one pipeline expression",
+                        crate::limits::MAX_EXPR_NODES
+                    )),
+                ));
+            }
             let params = match get(fields, "params") {
                 None => None,
                 // Lenient AI-ingest (§3.6): a `{name: <Binding>}` MAP is
