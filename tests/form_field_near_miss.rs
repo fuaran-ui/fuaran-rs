@@ -9,6 +9,12 @@
 //! invisible to every gate. Pinning the whole string is what keeps the hosts
 //! from drifting a word at a time.
 //!
+//! Phase 1659 moved the vocabulary LABEL with the message it pins: the reference
+//! hosts say `the form vocabulary` and this pin said `the form field vocabulary`.
+//! Two spellings of one didactic send two authors to two documents for one
+//! defect, and a pinned test is exactly what keeps a divergence alive once it
+//! exists — so the pin moves in the same commit as the message, or it reverts it.
+//!
 //! Two other things are pinned here because nothing else pins them: the two
 //! spellings the corpus fixture does not exercise (a host wired to only the key
 //! it was shown is non-conformant in a way no fixture catches), and the GRID
@@ -43,7 +49,7 @@ fn the_near_miss_refusal_names_what_the_silence_costs() {
         assert_eq!(
             err.message,
             format!(
-                "'{spelling}' is not part of the form field vocabulary — it would be ignored, \
+                "'{spelling}' is not part of the form vocabulary — it would be ignored, \
                  not honoured, and the field would accept anything"
             ),
             "the didactic drifted from the reference hosts' wording"

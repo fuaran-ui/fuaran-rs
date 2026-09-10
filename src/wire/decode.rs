@@ -3728,7 +3728,9 @@ const FORM_FIELD_NEAR_MISSES: &[(&str, &str)] = &[
 
 /// What the silence costs at this position, appended to the refusal message —
 /// the same shape as `A11Y_NEAR_MISS_CONSEQUENCE`, and pinned to the reference
-/// hosts' wording. A near-missed rule slot does not merely go unread: the field
+/// hosts' wording, as is the `form` vocabulary label the call site passes
+/// (Phase 1659 — this host and `fuaran-py` both said `form field`, and both
+/// moved). A near-missed rule slot does not merely go unread: the field
 /// still renders, and it constrains nothing at all.
 const FORM_FIELD_NEAR_MISS_CONSEQUENCE: &str = ", and the field would accept anything";
 
@@ -3814,11 +3816,19 @@ fn decode_form_field(path: &str, j: &JVal) -> DResult<FormField> {
     let fields = as_obj(path, j)?;
     // The near-miss check runs BEFORE the rule decode, so a field carrying both
     // `validation` and a well-formed `rule` still names the ignored key.
+    //
+    // The vocabulary LABEL is `form`, not `form field` — Phase 1659. The reference
+    // hosts say "is not part of the form vocabulary" and this host said "the form
+    // field vocabulary": terser, not wrong, and invisible to every gate, because an
+    // op-side reject fixture pins the code and the path and never the prose. A
+    // didactic message that reads differently on two hosts sends two authors to two
+    // documents for one defect, which is the whole failure the corpus's
+    // message-parity contract exists to prevent one level up.
     check_near_misses_in(
         path,
         fields,
         FORM_FIELD_NEAR_MISSES,
-        "form field",
+        "form",
         FORM_FIELD_NEAR_MISS_CONSEQUENCE,
     )?;
     // Field alias: name → id. Id decodes first so the form context's
