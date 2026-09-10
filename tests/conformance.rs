@@ -15,8 +15,34 @@
 //! family (§3.6 — bare-text shorthands, null/opaque statics, legacy upgrades,
 //! the Phase 460 omit-when-default fields, and the enum/field-name aliases) is
 //! certified via `lenient-accept` decode-then-canonical-re-encode. Every
-//! declared family is now covered; when the corpus is absent (standalone
-//! checkout) every leg skips.
+//! declared family is now covered.
+//!
+//! # Absence is two different facts, and only one of them is a skip
+//!
+//! Until Phase 1664 an absent corpus made every leg here return, so "the oracle
+//! is not here" and "the oracle is here and every family conforms" reported the
+//! same `ok`. That is defensible in a standalone clone of this repository, which
+//! genuinely cannot run the suite — and indefensible in the cross-host
+//! workspace, where an absent corpus means the whole conformance claim has been
+//! switched off and nobody was told. **A conformance check that passes without
+//! its oracle is worse than no check**, because it reports the same green as one
+//! that ran.
+//!
+//! So the two are separated, by the same discriminator `tests/render.rs` uses
+//! for the reference host and `tests/program_wire_canonical.rs` uses for the
+//! program corpus: **any sibling host present ⇒ hard failure** naming what
+//! proved the shape; **nothing else present ⇒ the honest standalone NOT RUN**,
+//! which is what the public workflow reports (it checks out this repository and
+//! the wire corpus, and no sibling host). And a corpus that is CLAIMED —
+//! `FUARAN_WIRE_FIXTURES` names one — is a hard failure from there on whatever
+//! else is around it: an operator who named a path has said the oracle exists,
+//! so a path that is wrong is a mistake to report rather than a state to
+//! tolerate.
+//!
+//! [`classify_corpus`] is that decision as a pure function of a starting
+//! directory, which is what makes it testable — see
+//! `the_two_absences_are_told_apart`. It has to be, because this is the kind of
+//! check that passes by doing nothing.
 
 use std::path::{Path, PathBuf};
 
@@ -27,19 +53,192 @@ use fuaran_rs::elicitation::{
 use fuaran_rs::envelope::{decode_envelope, encode_envelope};
 use fuaran_rs::wire::{decode_node, decode_op, encode_node, encode_op};
 
-/// Walks up from the crate directory looking for the shared corpus (a sibling
-/// checkout). `None` keeps the repo standalone-testable — legs skip, not fail.
-fn find_corpus() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
+/// The environment variable an operator names the corpus root with, matching the
+/// estate's own spelling. A named path is CLAIMED: see [`Corpus::Declared`].
+const CORPUS_ENV: &str = "FUARAN_WIRE_FIXTURES";
+
+/// Sibling hosts whose presence proves this is a cross-host workspace checkout
+/// rather than a standalone clone. Deliberately excludes this host.
+///
+/// The same list, for the same purpose, as `tests/render.rs`'s
+/// `OTHER_HOST_NAMES` plus the reference host it names separately: each
+/// integration test is its own crate, so the constant cannot be shared without
+/// publishing it from the library, and publishing a list of sibling repository
+/// names out of a crate is not a thing this host should do to spare a
+/// duplication of seven strings.
+const WORKSPACE_SIBLING_HOSTS: &[&str] = &[
+    "fuaran-dotnet",
+    "fuaran",
+    "fuaran-ts",
+    "fuaran-py",
+    "fuaran-go",
+    "fuaran-kt",
+    "fuaran-swift",
+];
+
+/// What a corpus lookup found, with the two absences told apart.
+#[derive(Debug, PartialEq, Eq)]
+enum Corpus {
+    /// An operator named it. Anything wrong with it from here is a hard failure.
+    Declared(PathBuf),
+    /// Found beside this repository.
+    Discovered(PathBuf),
+    /// Nothing claimed and nothing found, in a checkout that is plainly the
+    /// cross-host workspace — so the oracle has been silently disabled rather
+    /// than legitimately absent. Carries the sibling that proves the shape.
+    MissingInWorkspace(String),
+    /// Nothing claimed, nothing found, and nothing else here either — a genuine
+    /// standalone clone of this repository.
+    Absent,
+}
+
+/// The classification, as a pure function of where the walk starts. Split out
+/// from [`locate_corpus`] so it can be exercised against directories built for
+/// the purpose rather than only against whatever this machine happens to hold.
+fn classify_corpus(start: &Path, declared: Option<&str>) -> Corpus {
+    if let Some(declared) = declared
+        && !declared.trim().is_empty()
+    {
+        return Corpus::Declared(PathBuf::from(declared));
+    }
+    let mut dir = start.to_path_buf();
     loop {
         let root = dir.join("wire-format-fixtures");
         if root.join("manifest.json").is_file() {
-            return Some(root);
+            return Corpus::Discovered(root);
         }
         if !dir.pop() {
-            return None;
+            break;
         }
     }
+    // Not found anywhere up the tree. Is this a standalone clone, or a workspace
+    // checkout whose corpus is missing? The two look identical from inside this
+    // function and are opposite facts: one is a repository that legitimately
+    // cannot run these legs, the other is an oracle that has been silently
+    // switched off. The discriminator is chosen so the PUBLIC workflow — which
+    // checks out this repository and the wire corpus and no sibling host —
+    // stays honestly NOT RUN.
+    let mut dir = start.to_path_buf();
+    loop {
+        for sibling in WORKSPACE_SIBLING_HOSTS {
+            if dir.join(sibling).is_dir() {
+                return Corpus::MissingInWorkspace(format!(
+                    "{}/ is present under {}",
+                    sibling,
+                    dir.display()
+                ));
+            }
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    Corpus::Absent
+}
+
+fn locate_corpus() -> Corpus {
+    classify_corpus(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        std::env::var(CORPUS_ENV).ok().as_deref(),
+    )
+}
+
+/// The shared corpus root, or `None` for the one absence that is honestly a
+/// skip. Every other absence PANICS here rather than returning.
+///
+/// A located corpus must also be READABLE as one: a `manifest.json` that is not
+/// there separates "this is the wrong corpus" from "this corpus is missing a
+/// fixture", and the two have different remedies. Without it, an operator whose
+/// `FUARAN_WIRE_FIXTURES` points one directory sideways gets acceptance followed
+/// by a confident complaint about absent fixtures — loud, and wrong about the
+/// cause.
+fn find_corpus() -> Option<PathBuf> {
+    let (root, claimed) = match locate_corpus() {
+        Corpus::Declared(p) => (p, true),
+        Corpus::Discovered(p) => (p, false),
+        Corpus::MissingInWorkspace(evidence) => panic!(
+            "the wire-format corpus is neither claimed nor present, but this is a cross-host \
+             workspace checkout ({evidence}) — so this conformance leg has been silently \
+             disabled rather than legitimately skipped, and a missing oracle reports the same \
+             green as a run. Clone `wire-format-fixtures` beside this repository, or name it \
+             with {CORPUS_ENV}. (A standalone clone of this repository alone still reports NOT \
+             RUN and asserts nothing.)"
+        ),
+        Corpus::Absent => {
+            eprintln!(
+                "the wire-format corpus is neither claimed nor present beside this repository, \
+                 and no sibling host is present either; this leg asserted nothing. Set \
+                 {CORPUS_ENV} to run it."
+            );
+            return None;
+        }
+    };
+    assert!(
+        root.join("manifest.json").is_file(),
+        "the corpus is {} at '{}' but it holds no manifest.json, which is its authoritative \
+         fixture enumeration. A conformance check that passes without its oracle is worse than \
+         no check, so this is a failure rather than a skip.",
+        if claimed { "claimed" } else { "present" },
+        root.display()
+    );
+    Some(root)
+}
+
+/// The go-red for everything above. A guard whose whole job is to fail is
+/// exactly the kind of code that quietly stops working, so each verdict is
+/// produced here from a directory built to produce it — including the two that
+/// cannot be produced on a machine holding a real corpus.
+#[test]
+fn the_two_absences_are_told_apart() {
+    let scratch = std::env::temp_dir().join(format!(
+        "fuaran-rs-corpus-classify-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let standalone = scratch.join("standalone").join("fuaran-rs");
+    let workspace = scratch.join("workspace").join("fuaran-rs");
+    std::fs::create_dir_all(&standalone).expect("scratch standalone tree");
+    std::fs::create_dir_all(workspace.parent().unwrap().join("fuaran-ts"))
+        .expect("scratch sibling host");
+    std::fs::create_dir_all(&workspace).expect("scratch workspace tree");
+
+    // Nothing named, nothing found, nothing else there: the honest NOT RUN.
+    assert_eq!(classify_corpus(&standalone, None), Corpus::Absent);
+
+    // Nothing named, nothing found, but a sibling host proves the shape.
+    let missing = classify_corpus(&workspace, None);
+    match &missing {
+        Corpus::MissingInWorkspace(evidence) => {
+            assert!(
+                evidence.contains("fuaran-ts"),
+                "the evidence names what proved the shape: {evidence}"
+            );
+        }
+        other => panic!("a workspace checkout with no corpus must not read as a skip: {other:?}"),
+    }
+
+    // A claimed path is claimed whatever surrounds it — including a claim that
+    // is wrong, which is the case an operator most needs told.
+    assert_eq!(
+        classify_corpus(&standalone, Some("/no/such/corpus")),
+        Corpus::Declared(PathBuf::from("/no/such/corpus"))
+    );
+    // An empty or whitespace claim is not a claim.
+    assert_eq!(classify_corpus(&standalone, Some("   ")), Corpus::Absent);
+
+    // The discovery arm still discovers, so the change did not disable the
+    // ordinary path in the act of hardening the absences.
+    let discoverable = scratch.join("found").join("fuaran-rs");
+    let corpus = scratch.join("found").join("wire-format-fixtures");
+    std::fs::create_dir_all(&discoverable).expect("scratch discoverable tree");
+    std::fs::create_dir_all(&corpus).expect("scratch corpus dir");
+    std::fs::write(corpus.join("manifest.json"), b"{}").expect("scratch manifest");
+    assert_eq!(
+        classify_corpus(&discoverable, None),
+        Corpus::Discovered(corpus)
+    );
+
+    let _ = std::fs::remove_dir_all(&scratch);
 }
 
 struct Fixture {
@@ -92,7 +291,9 @@ fn read_fixture(corpus: &Path, rel: &str) -> String {
 #[test]
 fn node_kind_set_matches_manifest() {
     let Some(corpus) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        // `find_corpus` PANICS on every absence but the standalone one, and
+        // prints that one's account itself — so this arm is reached only where
+        // asserting nothing is the honest answer.
         return;
     };
     let raw = std::fs::read_to_string(corpus.join("manifest.json")).expect("reading manifest");
@@ -136,7 +337,9 @@ fn node_kind_set_matches_manifest() {
 #[test]
 fn form_field_kind_set_matches_manifest() {
     let Some(corpus) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        // `find_corpus` PANICS on every absence but the standalone one, and
+        // prints that one's account itself — so this arm is reached only where
+        // asserting nothing is the honest answer.
         return;
     };
     let raw = std::fs::read_to_string(corpus.join("manifest.json")).expect("reading manifest");
@@ -229,7 +432,9 @@ fn collect_control_kinds(raw: &JVal, controls: &mut std::collections::BTreeSet<S
 #[test]
 fn corpus_control_kinds_are_all_recognised() {
     let Some(corpus) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        // `find_corpus` PANICS on every absence but the standalone one, and
+        // prints that one's account itself — so this arm is reached only where
+        // asserting nothing is the honest answer.
         return;
     };
     let known: std::collections::BTreeSet<String> = fuaran_rs::wire::CANONICAL_FORM_FIELD_KINDS
@@ -266,7 +471,9 @@ fn corpus_control_kinds_are_all_recognised() {
 #[test]
 fn corpus_round_trips_byte_identical() {
     let Some(corpus) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        // `find_corpus` PANICS on every absence but the standalone one, and
+        // prints that one's account itself — so this arm is reached only where
+        // asserting nothing is the honest answer.
         return;
     };
     let mut failures: Vec<String> = vec![];
@@ -331,7 +538,9 @@ fn corpus_round_trips_byte_identical() {
 #[test]
 fn corpus_rejects_surface_canonical_code_and_path() {
     let Some(corpus) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        // `find_corpus` PANICS on every absence but the standalone one, and
+        // prints that one's account itself — so this arm is reached only where
+        // asserting nothing is the honest answer.
         return;
     };
     let mut failures: Vec<String> = vec![];
@@ -411,7 +620,9 @@ fn corpus_rejects_surface_canonical_code_and_path() {
 #[test]
 fn corpus_envelope_round_trips_byte_identical() {
     let Some(corpus) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        // `find_corpus` PANICS on every absence but the standalone one, and
+        // prints that one's account itself — so this arm is reached only where
+        // asserting nothing is the honest answer.
         return;
     };
     let mut failures: Vec<String> = vec![];
@@ -464,7 +675,9 @@ fn corpus_envelope_round_trips_byte_identical() {
 #[test]
 fn corpus_envelope_rejects_surface_canonical_code_and_path() {
     let Some(corpus) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        // `find_corpus` PANICS on every absence but the standalone one, and
+        // prints that one's account itself — so this arm is reached only where
+        // asserting nothing is the honest answer.
         return;
     };
     let mut failures: Vec<String> = vec![];
@@ -534,7 +747,9 @@ fn elicitation_round_trip(decoder: &str, input: &str) -> Result<String, (String,
 #[test]
 fn corpus_elicitation_round_trips_byte_identical() {
     let Some(corpus) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        // `find_corpus` PANICS on every absence but the standalone one, and
+        // prints that one's account itself — so this arm is reached only where
+        // asserting nothing is the honest answer.
         return;
     };
     let mut failures: Vec<String> = vec![];
@@ -601,7 +816,9 @@ fn elicitation_reject(decoder: &str, input: &str) -> Option<(String, String)> {
 #[test]
 fn corpus_elicitation_rejects_and_answers_conform() {
     let Some(corpus) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        // `find_corpus` PANICS on every absence but the standalone one, and
+        // prints that one's account itself — so this arm is reached only where
+        // asserting nothing is the honest answer.
         return;
     };
     let mut failures: Vec<String> = vec![];
@@ -673,7 +890,9 @@ fn corpus_elicitation_rejects_and_answers_conform() {
 #[test]
 fn corpus_lenient_accept_round_trips_byte_identical() {
     let Some(corpus) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        // `find_corpus` PANICS on every absence but the standalone one, and
+        // prints that one's account itself — so this arm is reached only where
+        // asserting nothing is the honest answer.
         return;
     };
     let mut failures: Vec<String> = vec![];
@@ -740,7 +959,9 @@ fn corpus_lenient_accept_round_trips_byte_identical() {
 #[test]
 fn corpus_families_beyond_the_floor_are_explicitly_skipped() {
     let Some(corpus) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
+        // `find_corpus` PANICS on every absence but the standalone one, and
+        // prints that one's account itself — so this arm is reached only where
+        // asserting nothing is the honest answer.
         return;
     };
     let covered = [

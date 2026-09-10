@@ -486,6 +486,73 @@ mod tests {
         ));
     }
 
+    /// Phase 1664 — the target reaches the effect, and the scheme floor still
+    /// runs on the way. Both halves in one test: a `Blank` target that only
+    /// stopped being refused is worth nothing if it stopped being sanitised too.
+    #[test]
+    fn a_blank_target_ships_the_effect_carrying_it_and_still_meets_the_scheme_floor() {
+        let outcome = run_bounded_action(
+            "n",
+            &Action::Navigate {
+                route: TextSource::Literal("https://docs.example/orders".to_string()),
+                target: NavigateTarget::Blank,
+            },
+            BindingSources::default(),
+        );
+        assert_eq!(
+            outcome.effects,
+            vec![ClientEffect::Navigate {
+                route: "https://docs.example/orders".into(),
+                target: NavigateTarget::Blank,
+            }]
+        );
+        assert!(outcome.diagnostics.is_empty(), "nothing was refused");
+
+        let unsafe_blank = run_bounded_action(
+            "n",
+            &Action::Navigate {
+                route: TextSource::Literal("javascript:alert(1)".to_string()),
+                target: NavigateTarget::Blank,
+            },
+            BindingSources::default(),
+        );
+        assert!(unsafe_blank.effects.is_empty(), "the floor still refuses");
+    }
+
+    /// Phase 1126's clipboard widening, on the DISPATCH side. The corpus's
+    /// `btn-copy-bound` fixture certifies that a bound payload decodes and
+    /// re-encodes; it says nothing about what is copied, which is the half a
+    /// reader pastes with authority. So: the store is read when the reader
+    /// raises the action, and an unresolvable payload is the EMPTY STRING —
+    /// never the binding's own JSON, and never the loud i18n sentinel.
+    #[test]
+    fn a_bound_clipboard_payload_resolves_at_dispatch_and_degrades_to_empty() {
+        let bound = |key: &str| Action::WriteToClipboard {
+            text: TextSource::Bound(Box::new(crate::wire::Binding::State {
+                default_declared: false,
+                key: key.into(),
+                default_value: StaticValue::StringOpt(None),
+            })),
+        };
+
+        let outcome =
+            run_bounded_action("n", &bound("shareUrl"), store_with("shareUrl", "/o/4417"));
+        assert_eq!(
+            outcome.effects,
+            vec![ClientEffect::WriteToClipboard {
+                text: "/o/4417".into()
+            }]
+        );
+
+        let unresolved = run_bounded_action("n", &bound("absent"), BindingSources::default());
+        assert_eq!(
+            unresolved.effects,
+            vec![ClientEffect::WriteToClipboard {
+                text: String::new()
+            }]
+        );
+    }
+
     #[test]
     fn a_write_under_the_host_reserved_namespace_is_refused() {
         let outcome = run_bounded_action(
