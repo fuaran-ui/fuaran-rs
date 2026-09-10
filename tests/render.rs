@@ -2121,3 +2121,112 @@ fn a_captioned_expandable_image_nests_figure_anchor_image() {
     );
     assert!(!uncaptioned.contains("figure"), "{uncaptioned}");
 }
+
+// ─── The decoded `Binding::Computed` error channel (Phase 1667) ──────────────
+
+/// WIRE_FORMAT §5: a decoded `Computed` resolves to an ERROR naming its
+/// replacements, never to a value.
+///
+/// The fixture that used to render the empty state — a `Metric` whose value is a
+/// decoded `Computed` — put the em-dash on the page, indistinguishable from a
+/// metric whose query has not answered yet. The seam had no error channel at
+/// all, so the negative half of the rule held (never `0` / `""` / `false`) while
+/// the positive half — the reader is TOLD, and told the remedy — did not.
+///
+/// Go-red: against the pre-1667 seam the value slot is the em-dash and both the
+/// resolution assertion and the rendered-message assertion fail.
+#[test]
+fn a_decoded_computed_resolves_to_an_error_naming_its_replacements() {
+    use fuaran_rs::render::bindings::{
+        DECODED_COMPUTED_MESSAGE, NumberResolution, Resolution, resolve, resolve_scalar_number,
+    };
+    use fuaran_rs::wire::Binding;
+
+    let sources = BindingSources::default();
+
+    match resolve(&sources, &Binding::Computed) {
+        Resolution::Errored(msg) => {
+            assert_eq!(
+                msg, DECODED_COMPUTED_MESSAGE,
+                "the message is the remedy, surfaced verbatim"
+            );
+            assert!(
+                msg.contains("Binding.Expr"),
+                "and it names the case that replaced it: {msg}"
+            );
+        }
+        other => panic!("expected Errored, got {other:?}"),
+    }
+
+    // The numeric channel carries it, which is what lights the didactic slot
+    // rendition rather than a second one being invented for this case.
+    match resolve_scalar_number(&sources, &Binding::Computed) {
+        NumberResolution::Errored(msg) => assert_eq!(msg, DECODED_COMPUTED_MESSAGE),
+        NumberResolution::Resolved(n) => {
+            panic!("a decoded Computed resolved to {n} — the silent-default defect this closes")
+        }
+        NumberResolution::NotResolved => panic!("the numeric channel dropped the error to absence"),
+        NumberResolution::I18nUnresolved(key) => panic!("unexpected i18n outcome '{key}'"),
+    }
+
+    let html = render(
+        r#"{"id":"m","kind":{"$type":"Metric","emphasis":"Normal","format":{"$type":"None"},"label":{"$type":"Literal","text":"Revenue"},"value":{"$type":"Computed","fn":"<closure>"},"tone":"Default","weight":"Standard"}}"#,
+    );
+    // The slot's own text, compared as RENDERED text rather than against the raw
+    // message: the renderer HTML-escapes the `<closure>` sentinel the message
+    // quotes, and it should.
+    let open_tag = r#"<div class="fuaran-metric-value">"#;
+    let value_text = {
+        let open = html.find(open_tag).expect("the value slot");
+        let body = &html[open + open_tag.len()..];
+        &body[..body.find("</div>").expect("the slot closes")]
+    };
+    assert!(
+        value_text.starts_with("(error: ") && value_text.ends_with(')'),
+        "the slot must carry the didactic error rendition: {value_text}"
+    );
+    assert!(
+        value_text.contains("Binding.Computed has no wire projection")
+            && value_text.contains("use Binding.Expr / Transform / State"),
+        "and it must say why, and what to use instead: {value_text}"
+    );
+
+    // The negative half, restated over the rendered page: not the slot's zero,
+    // and not the bare em-dash that used to stand in for an answer.
+    for forbidden in ["0", "false", "", fuaran_rs::render::bindings::EM_DASH] {
+        assert_ne!(
+            value_text, forbidden,
+            "the value slot must not render the slot's empty state"
+        );
+    }
+}
+
+/// The go-red half of the test above: a change that made EVERY binding error
+/// would satisfy it and break the host. Two shapes that must keep answering — a
+/// value, and absence.
+#[test]
+fn every_other_binding_still_resolves_or_says_not_yet() {
+    use fuaran_rs::render::bindings::{NumberResolution, Resolution, resolve};
+    use fuaran_rs::wire::{Binding, StaticValue};
+
+    let sources = BindingSources::default();
+
+    let static_binding = Binding::Static {
+        value: StaticValue::Ast(JVal::Num(41.0)),
+    };
+    match fuaran_rs::render::bindings::resolve_number(&sources, &static_binding) {
+        NumberResolution::Resolved(n) => assert_eq!(n, 41.0),
+        NumberResolution::Errored(msg) => panic!("a Static binding errored: {msg}"),
+        NumberResolution::NotResolved => panic!("a Static binding must resolve"),
+        NumberResolution::I18nUnresolved(key) => panic!("unexpected i18n outcome '{key}'"),
+    }
+
+    let unresolved_query = Binding::Query {
+        name: "sales".to_string(),
+        depends_on: None,
+    };
+    match resolve(&sources, &unresolved_query) {
+        Resolution::NotResolved => (),
+        other => panic!("an unwritten Query is absence, not an error: {other:?}"),
+    }
+}
