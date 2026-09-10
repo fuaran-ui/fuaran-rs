@@ -315,6 +315,18 @@ pub enum Binding {
     /// AND the declaration keeps resolution unchanged — `visible` on an
     /// unwritten key still resolves `false` and removes the node, per §3.6 —
     /// while the encoder emits only what the document wrote.
+    ///
+    /// Phase 1656 — §5 now states that posture normatively for every host, and
+    /// pins it with `nodes/state-absent-default`,
+    /// `lenient/lenient-1656-state-default-null` and
+    /// `reject/reject-state-default-without-key`. The pair above is what makes
+    /// this host's answer expressible: on the WIRE fact it is exactly an
+    /// `Option<StaticValue>`, and it additionally carries the resolution
+    /// default an `Option` would discard, which `resolve` cannot recompute
+    /// because it has no access to the slot. `default_declared` is false for
+    /// every spelling of absence — the member missing, the member or either
+    /// alias present as `null` — and for a declared value this slot's parser
+    /// cannot read, which is the reference host's answer.
     State {
         key: String,
         default_value: StaticValue,

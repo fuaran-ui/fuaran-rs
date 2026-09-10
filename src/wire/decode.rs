@@ -2054,31 +2054,44 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
         "State" => {
             let key = req_string(path, fields, "key", "state key string")?;
             // Field aliases: initialValue / default → defaultValue.
-            // Phase 677 — an ABSENT default decodes exactly as the legacy
-            // `"defaultValue": null` did, or the encoder re-emits a placeholder
-            // and the round-trip breaks (caught by `form-declarative`).
-            let null = JVal::Null;
-            let raw =
-                get_aliased(fields, "defaultValue", &["initialValue", "default"]).unwrap_or(&null);
-            let default_value = slot
-                .parse(&format!("{path}.defaultValue"), raw)
-                .unwrap_or_else(|_| slot.placeholder());
-            // The WIRE fact, kept separately from the resolution default above.
-            // An explicit `null` reads as UNDECLARED, which is what the legacy
-            // spelling always meant and what `static_is_absent` used to stand
-            // in for — the difference is that the stand-in could not tell an
-            // undeclared default at a NUMERIC or BOOL slot from a declared
-            // zero, and so re-encoded a `defaultValue` the document never
-            // carried. `nodes/node-visible` and `nodes/switch-predicate` are
-            // the first fixtures with a bare `State` at a typed slot and are
-            // what surfaced it; `tests/state_seeding.rs` had it pinned.
-            let default_declared =
-                get_aliased(fields, "defaultValue", &["initialValue", "default"])
-                    .is_some_and(|v| !matches!(v, JVal::Null));
+            //
+            // Phase 1656 — §5's absent-`State.defaultValue` posture, which is
+            // now stated normatively rather than left to rule 4 by inference:
+            // absence OMITS, and the three spellings of absence are the member
+            // missing, the member present as `null`, and either alias present
+            // as `null`. All three yield NO declaration; the encoder writes the
+            // member only where one was declared.
+            //
+            // Two facts are carried apart, and that is what lets both halves be
+            // right at once. `default_declared` is the WIRE fact — did the
+            // document say anything. `default_value` is the RESOLUTION default
+            // (§3.3) — what an unwritten key yields, which at a numeric slot is
+            // `0` and at a bool one `false`, and which §3.6's `visible` rule
+            // depends on to remove a node whose unwritten predicate resolves
+            // false. Conflating them cost a byte-level round trip before Phase
+            // 1499: with only the value, an undeclared default at a NUMERIC or
+            // BOOL slot was indistinguishable from a declared zero, so
+            // `{"$type":"State","key":k}` re-encoded as
+            // `{"$type":"State","defaultValue":0,"key":k}`.
+            //
+            // An UNREADABLE declared default reads as undeclared too, which is
+            // the reference host's answer and the reason `static_is_absent` is
+            // no longer consulted here. The alternative — keep the declaration
+            // and encode the slot's placeholder — writes a value the document
+            // did not carry over one it did, which is the same fabrication in a
+            // different position, and at an absent-sentinel slot it would emit
+            // a member with no value at all. Corpus:
+            // `nodes/state-absent-default` (the five typed slots),
+            // `lenient/lenient-1656-state-default-null` (both null spellings),
+            // `reject/reject-state-default-without-key` (the optionality, the
+            // right way round); `tests/state_seeding.rs` holds the seeding half.
+            let raw = get_aliased(fields, "defaultValue", &["initialValue", "default"])
+                .filter(|v| !matches!(v, JVal::Null));
+            let parsed = raw.and_then(|v| slot.parse(&format!("{path}.defaultValue"), v).ok());
             Ok(Binding::State {
                 key,
-                default_value,
-                default_declared,
+                default_value: parsed.clone().unwrap_or_else(|| slot.placeholder()),
+                default_declared: parsed.is_some(),
             })
         }
         "Computed" => Ok(Binding::Computed),
@@ -2226,7 +2239,15 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                         JVal::Obj(sf) => get(sf, "defaultValue"),
                         _ => None,
                     };
-                    let has_carried = carried.is_some();
+                    // Phase 1656 — a `null` member is a SPELLING OF ABSENCE (§5),
+                    // so it carries nothing. It did not read that way before: a
+                    // raw `JVal::Null` is `Some` and is not an empty array, so it
+                    // fell to the snapshot branch and was decoded as carried data.
+                    // The reference host never had the defect because it reads the
+                    // DECODED binding's default, where every spelling of absence
+                    // has already collapsed to one value; this reads the raw
+                    // member, so it has to name them.
+                    let has_carried = matches!(carried, Some(v) if !matches!(v, JVal::Null));
                     // §24.4 (slot seeding) — an EMPTY carried array carries no
                     // ROWS, and that is a live source with an empty initial
                     // snapshot, not a malformed document. A declared default
@@ -2254,26 +2275,19 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                     // rather than a workaround for a wrapper this decoder would
                     // not accept bare.
                     if tag == "State" && (empty_carried || !has_carried) {
-                        // An absent default must stay ABSENT on the decoded
-                        // binding, or the two spellings stop re-encoding to their
-                        // own bytes. `decode_binding_slot`'s State arm reads a
-                        // missing default through the Rows slot, whose `null` arm
-                        // yields the empty row list — which the encoder then emits
-                        // as `"defaultValue":[]`, silently respelling a source
-                        // that DECLARES NOTHING as a declaration of the empty
-                        // table. `StaticValue::Ast(JVal::Null)` is this host's
-                        // representation of absence (`static_is_absent`), so the
-                        // key is omitted again on re-encode.
-                        let binding = match (has_carried, b) {
-                            (false, Binding::State { key, .. }) => Binding::State {
-                                default_declared: false,
-                                key,
-                                default_value: StaticValue::Ast(JVal::Null),
-                            },
-                            (_, b) => b,
-                        };
+                        // Phase 1656 — the absence override that used to sit
+                        // here is RETIRED. It substituted
+                        // `StaticValue::Ast(JVal::Null)` for the Rows slot's own
+                        // placeholder so that `static_is_absent` would omit the
+                        // member again on re-encode; since the case carries the
+                        // wire fact separately (`default_declared`, Phase 1499)
+                        // the decoder already clears it for an absent default and
+                        // the encoder already reads the declaration alone, so the
+                        // substitution bought nothing and cost the RESOLUTION
+                        // default — a bare rows source resolved to a null AST
+                        // rather than to the empty feed §24.4 gives it.
                         TransformSource::Live {
-                            binding: Box::new(binding),
+                            binding: Box::new(b),
                             initial: empty_embedded_source(),
                         }
                     } else if tag == "State" {

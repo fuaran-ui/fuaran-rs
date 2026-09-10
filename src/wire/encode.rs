@@ -110,6 +110,12 @@ fn map_marker(m: &MapMarker) -> String {
 /// value, so their key is omitted rather than emitting JSON `null`, for which
 /// the wire model has no case. A typed empty (`Options(vec![])`) is NOT absent:
 /// "no selection" and "selected nothing" stay distinguishable.
+///
+/// Phase 1656 — this is the `Static.value` rule ONLY. `State.defaultValue`
+/// reads its own wire fact (`Binding::State`'s `default_declared`), so this
+/// function is no longer consulted there; it used to stand in for that fact and
+/// could not tell an undeclared default at a numeric or bool slot from a
+/// declared zero.
 fn static_is_absent(v: &StaticValue) -> bool {
     matches!(
         v,
@@ -504,14 +510,20 @@ fn binding(b: &Binding) -> String {
             default_value,
             default_declared,
         } => {
-            // Phase 677 — same rule as `Static`: absence omits, never null.
-            // The DECLARATION decides, not the value: a typed slot's decoded
-            // default is the placeholder an unwritten key resolves to, and
-            // emitting that would put a `defaultValue` on the wire the document
-            // never carried.
+            // §5's absent-default posture (Phase 1656; Phase 677's rule for
+            // `Static`, stated normatively for this position). The DECLARATION
+            // decides and nothing else: a typed slot's decoded default is the
+            // placeholder an unwritten key RESOLVES to, and emitting that would
+            // put a `defaultValue` on the wire the document never carried.
+            //
+            // `static_is_absent` is deliberately NOT consulted — it was the
+            // stand-in for the wire fact before Phase 1499 gave the case one of
+            // its own, and the decoder now clears the declaration for every
+            // absent spelling and for an unreadable value, so a declared
+            // default can no longer be an absent sentinel.
             let mut fields = vec![];
 
-            if *default_declared && !static_is_absent(default_value) {
+            if *default_declared {
                 fields.push(field("defaultValue", static_value(default_value)));
             }
 
