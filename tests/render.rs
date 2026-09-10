@@ -1697,94 +1697,151 @@ fn drawing_root_escapes_hostile_text_inside_the_aria_label_attribute() {
 //
 // Placement-sensitive, for the reason recorded above the placement block.
 
-/// One fixture's expectation: the element carrying the projection (`None` for
-/// the wrapper), what its own open tag must contain, and what must not appear.
+/// One fixture's expectation, DERIVED from the corpus's own a11y contract.
+///
+/// Phase 1665 - this table used to be a hand-written `const` here, and the same
+/// table was hand-written again in four sibling hosts. Five copies of one
+/// cross-host claim is exactly the arrangement that let `accessibility.label`
+/// resolve five different ways with every conformance gate green: each host
+/// measured itself against its own idea of the trait, and no copy could
+/// contradict another. The claim now lives once, in `a11y-contract.json`'s
+/// `behaviour` section, and every host reads it.
+///
+/// What stays host-local is the one thing the contract deliberately does not
+/// state: which ELEMENT this host renders for a forwarding kind. The contract
+/// says the projection FORWARDS (the D4 predicate, host-neutral); `element` is
+/// this renderer's own answer, given in `FORWARDING_TAG` below.
 struct A11yCorpusCase {
-    fixture: &'static str,
+    fixture: String,
     element: Option<&'static str>,
-    want: &'static [&'static str],
-    absent_from_carrier: &'static [&'static str],
+    want: Vec<String>,
+    absent_from_carrier: Vec<&'static str>,
 }
 
-const A11Y_CORPUS: &[A11yCorpusCase] = &[
-    // All six slots at once on an ordinary wrapper kind. `hidden` is an
-    // explicit Static FALSE — distinct on the wire from omitted, and it must
-    // emit nothing (`aria-hidden` is not a tri-state).
-    A11yCorpusCase {
-        fixture: "a11y-wrapper-all-slots",
-        element: None,
-        want: &[
-            r#"aria-label="Channel performance summary""#,
-            r#"aria-labelledby="a11y-wrapper-heading""#,
-            r#"aria-describedby="a11y-wrapper-note""#,
-            r#"role="region""#,
-            r#"aria-live="polite""#,
-        ],
-        absent_from_carrier: &["aria-hidden"],
-    },
-    // The State forms. `label` resolves through its declared `defaultValue`
-    // with no host sources (the reference host's default law); the custom
-    // role's CASE is carried verbatim — the exact spelling a fold bug once
-    // rewrote — and `off` is a real `liveRegion` token, not an absence.
-    A11yCorpusCase {
-        fixture: "a11y-wrapper-state-bound",
-        element: None,
-        want: &[
-            r#"aria-label="Site footer""#,
-            r#"role="doc-pageFooter""#,
-            r#"aria-live="off""#,
-        ],
-        absent_from_carrier: &["aria-hidden"],
-    },
-    A11yCorpusCase {
-        fixture: "a11y-alert-assertive",
-        element: None,
-        want: &[r#"role="alert""#, r#"aria-live="assertive""#],
-        absent_from_carrier: &[],
-    },
-    // D4 forwarding: the body IS the semantic element. The accessible name
-    // OVERRIDES the visible "Read more".
-    A11yCorpusCase {
-        fixture: "a11y-link-labelled",
-        element: Some("a"),
-        want: &[r#"aria-label="Read the 2026 annual report (PDF)""#],
-        absent_from_carrier: &[],
-    },
-    A11yCorpusCase {
-        fixture: "a11y-button-named",
-        element: Some("button"),
-        want: &[
-            r#"aria-label="Refresh revenue figures""#,
-            r#"role="button""#,
-        ],
-        absent_from_carrier: &[],
-    },
-    // The decorative shape: empty alt + `hidden` Static TRUE — the slot two
-    // hosts dropped entirely before the Phase 951 port.
-    A11yCorpusCase {
-        fixture: "a11y-image-decorative",
-        element: Some("img"),
-        want: &[r#"aria-hidden="true""#],
-        absent_from_carrier: &[],
-    },
+/// The six attribute names the accessibility projection can emit, in the wire's
+/// slot order. The complement of a vector's own list is what that vector
+/// forbids: the contract declares its attribute list EXHAUSTIVE for the
+/// projection.
+const PROJECTION_ATTRIBUTES: &[&str] = &[
+    "aria-label",
+    "aria-labelledby",
+    "aria-describedby",
+    "role",
+    "aria-live",
+    "aria-hidden",
 ];
+
+/// The element THIS host's body renders for each forwarding fixture's kind - the
+/// host-local half of a contract vector. A forwarding vector with no entry here
+/// panics rather than falling back to the wrapper: a silent fallback would
+/// assert the projection landed where the contract says it must not.
+const FORWARDING_TAG: &[(&str, &str)] = &[
+    ("a11y-link-labelled", "a"),
+    ("a11y-button-named", "button"),
+    ("a11y-image-decorative", "img"),
+];
+
+/// Read the contract's behaviour vectors. `None` with no corpus present; the
+/// caller skips rather than passing vacuously.
+fn a11y_corpus_cases() -> Option<Vec<A11yCorpusCase>> {
+    let root = corpus_nodes_dir()?.parent()?.to_path_buf();
+    let raw = std::fs::read_to_string(root.join("a11y-contract.json")).ok()?;
+    let contract = parse(&raw).expect("a11y-contract.json parses");
+    let vectors = match contract.field("behaviour").and_then(|b| b.field("vectors")) {
+        Some(JVal::Arr(items)) => items,
+        _ => panic!("a11y-contract.json must carry behaviour.vectors as an array"),
+    };
+    let mut cases = Vec::with_capacity(vectors.len());
+    for v in vectors {
+        let fixture = match v.field("fixture") {
+            Some(JVal::Str(s)) => s.clone(),
+            _ => panic!("a behaviour vector must name its fixture"),
+        };
+        let forwards = matches!(v.field("forwards"), Some(JVal::Bool(true)));
+        let pairs = match v.field("attributes") {
+            Some(JVal::Arr(items)) => items,
+            _ => panic!("{fixture}: a behaviour vector must carry an attributes array"),
+        };
+        let mut want = Vec::with_capacity(pairs.len());
+        let mut names: Vec<&str> = Vec::with_capacity(pairs.len());
+        for pair in pairs {
+            match pair {
+                JVal::Arr(kv) if kv.len() == 2 => match (&kv[0], &kv[1]) {
+                    (JVal::Str(name), JVal::Str(value)) => {
+                        want.push(format!("{name}=\"{value}\""));
+                        names.push(
+                            PROJECTION_ATTRIBUTES
+                                .iter()
+                                .find(|a| *a == name)
+                                .copied()
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "{fixture}: {name} is not an accessibility-projection attribute"
+                                    )
+                                }),
+                        );
+                    }
+                    _ => panic!("{fixture}: an attribute pair is two strings"),
+                },
+                _ => panic!("{fixture}: an attribute pair is a two-element array"),
+            }
+        }
+        let element = if forwards {
+            Some(
+                FORWARDING_TAG
+                    .iter()
+                    .find(|(f, _)| *f == fixture)
+                    .map(|(_, tag)| *tag)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{fixture}: the contract says the projection forwards, and this host \
+                             has not said which element it renders for that kind - add it to \
+                             FORWARDING_TAG"
+                        )
+                    }),
+            )
+        } else {
+            None
+        };
+        cases.push(A11yCorpusCase {
+            fixture,
+            element,
+            want,
+            absent_from_carrier: PROJECTION_ATTRIBUTES
+                .iter()
+                .copied()
+                .filter(|a| !names.contains(a))
+                .collect(),
+        });
+    }
+    Some(cases)
+}
 
 #[test]
 fn a11y_corpus_projection_lands_on_the_right_element() {
-    if corpus_nodes_dir().is_none() {
+    let Some(cases) = a11y_corpus_cases() else {
         eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
         return;
-    }
+    };
     // A table-driven leg that silently enumerated nothing would be a gate that
-    // checked nothing.
-    assert_eq!(
-        A11Y_CORPUS.len(),
-        6,
-        "the Phase 955 node family is six fixtures"
+    // checked nothing - and since Phase 1665 the table is READ rather than
+    // written here, so an empty one is also what a mis-shaped contract looks
+    // like. Both are refused. The count is not restated: the contract is the
+    // enumeration, exactly as `manifest.json` is for the fixtures.
+    assert!(
+        !cases.is_empty(),
+        "a11y-contract.json's behaviour.vectors must enumerate the a11y fixture family"
+    );
+    assert!(
+        cases
+            .iter()
+            .any(|c| c.fixture == "a11y-wrapper-transform-label"),
+        "the contract must carry the Phase 1665 vector - the Transform-bound accessible name is \
+         the one every host resolved through its row-shaped generic path"
     );
 
-    for case in A11Y_CORPUS {
-        let tree = load_fixture(case.fixture).expect("the corpus is present");
+    for case in &cases {
+        let tree = load_fixture(&case.fixture).expect("the corpus is present");
         let html = render_to_html(&tree, &BindingSources::default());
         let wrapper = wrapper_tag(&html);
         let carrier = match case.element {
@@ -1792,14 +1849,14 @@ fn a11y_corpus_projection_lands_on_the_right_element() {
             Some(tag) => open_tag(&html, tag),
         };
 
-        for want in case.want {
+        for want in &case.want {
             assert!(
                 carrier.contains(want),
                 "{}: carrier missing {want}: {carrier}",
                 case.fixture
             );
         }
-        for absent in case.absent_from_carrier {
+        for absent in &case.absent_from_carrier {
             assert!(
                 !carrier.contains(absent),
                 "{}: carrier must not emit {absent}: {carrier}",
@@ -1808,7 +1865,7 @@ fn a11y_corpus_projection_lands_on_the_right_element() {
         }
         // A forwarding kind must not leave the projection behind.
         if case.element.is_some() {
-            for want in case.want {
+            for want in &case.want {
                 let attr = &want[..want.find('=').expect("an attribute assertion")];
                 assert!(
                     !wrapper.contains(attr),
