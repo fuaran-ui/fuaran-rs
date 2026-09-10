@@ -3,7 +3,7 @@
 //! partial-hydration laws, and the reference-CSS byte-copy.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::client::ClientSession;
@@ -1076,60 +1076,185 @@ fn date_range_variants_select_their_native_input_type() {
 /// divergence. It did not: there was nothing to be dormant. Added here so the
 /// divergence is measured rather than asserted, and so a future wrong class name
 /// in this host is caught by a gate instead of by review.
+/// Every project directory under the reference host's `src/` whose name begins
+/// with this prefix is a renderer project, and every `.fs` inside one is a place
+/// the reference may spell an emitted class.
+const REFERENCE_RENDERER_PROJECT_PREFIX: &str = "Fuaran.UI.Renderer";
+
+/// The files the source list named by hand before Phase 1653 derived it. Kept
+/// as a FLOOR, not as the list: a glob that silently stops matching — a project
+/// renamed, an `src/` layout change, a checkout that is not the host it looks
+/// like — otherwise reports an empty vocabulary as a clean run, which is the
+/// same "stale but valid-looking" shape the derivation is replacing.
+const REFERENCE_RENDERER_SOURCE_FLOOR: &[&str] = &[
+    "Fuaran.UI.Renderer.Server/Render.fs",
+    "Fuaran.UI.Renderer/Render.fs",
+    "Fuaran.UI.Renderer.Core/Theme.fs",
+    "Fuaran.UI.Renderer.Core/DrawingSvg.fs",
+    "Fuaran.UI.Renderer.Core/Css.fs",
+    "Fuaran.UI.Renderer.Core/RatingModel.fs",
+    "Fuaran.UI.Renderer.Core/Markdown.fs",
+    "Fuaran.UI.Renderer.Core/MathMl.fs",
+    // Named by the 2026-09-02 diagnosis as the two the literal list never had:
+    // `"fuaran-custom-%s-%s"` is composed here, and the py guard's prefix
+    // assertion is about exactly this spelling.
+    "Fuaran.UI.Renderer/Runtime.fs",
+    "Fuaran.UI.Renderer.Server/Registry.fs",
+];
+
+/// Every `.fs` under `dir`, recursively, skipping build output. Sorted, so the
+/// derived vocabulary does not depend on directory-iteration order.
+fn fs_sources_under(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if path.is_dir() {
+            // `obj/` and `bin/` hold generated and copied sources; scanning them
+            // would let a stale build output contribute vocabulary.
+            if name != "obj" && name != "bin" {
+                fs_sources_under(&path, out);
+            }
+        } else if name.ends_with(".fs") {
+            out.push(path);
+        }
+    }
+}
+
+/// The reference renderer sources, **derived rather than listed**.
+///
+/// # Why this is derived (Phase 1653, from the 2026-09-02 diagnosis)
+///
+/// This was a hand-maintained four-file literal shared, in three translations,
+/// by this host, the Go host and the Python host. The reference then factored
+/// its class spellings into helper modules the literal did not name — `Css.fs`
+/// (36 tokens), `RatingModel.fs`, `Runtime.fs`, `Registry.fs` — and all three
+/// hosts went red at once for the same reason: not a host defect, and not the
+/// reference having dropped a spelling, but the oracle having stopped looking
+/// where the classes live. The irony is on the record: `Css.fs`'s own header
+/// says it exists so an inline spelling can no longer drift, so the anti-drift
+/// refactor is what broke the drift detector.
+///
+/// Appending the missing filenames would have fixed the instance and reset the
+/// clock. Deriving removes the class: a new helper module inside a renderer
+/// project is in the set the moment it exists, with nothing to remember.
+///
+/// # Where the derivation can still be wrong, and what says so
+///
+/// It scopes to the renderer PROJECTS. A class the reference spells outside one
+/// — `Fuaran.UI/Defaults.fs` holds a couple of placeholder classes — would be
+/// invisible here. That is not left to hope: `explain_absent_class` below
+/// searches the whole reference `src/` tree for any class this host emits and
+/// this set lacks, and reports the file that spells it. So an offender's
+/// message distinguishes "the reference does not spell this" (a defect in THIS
+/// host) from "the reference spells it in <file>, which the derivation does not
+/// reach" (a defect in the derivation) — which is precisely the fork the
+/// 2026-09-02 py-leg reading took the wrong branch of.
+fn reference_renderer_sources(root: &Path) -> Vec<PathBuf> {
+    let src = root.join("src");
+    let mut projects: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&src) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir()
+                && entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(REFERENCE_RENDERER_PROJECT_PREFIX)
+            {
+                projects.push(path);
+            }
+        }
+    }
+    projects.sort();
+
+    let mut files: Vec<PathBuf> = Vec::new();
+    for project in &projects {
+        fs_sources_under(project, &mut files);
+    }
+    files.sort();
+
+    // The completeness floor. A derived set is only as good as the glob that
+    // produced it, and an empty or shrunken glob is indistinguishable from a
+    // reference host that spells nothing.
+    let relative: std::collections::BTreeSet<String> = files
+        .iter()
+        .filter_map(|p| p.strip_prefix(&src).ok())
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+    let missing: Vec<&&str> = REFERENCE_RENDERER_SOURCE_FLOOR
+        .iter()
+        .filter(|f| !relative.contains(**f))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the derived renderer-source set is missing files the hand-maintained list named: \
+         {missing:?}. Either the reference host's layout moved (update \
+         REFERENCE_RENDERER_PROJECT_PREFIX / the floor together, deliberately) or this glob \
+         matched the wrong tree — it scanned {} project(s) under {}. A silently-empty derivation \
+         reports a clean run, which is the failure this floor exists to make loud.",
+        projects.len(),
+        src.display()
+    );
+    files
+}
+
+/// For a class this host emits that the derived vocabulary lacks: does the
+/// reference spell it ANYWHERE under `src/`, and if so where?
+///
+/// This is the completeness property doing its work at the point of failure.
+/// `Some(file)` means the derivation did not reach the file — fix the
+/// derivation. `None` means the reference genuinely does not spell the class —
+/// fix this host, and do NOT relax the assertion, which is the branch the
+/// 2026-09-02 py-leg reading took wrongly.
+fn explain_absent_class(root: &Path, class: &str) -> Option<String> {
+    let src = root.join("src");
+    let mut all: Vec<PathBuf> = Vec::new();
+    fs_sources_under(&src, &mut all);
+    all.sort();
+    for path in all {
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if class_tokens(&raw).iter().any(|t| t == class) {
+            return Some(
+                path.strip_prefix(&src)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
+        }
+    }
+    None
+}
+
+/// Renders each offending class with the completeness verdict attached, so the
+/// failure message says which of the two defects it is.
+fn describe_offenders(root: &Path, offenders: &[&String]) -> String {
+    offenders
+        .iter()
+        .map(|c| match explain_absent_class(root, c) {
+            Some(file) => format!(
+                "{c} — the reference DOES spell this, in src/{file}; the derived renderer-source \
+                 set does not reach that file, so fix the DERIVATION"
+            ),
+            None => format!(
+                "{c} — the reference spells this nowhere under src/; fix THIS HOST's spelling \
+                 (do not relax the assertion)"
+            ),
+        })
+        .collect::<Vec<_>>()
+        .join("\n  ")
+}
+
 /// Extracts (exact classes, composition prefixes) from the reference renderer
 /// sources. `None` only on a genuine standalone checkout.
 fn reference_vocabulary() -> Option<(std::collections::BTreeSet<String>, Vec<String>)> {
     let root = reference_host_root()?;
-    let sources = [
-        root.join("src")
-            .join("Fuaran.UI.Renderer.Server")
-            .join("Render.fs"),
-        root.join("src")
-            .join("Fuaran.UI.Renderer")
-            .join("Render.fs"),
-        root.join("src")
-            .join("Fuaran.UI.Renderer.Core")
-            .join("Theme.fs"),
-        root.join("src")
-            .join("Fuaran.UI.Renderer.Core")
-            .join("DrawingSvg.fs"),
-        // Phase 1128 — `Css.fs` was MISSING from this list, and its absence made
-        // the oracle under-report the reference vocabulary by 36 tokens.
-        //
-        // It is the file the reference EXTRACTED its class composition into
-        // precisely so the spellings could not drift ("each spell
-        // `\"fuaran-metric fuaran-metric-\" + tone` inline can drift by a …"), so
-        // omitting it dropped `fuaran-badge`, `fuaran-metric`, `fuaran-toast`,
-        // `fuaran-layout-stack` and thirty-odd more out of the set this host is
-        // measured against — every one of them a class the reference does emit.
-        //
-        // The gate never SAID so, because it was masked: the walk panicked on the
-        // first fixture carrying a kind this host had not adopted, so it never
-        // reached its own offender assertion. Adopting the kind is what surfaced
-        // the stale list, which is the class of finding the manifest-driven
-        // obligation suite next door exists to make loud rather than incidental.
-        root.join("src")
-            .join("Fuaran.UI.Renderer.Core")
-            .join("Css.fs"),
-        // Phase 1499 — RatingModel.fs is the SAME class of omission Css.fs was,
-        // and it presented identically: the reference EXTRACTED the rating's
-        // per-position fill classes there so the three spellings could not
-        // drift between its two renderers, and this list not naming the file
-        // made every one of them read as absent from a vocabulary that has
-        // carried them since Phase 1130. Adopting the kind is what surfaced it,
-        // exactly as adopting a kind surfaced the Css.fs gap.
-        root.join("src")
-            .join("Fuaran.UI.Renderer.Core")
-            .join("RatingModel.fs"),
-        // Markdown.fs and MathMl.fs likewise compose emitted classes for the two
-        // sub-renderers whose output this host also emits.
-        root.join("src")
-            .join("Fuaran.UI.Renderer.Core")
-            .join("Markdown.fs"),
-        root.join("src")
-            .join("Fuaran.UI.Renderer.Core")
-            .join("MathMl.fs"),
-    ];
+    let sources = reference_renderer_sources(&root);
 
     // A token ending in '-' is a composition prefix (fuaran-metric- styles
     // fuaran-metric-brand). The BARE namespace is not: it occurs in the
@@ -1158,6 +1283,80 @@ fn reference_vocabulary() -> Option<(std::collections::BTreeSet<String>, Vec<Str
         exact.len()
     );
     Some((exact, prefixes))
+}
+
+/// The completeness property the 2026-09-02 diagnosis asked for: not "is every
+/// listed file present" (which passed while the list was three files short) but
+/// "does the derivation reach past the list at all, and does it reach the files
+/// the drift was hiding in".
+#[test]
+fn the_reference_source_set_is_derived_rather_than_listed() {
+    let Some(root) = reference_host_root() else {
+        eprintln!("reference renderer not found; skipping (standalone checkout)");
+        return;
+    };
+    let files = reference_renderer_sources(&root);
+    let src = root.join("src");
+    let relative: Vec<String> = files
+        .iter()
+        .filter_map(|p| p.strip_prefix(&src).ok())
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+
+    // The floor is asserted inside the derivation; what this adds is that the
+    // derivation is not merely REPRODUCING the floor. A glob narrowed until it
+    // matched exactly the hand-listed files would satisfy the floor and have
+    // re-created the defect.
+    assert!(
+        relative.len() > REFERENCE_RENDERER_SOURCE_FLOOR.len(),
+        "the derived set ({}) is no larger than the hand-maintained floor ({}) — the derivation \
+         is not reaching past the list it replaced:\n  {}",
+        relative.len(),
+        REFERENCE_RENDERER_SOURCE_FLOOR.len(),
+        relative.join("\n  ")
+    );
+
+    // The two the 2026-09-02 diagnosis named as never having been in the list.
+    // They are in the floor as well, so this is belt-and-braces — but the floor
+    // is the thing a future edit might trim, and these two are the instance the
+    // whole bundle was filed over.
+    for f in [
+        "Fuaran.UI.Renderer/Runtime.fs",
+        "Fuaran.UI.Renderer.Server/Registry.fs",
+    ] {
+        assert!(
+            relative.iter().any(|r| r == f),
+            "the derivation does not reach {f}, the file that composes `fuaran-custom-`"
+        );
+    }
+}
+
+/// Verify the probe, not just the verdict: `describe_offenders` is only useful
+/// if it can tell the two failure branches apart, and both branches are
+/// unreachable in a green run.
+#[test]
+fn the_offender_explanation_distinguishes_its_two_branches() {
+    let Some(root) = reference_host_root() else {
+        eprintln!("reference renderer not found; skipping (standalone checkout)");
+        return;
+    };
+    // A class the reference spells OUTSIDE the renderer projects: the
+    // derivation-gap branch. `Fuaran.UI/Defaults.fs` holds it.
+    let outside = "fuaran-error-boundary-placeholder".to_string();
+    let derivation_gap = describe_offenders(&root, &[&outside]);
+    assert!(
+        derivation_gap.contains("fix the DERIVATION"),
+        "a class the reference spells outside the renderer projects must be reported as a \
+         derivation gap, not as a host defect: {derivation_gap}"
+    );
+
+    // A class nothing spells anywhere: the host-defect branch.
+    let nowhere = "fuaran-not-a-real-class-1653".to_string();
+    let host_defect = describe_offenders(&root, &[&nowhere]);
+    assert!(
+        host_defect.contains("fix THIS HOST"),
+        "a class the reference spells nowhere must be reported as a host defect: {host_defect}"
+    );
 }
 
 #[test]
@@ -1213,9 +1412,14 @@ fn emitted_class_vocabulary_matches_the_reference_renderer() {
         "class-vocabulary parity EXECUTED: {ran} fixtures, {checked} emitted-class occurrences, {} reference classes",
         exact.len()
     );
+    let offenders: Vec<&String> = offenders.iter().collect();
     assert!(
         offenders.is_empty(),
-        "emitted classes absent from the reference renderer vocabulary: {offenders:?}"
+        "emitted classes absent from the reference renderer vocabulary:\n  {}",
+        describe_offenders(
+            &reference_host_root().expect("the reference host was located above"),
+            &offenders
+        )
     );
 }
 
@@ -1324,7 +1528,11 @@ fn form_control_class_vocabulary_matches_the_reference_renderer() {
     );
     assert!(
         offenders.is_empty(),
-        "form-control classes absent from the reference renderer vocabulary: {offenders:?}"
+        "form-control classes absent from the reference renderer vocabulary:\n  {}",
+        describe_offenders(
+            &reference_host_root().expect("the reference host was located above"),
+            &offenders
+        )
     );
 }
 

@@ -18,7 +18,9 @@
 //! at-the-limit cases are not padding: they are the half this host actually
 //! failed, and a refusal-only suite would have passed throughout.
 
-use fuaran_rs::limits::{MAX_ARRAY_LENGTH, MAX_JSON_DEPTH, MAX_NODE_DEPTH, MAX_STRING_LENGTH};
+use fuaran_rs::limits::{
+    MAX_ARRAY_LENGTH, MAX_DOCUMENT_BYTES, MAX_JSON_DEPTH, MAX_NODE_DEPTH, MAX_STRING_LENGTH,
+};
 use fuaran_rs::wire::{decode_node, decode_op};
 
 const BOX_OPEN: &str = r#"{"id":"n","kind":{"$type":"Box","role":"Group","layout":{"$type":"Flex","direction":"Vertical","wrap":false},"children":["#;
@@ -259,4 +261,79 @@ fn an_array_at_exactly_max_array_length_fails_on_shape_not_on_the_limit() {
     let doc = format!("[{items}]");
     let e = decode_node(&doc).unwrap_err();
     assert_ne!(e.code.as_str(), "LIMIT_EXCEEDED");
+}
+
+// ── §21.7 max document bytes ────────────────────────────────────────────────
+//
+// The vector is HOST-LOCAL by design and not a corpus fixture: committing
+// 32 MiB of padding to a shared repository to assert one integer comparison is
+// a poor trade, and unlike the depth bounds this is not a recursion hazard. So
+// this pair IS the conformance evidence for §21.7 on this host, which is why
+// both halves are here rather than only the refusal.
+
+/// A syntactically valid document padded to exactly `bytes` UTF-8 bytes.
+///
+/// Padding inside a STRING literal rather than with whitespace, deliberately:
+/// the check runs before the parser, so whitespace would test the same
+/// comparison, but a string keeps the document one a parser would otherwise
+/// have to walk — which is the cost §21.7 exists to refuse up front.
+fn document_of_bytes(bytes: usize) -> String {
+    let prefix = r#"{"id":"n","kind":{"$type":"Markdown","text":""#;
+    let suffix = r#""}}"#;
+    let pad = bytes - prefix.len() - suffix.len();
+    format!("{prefix}{}{suffix}", "a".repeat(pad))
+}
+
+#[test]
+fn refuses_a_document_one_byte_past_the_ceiling() {
+    let doc = document_of_bytes(MAX_DOCUMENT_BYTES + 1);
+    assert_eq!(doc.len(), MAX_DOCUMENT_BYTES + 1);
+    let e = decode_node(&doc).unwrap_err();
+    assert_eq!(e.code.as_str(), "LIMIT_EXCEEDED");
+    // The breach is a property of the DOCUMENT, so the path is the root — not
+    // a position inside it, which there is no meaningful way to name.
+    assert_eq!(e.path, "$");
+}
+
+#[test]
+fn refuses_an_over_ceiling_op_document_too() {
+    // Both public entry points, because both allocate. A ceiling on one of
+    // them is a ceiling on neither in practice.
+    let doc = document_of_bytes(MAX_DOCUMENT_BYTES + 1);
+    let e = decode_op(&doc).unwrap_err();
+    assert_eq!(e.code.as_str(), "LIMIT_EXCEEDED");
+    assert_eq!(e.path, "$");
+}
+
+#[test]
+fn a_document_at_exactly_the_ceiling_is_not_refused_for_its_size() {
+    // The at-the-limit half, which is the half a refusal-only suite passes
+    // while enforcing the ceiling one byte too tightly. This document's string
+    // is far past §21.6, so it IS refused — but by the string bound, not by
+    // the size ceiling, and the two are told apart by the message rather than
+    // by the path: both report at `$`, because the parser reaches its own
+    // bound before it has a position to name. What is asserted is that the
+    // size check did not fire, which is the statement about the boundary the
+    // refusal test above cannot make.
+    let doc = document_of_bytes(MAX_DOCUMENT_BYTES);
+    assert_eq!(doc.len(), MAX_DOCUMENT_BYTES);
+    let e = decode_node(&doc).unwrap_err();
+    assert!(
+        !e.message.contains("UTF-8 bytes"),
+        "a document AT the ceiling was refused as an over-size document: {e:?}"
+    );
+    // ...and it did reach the parser, which is what "the size check did not
+    // fire" means operationally.
+    assert!(
+        e.message.contains("MAX_STRING_LENGTH"),
+        "expected the string bound to be the refusal that fired: {e:?}"
+    );
+}
+
+#[test]
+fn an_ordinary_document_is_unaffected() {
+    // Verify the probe: the ceiling must not be reachable by an ordinary tree,
+    // or the two tests above would pass on a host that refused everything.
+    let doc = r#"{"id":"n","kind":{"$type":"Markdown","text":"hello"}}"#;
+    assert!(decode_node(doc).is_ok());
 }

@@ -6276,8 +6276,41 @@ fn limit_error(path: &str, breach: crate::limits::LimitBreach) -> DecodeError {
     )
 }
 
+/// The §21.7 total-document ceiling, checked BEFORE parsing.
+///
+/// One comparison on the input's length. Deferring it would allocate the
+/// document twice for no benefit, and it is the only §21 limit that bounds the
+/// document's TOTAL rather than the shape of the walk — the five structural
+/// bounds compose multiplicatively and admit a hundred-gigabyte document that
+/// satisfies every one of them individually.
+///
+/// `&str` is UTF-8 by construction, so `len()` IS the measured unit and there
+/// is nothing to convert. The path is `$`: the breach is a property of the
+/// document, not of a position in it.
+fn document_bytes_error(json: &str) -> Option<DecodeError> {
+    if json.len() <= crate::limits::MAX_DOCUMENT_BYTES {
+        return None;
+    }
+    Some(make_error(
+        DecodeErrorCode::LimitExceeded,
+        "$".to_string(),
+        format!(
+            "document is {} UTF-8 bytes, over the {}-byte ceiling",
+            json.len(),
+            crate::limits::MAX_DOCUMENT_BYTES
+        ),
+        Some(format!(
+            "a document of at most {} UTF-8 bytes",
+            crate::limits::MAX_DOCUMENT_BYTES
+        )),
+    ))
+}
+
 /// Decode a canonical-JSON `Node` payload into the storage-shape typed tree.
 pub fn decode_node(json: &str) -> Result<Node, DecodeError> {
+    if let Some(e) = document_bytes_error(json) {
+        return Err(e);
+    }
     match parse(json) {
         Ok(ast) => {
             crate::limits::reset_walk();
@@ -6289,6 +6322,9 @@ pub fn decode_node(json: &str) -> Result<Node, DecodeError> {
 
 /// Decode a canonical-JSON `TreeOp` payload into the storage-shape typed op.
 pub fn decode_op(json: &str) -> Result<TreeOp, DecodeError> {
+    if let Some(e) = document_bytes_error(json) {
+        return Err(e);
+    }
     match parse(json) {
         Ok(ast) => {
             crate::limits::reset_walk();

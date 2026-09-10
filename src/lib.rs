@@ -12,7 +12,16 @@
 //! and the typed node/op codec ([`wire`]): [`wire::decode_node`] /
 //! [`wire::encode_node`] / [`wire::decode_op`] / [`wire::encode_op`], certified
 //! byte-for-byte against the shared conformance corpus (round-trip + reject
-//! families). The apply engine, validator, and emission tiers are roadmap work.
+//! families).
+//!
+//! So are the three tiers this line used to call roadmap work: the tree-op apply
+//! engine ([`ops`]), the pre-emit [`validator`], and server-side and
+//! browser-native emission ([`render`], [`serverdriven`], [`client`], [`ffi`]) —
+//! each certified against the same corpus. What a reader should still calibrate
+//! against is coverage rather than existence: the [`render`] tier's per-kind
+//! fidelity is measured by the corpus's own obligation roster, not claimed
+//! uniformly, and this host is a *headless and WASM* host — it holds no
+//! server-side session state beyond what [`edge`] journals.
 
 /// The bounded program loop (client placement) — behaviour carried as data:
 /// the closed action walk, the per-interaction budget, the default-deny effect

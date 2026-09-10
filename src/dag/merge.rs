@@ -141,13 +141,27 @@ fn two_sided(
     }
 }
 
-/// The refusal-envelope spelling of a style sub-field's value: the enum CASE
-/// NAME, which is what the reference host's envelope carries.
+/// The refusal-envelope spelling of a style sub-field's value: the value's
+/// **wire** spelling, for every sub-field including `TextDirection`.
 ///
-/// For five of the six sub-fields that is also the wire spelling, so `as_str`
-/// serves. `TextDirection` is the exception — its wire spelling is lowercase
-/// (`"auto"`) while its case name is `Auto` — so it spells its own, and a
-/// `style.direction` refusal stays byte-identical to the reference host's.
+/// # Why this is the wire spelling, and why it used to say the opposite
+///
+/// The obligation is byte-identity with the reference host's envelope, and for
+/// five of the six sub-fields the case name and the wire spelling coincide, so
+/// nothing distinguished the two rules. The corpus manifest's own
+/// `refusalDescription` asserted that coincidence as a general fact — "every
+/// style sub-field is enum-shaped, so the value coincides with its wire
+/// spelling" — which is false for exactly `TextDirection` (`Auto`/`Ltr`/`Rtl`
+/// against `auto`/`ltr`/`rtl`), and no fixture reached it. This host and the
+/// TypeScript host each read the description, each chose the CASE name, and
+/// each wrote a comment saying it was matching the reference.
+///
+/// The reference's emitter has since been corrected and the corpus now PINS the
+/// spelling (`merge-conformance/merge-refusal-concurrent-direction`), so the
+/// question is answered by a fixture rather than by a description: the envelope
+/// carries the wire spelling. `as_str` now serves every sub-field, which is why
+/// there is no longer an exception arm to keep in step — a coincidence held by
+/// one rule instead of two.
 trait StyleFacetValue: Copy + PartialEq {
     fn facet_value(self) -> &'static str;
 }
@@ -162,17 +176,14 @@ macro_rules! wire_spelled_facet {
     };
 }
 
-wire_spelled_facet!(ToneVariant, StyleWeight, Emphasis, StyleRole, FontVoice);
-
-impl StyleFacetValue for TextDirection {
-    fn facet_value(self) -> &'static str {
-        match self {
-            TextDirection::Auto => "Auto",
-            TextDirection::Ltr => "Ltr",
-            TextDirection::Rtl => "Rtl",
-        }
-    }
-}
+wire_spelled_facet!(
+    ToneVariant,
+    StyleWeight,
+    Emphasis,
+    StyleRole,
+    FontVoice,
+    TextDirection,
+);
 
 /// Mirror of the canonical encoder's string escape, kept local so the merge
 /// module takes no codec dependency for the envelope (only `"`, `\` and the

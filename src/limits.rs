@@ -92,6 +92,43 @@ pub const MAX_NODES: usize = 100_000;
 /// pipeline's cost is already bounded by its own rows and steps.
 pub const MAX_EXPR_NODES: usize = 512;
 
+/// Maximum UTF-8 **byte** length of one whole input document (§21.7).
+///
+/// The five structural limits compose MULTIPLICATIVELY, and a document that
+/// respects every one of them can still be arbitrarily large: 100 000 array
+/// elements each holding a 1 048 576-code-point string is inside every bound
+/// above and is a hundred gigabytes. Each individual check refuses nothing,
+/// because each individual check is satisfied — the structural limits bound the
+/// SHAPE of the walk, and nothing bounded its TOTAL.
+///
+/// Three things about it are normative and easy to get subtly wrong:
+///
+///  * **Bytes, not code points, and not this host's string length.** §21.6
+///    bounds a VALUE the author wrote, so it is measured in units of text; this
+///    bounds the CARRIAGE, which is what an attacker sends and what a host
+///    allocates. Rust's `str::len()` is already UTF-8 bytes, so this host
+///    measures it directly and has nothing to convert — the trap the rule warns
+///    about is a UTF-16 host substituting its native length, which under-counts
+///    a CJK document threefold, in the direction that ADMITS.
+///  * **Before parsing.** It is one comparison on the input's length, so a host
+///    that defers it has chosen to allocate the document twice for no benefit.
+///  * **The path is `$`.** The breach is a property of the document, not of a
+///    position inside it.
+///
+/// The figure is constrained from BELOW by [`MAX_NODES`]: a document at exactly
+/// 100 000 nodes is about 8 MB of small nodes, so an 8 MiB ceiling — which
+/// looks generous beside a 1 MiB string bound — would refuse a document rule 1
+/// requires every host to ACCEPT, quietly lowering the node ceiling while
+/// leaving its stated value in the table. 32 MiB leaves about 335 bytes per
+/// node at that ceiling.
+///
+/// **The vector is HOST-LOCAL and deliberately not a corpus fixture** —
+/// committing 32 MiB of padding to a shared repository to assert one integer
+/// comparison is a poor trade, and unlike the depth bounds this is not a
+/// recursion hazard. `tests/limits.rs` asserts the pair this host owes: one
+/// byte over is refused, and a document at the node ceiling still decodes.
+pub const MAX_DOCUMENT_BYTES: usize = 33_554_432;
+
 use std::cell::Cell;
 
 thread_local! {

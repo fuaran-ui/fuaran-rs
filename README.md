@@ -37,18 +37,29 @@ let tree = Node {
             state: Default::default(),
             style: Default::default(),
             accessibility: None,
+            tooltip: None,
+            visible: None,
         }],
         heading: None,
         layout: BoxLayout::Auto,
         role: BoxRole::Dashboard,
+        keep_together: false,
+        break_before: false,
     }),
     state: Default::default(),
     style: Default::default(),
     accessibility: None,
+    tooltip: None,
+    visible: None,
 };
 
 let wire: String = encode_node(&tree);   // canonical wire JSON, byte-identical to every host
 ```
+
+This block is **compiled**, not transcribed: `tests/readme_quickstart.rs` holds the
+same source, builds it, and fails if the two copies stop matching byte for byte —
+so a widened `Node` or `BoxSpec` breaks the quick-start in the commit that widens
+it rather than in a reader's terminal weeks later.
 
 Full walkthrough — author → encode → render (headless or browser-native WASM) →
 playground: <https://fuaran-ui.io/get-started/rust>.

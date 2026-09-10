@@ -13,6 +13,34 @@ description = "Rust host of the Fuaran UI wire format — a dependency-light, id
 license = "Apache-2.0"
 authors = ["Andrew J. Willshire <andrew@fuaran.com>"]
 repository = "https://github.com/fuaran-ui/fuaran-rs"
+readme = "README.md"
+documentation = "https://docs.rs/fuaran-ui"
+# crates.io allows at most five keywords, each ≤ 20 characters and starting
+# with a letter. Chosen for what someone LOOKING for this crate would type,
+# not for what it is called: "wire-format" and "canonical-json" are the two
+# searches that should find it before its own name is known.
+keywords = ["ui", "wire-format", "canonical-json", "wasm", "json"]
+# From the crates.io category slug list; an unrecognised slug is a publish
+# warning rather than an error, which is exactly the kind of thing that is
+# discovered on the day of a release rather than before it.
+categories = ["web-programming", "encoding", "wasm", "gui"]
+# What the published .crate carries. `cargo package` includes every tracked
+# file by default; excluded here is scaffolding a consumer never reads — the
+# mobile packaging output, the workspace launcher, and CI.
+#
+# Two directories that LOOK like scaffolding are deliberately KEPT, because
+# excluding them breaks the package rather than slimming it. `tests/` is the
+# conformance suite: a reference implementation whose suite is absent from its
+# own package is asking to be taken on trust. And `js/` holds the browser
+# loader and the demo page — which `tests/demo_page.rs` reads with
+# `include_str!`, so excluding it makes the packaged crate fail to compile its
+# own tests. That coupling is not obvious from either file, which is exactly
+# why it is written here.
+exclude = [
+    "packaging/*",
+    "run.ps1",
+    ".github/*",
+]
 
 [lib]
 name = "fuaran_rs"

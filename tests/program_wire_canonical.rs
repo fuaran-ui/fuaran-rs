@@ -49,9 +49,25 @@
 //!
 //! Where the corpus **is** claimed and cannot be read, this leg **fails** — it
 //! never skips. A conformance check that passes without its oracle is worse
-//! than no check, because it reports the same green as one that ran. Where no
-//! corpus is claimed at all, it reports that it did not run and asserts
-//! nothing.
+//! than no check, because it reports the same green as one that ran.
+//!
+//! # Absence is two different facts, and only one of them is a skip
+//!
+//! Until Phase 1653 an absent corpus simply returned, so "the oracle is not
+//! here" and "the oracle is here and agrees" reported the same `ok`. That is
+//! defensible in a standalone clone of this repository, which genuinely cannot
+//! run the leg — and indefensible in the cross-host workspace, where an absent
+//! corpus means the check has been switched off and nobody was told.
+//!
+//! So the two are separated, by the discriminator `tests/render.rs` already
+//! uses for the reference host: **any sibling host present ⇒ hard failure**
+//! naming what proved the shape; **nothing else present ⇒ the honest standalone
+//! NOT RUN**, which is what the public workflow reports (it checks out this
+//! repository and the wire corpus, and no sibling host). And a corpus that IS
+//! located must SAY it is the program wire's — `manifest.json`'s
+//! `specification` member is read as part of the acceptance predicate, so a
+//! variable pointing one directory sideways is refused by name instead of being
+//! accepted and then reported as a corpus missing every vector.
 
 use fuaran_rs::canonical::{JVal, parse, render_canonical};
 use std::path::PathBuf;
@@ -69,12 +85,41 @@ use std::path::PathBuf;
 /// `bounded::effect` tests, which are where an as-emitted envelope belongs.
 const AS_EMITTED_FAMILY: &str = "client-effect";
 
+/// Sibling hosts whose presence proves this is a cross-host workspace checkout
+/// rather than a standalone clone. Deliberately excludes this host.
+///
+/// The same list, for the same purpose, as `tests/render.rs`'s
+/// `OTHER_HOST_NAMES`: each integration test is its own crate, so the constant
+/// cannot be shared without publishing it from the library, and publishing a
+/// list of sibling repository names out of a crate is not a thing this host
+/// should do to spare a duplication of seven strings.
+const WORKSPACE_SIBLING_HOSTS: &[&str] = &[
+    "fuaran-dotnet",
+    "fuaran",
+    "fuaran-ts",
+    "fuaran-py",
+    "fuaran-go",
+    "fuaran-kt",
+    "fuaran-swift",
+];
+
+/// The identity member every specification corpus in this estate carries. The
+/// acceptance predicate READS it rather than trusting a directory name — a
+/// manifest that merely CITES another specification satisfies a containment
+/// probe, which is the recorded way this class of resolver goes wrong.
+const PROGRAM_WIRE_IDENTITY: &str = "program-wire";
+
 enum Corpus {
     /// An operator named it. Anything wrong with it from here is a hard failure.
     Declared(PathBuf),
     /// Found beside this repository.
     Discovered(PathBuf),
-    /// Nothing claimed and nothing found.
+    /// Nothing claimed and nothing found, in a checkout that is plainly the
+    /// cross-host workspace — so the oracle has been silently disabled rather
+    /// than legitimately absent. Carries the sibling that proves the shape.
+    MissingInWorkspace(String),
+    /// Nothing claimed, nothing found, and nothing else here either — a genuine
+    /// standalone clone of this repository.
     Absent,
 }
 
@@ -85,15 +130,93 @@ impl Corpus {
                 return Corpus::Declared(PathBuf::from(declared).join("wire-fixtures"));
             }
         }
-        let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
+        let crate_dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
+        let mut dir = crate_dir.clone();
         loop {
             let root = dir.join("fuaran-program-spec").join("wire-fixtures");
             if root.join("manifest.json").is_file() {
                 return Corpus::Discovered(root);
             }
             if !dir.pop() {
-                return Corpus::Absent;
+                break;
             }
+        }
+        // Not found anywhere up the tree. Is this a standalone clone, or a
+        // workspace checkout whose corpus is missing? The two look identical
+        // from inside this function and are opposite facts: one is a repository
+        // that legitimately cannot run this leg, the other is an oracle that has
+        // been silently switched off. The discriminator is the one
+        // `tests/render.rs` already uses for the reference host, and it is
+        // chosen so the PUBLIC workflow — which checks out this repository and
+        // the wire corpus and no sibling host — stays honestly NOT RUN.
+        let mut dir = crate_dir;
+        loop {
+            for sibling in WORKSPACE_SIBLING_HOSTS {
+                if dir.join(sibling).is_dir() {
+                    return Corpus::MissingInWorkspace(format!(
+                        "{}/ is present under {}",
+                        sibling,
+                        dir.display()
+                    ));
+                }
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+        Corpus::Absent
+    }
+
+    /// The acceptance half: a located corpus must SAY it is the program wire's,
+    /// and an absence must not read as a pass.
+    ///
+    /// Reading the identity out of the manifest is what separates "this is the
+    /// wrong corpus" from "this corpus is missing a vector", and the two have
+    /// different remedies. Without it, an operator whose `FUARAN_PROGRAM_SPEC`
+    /// points one directory sideways gets acceptance followed by a confident
+    /// complaint about absent vectors — loud, and wrong about the cause.
+    fn accept(self) -> Option<PathBuf> {
+        let (fixtures, declared) = match self {
+            Corpus::Declared(p) => (p, true),
+            Corpus::Discovered(p) => (p, false),
+            Corpus::MissingInWorkspace(evidence) => panic!(
+                "the program wire corpus is neither claimed nor present, but this is a \
+                 cross-host workspace checkout ({evidence}) — so this leg has been silently \
+                 disabled rather than legitimately skipped, and a missing oracle reports the \
+                 same green as a run. Clone `fuaran-program-spec` beside this repository, or \
+                 name it with FUARAN_PROGRAM_SPEC. (A standalone clone of this repository \
+                 alone still reports NOT RUN and asserts nothing.)"
+            ),
+            Corpus::Absent => {
+                eprintln!(
+                    "the program wire corpus is neither claimed nor present beside this \
+                     repository, and no sibling host is present either; this leg asserted \
+                     nothing. Set FUARAN_PROGRAM_SPEC to run it."
+                );
+                return None;
+            }
+        };
+
+        let manifest_path = fixtures.join("manifest.json");
+        let raw = std::fs::read_to_string(&manifest_path).unwrap_or_else(|e| {
+            panic!(
+                "the corpus is {} at '{}' but its manifest could not be read: {e}. \
+                 A conformance check that passes without its oracle is worse than no check, \
+                 so this is a failure rather than a skip.",
+                if declared { "claimed" } else { "present" },
+                manifest_path.display()
+            )
+        });
+        let manifest = parse(&raw).expect("the manifest parses with this host's own JSON layer");
+        match manifest.field("specification") {
+            Some(JVal::Str(id)) if id == PROGRAM_WIRE_IDENTITY => Some(fixtures),
+            other => panic!(
+                "'{}' is not the program wire corpus: its manifest's `specification` member is \
+                 {other:?}, not \"{PROGRAM_WIRE_IDENTITY}\". Refused at RESOLUTION rather than \
+                 accepted and then reported as a corpus missing every vector, which names the \
+                 wrong cause.",
+                manifest_path.display()
+            ),
         }
     }
 }
@@ -107,26 +230,12 @@ fn string_field(entry: &JVal, key: &str) -> Option<String> {
 
 #[test]
 fn every_round_trip_vector_re_renders_to_its_committed_bytes() {
-    let fixtures = match Corpus::locate() {
-        Corpus::Absent => {
-            eprintln!(
-                "the program wire corpus is neither claimed nor present beside this repository; \
-                 this leg asserted nothing. Set FUARAN_PROGRAM_SPEC to run it."
-            );
-            return;
-        }
-        Corpus::Declared(p) | Corpus::Discovered(p) => p,
+    let Some(fixtures) = Corpus::locate().accept() else {
+        return;
     };
 
     let manifest_path = fixtures.join("manifest.json");
-    let raw = std::fs::read_to_string(&manifest_path).unwrap_or_else(|e| {
-        panic!(
-            "the corpus is claimed at '{}' but its manifest could not be read: {e}. \
-             A conformance check that passes without its oracle is worse than no check, \
-             so this is a failure rather than a skip.",
-            manifest_path.display()
-        )
-    });
+    let raw = std::fs::read_to_string(&manifest_path).expect("the manifest was read at acceptance");
     let manifest = parse(&raw).expect("the manifest parses with this host's own JSON layer");
 
     let Some(JVal::Arr(vectors)) = manifest.field("vectors") else {

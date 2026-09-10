@@ -49,32 +49,44 @@
       // A small tree: a heading + a metric bound to the reactive `$state.revenue`
       // slot. The demo writes that slot (the write-back a decoded control does)
       // and swaps the heading text via a structural EditNode op.
+      //
+      // Written as strict JSON — which is also valid JS — and delimited by the
+      // two markers below, so `tests/demo_page.rs` can lift it out of this page
+      // and DECODE it with the host's own decoder. It could not before: the
+      // Metric slot was spelled `source`, which the 0.2.0 rename law retired in
+      // favour of `value` for a scalar displayed value (`source` is reserved
+      // for collection feeds, and the retired spelling is a hard decode error
+      // rather than an alias). So `createSession` threw MISSING_FIELD at
+      // `$.kind.value` and this page never mounted — and nothing anywhere
+      // noticed, because no gate had ever read this file.
+      // DEMO-TREE-BEGIN
       const tree = {
-        id: 'root',
-        kind: {
-          $type: 'Box',
-          children: [
+        "id": "root",
+        "kind": {
+          "$type": "Box",
+          "children": [
             {
-              id: 'title',
-              kind: { $type: 'Heading', level: 1, text: { $type: 'Literal', text: 'Live dashboard' }, variant: 'Standard' },
+              "id": "title",
+              "kind": { "$type": "Heading", "level": 1, "text": { "$type": "Literal", "text": "Live dashboard" }, "variant": "Standard" }
             },
             {
-              id: 'metric',
-              kind: {
-                $type: 'Metric',
-                emphasis: 'Loud',
-                format: { $type: 'Currency', code: 'GBP' },
-                label: { $type: 'Literal', text: 'Revenue' },
-                source: { $type: 'State', defaultValue: 0, key: 'revenue' },
-                tone: 'Brand',
-                weight: 'Standard',
-              },
-            },
+              "id": "metric",
+              "kind": {
+                "$type": "Metric",
+                "emphasis": "Loud",
+                "format": { "$type": "Currency", "code": "GBP" },
+                "label": { "$type": "Literal", "text": "Revenue" },
+                "value": { "$type": "State", "defaultValue": 0, "key": "revenue" },
+                "tone": "Brand",
+                "weight": "Standard"
+              }
+            }
           ],
-          layout: { $type: 'Flex', direction: 'Vertical', wrap: false },
-          role: 'Group',
-        },
+          "layout": { "$type": "Flex", "direction": "Vertical", "wrap": false },
+          "role": "Group"
+        }
       };
+      // DEMO-TREE-END
 
       const status = document.getElementById('status');
       const mountEl = document.getElementById('mount');

@@ -153,25 +153,44 @@ impl OpStreamSink for FileSink {
 
 // ─── Record (de)serialisation ────────────────────────────────────────────────
 
+// ─── The actor's ONE encoding (Phase 1653) ───────────────────────────────────
+//
+// This file used to render the actor through `render_object`, which Ordinal-
+// SORTS its keys and so emitted `{"id","kind","model","version"}` — where
+// `chain::encode_actor` emits the pinned `{"kind","model","version","id"}` that
+// the hash pre-image folds in and the DAG record nests verbatim. Two encodings
+// of one value in one module is the drift Phase 1168 avoided in the DAG record
+// by EXPOSING the canonical encoder rather than writing a second one, and this
+// is the same fix.
+//
+// # The readability question, answered before the change (it is the first task,
+// # not an afterthought)
+//
+// The sink's output is PERSISTED, so a change here changes bytes already on
+// disk, and the honest question is whether lines written under the old order
+// must still read back. They must, and they do — established rather than
+// assumed:
+//
+//  * The reader is key-addressed, not positional. `deserialize_record` and
+//    `parse_actor` go through `JVal::field`, so member order is not a fact
+//    either of them can observe. `a_sink_line_in_the_pre_1653_key_order_still_
+//    parses` in `tests/opstream.rs` pins that against a literal old line rather
+//    than leaving it to inspection.
+//  * The line's own bytes are not hashed. `chain::compute_hash` builds its
+//    pre-image from `encode_actor` — the pinned encoder — and never from the
+//    serialised line, so no chain verification depends on this order and old
+//    and new lines verify identically in one file.
+//
+// So there is no migration, no dual-read path, and no version marker: the two
+// orders are the same document, and after this change the host emits one of
+// them instead of two.
+//
+// One same-class twin is deliberately NOT changed here: `result_json` below has
+// the identical shape against `chain`'s private `encode_result`. Unifying it
+// means publishing a second function from `chain`, which is a public-surface
+// decision this phase was not asked to take.
 fn actor_json(a: &Actor) -> String {
-    match a {
-        Actor::Human { id } => {
-            let mut f = vec![
-                ("kind".to_string(), escape_string("human")),
-                ("id".to_string(), escape_string(id)),
-            ];
-            render_object(&mut f)
-        }
-        Actor::Agent { model, version, id } => {
-            let mut f = vec![
-                ("kind".to_string(), escape_string("agent")),
-                ("model".to_string(), escape_string(model)),
-                ("version".to_string(), escape_string(version)),
-                ("id".to_string(), escape_string(id)),
-            ];
-            render_object(&mut f)
-        }
-    }
+    crate::opstream::encode_actor(a)
 }
 
 fn result_json(r: &OpResult) -> String {

@@ -110,8 +110,11 @@ jobs:
             echo "No driver scenario corpus — neither \`FUARAN_PROGRAM_SPEC\` nor a checkout beside this repo:"
             echo "  - \`the_loop_reproduces_every_scenario_the_corpus_enumerates\` (tests/driver_semantics.rs)"
             echo "  - \`a_mutated_trace_makes_this_harness_go_red\` (tests/driver_semantics.rs)"
+            echo "  - \`every_round_trip_vector_re_renders_to_its_committed_bytes\` (tests/program_wire_canonical.rs)"
             echo "    Operator-invoked (\`run.ps1 -DriverSemantics\`). A corpus that is CLAIMED and"
-            echo "    unreadable FAILS this pair rather than skipping it — only an unclaimed one is NOT RUN."
+            echo "    unreadable FAILS these rather than skipping them, and so does an absent one in a"
+            echo "    cross-host workspace checkout — only an unclaimed corpus with no sibling host"
+            echo "    beside this repository is NOT RUN, which is the shape of this workflow."
             echo
             echo "Everything else in the suite is gated below, with no exclusions."
           } | tee -a "$GITHUB_STEP_SUMMARY"

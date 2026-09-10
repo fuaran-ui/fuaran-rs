@@ -164,6 +164,16 @@ x.fuaran_session_free(probeSession);
 console.error(`placement-abi (wasm32): ${ran.length} case(s): ${ran.join(', ')}`);
 if (failures.length > 0) {
   console.error(`\n${failures.length} failure(s):\n\n${failures.join('\n\n')}`);
-  process.exit(1);
+  // `process.exitCode` rather than `process.exit(1)`: node exits naturally once
+  // this module settles, where an immediate exit while the WebAssembly instance
+  // is still live aborts in libuv on Windows and reports 127 instead of 1 — the
+  // abort's assertion text lands on top of the failure list above, so the leg
+  // reports a harder failure than the one it found. `js/list-param.mjs` is the
+  // newer leg that already does this; the two setup aborts higher up keep
+  // `process.exit` deliberately, because no instance is live there yet.
+  process.exitCode = 1;
+} else {
+  console.error(
+    'placement-abi (wasm32): every recorded envelope reproduced, and the probe went red.',
+  );
 }
-console.error('placement-abi (wasm32): every recorded envelope reproduced, and the probe went red.');

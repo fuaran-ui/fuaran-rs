@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::opstream::{
     Actor, FileSink, InMemorySink, OpRecord, OpResult, OpStream, OpStreamSink, SinkError,
-    VerificationError, compute_hash, genesis_previous_hash, replay, replay_stream, verify_chain,
+    VerificationError, compute_hash, encode_actor, genesis_previous_hash, replay, replay_stream,
+    verify_chain,
 };
 use fuaran_rs::wire::{Node, TreeOp, decode_node, decode_op};
 
@@ -321,6 +322,150 @@ fn persist_reopen_verify_fold_round_trips() {
     // ...and folds to the byte-identical tree.
     let folded = replay(&base, reopened.records()).expect("replay reopened");
     assert_eq!(folded, expected);
+
+    let _ = std::fs::remove_file(&path);
+}
+
+// ─── The actor's one encoding, and the lines already on disk (Phase 1653) ────
+
+/// The sink used to render the actor with Ordinal-SORTED keys where
+/// `encode_actor` — the encoder the hash pre-image folds in and the DAG record
+/// nests verbatim — pins them. Unifying them changes bytes already persisted,
+/// so the readability question had to be settled first rather than assumed.
+///
+/// This is that settlement, executable: a line in the PRE-1653 key order, fed
+/// to a reader that has only ever seen the new one. It must read back into the
+/// same record, and the chain must still verify — because the reader is
+/// key-addressed and the line's own bytes are not part of the hash pre-image.
+/// If either stops being true, no operator can read an old journal and this
+/// test is where they find out.
+#[test]
+fn a_sink_line_in_the_pre_1653_key_order_still_parses() {
+    let path = std::env::temp_dir().join(format!(
+        "fuaran-rs-opstream-legacy-{}-{}.jsonl",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_file(&path);
+
+    let actor = Actor::Agent {
+        model: "claude".to_string(),
+        version: "4.8".to_string(),
+        id: "planner".to_string(),
+    };
+    let op = decode_op(r#"{"$type":"RemoveNode","target":"gone"}"#).expect("op decodes");
+    let hash = compute_hash(
+        &genesis_previous_hash(),
+        &op,
+        1,
+        1_700_000_000,
+        &actor,
+        None,
+        &OpResult::Success,
+    );
+
+    // Byte-for-byte the shape the sink emitted before this phase: the actor's
+    // members Ordinal-sorted (`id` first), everything else unchanged.
+    let legacy = format!(
+        concat!(
+            r#"{{"actor":{{"id":"planner","kind":"agent","model":"claude","version":"4.8"}},"#,
+            r#""hash":"{hash}","op":{{"$type":"RemoveNode","target":"gone"}},"#,
+            r#""previousHash":"{prev}","promptId":null,"result":{{"kind":"success"}},"#,
+            r#""sequence":1,"ts":1700000000}}"#,
+            "\n"
+        ),
+        hash = hash,
+        prev = genesis_previous_hash()
+    );
+    std::fs::write(&path, &legacy).expect("write the legacy line");
+
+    let reopened = FileSink::open(&path).expect("a pre-1653 line still opens");
+    assert_eq!(
+        reopened.records().len(),
+        1,
+        "the pre-1653 sink line did not read back — an operator's existing journal is unreadable"
+    );
+    let read = &reopened.records()[0];
+    assert_eq!(read.actor, actor, "the actor did not survive the read");
+    assert_eq!(
+        verify_chain(reopened.records()),
+        Ok(()),
+        "the chain over a pre-1653 line no longer verifies — the line's own byte order has \
+         somehow become part of the hash pre-image, which it must never be"
+    );
+
+    // Verify the probe: the reader must be capable of refusing, or the pass
+    // above says nothing about what it read.
+    let corrupted = legacy.replace(r#""model":"claude""#, r#""modle":"claude""#);
+    assert_ne!(corrupted, legacy, "the perturbation changed nothing");
+    let corrupt_path = path.with_extension("corrupt.jsonl");
+    std::fs::write(&corrupt_path, &corrupted).expect("write the corrupted line");
+    assert!(
+        FileSink::open(&corrupt_path).is_err(),
+        "a malformed actor was accepted, so this test cannot see the failure it exists for"
+    );
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&corrupt_path);
+}
+
+/// The sink and the chain now agree on the actor's bytes. Pinned, so a future
+/// edit that re-introduces a second encoding is a failing test rather than a
+/// divergence nobody looks for.
+#[test]
+fn the_sink_line_carries_the_pinned_actor_encoding() {
+    let path = std::env::temp_dir().join(format!(
+        "fuaran-rs-opstream-actor-{}-{}.jsonl",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_file(&path);
+
+    let actor = Actor::Agent {
+        model: "claude".to_string(),
+        version: "4.8".to_string(),
+        id: "planner".to_string(),
+    };
+    let op = decode_op(r#"{"$type":"RemoveNode","target":"gone"}"#).expect("op decodes");
+    let record = OpRecord {
+        sequence: 1,
+        op,
+        timestamp_unix_seconds: 1_700_000_000,
+        actor: actor.clone(),
+        prompt_id: None,
+        result: OpResult::Success,
+        previous_hash: genesis_previous_hash(),
+        hash: String::new(),
+    };
+    let record = OpRecord {
+        hash: compute_hash(
+            &record.previous_hash,
+            &record.op,
+            record.sequence,
+            record.timestamp_unix_seconds,
+            &record.actor,
+            None,
+            &record.result,
+        ),
+        ..record
+    };
+
+    {
+        let mut sink = FileSink::open(&path).expect("open sink");
+        sink.append(&record).expect("append");
+    }
+    let written = std::fs::read_to_string(&path).expect("read back");
+    assert!(
+        written.contains(&format!(r#""actor":{}"#, encode_actor(&actor))),
+        "the sink line does not carry `encode_actor`'s bytes — there are two actor encodings in \
+         this host again:\n{written}"
+    );
 
     let _ = std::fs::remove_file(&path);
 }
