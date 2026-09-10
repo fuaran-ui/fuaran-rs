@@ -119,7 +119,7 @@ pub const MAX_EXPR_NODES: usize = 512;
 /// An UPPER bound only. A negative `rows` is not a resource breach — nothing
 /// expands — and reporting one as `LimitExceeded` would be the actively-wrong
 /// diagnosis rule 2 forbids. It is an authoring defect and belongs to the
-/// pre-emit validator family (`FUARAN150`), which this crate does not
+/// pre-emit validator family (`FUARAN152`), which this crate does not
 /// implement.
 pub const MAX_SKELETON_ROWS: i64 = 10_000;
 
