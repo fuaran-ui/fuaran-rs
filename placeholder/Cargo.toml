@@ -1,0 +1,27 @@
+# Defensive placeholder for the bare crate name `fuaran`. The real crate is
+# `fuaran-ui` (repository `fuaran-rs`): `cargo add fuaran-ui`. This crate exports
+# nothing and will never gain an API; it exists so the unqualified name cannot be
+# taken by an unrelated project and mistaken for the Fuaran UI wire-format host.
+# Mirrors the unscoped npm name `fuaran`, held the same way beside `@fuaran-ui/*`.
+[package]
+name = "fuaran"
+version = "0.0.0-placeholder.1"
+edition = "2024"
+rust-version = "1.85"
+description = "Placeholder for the bare name. The Fuaran UI wire-format host for Rust is the `fuaran-ui` crate — `cargo add fuaran-ui`."
+license = "Apache-2.0"
+authors = ["Andrew J. Willshire <andrew@fuaran.com>"]
+repository = "https://github.com/fuaran-ui/fuaran-rs"
+homepage = "https://fuaran-ui.io"
+readme = "README.md"
+keywords = ["ui", "wire-format", "placeholder"]
+categories = ["web-programming"]
+include = ["src/lib.rs", "README.md", "Cargo.toml"]
+
+# This directory sits inside the `fuaran-ui` crate's repository. An empty
+# workspace table makes it its own root, so cargo does not look upward for one
+# and the parent crate's `exclude` keeps it out of the `fuaran-ui` package.
+[workspace]
+
+[lib]
+path = "src/lib.rs"

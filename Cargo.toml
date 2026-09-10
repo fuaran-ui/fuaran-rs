@@ -38,6 +38,7 @@ categories = ["web-programming", "encoding", "wasm", "gui"]
 # why it is written here.
 exclude = [
     "packaging/*",
+    "placeholder/*",
     "run.ps1",
     ".github/*",
 ]
