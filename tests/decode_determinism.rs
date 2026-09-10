@@ -100,13 +100,42 @@ fn numbers_outside_the_rfc_8259_grammar_are_refused() {
     );
 }
 
+/// A typed integer slot §21 does NOT bound (Phase 1666), for the §7.1 probes
+/// that must not also be asserting a §21 limit.
+fn heading(level: &str) -> String {
+    format!(
+        r#"{{"id":"h","kind":{{"$type":"Heading","level":{level},"text":"t","variant":"Standard"}}}}"#
+    )
+}
+
 #[test]
 fn the_grammar_still_admits_every_well_formed_number() {
     // The corrected twins. A grammar check written too tightly refuses these,
     // and no reject fixture would notice.
+    //
+    // Phase 1666 — the PROBE moved off `Skeleton.rows`, and §7.1's statement did
+    // not move at all. `Heading.level` is a typed integer slot §21 does not
+    // bound; `Skeleton.rows` is now bounded by §21.9, so `2147483647` there is a
+    // `LimitExceeded` rather than a decode. A §7.1 test must probe a slot §7.1
+    // ALONE governs, or it asserts the conjunction of §7.1 and §21 and will be
+    // re-broken by the next limit that lands on whichever slot it happened to
+    // pick.
     for lit in ["3", "0", "-3", "2147483647", "-2147483648"] {
-        accepted(&skeleton(lit));
+        accepted(&heading(lit));
     }
+}
+
+/// The §7.1 / §21 seam, stated rather than left to be inferred from which test
+/// happens to sit where (Phase 1666).
+///
+/// The two codes answer different questions and the ORDER keeps them apart:
+/// §7.1 asks what the slot can HOLD and admits `2147483647`; §21.9 then asks how
+/// much work the document may NAME and refuses it. A host reading the bound as a
+/// narrowing of the slot's type would answer `WrongType` here — and would also
+/// refuse the at-the-bound document §21.2 rule 1 obliges it to accept.
+#[test]
+fn a_bounded_integer_slot_refuses_in_range_as_a_limit_breach() {
+    assert_eq!(refused(&skeleton("2147483647")), "LIMIT_EXCEEDED");
 }
 
 #[test]
