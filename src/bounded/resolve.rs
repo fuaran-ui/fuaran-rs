@@ -67,12 +67,20 @@ pub fn structural_children(kind: &NodeKind) -> Vec<&Node> {
 /// as it was when it does not resolve. An unresolved binding is a real state a
 /// renderer distinguishes (still loading, versus resolved-to-nothing), so this
 /// pass never fabricates a value to fill it.
+///
+/// Phase 1667 — an ERRORED binding is left alone for a sharper form of the same
+/// reason: baking it into a `Static` would DISCARD the error, and the tree this
+/// pass hands on would then render a plausible empty slot with nothing left to
+/// say why. Kept as it was, the binding errors again at the slot, where the
+/// renderer can surface it.
 fn subst(sources: &BindingSources, binding: &Binding) -> Binding {
     match resolve(sources, binding) {
         Resolution::Resolved(value) => Binding::Static {
             value: to_static(&value),
         },
-        Resolution::NotResolved | Resolution::I18nUnresolved(_) => binding.clone(),
+        Resolution::NotResolved | Resolution::I18nUnresolved(_) | Resolution::Errored(_) => {
+            binding.clone()
+        }
     }
 }
 
