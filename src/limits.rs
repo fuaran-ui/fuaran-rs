@@ -92,6 +92,37 @@ pub const MAX_NODES: usize = 100_000;
 /// pipeline's cost is already bounded by its own rows and steps.
 pub const MAX_EXPR_NODES: usize = 512;
 
+/// Maximum value of ONE `Skeleton` node's `rows` slot (§21.9).
+///
+/// Counted per node rather than per document — a tree may carry many
+/// `Skeleton` nodes, each bounded here, with the whole still bounded by
+/// `MAX_NODES` and `MAX_DOCUMENT_BYTES`.
+///
+/// It is the first bound here that a document breaches with four digits rather
+/// than with bulk, and §21.8's argument applies more sharply because this is
+/// not even an evaluation — the rows are simply not present in the input. A
+/// server-side renderer emits one row of markup per count, so
+/// `{"$type":"Skeleton","rows":100000000}` is a document well inside every
+/// other limit (a handful of bytes, one node, three JSON levels) that names a
+/// hundred million rendered rows. Every structural limit is satisfied, and each
+/// is satisfied because none of them is looking at the value.
+///
+/// §7.1 decides FIRST, and the ORDER is what keeps the two rules apart. §7.1
+/// says what a typed integer slot can HOLD, and `2147483647` is finite,
+/// fraction-free and inside signed 32-bit, so §7.1 admits it; this bound then
+/// refuses it for the work it names. A non-integer therefore stays
+/// `WrongType` and a 32-bit-valid value past the bound is `LimitExceeded` —
+/// never the reverse. Collapsing the two into a narrower integer read would
+/// also refuse the at-the-bound document §21.2 rule 1 obliges every host to
+/// accept.
+///
+/// An UPPER bound only. A negative `rows` is not a resource breach — nothing
+/// expands — and reporting one as `LimitExceeded` would be the actively-wrong
+/// diagnosis rule 2 forbids. It is an authoring defect and belongs to the
+/// pre-emit validator family (`FUARAN150`), which this crate does not
+/// implement.
+pub const MAX_SKELETON_ROWS: i64 = 10_000;
+
 /// Maximum UTF-8 **byte** length of one whole input document (§21.7).
 ///
 /// The five structural limits compose MULTIPLICATIVELY, and a document that

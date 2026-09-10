@@ -3317,9 +3317,34 @@ fn decode_sparkline_spec(path: &str, j: &JVal) -> DResult<SparklineSpec> {
     Ok(SparklineSpec { source })
 }
 
+// Phase 1666 — `Skeleton.rows` is bounded by §21.9.
+//
+// `req_int` decides FIRST, so §7.1's slot rule is untouched: a fractional,
+// non-finite or out-of-32-bit value is still a `WrongType` and never a limit
+// breach. The bound then refuses a value the slot CAN hold but the format will
+// not carry the work of — a renderer emits one placeholder row per count, so
+// `{"rows":100000000}` names 10^8 rendered rows in a handful of bytes. The two
+// codes answer different questions and the ORDER is what keeps them apart.
+//
+// Upper bound only, deliberately: a negative count is an authoring defect
+// (`FUARAN150` in the pre-emit family), not a resource breach.
 fn decode_skeleton_spec(path: &str, j: &JVal) -> DResult<SkeletonSpec> {
     let fields = as_obj(path, j)?;
     let rows = req_int(path, fields, "rows", "skeleton row count integer")?;
+    if rows > crate::limits::MAX_SKELETON_ROWS {
+        return Err(make_error(
+            DecodeErrorCode::LimitExceeded,
+            &format!("{path}.rows"),
+            format!(
+                "skeleton rows {rows} exceeds the maximum of {} (WIRE_FORMAT 21.9)",
+                crate::limits::MAX_SKELETON_ROWS
+            ),
+            Some(format!(
+                "at most {} rows on one Skeleton",
+                crate::limits::MAX_SKELETON_ROWS
+            )),
+        ));
+    }
     Ok(SkeletonSpec { rows })
 }
 
