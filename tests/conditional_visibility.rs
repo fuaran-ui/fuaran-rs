@@ -59,8 +59,14 @@ fn visible_false_removes_the_node_entirely() {
     assert!(!html.contains("SUBJECT"), "the text is gone: {html}");
     // Removal is not concealment: no placeholder carries the id, and nothing
     // marks the absence.
-    assert!(!html.contains("subject"), "no placeholder carries the id: {html}");
-    assert!(!html.contains("aria-hidden"), "removal is not concealment: {html}");
+    assert!(
+        !html.contains("subject"),
+        "no placeholder carries the id: {html}"
+    );
+    assert!(
+        !html.contains("aria-hidden"),
+        "removal is not concealment: {html}"
+    );
     assert!(
         html.contains("BEFORE") && html.contains("AFTER"),
         "the siblings are untouched: {html}"
@@ -152,8 +158,14 @@ fn first_match_wins_runs_over_the_authored_order() {
         &sources(&[("flag", JVal::Bool(true)), ("view", JVal::Str("a".into()))]),
     );
 
-    assert!(html.contains("BY PREDICATE"), "authored order decides: {html}");
-    assert!(!html.contains("BY MATCH"), "the later match does not pre-empt: {html}");
+    assert!(
+        html.contains("BY PREDICATE"),
+        "authored order decides: {html}"
+    );
+    assert!(
+        !html.contains("BY MATCH"),
+        "the later match does not pre-empt: {html}"
+    );
 }
 
 #[test]
@@ -188,7 +200,8 @@ fn a_when_only_switch_needs_no_selector() {
     ],"default":{"id":"sw-default","kind":{"$type":"Markdown","text":"NOT READY"}},"stateKey":""}}"#;
 
     assert!(
-        render_to_html(&node(json), &sources(&[("form.valid", JVal::Bool(true))])).contains("READY"),
+        render_to_html(&node(json), &sources(&[("form.valid", JVal::Bool(true))]))
+            .contains("READY"),
     );
     assert!(
         render_to_html(&node(json), &sources(&[("form.valid", JVal::Bool(false))]))
