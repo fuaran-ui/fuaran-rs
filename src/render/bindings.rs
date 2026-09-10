@@ -1426,8 +1426,22 @@ pub fn accessibility_attributes(
         return vec![];
     };
     let mut pairs: Vec<(&'static str, String)> = Vec::new();
+    // Phase 1665 — the SCALAR path on `label`, matching `hidden`'s
+    // `try_scalar_bool` below. This read `try_string`, whose `Transform` arm is
+    // row-shaped, so a pipeline yielding the one cell an author obviously meant
+    // ("name this region after what is in it") had no display form and this host
+    // emitted no `aria-label` at all. The reference host and the erased host each
+    // got it wrong differently (a caught cast error; the rows array in the
+    // attribute), and on the one trait with no visible output none of the three
+    // was reported. `try_scalar_string` falls through to `try_string` for every
+    // other binding case, so no shipped document changes what it renders.
+    // WIRE_FORMAT's accessibility-trait render obligations state the rule;
+    // `nodes/a11y-wrapper-transform-label` and `a11y-contract.json`'s behaviour
+    // vectors pin it. The empty-name filter is unchanged: an empty accessible
+    // name is worse than none, because it silences the content that would
+    // otherwise have named the node.
     if let Some(label) = &a11y.label
-        && let Some(resolved) = try_string(sources, label)
+        && let Some(resolved) = try_scalar_string(sources, label)
         && !resolved.is_empty()
     {
         pairs.push(("aria-label", resolved));
