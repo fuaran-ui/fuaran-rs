@@ -633,6 +633,44 @@ fn decode_jval_map(path: &str, j: &JVal) -> DResult<Vec<(String, JVal)>> {
     Ok(out)
 }
 
+/// A `TextSource.I18n` argument bag — discriminated BY INSPECTION (§5, Phase 1661).
+///
+/// An object carrying a `$type` member is a BINDING and decodes as one, so an
+/// unrecognised case and a known case missing a required member refuse at the
+/// argument's own path rather than passing as an unrecognised object literal;
+/// every other JSON value is the LITERAL argument, rule-12 strict.
+///
+/// A tagged `Static` is read here rather than left to `decode_binding`, so the
+/// two spellings of a literal agree. A PRESENT value collapses to
+/// `I18nArg::Literal` under the same strict decoder the bare spelling takes —
+/// one payload position under two spellings cannot have two null postures, and
+/// routing it through the binding decoder would additionally put it on the
+/// `StaticValue::Ast` rule-11 path. A missing or null value stays a binding:
+/// absence is structural (Phase 677), has no bare spelling, and `decode_binding`
+/// is already this host's one implementation of it.
+fn decode_i18n_args(path: &str, j: &JVal) -> DResult<Vec<(String, I18nArg)>> {
+    let fields = as_obj(path, j)?;
+    let mut out = Vec::with_capacity(fields.len());
+    for (k, v) in fields {
+        let arg_path = format!("{path}.{k}");
+        let arg = match v {
+            JVal::Obj(arg_fields) if get(arg_fields, "$type").is_some() => {
+                match (get(arg_fields, "$type"), get(arg_fields, "value")) {
+                    (Some(JVal::Str(t)), Some(raw))
+                        if t == "Static" && !matches!(raw, JVal::Null) =>
+                    {
+                        I18nArg::Literal(decode_jval(&format!("{arg_path}.value"), raw)?)
+                    }
+                    _ => I18nArg::Bound(decode_binding(&arg_path, v)?),
+                }
+            }
+            literal => I18nArg::Literal(decode_jval(&arg_path, literal)?),
+        };
+        out.push((k.clone(), arg));
+    }
+    Ok(out)
+}
+
 // ─── Compute layer (Core-style string errors) ────────────────────────────────
 
 type CResult<T> = Result<T, String>;
@@ -2571,7 +2609,7 @@ fn decode_text_source(path: &str, j: &JVal) -> DResult<TextSource> {
             let key = req_string(path, fields, "key", "i18n key string")?;
             let args = match get(fields, "args") {
                 None => vec![],
-                Some(v) => decode_jval_map(&format!("{path}.args"), v)?,
+                Some(v) => decode_i18n_args(&format!("{path}.args"), v)?,
             };
             Ok(TextSource::I18n { key, args })
         }

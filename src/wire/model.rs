@@ -225,11 +225,37 @@ bare_enum!(ChannelDirection { OutOnly => "OutOnly", TwoWay => "TwoWay" });
 pub enum TextSource {
     Literal(String),
     Bound(Box<Binding>),
-    /// `args` is a structured-JSON map (rule 12) — always emitted, `{}` when empty.
+    /// `args` is a name-keyed ARGUMENT map — always emitted, `{}` when empty.
+    /// Since Phase 1661 an argument is an [`I18nArg`], not a bare `JVal`.
     I18n {
         key: String,
-        args: Vec<(String, JVal)>,
+        args: Vec<(String, I18nArg)>,
     },
+}
+
+/// One `TextSource.I18n` argument (§5, Phase 1661).
+///
+/// The slot is discriminated BY INSPECTION on the wire — an object carrying a
+/// `$type` member is the binding arm, ANY other JSON value the literal arm — so
+/// it is discriminated by variant here, and a literal encodes BARE, which is
+/// why every literal-args document ever emitted is byte-identical across the
+/// widening.
+#[derive(Debug, Clone, PartialEq)]
+pub enum I18nArg {
+    /// The LITERAL argument: a bare JSON value, faithful at any depth within
+    /// the §21 limits (rule 12), and rejecting a `null` at the null's own path.
+    ///
+    /// A variant of its own rather than `Binding::Static`, for a reason worth
+    /// stating where the choice is made: that variant carries a [`StaticValue`]
+    /// whose untyped `Ast` arm collapses an array or object to `"<opaque>"`
+    /// under rule 11 — correct at an obj-erased seam, and wrong here, where it
+    /// would silently narrow what this host can round-trip at a position rule 12
+    /// promises is faithful.
+    Literal(JVal),
+    /// A store-reading argument, carrying its own `$type` envelope on the wire —
+    /// including a valueless `Static`, whose absence is structural (Phase 677)
+    /// and has no bare spelling.
+    Bound(Binding),
 }
 
 /// One grid / chart row: an *open* name→cell map (unlike a fixed-field record),

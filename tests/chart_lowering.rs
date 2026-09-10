@@ -21,8 +21,8 @@ use fuaran_rs::render::chart_lowering::{
 };
 use fuaran_rs::wire::{
     Binding, ChartAnnotation, ChartAnnotationRange, ChartAnnotationX, ChartDataLabels, ChartKind,
-    ChartLegendPosition, ChartXScale, Format, Node, NodeKind, SemanticStyle, StateBehaviour,
-    StaticValue, TextSource,
+    ChartLegendPosition, ChartXScale, Format, I18nArg, Node, NodeKind, SemanticStyle,
+    StateBehaviour, StaticValue, TextSource,
 };
 
 /// Walk up from the crate dir to the shared corpus (mirrors conformance.rs).
@@ -145,9 +145,14 @@ fn text_source_of(j: &JVal) -> TextSource {
                 Some(JVal::Str(k)) => k.clone(),
                 _ => panic!("chart-lowering input: I18n TextSource missing key"),
             },
+            // Phase 1661 — an argument is an `I18nArg`. These inputs carry only
+            // literal arguments, which is the bare arm.
             args: match j.field("args") {
                 None => Vec::new(),
-                Some(JVal::Obj(entries)) => entries.clone(),
+                Some(JVal::Obj(entries)) => entries
+                    .iter()
+                    .map(|(k, v)| (k.clone(), I18nArg::Literal(v.clone())))
+                    .collect(),
                 Some(_) => panic!("chart-lowering input: I18n args is not an object"),
             },
         },

@@ -31,8 +31,8 @@ use crate::canonical::{JVal, format_number as canonical_number};
 use crate::transform::{self, Table};
 use crate::wire::{
     Accessibility, AggFn, Binding, Cell, CellFormat, ColExpr, DataSource, DateStyle, DurationStyle,
-    DurationUnit, Format, LocaleSource, RelativeTimeUnit, SelectOption, StaticValue, TextSource,
-    TimeGrain, TransformParam, TransformSource, TransformStep,
+    DurationUnit, Format, I18nArg, LocaleSource, RelativeTimeUnit, SelectOption, StaticValue,
+    TextSource, TimeGrain, TransformParam, TransformSource, TransformStep,
 };
 
 /// The em-dash placeholder an unresolved value renders as.
@@ -994,6 +994,21 @@ fn jval_arg_string(v: &JVal) -> String {
     }
 }
 
+/// The display string ONE `TextSource.I18n` argument substitutes into its
+/// template (Phase 1661).
+///
+/// A LITERAL argument projects through exactly the rule this slot used before it
+/// was widened, so no existing caption changes a character. A bound argument
+/// resolves through the store, and an unresolvable one substitutes the empty
+/// string rather than leaving `{name}` visible in the sentence — the `Bound`
+/// arm's degradation one level down.
+fn i18n_arg_string(sources: &BindingSources, arg: &I18nArg) -> String {
+    match arg {
+        I18nArg::Literal(v) => jval_arg_string(v),
+        I18nArg::Bound(b) => try_scalar_string(sources, b).unwrap_or_default(),
+    }
+}
+
 /// Render a `TextSource` to a plain string against the supplied sources.
 pub fn render_text(sources: &BindingSources, text: &TextSource) -> String {
     match text {
@@ -1007,7 +1022,7 @@ pub fn render_text(sources: &BindingSources, text: &TextSource) -> String {
             Some(template) => {
                 let mut acc = template.clone();
                 for (k, v) in args {
-                    acc = acc.replace(&format!("{{{k}}}"), &jval_arg_string(v));
+                    acc = acc.replace(&format!("{{{k}}}"), &i18n_arg_string(sources, v));
                 }
                 acc
             }
