@@ -1,7 +1,7 @@
 //! The signature-searchable function registry (Phase 558) — the Rust host of the
 //! F# reference `Fuaran.Core.FunctionRegistry.findBySignature` (Phase 50/512)
 //! plus deterministic compose-path resolution (the twin of the Python
-//! `fuaran_py.function` registry, Phase 523).
+//! `fuaran_ui.function` registry, Phase 523).
 //!
 //! Composition-by-lookup, not composition-by-generation: register functions by
 //! the node-kind they *produce* and the typed *holes* they require, then ask the

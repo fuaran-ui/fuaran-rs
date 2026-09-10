@@ -1,7 +1,7 @@
 # CLAUDE.md — fuaran-rs (Rust reference implementation)
 
 This repo is the **Rust host of the Fuaran UI wire format** — a **co-equal sibling
-to the F# (`Fuaran.UI`), TypeScript (`@fuaran-ui/*`), Python (`fuaran_py`), and Go
+to the F# (`Fuaran.UI`), TypeScript (`@fuaran-ui/*`), Python (`fuaran_ui`), and Go
 (`fuaran-go`) tiers**. Its identity is **two hosts in one crate**: a headless
 backend / edge / embedded host *and* a **browser-native `wasm32` client** — the
 canonical-JSON codec, a tree-op apply engine, a pre-emit validator, and both
