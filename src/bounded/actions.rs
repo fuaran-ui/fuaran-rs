@@ -264,6 +264,12 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
                     Resolution::I18nUnresolved(_) => Err(
                         "the bound source is an unresolved i18n key — no write performed".to_string(),
                     ),
+                    // Phase 1667 — the seam's error channel. Reported with the
+                    // message VERBATIM rather than wrapped: it already names the
+                    // remedy, and a write is exactly where a fabricated default
+                    // would be least recoverable — the wrong value would then be
+                    // in the store, indistinguishable from one a reader typed.
+                    Resolution::Errored(msg) => Err(format!("{msg} — no write performed")),
                 },
                 (None, Some(literal)) => Ok(literal.clone()),
                 (None, None) => Err(

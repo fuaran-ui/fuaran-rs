@@ -4,8 +4,11 @@
 //! would: `Static` to its typed value, `Query` / `Filter` / `Selection` from
 //! host-supplied [`BindingSources`] (the decoded accessors are identity
 //! projections, so the raw source value flows through), `State` to the source
-//! value or its carried default. `Computed` resolves `NotResolved` on this
-//! decoded-tree host (it erases on the wire).
+//! value or its carried default. A decoded `Computed` resolves
+//! [`Resolution::Errored`] (Phase 1667): the case's whole payload is a host
+//! closure that erases on the wire, so §5 says it resolves to an error naming
+//! its replacements — never to a value, and never to the slot's empty state,
+//! which a reader cannot tell from an answer.
 //!
 //! `Transform` is render-time evaluated (Phase 649) through the host's own
 //! certified evaluator (`crate::transform`), but NOT inside [`resolve`]: an
@@ -68,7 +71,26 @@ pub enum Resolution<'a> {
     Resolved(Value<'a>),
     NotResolved,
     I18nUnresolved(String),
+    /// The document asked for something no decoded tree can answer, and there is
+    /// no value that could stand in without being read as an answer (Phase
+    /// 1667). Distinct from `NotResolved`, which is a slot with no value YET.
+    ///
+    /// A VARIANT rather than a `Result<Resolution, _>` wrapper, for two reasons.
+    /// The reference resolver's own outcome type carries the error the same way
+    /// (`Errored of message: string`), so a `Result` would be a second shape for
+    /// one fact; and this crate already spells the channel this way twice, on
+    /// [`NumberResolution::Errored`] and `ScalarOutcome::Errored`, so a `resolve`
+    /// that answered differently from the two outcomes derived FROM it would be
+    /// the odd one out. Adding it is what makes every exhaustive `match` on
+    /// `Resolution` fail to compile until it decides.
+    Errored(String),
 }
+
+/// The one message a decoded `Binding::Computed` carries — byte-identical to the
+/// reference host's, so every host renders the same sentence and a test can pin
+/// it. A constant rather than a literal at the construction site for exactly
+/// that reason.
+pub const DECODED_COMPUTED_MESSAGE: &str = "Binding.Computed has no wire projection (decoded from a '<closure>' sentinel) — use Binding.Expr / Transform / State";
 
 /// Resolve a binding against the supplied sources.
 pub fn resolve<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Resolution<'a> {
@@ -117,20 +139,15 @@ pub fn resolve<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Resolut
             Some(raw) => Resolution::Resolved(Value::Json(raw)),
             None => Resolution::Resolved(Value::Static(default_value)),
         },
-        // Host-only on the wire (§5.1). A decoded `Computed` has nothing to
-        // compute WITH — the case's whole payload is a host closure and it
-        // crosses the wire as the sentinel — so it must never answer the slot's
-        // zero. It resolves as not-resolved and the loading surface shows.
-        //
-        // KNOWN LIMIT, stated rather than implied: `Resolution` carries no error
-        // variant, so this host shows the empty state where the F# and
-        // TypeScript hosts show an error naming `Binding::Expr` / `Transform` /
-        // `State` as the replacement. That is strictly better than the silent
-        // DEFAULT those hosts used to produce and strictly worse than the error
-        // they now do; closing it means widening this enum and every match over
-        // it, which is a change to this host's rendering contract rather than to
-        // its codec.
-        Binding::Computed => Resolution::NotResolved,
+        // Host-only on the wire (§5.1): the case's whole payload is a host
+        // closure and it crosses the wire as the `"<closure>"` sentinel, so a
+        // decoded `Computed` has nothing to compute WITH. §5 therefore says it
+        // resolves to an ERROR naming its replacements, never to a value — and
+        // Phase 1667 gave this seam the arm to say so. `NotResolved` was the
+        // slot's empty state, which held the negative half of the rule (no
+        // `0` / `""` / `false`, ever) and not the positive one: a reader cannot
+        // tell an em-dash here from a query that has not answered yet.
+        Binding::Computed => Resolution::Errored(DECODED_COMPUTED_MESSAGE.to_string()),
         // Phase 765 — host-furnished, resolved once per render pass; never a
         // clock read here, so SSR output is reproducible for a pinned instant.
         //
@@ -245,6 +262,13 @@ pub fn resolve_number(sources: &BindingSources, binding: &Binding) -> NumberReso
             NumberResolution::NotResolved
         }
         Resolution::I18nUnresolved(key) => NumberResolution::I18nUnresolved(key),
+        // Phase 1667 — the error crosses onto the numeric channel unchanged, so
+        // a Metric / LabelValueRow value slot renders `(error: <message>)`
+        // through the didactic rendition `resolved_value_text` already carries
+        // for the Phase 632 scalar-ambiguity case. No second rendition invented:
+        // the two errors are the same KIND of thing at the slot — the renderer
+        // has no number to show and says why.
+        Resolution::Errored(msg) => NumberResolution::Errored(msg),
     }
 }
 
@@ -396,6 +420,14 @@ pub fn eval_transform_frame(
                     "Transform live source is an unresolved i18n key '{key}'"
                 ));
             }
+            // Phase 1667 — an ERROR is not the unwritten store the arm above
+            // falls back for: falling back to `initial` there is right because
+            // the decode-time snapshot IS the answer until the store is written,
+            // whereas here there is no answer at all and evaluating over the
+            // snapshot would render a table the document did not ask for.
+            Resolution::Errored(msg) => {
+                return Err(format!("Transform live source: {msg}"));
+            }
         },
     };
     let data_source: &DataSource = match (&live_input, source) {
@@ -441,6 +473,13 @@ pub fn eval_transform_frame(
                     "Transform param '{}' source is an unresolved i18n key '{key}'",
                     p.name
                 ));
+            }
+            // Phase 1667 — an ERROR is not the UNBOUND the arm above records.
+            // Unbound is lenient on purpose (a filter step naming it is pruned,
+            // so the unfiltered table shows); pruning here would silently drop a
+            // constraint the document declared and could never satisfy.
+            Resolution::Errored(msg) => {
+                return Err(format!("Transform param '{}' source: {msg}", p.name));
             }
         }
     }
@@ -688,6 +727,11 @@ fn eval_binding_expr(
                     p.name
                 ));
             }
+            // Phase 1667 — same posture as the unbound arm above, and for the
+            // stronger reason: an expression has no step to prune.
+            Resolution::Errored(msg) => {
+                return Err(format!("Expr param '{}' source: {msg}", p.name));
+            }
         }
     }
     let substituted = if list_env.is_empty() {
@@ -858,6 +902,13 @@ pub fn resolve_rows<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Re
         Resolution::Resolved(_) => ResolvedRows::Rows(Cow::Borrowed(&[])),
         Resolution::NotResolved => ResolvedRows::NotResolved,
         Resolution::I18nUnresolved(_) => ResolvedRows::Rows(Cow::Borrowed(&[])),
+        // Phase 1667 — collapsed onto `NotResolved`, which is what the arm
+        // above this match already does for an errored `Transform` and what the
+        // reference resolver's own row call sites do (it carries a named
+        // convenience for treating not-resolved and errored alike). A ROW
+        // context has one thing to say either way: no table, so the loading /
+        // empty surface, never a fabricated one.
+        Resolution::Errored(_) => ResolvedRows::NotResolved,
     }
 }
 
