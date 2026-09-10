@@ -21,3 +21,5 @@ tests/corpus/
 # the cross-target build legs; regenerated, not source). The Swift/Kotlin scaffold
 # source lands in later phases and will be re-included explicitly.
 /packaging/
+# the bare-name placeholder crate's own build output
+/placeholder/target/
