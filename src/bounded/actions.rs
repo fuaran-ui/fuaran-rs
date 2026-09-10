@@ -46,7 +46,7 @@ use crate::canonical::JVal;
 use crate::render::BindingSources;
 use crate::render::bindings::{Resolution, Value, resolve, try_string};
 use crate::render::sanitize::sanitize_url;
-use crate::wire::{Action, FileReadEncoding, NavigateTarget, StaticValue, TextSource};
+use crate::wire::{Action, FileReadEncoding, StaticValue, TextSource};
 
 use super::effect::ClientEffect;
 
@@ -322,30 +322,16 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
         // real navigation — the current document with its query and fragment
         // stripped — so the honest answer is a diagnostic and nothing else.
         //
-        // A `Blank` target is REFUSED on this placement rather than navigated
-        // in place. This placement's client-effect envelope carries a route and
-        // nothing else, and its wire is specified elsewhere, so honouring the
-        // second context is not possible here and mint-a-member is not this
-        // phase's to do. Navigating in place would perform a different act from
-        // the one the document asked for, silently — and §3.6's own reasoning
-        // for making `noopener` / `noreferrer` a RENDERER obligation is exactly
-        // that a seam which cannot open a second context must not pretend to.
-        Action::Navigate {
-            route,
-            target: NavigateTarget::Blank,
-        } => {
-            let _ = route;
-            refused(
-                node_id,
-                action,
-                "a Blank target opens a second context, which this placement's effect envelope                  cannot carry",
-                store,
-            )
-        }
-        Action::Navigate {
-            route,
-            target: NavigateTarget::Self_,
-        } => match resolve_text_source(&store, route) {
+        // Phase 1664 — the target is CARRIED, where Phase 1536 had to refuse it.
+        // The client-effect envelope now names the browsing context (an optional
+        // member, omitted at `Self`), so the two targets are one arm again and
+        // the interpreter has nothing to decide about them: it resolves the
+        // route, applies the scheme floor, and reports what the document asked
+        // for. That is the whole of the change on this side — dropping the
+        // target was the defect, not refusing it, because a seam that cannot
+        // open a second context must not pretend to and a seam that CAN must not
+        // pretend it cannot.
+        Action::Navigate { route, target } => match resolve_text_source(&store, route) {
             None => refused(
                 node_id,
                 action,
@@ -357,6 +343,7 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
                     store,
                     ClientEffect::Navigate {
                         route: safe.into_owned(),
+                        target: *target,
                     },
                 ),
                 None => refused(node_id, action, "the route is not a safe URL", store),
@@ -451,6 +438,7 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wire::NavigateTarget;
 
     fn store_with(key: &str, value: &str) -> BindingSources {
         let mut sources = BindingSources::default();

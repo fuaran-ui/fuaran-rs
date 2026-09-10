@@ -27,13 +27,30 @@
 
 use std::collections::BTreeSet;
 
+use crate::wire::NavigateTarget;
+
 /// A client-only effect a bounded program reached. The host performs it (or
 /// declines it audibly — see [`Denial`]); this type is what the program *asked
 /// for*, never what the world then did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientEffect {
-    /// A full navigation.
-    Navigate { route: String },
+    /// A full navigation, in the browsing context `target` names.
+    ///
+    /// Phase 1664 — `target` is the SAME closed enum `Action::Navigate` carries,
+    /// and it arrives here for a plain reason: before it, this channel dropped
+    /// the only part of the instruction that says WHERE the navigation lands, so
+    /// the interpreter had to decline a `Blank` target outright rather than
+    /// pass it on. A field rather than a second arm, matching the specified
+    /// envelope — `Blank` modifies the same act (go here) rather than naming a
+    /// different one, and a sibling `OpenInNewTab` would be a near-synonym in a
+    /// vocabulary that is closed precisely so a host knows what it may be asked
+    /// for.
+    ///
+    /// `Self` is the identity and is NOT written: see [`ClientEffect::encode`].
+    Navigate {
+        route: String,
+        target: NavigateTarget,
+    },
     /// Update the address without a reload.
     PushState { route: String },
     /// Write to the clipboard.
@@ -78,9 +95,24 @@ impl ClientEffect {
     /// arm's members in **declaration** order.
     pub fn encode(&self) -> String {
         match self {
-            ClientEffect::Navigate { route } => {
+            // The identity is OMITTED, and that is what keeps this widening
+            // additive: `{"kind":"Navigate","route":…}` — every byte sequence a
+            // rendering surface has ever been handed for this arm — is
+            // unchanged and means exactly what it always meant, so `Blank` is
+            // the only value that ever appears on this wire. A reader must
+            // therefore read ABSENCE as `Self`, which is the other half of the
+            // same rule and belongs to whoever decodes this envelope.
+            ClientEffect::Navigate {
+                route,
+                target: NavigateTarget::Self_,
+            } => {
                 format!("{{\"kind\":\"Navigate\",\"route\":{}}}", quoted(route))
             }
+            ClientEffect::Navigate { route, target } => format!(
+                "{{\"kind\":\"Navigate\",\"route\":{},\"target\":{}}}",
+                quoted(route),
+                quoted(target.as_str())
+            ),
             ClientEffect::PushState { route } => {
                 format!("{{\"kind\":\"PushState\",\"route\":{}}}", quoted(route))
             }
@@ -270,7 +302,10 @@ fn destination_of(
 )> {
     use crate::render::egress::{Destination, EgressClass, classify_destination};
     match effect {
-        ClientEffect::Navigate { route } | ClientEffect::PushState { route } => {
+        // The target names a browsing CONTEXT, never a destination, so it is
+        // not part of the egress question: the same route is judged the same way
+        // whether it lands here or in a fresh context.
+        ClientEffect::Navigate { route, .. } | ClientEffect::PushState { route } => {
             Some((EgressClass::Route, classify_destination(route)))
         }
         ClientEffect::Download { url, .. } => {
@@ -475,6 +510,7 @@ fn quoted(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wire::NavigateTarget;
 
     #[test]
     fn download_emits_url_before_name_which_is_not_ordinal_order() {
@@ -503,10 +539,61 @@ mod tests {
         );
     }
 
+    /// Phase 1664 — the omit-at-identity rule, held by BYTES on both sides and
+    /// as ONE test, because that is the only form in which it is falsifiable.
+    ///
+    /// Either half alone is satisfied by an encoder that is wrong in the other
+    /// direction: an encoder that NEVER writes the member passes the `Self`
+    /// assertion, and one that ALWAYS writes it passes the `Blank` assertion.
+    /// The pair is what pins the rule — which is exactly why the corpus carries
+    /// `navigate.json` and `navigate-target.json` beside each other rather than
+    /// either on its own, and these are the same two documents.
+    #[test]
+    fn navigate_omits_the_target_at_self_and_writes_it_at_blank() {
+        assert_eq!(
+            ClientEffect::Navigate {
+                route: "/orders".into(),
+                target: NavigateTarget::Self_,
+            }
+            .encode(),
+            "{\"kind\":\"Navigate\",\"route\":\"/orders\"}"
+        );
+        assert_eq!(
+            ClientEffect::Navigate {
+                route: "/docs/orders".into(),
+                target: NavigateTarget::Blank,
+            }
+            .encode(),
+            "{\"kind\":\"Navigate\",\"route\":\"/docs/orders\",\"target\":\"Blank\"}"
+        );
+    }
+
+    /// The target names a browsing CONTEXT and never a destination, so it must
+    /// not reach the egress decision. Asserted rather than assumed: a policy
+    /// that keyed on the pair would let a document reach a refused origin by
+    /// flipping one enum, which is the shape the `download`-anchor rule in
+    /// `render::egress` already warns about one layer up.
+    #[test]
+    fn the_navigate_target_does_not_change_the_egress_verdict() {
+        let policy = EffectPolicy::local_egress_only();
+        let refused = |target| {
+            policy.decide(&ClientEffect::Navigate {
+                route: "https://exfil.example/collect".into(),
+                target,
+            })
+        };
+        assert_eq!(
+            refused(NavigateTarget::Self_),
+            refused(NavigateTarget::Blank)
+        );
+        assert!(refused(NavigateTarget::Blank).is_some());
+    }
+
     #[test]
     fn both_default_to_deny_and_the_two_facts_are_independent() {
         let effect = ClientEffect::Navigate {
             route: "/next".into(),
+            target: NavigateTarget::Self_,
         };
 
         // Nothing registered, nothing permitted.
@@ -554,7 +641,8 @@ mod tests {
         // A route that has not left the origin passes the floor untouched.
         assert_eq!(
             policy.decide(&ClientEffect::Navigate {
-                route: "/orders".into()
+                route: "/orders".into(),
+                target: NavigateTarget::Self_
             }),
             None
         );
@@ -564,7 +652,8 @@ mod tests {
         // exfiltration attempt would be sitting.
         assert_eq!(
             policy.decide(&ClientEffect::Navigate {
-                route: "https://exfil.example/collect?session=secret".into()
+                route: "https://exfil.example/collect?session=secret".into(),
+                target: NavigateTarget::Self_
             }),
             Some(Denial::GateRefused {
                 capability: "Navigate".into(),
@@ -602,7 +691,8 @@ mod tests {
 
         assert_eq!(
             policy.decide(&ClientEffect::Navigate {
-                route: "https://app.example/orders".into()
+                route: "https://app.example/orders".into(),
+                target: NavigateTarget::Self_
             }),
             None
         );
@@ -630,7 +720,8 @@ mod tests {
             EffectPolicy::permissive().with_egress(EgressFloor::Declared(permissive_egress()));
         assert_eq!(
             wide.decide(&ClientEffect::Navigate {
-                route: "https://anywhere.example/x".into()
+                route: "https://anywhere.example/x".into(),
+                target: NavigateTarget::Self_
             }),
             None
         );
@@ -642,6 +733,7 @@ mod tests {
         // closure: both refusals are GateRefused, and only one has an origin.
         let effect = ClientEffect::Navigate {
             route: "https://exfil.example/x".into(),
+            target: NavigateTarget::Self_,
         };
         let by_gate = EffectPolicy::permissive().with_gate(|_| false);
         let by_destination = EffectPolicy::local_egress_only();
