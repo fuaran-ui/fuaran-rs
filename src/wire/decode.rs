@@ -3423,14 +3423,14 @@ fn decode_sparkline_spec(path: &str, j: &JVal) -> DResult<SparklineSpec> {
 // codes answer different questions and the ORDER is what keeps them apart.
 //
 // Upper bound only, deliberately: a negative count is an authoring defect
-// (`FUARAN150` in the pre-emit family), not a resource breach.
+// (`FUARAN152` in the pre-emit family), not a resource breach.
 fn decode_skeleton_spec(path: &str, j: &JVal) -> DResult<SkeletonSpec> {
     let fields = as_obj(path, j)?;
     let rows = req_int(path, fields, "rows", "skeleton row count integer")?;
     if rows > crate::limits::MAX_SKELETON_ROWS {
         return Err(make_error(
             DecodeErrorCode::LimitExceeded,
-            &format!("{path}.rows"),
+            format!("{path}.rows"),
             format!(
                 "skeleton rows {rows} exceeds the maximum of {} (WIRE_FORMAT 21.9)",
                 crate::limits::MAX_SKELETON_ROWS
