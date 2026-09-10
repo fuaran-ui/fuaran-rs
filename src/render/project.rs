@@ -90,7 +90,12 @@ fn project_state(
 /// (including `Bound` over a non-Transform binding) passes through unchanged.
 fn map_text(sources: &BindingSources, text: &TextSource) -> TextSource {
     match text {
-        TextSource::Bound(binding) if matches!(**binding, Binding::Transform { .. }) => {
+        // Phase 1534 - an `Expr` lowers to a literal exactly as a `Transform`
+        // does: both derive an owned value the borrow-based `Resolution` cannot
+        // carry, so the projection is where they resolve.
+        TextSource::Bound(binding)
+            if matches!(**binding, Binding::Transform { .. } | Binding::Expr { .. }) =>
+        {
             TextSource::Literal(try_scalar_string(sources, binding).unwrap_or_default())
         }
         other => other.clone(),
@@ -124,12 +129,14 @@ fn map_opt_text(sources: &BindingSources, text: &Option<TextSource>) -> Option<T
 /// resolve, and every non-Transform binding, passes through unchanged.
 fn map_scalar_number(sources: &BindingSources, binding: &Binding) -> Binding {
     match binding {
-        Binding::Transform { .. } => match try_scalar_number(sources, binding) {
-            Some(n) => Binding::Static {
-                value: StaticValue::Ast(JVal::Num(n)),
-            },
-            None => binding.clone(),
-        },
+        Binding::Transform { .. } | Binding::Expr { .. } => {
+            match try_scalar_number(sources, binding) {
+                Some(n) => Binding::Static {
+                    value: StaticValue::Ast(JVal::Num(n)),
+                },
+                None => binding.clone(),
+            }
+        }
         other => other.clone(),
     }
 }
