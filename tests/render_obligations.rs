@@ -1326,8 +1326,7 @@ fn owes_style_direction_no_derived_direction_behaviour() {
 // `nodes/state-absent-default.json`'s `absent-default-sparkline`, reproduced here
 // as one node so the checker renders the subject rather than digging it out of a
 // six-node composite.
-const BOUND_SPARKLINE: &str =
-    r#"{"id":"absent-default-sparkline","kind":{"$type":"Sparkline","source":{"$type":"State","key":"series"}}}"#;
+const BOUND_SPARKLINE: &str = r#"{"id":"absent-default-sparkline","kind":{"$type":"Sparkline","source":{"$type":"State","key":"series"}}}"#;
 
 /// Render the bound sparkline with `series` fed from the store.
 fn render_series(series: JVal) -> String {
