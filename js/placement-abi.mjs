@@ -60,6 +60,7 @@ function readPacked(x, packed) {
 
 const VERBS = {
   place: 'fuaran_session_place',
+  move: 'fuaran_session_move',
   nudge: 'fuaran_session_nudge',
   duplicate: 'fuaran_session_duplicate',
   paste: 'fuaran_session_paste',
