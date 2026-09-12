@@ -1294,12 +1294,6 @@ fn owes_style_direction_no_derived_direction_behaviour() {
     );
 }
 
-/// Which (kind, claim) pairs this host asserts, and how.
-///
-/// Keyed by the claim's WIRE token, because the enumeration it is matched
-/// against comes from the artefact. The value is a pointer to the `#[test]`
-/// that asserts it, so a registry entry naming a claim nothing implements does
-/// not compile.
 // ─── DataGrid: the interactive-row class (3.6.24, Phase 1701) ────────────────
 //
 // Built from RAW canonical JSON, for the reason the direction checkers give:
@@ -1373,6 +1367,12 @@ fn owes_data_grid_interactive_row_only_with_action() {
     assert!(!static_rows_grid(false).contains(INTERACTIVE_ROW_MARKER));
 }
 
+/// Which (kind, claim) pairs this host asserts, and how.
+///
+/// Keyed by the claim's WIRE token, because the enumeration it is matched
+/// against comes from the artefact. The value is a pointer to the `#[test]`
+/// that asserts it, so a registry entry naming a claim nothing implements does
+/// not compile.
 const CHECKERS: &[(&str, fn())] = &[
     (
         "Media/accessible-name-always",
