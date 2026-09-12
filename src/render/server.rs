@@ -374,8 +374,9 @@ fn render_node_plain(ctx: &Ctx<'_>, node: &Node) -> String {
     // one under a declaration slot would conflate two different statements.
     match node.style.direction {
         TextDirection::Auto => {}
-        TextDirection::Ltr => attrs.push(("dir", s("ltr"))),
-        TextDirection::Rtl => attrs.push(("dir", s("rtl"))),
+        // PERTURBED (Phase 1696 go-red proof): the declared direction is dropped.
+        TextDirection::Ltr => {}
+        TextDirection::Rtl => {}
     }
     // Route the projection: a kind whose body IS the node's semantic element
     // takes the a11y attributes onto that element; every other kind carries

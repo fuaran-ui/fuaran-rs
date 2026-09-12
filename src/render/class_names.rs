@@ -185,8 +185,9 @@ pub fn node_class_name(kind: &NodeKind, style: &SemanticStyle) -> String {
     // document.
     match style.direction {
         TextDirection::Auto => base,
-        TextDirection::Ltr => format!("{base} fuaran-dir-ltr"),
-        TextDirection::Rtl => format!("{base} fuaran-dir-rtl"),
+        // PERTURBED (Phase 1696 go-red proof): the isolation class is dropped.
+        TextDirection::Ltr => base,
+        TextDirection::Rtl => base,
     }
 }
 
