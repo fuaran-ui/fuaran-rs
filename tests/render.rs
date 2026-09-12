@@ -1159,11 +1159,21 @@ fn reference_renderer_sources(root: &Path) -> Vec<PathBuf> {
     if let Ok(entries) = std::fs::read_dir(&src) {
         for entry in entries.flatten() {
             let path = entry.path();
+            // `*.Tests` projects are EXCLUDED (Phase 1677, aligning with the
+            // Python host, which excluded them from the start). A test's
+            // expectation string is not the reference's own spelling, so
+            // admitting one lets this oracle be satisfied by an assertion about
+            // the very drift it is checking for. It was not hypothetical: the
+            // reference's renderer test projects spell `fuaran-image-aspect-`
+            // as a bare trailing-dash token, which admitted it here as a
+            // composition PREFIX — so this host could have emitted an invented
+            // `fuaran-image-aspect-cinemascope` and passed, while the
+            // production renderer spells only four closed variants.
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
             if path.is_dir()
-                && entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(REFERENCE_RENDERER_PROJECT_PREFIX)
+                && name.starts_with(REFERENCE_RENDERER_PROJECT_PREFIX)
+                && !name.ends_with(".Tests")
             {
                 projects.push(path);
             }
@@ -1267,7 +1277,7 @@ fn reference_vocabulary() -> Option<(std::collections::BTreeSet<String>, Vec<Str
         let raw = std::fs::read_to_string(path).unwrap_or_else(|e| {
             panic!("reference renderer source missing inside the located host {path:?}: {e}")
         });
-        for token in class_tokens(&raw) {
+        for token in class_tokens(&strip_fsharp_comments(&raw)) {
             if token.ends_with('-') {
                 if token != "fuaran-" {
                     prefixes.push(token);
@@ -1421,6 +1431,60 @@ fn emitted_class_vocabulary_matches_the_reference_renderer() {
             &offenders
         )
     );
+}
+
+/// Drops F# comments before class tokens are extracted (Phase 1677, aligning
+/// with the Python host).
+///
+/// This is not tidiness. The reference's doc comments legitimately contain PROSE
+/// about the vocabulary — a markup example spelling `class="fuaran-icon
+/// fuaran-{kind}-icon"`, a sentence about "every `fuaran-`-shaped token" — and
+/// four such comments yielded composition prefixes (`fuaran-drawing-`,
+/// `fuaran-heading-`, `fuaran-math-`, `fuaran-modal-`) that the production
+/// renderer does not spell. A prefix admitted from prose widens what this host
+/// may emit without any reference code having said so, which is the same class
+/// of vacuity the bare-namespace guard refuses one step further along.
+///
+/// Hand-scanned, like `class_tokens` below and for the same reason (no regex
+/// dependency). Block comments NEST in F#, so the scan carries a depth counter;
+/// a `//` inside a string literal truncates the rest of that line, which the
+/// Python host's regex does too — the error is in the narrowing direction, so it
+/// can only make this oracle stricter, never vacuous.
+fn strip_fsharp_comments(source: &str) -> String {
+    // Scanned as BYTES and rebuilt from bytes, never char-by-char: every marker
+    // here is ASCII and a UTF-8 continuation byte is always >= 0x80, so a
+    // comment can neither start nor end inside a multi-byte character and what
+    // survives is still valid UTF-8. Casting each byte to `char` would decode
+    // the reference's em-dashes as Latin-1 and re-encode them as mojibake.
+    let bytes = source.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(source.len());
+    let mut i = 0usize;
+    let mut depth = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'(' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+            depth += 1;
+            i += 2;
+            continue;
+        }
+        if depth > 0 {
+            if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b')' {
+                depth -= 1;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).expect("comment stripping preserves UTF-8 boundaries")
 }
 
 fn class_tokens(source: &str) -> Vec<String> {

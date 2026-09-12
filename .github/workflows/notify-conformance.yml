@@ -3,22 +3,29 @@ name: Notify cross-host conformance gate
 # This repo is one of the conformant hosts of the Fuaran UI wire format, so a
 # push HERE is precisely the change the cross-implementation conformance gate
 # exists to check — yet until this workflow landed, a host push fired NOTHING at
-# that gate. `ci.yml` runs this host's own suite; nothing told the cross-host
-# gate that a host had moved, and the gate's own push filter cannot see pushes
-# to another repo. So it had to be dispatched by hand and the nightly schedule
-# was the only backstop. That is the "a quiet run history is not evidence of no
-# drift" caveat, on the host side.
+# that gate. The gate lives in a DOWNSTREAM CONSUMER repository — one that checks
+# several conformant hosts out together and certifies them against the same
+# corpus — and its own path filters cannot see pushes to THIS repo, so it had to
+# be dispatched by hand and the nightly schedule was the only backstop. That is
+# the "a quiet run history is not evidence of no drift" caveat, on the host side.
 #
-# The corpus repo already solved this for its own pushes; this is a mirror of
-# its workflow, differing only in `source_repo`.
+# The dispatch target is CONFIGURATION, not a constant: the repository variable
+# `CONFORMANCE_DISPATCH_REPO` names it as `owner/name`. Keeping it out of the
+# workflow text means this public file describes the mechanism without naming
+# anybody's repository, and a consumer that re-homes its gate changes a variable
+# rather than opening a pull request here.
 #
-# Requires the org-level Actions secret FUARAN_WORKSPACE_APP_PRIVATE_KEY — the
-# private key of the `fuaran-ui-workspace-broker` GitHub App (app id 4797739),
-# installed on the dispatch target only. The workflow mints a SHORT-LIVED
-# installation token at run time (the App holds `Contents: write` there — the
-# scope the repository_dispatch REST endpoint requires); no long-lived token is
-# stored anywhere. The default GITHUB_TOKEN is scoped to THIS repo only and
-# cannot dispatch cross-repo.
+# Credentials: the org-level Actions secret FUARAN_WORKSPACE_APP_PRIVATE_KEY is
+# the private key of a GitHub App (app id 4797739) installed on the dispatch
+# target only. The workflow mints a SHORT-LIVED installation token at run time
+# (the App holds `Contents: write` there — the scope the repository_dispatch REST
+# endpoint requires); no long-lived token is stored anywhere. The default
+# GITHUB_TOKEN is scoped to THIS repo only and cannot dispatch cross-repo.
+#
+# [OPERATOR-GATED — both the org secret and the variable must be granted to this
+# repo for this to fire; until then the job SKIPS rather than fails. Without the
+# probe, a withdrawn secret goes red on every push to main, which is a permanent
+# red that masks the real build and test failures it sits beside.]
 #
 # NOTE: an unfired trigger looks identical to a green one. If this ever needs
 # proving, push a trivial commit and confirm a gate run appears.
@@ -27,8 +34,9 @@ on:
   push:
     branches: [main]
 
-# Least privilege, stated rather than inherited. The cross-repo dispatch runs on
-# a SHORT-LIVED App installation token, never on the job's own token.
+# Least privilege, stated rather than inherited. The cross-repo dispatch below
+# runs on a SHORT-LIVED App installation token, never on the job's own token, so
+# the default one needs nothing beyond reading this repository.
 permissions:
   contents: read
 
@@ -36,24 +44,58 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
-      - name: Mint a workspace App installation token
-        id: workspace-token
+      # A secrets expression is not valid in a step-level `if:`, so the presence
+      # probe goes through an env-var step output instead. The VARIABLE is probed
+      # in the same step and by the same rule: an unconfigured target is the same
+      # "not granted here" state as an unconfigured key, and the two must gate
+      # together or the token mint runs for a dispatch that cannot be addressed.
+      - name: Check whether the dispatch credentials and target are granted here
+        id: gate
+        env:
+          HAS_KEY: ${{ secrets.FUARAN_WORKSPACE_APP_PRIVATE_KEY != '' }}
+          TARGET: ${{ vars.CONFORMANCE_DISPATCH_REPO }}
+        run: |
+          if [ "$HAS_KEY" = "true" ] && [ -n "$TARGET" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "owner=${TARGET%%/*}" >> "$GITHUB_OUTPUT"
+            echo "repo=${TARGET##*/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Mint an installation token for the dispatch target
+        id: dispatch-token
+        if: steps.gate.outputs.configured == 'true'
         # SHA-PINNED, not tag-pinned: this step receives the App private key and
-        # mints a write-scoped token on another repository, so a moved `v2` is
-        # credential-bearing code nobody reviewed. `# v2.2.2` names the release.
+        # mints a token with `Contents: write` on the dispatch target, so a moved
+        # `v2` is credential-bearing code nobody reviewed. `# v2.2.2` records
+        # which release the digest is; Dependabot proposes the bumps.
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
-          app-id: 4797739 # fuaran-ui-workspace-broker
+          app-id: 4797739
           private-key: ${{ secrets.FUARAN_WORKSPACE_APP_PRIVATE_KEY }}
-          owner: fuaran-ui
-          repositories: workspace
+          owner: ${{ steps.gate.outputs.owner }}
+          repositories: ${{ steps.gate.outputs.repo }}
 
-      - name: Trigger cross-host wire-format conformance gate
+      - name: Trigger the downstream wire-format conformance gate
         env:
-          GH_TOKEN: ${{ steps.workspace-token.outputs.token }}
+          GH_TOKEN: ${{ steps.dispatch-token.outputs.token }}
+          TARGET: ${{ vars.CONFORMANCE_DISPATCH_REPO }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
-          gh api repos/fuaran-ui/workspace/dispatches \
+          # Operator-gated: until the key and the target are both configured
+          # here, skip rather than fail. (The mint step above is if-guarded on
+          # the same condition, so an unconfigured repo skips it and lands here
+          # tokenless.)
+          if [ -z "$GH_TOKEN" ] || [ -z "$TARGET" ]; then
+            echo "::notice::The downstream conformance dispatch is not configured here (needs the FUARAN_WORKSPACE_APP_PRIVATE_KEY secret and the CONFORMANCE_DISPATCH_REPO variable) — skipping."
+            exit 0
+          fi
+          # Both values reach `gh` through the ENVIRONMENT rather than through an
+          # expression, so neither is substituted into the script text before a
+          # shell parses it.
+          gh api "repos/$TARGET/dispatches" \
             --method POST \
             -f event_type=wire-conformance \
-            -f 'client_payload[source_repo]=fuaran-rs' \
-            -f 'client_payload[sha]=${{ github.sha }}'
+            -f "client_payload[source_repo]=fuaran-rs" \
+            -f "client_payload[sha]=$SOURCE_SHA"
