@@ -133,7 +133,10 @@ fn an_unresolved_source_is_still_the_empty_series() {
     // which carries no polyline at all.
     let html = render(BOUND, None);
     let empty = html.contains("fuaran-sparkline-empty");
-    assert!(empty, "an unresolved source stays the empty sparkline:\n{html}");
+    assert!(
+        empty,
+        "an unresolved source stays the empty sparkline:\n{html}"
+    );
     assert!(!html.contains("points=\""), "{html}");
 }
 
