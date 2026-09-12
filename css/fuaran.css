@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:e56df5af70231f8e
+/* fuaran-vocabulary-fingerprint: fv1:253483dae447ee83
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -2148,6 +2148,20 @@ body {
 .fuaran-grid-row:hover,
 .fuaran-table-row:hover {
   background: var(--fuaran-tone-subdued-hover-bg, #e5e7eb);
+}
+
+/* Phase 1701 — the pointer is the ROW-ACTION affordance, and it used to sit in
+   the rule above, where it told every reader that every row was clickable when
+   only a row whose grid declares `onRowClick` is. A pointer over inert content
+   is a promise the markup does not keep, and it is the kind of thing a reader
+   learns to distrust rather than reports; hosts were scoping their own
+   neutralisation to undo it.
+
+   So the renderers emit `fuaran-grid-row-interactive` on exactly the rows that
+   carry a declared row action, and the pointer keys on that. The hover
+   BACKGROUND stays on every row: it says "this is the row under your pointer",
+   which is true of a row you cannot click. Only the promise of a click moved. */
+.fuaran-grid-row-interactive:hover {
   cursor: pointer;
 }
 

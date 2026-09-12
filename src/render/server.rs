@@ -49,7 +49,9 @@ use super::bindings::{
     resolve_scalar_number, resolve_string_pair, static_display_string, try_bool, try_number,
     try_scalar_bool, try_scalar_number, try_string,
 };
-use super::class_names::{icon_size_class, node_class_name, tone_var, trend_sentiment};
+use super::class_names::{
+    grid_row_interactive_class, icon_size_class, node_class_name, tone_var, trend_sentiment,
+};
 use super::egress::{
     EgressClass, EgressPolicy, deny_non_local_egress, sanitize_embed_src_for_egress,
     sanitize_url_for_egress,
@@ -3963,7 +3965,22 @@ fn render_grid(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &GridSpec) -> String
                     )
                 })
                 .collect();
-            el("tr", &[("class", s("fuaran-grid-row"))], &cells)
+            // Phase 1701 - the row-action affordance marker (WIRE_FORMAT.md
+            // 3.6.24). This host wires no click on the static leg, but the class
+            // states what the DOCUMENT declared, and the row it marks is the
+            // seed a hydrating client takes over: a marked row here is a row
+            // that is about to become clickable.
+            el(
+                "tr",
+                &[(
+                    "class",
+                    s(format!(
+                        "fuaran-grid-row{}",
+                        grid_row_interactive_class(spec.on_row_click.is_some())
+                    )),
+                )],
+                &cells,
+            )
         })
         .collect();
     let body = el("tbody", &[], &body_rows);
