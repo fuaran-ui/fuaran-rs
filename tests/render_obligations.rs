@@ -1300,6 +1300,145 @@ fn owes_style_direction_no_derived_direction_behaviour() {
 /// against comes from the artefact. The value is a pointer to the `#[test]`
 /// that asserts it, so a registry entry naming a claim nothing implements does
 /// not compile.
+
+// ─── Phase 1704 — Sparkline float-sequence resolution (§24.7) ────────────────
+//
+// The claims are about a HOST-FED series, so these two checkers are the only
+// ones in this file that render against a non-empty store. That is structural
+// rather than convenient: a float-sequence slot TYPES its elements at decode, so
+// `[1,"3.5",3]` is a `WRONG_TYPE` and no document can carry the case. The store
+// is the only place a foreign element exists, which is why §24.7 is a render
+// obligation and not a codec family.
+//
+// The observable is the emitted `<polyline points="…">`: the lowering yields one
+// point per series element, so counting points counts readings. An assertion on
+// the em-dash alone could not tell a host that read every element from one that
+// read the first two and gave up.
+//
+// This host already resolved the seam the way §24.7 states (Phase 1673 made
+// `resolve_float_seq` propagate the sentinel rather than drop the element), so
+// nothing in `src/` moves here. That is not a reason to skip the checkers: the
+// declaration's whole mechanism is that every adopting host answers the claim
+// from the artefact's enumeration, and a host that merely happens to conform
+// today is exactly the host a later refactor breaks silently.
+//
+// The document is the corpus's own bound-source sparkline —
+// `nodes/state-absent-default.json`'s `absent-default-sparkline`, reproduced here
+// as one node so the checker renders the subject rather than digging it out of a
+// six-node composite.
+const BOUND_SPARKLINE: &str =
+    r#"{"id":"absent-default-sparkline","kind":{"$type":"Sparkline","source":{"$type":"State","key":"series"}}}"#;
+
+/// Render the bound sparkline with `series` fed from the store.
+fn render_series(series: JVal) -> String {
+    let mut sources = BindingSources::default();
+    sources.state.insert("series".to_string(), series);
+    render_to_html(&node(BOUND_SPARKLINE), &sources)
+}
+
+/// How many readings the emission shows: one `x,y` pair per element.
+fn point_count(html: &str) -> usize {
+    let marker = "points=\"";
+    let Some(start) = html.find(marker) else {
+        return 0;
+    };
+    let rest = &html[start + marker.len()..];
+    let Some(end) = rest.find('"') else {
+        return 0;
+    };
+    rest[..end].split_whitespace().count()
+}
+
+fn num_series(values: &[f64]) -> JVal {
+    JVal::Arr(values.iter().copied().map(JVal::Num).collect())
+}
+
+/// §24.7 — ONE READING PER ELEMENT, whatever the elements are.
+#[test]
+fn owes_sparkline_float_seq_reads_element_wise() {
+    let finite = render_series(num_series(&[1.0, 2.0, 3.0, 4.0]));
+    assert_eq!(
+        point_count(&finite),
+        4,
+        "a four-element series must draw four readings: {finite}"
+    );
+
+    // The element the rule is about: one the host cannot read as a number, among
+    // readable neighbours. Several shapes, because a host special-casing strings
+    // and one special-casing foreign types are different defects.
+    for foreign in [
+        JVal::Str("banana".to_string()),
+        JVal::Bool(true),
+        JVal::Null,
+        JVal::Arr(vec![JVal::Num(1.0)]),
+    ] {
+        let html = render_series(JVal::Arr(vec![
+            JVal::Num(1.0),
+            foreign.clone(),
+            JVal::Num(3.0),
+            JVal::Num(4.0),
+        ]));
+        assert!(
+            !html.contains("fuaran-sparkline-empty"),
+            "one unreadable element ({foreign:?}) suppressed the whole series - the em-dash is the \
+             UNRESOLVED case, not the partly-readable one; discarding the readable points tells the \
+             reader nothing at all: {html}"
+        );
+        assert_eq!(
+            point_count(&html),
+            4,
+            "an unreadable element ({foreign:?}) changed the series LENGTH - a series index is a \
+             position, so a dropped reading slides every later one one place left: {html}"
+        );
+    }
+}
+
+/// §24.7 — the element accept set is §7's and CLOSED.
+#[test]
+fn owes_sparkline_float_seq_accept_set_closed() {
+    // The twin FIRST, so the comparison below is against a real render rather
+    // than two em-dashes agreeing about nothing.
+    let genuine = render_series(num_series(&[0.0, 3.5, 7.0]));
+    assert_eq!(
+        point_count(&genuine),
+        3,
+        "the genuine number must be read - the closed set admits JSON numbers: {genuine}"
+    );
+
+    // The comparison IS the claim, and it is the one formulation that reads the
+    // same on every host: a host that coerced "3.5" emits byte-identical markup
+    // for the two, whatever its geometry. Asserting the characters `3.5` are
+    // absent would pass on a host that coerced and then scaled the coordinate.
+    for spelling in ["3.5", "+3.5", " 3.5 ", "0x1p-2", "inf", "nan"] {
+        let coerced = render_series(JVal::Arr(vec![
+            JVal::Num(0.0),
+            JVal::Str(spelling.to_string()),
+            JVal::Num(7.0),
+        ]));
+        assert_ne!(
+            coerced, genuine,
+            "the string {spelling:?} resolved to the number it spells - the accept set at this slot \
+             is §7's and closed, and this host's own decoder refuses exactly this spelling"
+        );
+    }
+
+    // …and the three the set DOES admit, in the same shape. Without them the
+    // claim above would be satisfied by a host that read no string at all,
+    // including the sentinels the format exists to spell.
+    for sentinel in ["NaN", "Infinity", "-Infinity"] {
+        let html = render_series(JVal::Arr(vec![
+            JVal::Num(1.0),
+            JVal::Str(sentinel.to_string()),
+            JVal::Num(3.0),
+        ]));
+        assert_eq!(
+            point_count(&html),
+            3,
+            "the sentinel {sentinel:?} is IN the accept set and must read as its non-finite value: {html}"
+        );
+    }
+}
+
 const CHECKERS: &[(&str, fn())] = &[
     (
         "Media/accessible-name-always",
@@ -1396,6 +1535,15 @@ const CHECKERS: &[(&str, fn())] = &[
     (
         "style.direction/no-derived-direction-behaviour",
         owes_style_direction_no_derived_direction_behaviour,
+    ),
+    // Phase 1704 — the two float-sequence resolution claims (§24.7).
+    (
+        "Sparkline/float-seq-reads-element-wise",
+        owes_sparkline_float_seq_reads_element_wise,
+    ),
+    (
+        "Sparkline/float-seq-accept-set-closed",
+        owes_sparkline_float_seq_accept_set_closed,
     ),
 ];
 
