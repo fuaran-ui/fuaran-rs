@@ -1579,6 +1579,48 @@ fn resolves_every_declared_claim_id_against_the_closed_vocabulary() {
     }
 }
 
+/// A trait's declared SCOPE is one this host can act on.
+///
+/// `appliesTo` decides whether a trait claim is OWED here at all: a trait riding
+/// only kinds this host does not render owes nothing, and one riding the
+/// envelope is owed by everything. A scope this host cannot interpret is
+/// therefore not a cosmetic defect — it is an unanswerable question about
+/// whether the gate should be red.
+///
+/// The two arms are asserted in BOTH directions, because the tagged shape exists
+/// precisely so that "every kind" is not spellable as an empty array: an
+/// `allKinds` carrying a list, or a `namedKinds` carrying none, would each read
+/// as the opposite of what it says.
+#[test]
+fn every_declared_trait_scope_is_actionable() {
+    let Some(manifest) = load() else { return };
+
+    for row in &manifest.traits {
+        assert!(
+            row.trait_id.contains('.'),
+            "a trait id is the wire path of the member it governs, never a bare kind name: {}",
+            row.trait_id
+        );
+        match row.scope.as_str() {
+            "allKinds" => assert!(
+                row.scope_kinds.is_empty(),
+                "{}: an allKinds scope names no kinds - a list would be a narrower claim than the                  scope itself: {:?}",
+                row.trait_id,
+                row.scope_kinds
+            ),
+            "namedKinds" => assert!(
+                !row.scope_kinds.is_empty(),
+                "{}: a namedKinds scope with an empty list rides NOTHING, which is satisfiable by                  rendering nothing at all",
+                row.trait_id
+            ),
+            other => panic!(
+                "{}: this host cannot interpret the scope {other:?}, so it cannot say whether the                  trait's claims are owed here",
+                row.trait_id
+            ),
+        }
+    }
+}
+
 #[test]
 fn registers_no_checker_for_an_obligation_the_manifest_does_not_declare() {
     // A checker for a claim no row declares is a stale assertion: it passes
