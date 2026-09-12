@@ -1369,6 +1369,76 @@ fn the_offender_explanation_distinguishes_its_two_branches() {
     );
 }
 
+/// Asks the question every other guard around the oracle cannot (Phase 1677,
+/// porting the Python host's `test_reference_vocabulary_admits_no_degenerate_prefix`):
+/// not "is the oracle big enough" but "can the oracle still say no".
+///
+/// Every neighbouring guard measures the vocabulary's SIZE — ">50 exact
+/// classes", "`fuaran-node` is present", "the derived set is larger than the
+/// floor" — and a vocabulary can be large, correct in every named member, and
+/// still admit every possible input, because one over-broad prefix subsumes
+/// the lot. Two such prefixes have reached this oracle already: the bare
+/// namespace, from a doc-comment sentence (dropped at extraction, see
+/// `reference_vocabulary`), and `fuaran-image-aspect-`, from a TEST project's
+/// expectation string (closed by the `*.Tests` exclusion in
+/// `reference_renderer_sources`). Each was a different way in. Stripping
+/// comments and excluding tests remove the two known ways; this test is what
+/// catches the next one, because it checks the property those fixes exist to
+/// restore rather than the fixes themselves.
+#[test]
+fn the_reference_vocabulary_admits_no_degenerate_prefix() {
+    let Some((exact, prefixes)) = reference_vocabulary() else {
+        eprintln!("reference renderer not found; skipping (standalone checkout)");
+        return;
+    };
+
+    // A prefix that names nothing beyond the namespace admits every class this
+    // host can emit, by construction. The extraction drops the bare token, so
+    // this half is enforced twice — deliberately: a future change to the
+    // extraction must not be able to reintroduce it silently.
+    let degenerate: Vec<&String> = prefixes
+        .iter()
+        .filter(|p| {
+            p.as_str() == "fuaran-" || !p.starts_with("fuaran-") || p.len() <= "fuaran-".len()
+        })
+        .collect();
+    assert!(
+        degenerate.is_empty(),
+        "the extracted prefix set contains {degenerate:?}, which admits every class this host can \
+         emit — the parity assertion is a tautology while it is there. It comes from prose (a \
+         doc-comment markup example, or a sentence about the vocabulary) leaking into the \
+         extraction; check `strip_fsharp_comments` still covers the comment form the \
+         reference used."
+    );
+
+    // The go-red proof, run in-process: a parity lock that has silently gone
+    // vacuous looks exactly like one that is passing, so the falsifier is worth
+    // an assertion of its own rather than a comment claiming the check works.
+    // Two probes: an invented class no reference file could plausibly spell,
+    // and the instance this phase measured — the production renderer spells
+    // exactly four `fuaran-image-aspect-*` variants (`Render.fs`), so a fifth
+    // is admissible only through a prefix the reference never wrote.
+    for invented in [
+        "fuaran-a-class-the-reference-host-does-not-spell",
+        "fuaran-image-aspect-cinemascope",
+    ] {
+        assert!(
+            !exact.contains(invented),
+            "the oracle admits {invented:?} as an EXACT class, which no reference source spells"
+        );
+        let via: Vec<&String> = prefixes
+            .iter()
+            .filter(|p| invented.starts_with(p.as_str()))
+            .collect();
+        assert!(
+            via.is_empty(),
+            "the oracle admits the invented class {invented:?} through the prefix(es) {via:?}, \
+             so it admits anything under that prefix — find where the reference spells it and \
+             whether that is code or prose"
+        );
+    }
+}
+
 #[test]
 fn emitted_class_vocabulary_matches_the_reference_renderer() {
     let Some((exact, prefixes)) = reference_vocabulary() else {
