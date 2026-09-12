@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:533d4239b16f57b7
+/* fuaran-vocabulary-fingerprint: fv1:e56df5af70231f8e
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -495,12 +495,12 @@ body {
 /* Phase 69 (2026-05-29): disabled tab — greyed text + no pointer + the
    ::after indicator stays hidden. Matches the SDK disabled-tab posture. */
 .fuaran-tab-disabled {
-  color: var(--fuaran-tone-default-disabled-fg, #9ca3af);
+  color: var(--fuaran-tone-default-disabled-fg, #6b7280);
   cursor: not-allowed;
 }
 
 .fuaran-tab-disabled:hover {
-  color: var(--fuaran-tone-default-disabled-fg, #9ca3af);
+  color: var(--fuaran-tone-default-disabled-fg, #6b7280);
 }
 
 .fuaran-tab-disabled:hover::after {
@@ -2297,7 +2297,7 @@ body {
 
 .fuaran-grid-reorder-handle {
   padding: 0 var(--fuaran-space-xs, 4px);
-  font-size: var(--fuaran-text-sm, 14px);
+  font-size: var(--fuaran-text-sm, 13px);
   line-height: 1;
   border: none;
   background: transparent;
@@ -2341,7 +2341,7 @@ body {
 .fuaran-drag-place {
   align-self: flex-start;
   padding: var(--fuaran-space-xs, 4px) var(--fuaran-space-sm, 8px);
-  font-size: var(--fuaran-text-sm, 14px);
+  font-size: var(--fuaran-text-sm, 13px);
   line-height: 1.2;
   border: 1px dashed var(--fuaran-color-border, #d1d5db);
   border-radius: var(--fuaran-radius-sm, 4px);
@@ -2361,7 +2361,7 @@ body {
    — never `display: none`, which would take it out of the accessibility tree
    and silence the announcements it exists for. */
 .fuaran-drag-status {
-  font-size: var(--fuaran-text-sm, 14px);
+  font-size: var(--fuaran-text-sm, 13px);
   color: var(--fuaran-color-text-muted, #6b7280);
 }
 
@@ -3401,7 +3401,7 @@ html[data-fuaran-disconnected]::before {
   border-color: var(--fuaran-tone-info-border, #93c5fd);
 }
 .fuaran-toast-success {
-  border-color: var(--fuaran-tone-success-border, #86efac);
+  border-color: var(--fuaran-tone-success-border, #6ee7b7);
 }
 .fuaran-toast-warning {
   border-color: var(--fuaran-tone-warning-border, #fcd34d);
@@ -3510,7 +3510,7 @@ html[data-fuaran-disconnected]::before {
 }
 
 .fuaran-popover-body {
-  font-size: var(--fuaran-text-sm, 14px);
+  font-size: var(--fuaran-text-sm, 13px);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
