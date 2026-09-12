@@ -1601,6 +1601,11 @@ fn every_declared_trait_scope_is_actionable() {
             "a trait id is the wire path of the member it governs, never a bare kind name: {}",
             row.trait_id
         );
+        assert!(
+            !manifest.kinds.iter().any(|k| k.kind == row.trait_id),
+            "{} collides with a kind name; one registry keys both populations",
+            row.trait_id
+        );
         match row.scope.as_str() {
             "allKinds" => assert!(
                 row.scope_kinds.is_empty(),
