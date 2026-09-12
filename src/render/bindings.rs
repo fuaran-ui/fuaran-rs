@@ -971,12 +971,70 @@ pub fn resolve_string_pair(
     }
 }
 
+/// ONE element of a host-fed float sequence, read by the SAME rule the
+/// `Static`/`FloatSeq` DECODE path applies — see `wire::decode::as_float`: a
+/// JSON number, or one of the three quoted non-finite sentinels §5 requires
+/// every host to emit and §7 requires every decoder to accept.
+///
+/// # The rule, stated because this seam owed one (Phase 1673)
+///
+/// **A float sequence resolves to one element per input element, always.** An
+/// element that is not a number and not a sentinel resolves to `f64::NAN` — it
+/// SAYS "there is no number here" rather than vanishing.
+///
+/// This arm used to be `filter_map(jval_number)`, which DROPPED such an element
+/// and so silently SHORTENED the series: `[1,"NaN",3]` from a host store became
+/// a two-point sparkline, while the identical array arriving as a typed
+/// `Static`/`FloatSeq` payload became three points with a NaN in the middle.
+/// Two paths, one document, different series lengths — and the shorter one is
+/// the more dangerous, because a series index is a POSITION: dropping element 1
+/// does not leave a gap at 1, it slides every later reading one place left, so
+/// the chart is not missing a point, it is showing the wrong points at the wrong
+/// places and looks entirely plausible doing it.
+///
+/// Two candidate rules were closed in favour of this one. DROPPING is what the
+/// defect did, and the paragraph above is why it is wrong. REFUSING is what the
+/// decode path does for a genuinely unreadable element — but decode refuses a
+/// DOCUMENT before anything renders, where this runs at render time over data a
+/// host fed in, with no error channel and a whole sparkline to lose; and the
+/// format already has a spelling for "not a number", which is the sentinel this
+/// returns. Nothing downstream is surprised by it: the decode path can produce
+/// NaN from a well-formed document, so every consumer of a float sequence in
+/// this host already meets one.
+///
+/// The element vocabulary is not invented here. `tests/sparkline_lowering.rs`'s
+/// reader of the corpus's own `sparkline-lowering/*` inputs already spells it
+/// exactly — number, `"NaN"`, `"Infinity"`, `"-Infinity"` — and panics on
+/// anything else, because a corpus input is authored and junk in one is a
+/// defect. This is that same vocabulary with the panic replaced by the sentinel,
+/// because a HOST STORE is not authored and junk in one is Tuesday.
+///
+/// What this is NOT: a claim that a NaN element RENDERS well. A non-finite
+/// reading reaches the sparkline lowering and comes out of `draw_num` as `0`,
+/// which is this host's standing treatment of a non-finite coordinate and
+/// applies identically to a NaN that arrived through the corpus-exercised decode
+/// path. That is a separate, host-wide question about drawing non-finite
+/// geometry; this function's job is to make the two paths agree about what the
+/// SERIES is.
+fn float_seq_element(v: &JVal) -> f64 {
+    match v {
+        JVal::Num(n) => *n,
+        JVal::Str(s) if s == "NaN" => f64::NAN,
+        JVal::Str(s) if s == "Infinity" => f64::INFINITY,
+        JVal::Str(s) if s == "-Infinity" => f64::NEG_INFINITY,
+        _ => f64::NAN,
+    }
+}
+
 /// The float series of a sparkline: typed `Static` payload or source array.
+///
+/// Both arms yield one element per input element — see [`float_seq_element`] for
+/// the rule the `Json(Arr)` arm applies and why it is not a filter.
 pub fn resolve_float_seq(sources: &BindingSources, binding: &Binding) -> Vec<f64> {
     match resolve(sources, binding) {
         Resolution::Resolved(Value::Static(StaticValue::FloatSeq(values))) => values.clone(),
         Resolution::Resolved(Value::Json(JVal::Arr(items))) => {
-            items.iter().filter_map(jval_number).collect()
+            items.iter().map(float_seq_element).collect()
         }
         _ => vec![],
     }

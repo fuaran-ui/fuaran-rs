@@ -1,5 +1,5 @@
-//! The session-level placement verbs of the C-ABI: place, nudge, duplicate,
-//! paste.
+//! The session-level placement verbs of the C-ABI: place, move, nudge,
+//! duplicate, paste.
 //!
 //! # Why these live on the ABI at all
 //!
@@ -17,16 +17,23 @@
 //! Each verb takes ONE canonical-JSON request document (a `(ptr, len)` UTF-8
 //! buffer per the [module memory contract](super)) rather than a widening list
 //! of `(ptr, len)` pairs — a placement carries a parent, a placement case, an
-//! optional anchor and, for two of the verbs, a whole node. The request is the
-//! same document shape across all four verbs, so a binding writes one encoder.
+//! optional anchor and, for three of the verbs, a node. The request is the
+//! same document shape across all five verbs, so a binding writes one encoder.
 //!
 //! ```text
 //! place     { "parentId": …, "placement": "Last"|"First"|"Before"|"After",
 //!             "anchor"?: …, "child": { …node… } }
+//! move      { …target…, "source": … }
 //! paste     { …target…, "subtree": { …node… }, "idPrefix"?: … }
 //! duplicate { …target…, "source": …, "idPrefix"?: … }
 //! nudge     { "target": …, "delta": ±n }
 //! ```
+//!
+//! `move` names the node it relocates with `"source"`, the same member
+//! `duplicate` uses and for the same reason: both name a node ALREADY IN THE
+//! TREE and place it somewhere, so a binding that can encode one can encode the
+//! other unchanged. (`nudge`'s `"target"` names a node too, but it carries no
+//! destination at all — it is the one verb that is not a placement.)
 //!
 //! `anchor` is REQUIRED for `Before` / `After` and REFUSED for `Last` / `First`:
 //! a caller that supplied an anchor a verb would silently drop has stated an
@@ -52,7 +59,7 @@
 use crate::canonical::{JVal, parse, render_canonical};
 use crate::client::ClientSession;
 use crate::ops::placement::{
-    DerivedIds, FreshIds, PlaceError, Placement, SequentialIds, Target, duplicate_op_with,
+    DerivedIds, FreshIds, PlaceError, Placement, SequentialIds, Target, duplicate_op_with, move_op,
     nudge_op, paste_op_with, place_op,
 };
 use crate::wire::{Node, TreeOp, decode_node, encode_op};
@@ -232,6 +239,18 @@ fn duplicate_verb(session: &ClientSession, document: &JVal) -> Result<TreeOp, Ve
     )?)
 }
 
+/// Relocate a node already in the tree. Unlike `place` this emits `MoveNode`
+/// (plus a `ReorderChildren` when appending does not already produce the wanted
+/// order), so no id is minted and none is remapped: the node keeps its identity,
+/// which is the whole difference between a move and a duplicate, and is why a
+/// drag-move cannot be expressed as `place` + `RemoveNode` without breaking
+/// every reference to the moved id for the duration of the two ops.
+fn move_verb(session: &ClientSession, document: &JVal) -> Result<TreeOp, VerbError> {
+    let target = target_of(document)?;
+    let source = required_str(document, "source")?;
+    Ok(move_op(session.tree(), &source, &target)?)
+}
+
 fn nudge_verb(session: &ClientSession, document: &JVal) -> Result<TreeOp, VerbError> {
     let node_id = required_str(document, "target")?;
     let delta = match document.field("delta") {
@@ -292,6 +311,26 @@ pub unsafe extern "C" fn fuaran_session_place(
 ) -> FuaranBuf {
     // SAFETY: caller contract.
     unsafe { dispatch(session, ptr, len, "fuaran_session_place", place_verb) }
+}
+
+/// Relocate a node already in the tree: `{"source":…,"parentId":…,
+/// "placement":…,"anchor"?:…}`. The node KEEPS ITS ID — this emits `MoveNode`,
+/// never an insert-and-remove — so it is the verb a drag-move is, and the one a
+/// decode-only projection cannot reach any other way without reimplementing the
+/// placement algebra. Returns `{"ok":true,"op":…}` or an error envelope; a move
+/// into the node itself or into its own descendant is refused by name
+/// (`MoveIntoSelf` / `MoveIntoDescendant`) before any op is emitted.
+///
+/// # Safety
+/// As [`fuaran_session_place`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fuaran_session_move(
+    session: *mut ClientSession,
+    ptr: *const u8,
+    len: usize,
+) -> FuaranBuf {
+    // SAFETY: caller contract.
+    unsafe { dispatch(session, ptr, len, "fuaran_session_move", move_verb) }
 }
 
 /// Move a node one or more sibling positions: `{"target":…,"delta":±n}`. Emits

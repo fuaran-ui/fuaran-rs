@@ -1,5 +1,5 @@
 //! The **native** leg of the placement C-ABI: drive `fuaran_session_place` /
-//! `_nudge` / `_duplicate` / `_paste` through the raw `extern "C"` surface,
+//! `_move` / `_nudge` / `_duplicate` / `_paste` through the raw `extern "C"` surface,
 //! exactly as a native binding does — `fuaran_alloc` an input buffer, call,
 //! read the returned [`FuaranBuf`], `fuaran_dealloc` both. This certifies the
 //! native two-word `{ ptr, len }` return form that a packed-`u64` return would
@@ -21,8 +21,8 @@
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::ffi::{
     FuaranBuf, fuaran_alloc, fuaran_dealloc, fuaran_session_duplicate, fuaran_session_free,
-    fuaran_session_new, fuaran_session_nudge, fuaran_session_paste, fuaran_session_place,
-    fuaran_session_tree_json,
+    fuaran_session_move, fuaran_session_new, fuaran_session_nudge, fuaran_session_paste,
+    fuaran_session_place, fuaran_session_tree_json,
 };
 
 const FIXTURE: &str = concat!(
@@ -70,6 +70,7 @@ fn call(session: *mut fuaran_rs::client::ClientSession, verb: &str, request: &st
     let out = take_buf(unsafe {
         match verb {
             "place" => fuaran_session_place(session, ptr, len),
+            "move" => fuaran_session_move(session, ptr, len),
             "nudge" => fuaran_session_nudge(session, ptr, len),
             "duplicate" => fuaran_session_duplicate(session, ptr, len),
             "paste" => fuaran_session_paste(session, ptr, len),
@@ -141,7 +142,7 @@ fn the_fixture_exercises_every_verb_and_both_refusal_classes() {
         .collect();
     verbs.sort();
     verbs.dedup();
-    assert_eq!(verbs, ["duplicate", "nudge", "paste", "place"]);
+    assert_eq!(verbs, ["duplicate", "move", "nudge", "paste", "place"]);
     let expects: Vec<String> = cases(&doc)
         .iter()
         .map(|c| string_member(c, "expect"))
@@ -187,7 +188,7 @@ fn a_null_session_handle_yields_an_empty_buffer_rather_than_a_crash() {
     // The surface-wide null contract, restated for the new entry points: a
     // binding that lost its handle must get nothing back, not undefined
     // behaviour.
-    for verb in ["place", "nudge", "duplicate", "paste"] {
+    for verb in ["place", "move", "nudge", "duplicate", "paste"] {
         assert_eq!(call(std::ptr::null_mut(), verb, "{}"), "");
     }
 }

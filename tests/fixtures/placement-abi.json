@@ -84,7 +84,43 @@
       "verb": "place",
       "request": "{\"parentId\":\"left\",\"placement\":\"Last\",\"child\":{\"id\":\"bad\",\"kind\":{\"$type\":\"NoSuchKind\"}}}",
       "expect": "{\"error\":{\"class\":\"request\",\"code\":\"INVALID_REQUEST\",\"message\":\"the 'child' node does not decode: unknown NodeKind discriminator 'NoSuchKind' at $.kind.$type\"}}"
+    },
+    {
+      "name": "move-relocates-a-node-and-keeps-its-id",
+      "verb": "move",
+      "request": "{\"parentId\":\"empty\",\"placement\":\"Last\",\"source\":\"x\"}",
+      "expect": "{\"ok\":true,\"op\":{\"$type\":\"MoveNode\",\"newParentId\":\"empty\",\"target\":\"x\"}}"
+    },
+    {
+      "name": "move-before-a-sibling-reorders-in-the-same-call",
+      "verb": "move",
+      "request": "{\"anchor\":\"b\",\"parentId\":\"left\",\"placement\":\"Before\",\"source\":\"solo\"}",
+      "expect": "{\"ok\":true,\"op\":{\"$type\":\"Batch\",\"ops\":[{\"$type\":\"MoveNode\",\"newParentId\":\"left\",\"target\":\"solo\"},{\"$type\":\"ReorderChildren\",\"newOrder\":[\"y\",\"a\",\"solo\",\"b\",\"c\"],\"parentId\":\"left\"}]}}"
+    },
+    {
+      "name": "moving-a-node-into-its-own-descendant-is-refused",
+      "verb": "move",
+      "request": "{\"parentId\":\"left-copy\",\"placement\":\"Last\",\"source\":\"empty\"}",
+      "expect": "{\"error\":{\"class\":\"placement\",\"code\":\"MoveIntoDescendant\",\"message\":\"MoveIntoDescendant: 'left-copy' sits inside 'empty's own subtree (would create a cycle).\"}}"
+    },
+    {
+      "name": "moving-a-node-into-itself-is-refused",
+      "verb": "move",
+      "request": "{\"parentId\":\"left\",\"placement\":\"Last\",\"source\":\"left\"}",
+      "expect": "{\"error\":{\"class\":\"placement\",\"code\":\"MoveIntoSelf\",\"message\":\"MoveIntoSelf: cannot move node 'left' into itself.\"}}"
+    },
+    {
+      "name": "moving-an-absent-source-is-refused",
+      "verb": "move",
+      "request": "{\"parentId\":\"root\",\"placement\":\"Last\",\"source\":\"ghost\"}",
+      "expect": "{\"error\":{\"class\":\"placement\",\"code\":\"NodeNotFound\",\"message\":\"NodeNotFound: node 'ghost' is not in the tree, or sits in a position the structural ops cannot reach.\"}}"
+    },
+    {
+      "name": "a-move-carrying-no-source-is-a-request-error",
+      "verb": "move",
+      "request": "{\"parentId\":\"root\",\"placement\":\"Last\"}",
+      "expect": "{\"error\":{\"class\":\"request\",\"code\":\"INVALID_REQUEST\",\"message\":\"the request carries no string 'source'\"}}"
     }
   ],
-  "finalTree": "{\"id\":\"root\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"left\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"y\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"a\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"b\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"c\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"x\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"solo\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"right\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"d\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"right-copy\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"d-copy\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"empty\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"left-copy\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"a-copy\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"z\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"dup-1\",\"kind\":{\"$type\":\"Box\",\"children\":[],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}}"
+  "finalTree": "{\"id\":\"root\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"left\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"y\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"a\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"solo\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"b\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"c\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"right\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"d\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"right-copy\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"d-copy\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"empty\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"left-copy\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"a-copy\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}},{\"id\":\"z\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"x\",\"kind\":{\"$type\":\"Markdown\",\"text\":\"body\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}},{\"id\":\"dup-1\",\"kind\":{\"$type\":\"Box\",\"children\":[],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\",\"wrap\":false},\"role\":\"Group\"}}"
 }

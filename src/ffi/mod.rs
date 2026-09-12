@@ -58,8 +58,8 @@ use crate::client::{ClientError, ClientSession, RowsOutcome};
 /// `include/fuaran.h` declares. See the module header for why it exists.
 #[cfg(feature = "driver-semantics-abi")]
 pub mod bounded;
-/// The session-level placement verbs — place / nudge / duplicate / paste over
-/// [`crate::ops::placement`]. Part of the default export surface
+/// The session-level placement verbs — place / move / nudge / duplicate / paste
+/// over [`crate::ops::placement`]. Part of the default export surface
 /// `include/fuaran.h` declares, on every target.
 pub mod placement;
 pub mod rosetta;
@@ -68,7 +68,8 @@ pub mod rosetta;
 // this surface, so they are reachable at `ffi::…` from Rust too — one import
 // path for the whole ABI, whichever file the body happens to live in.
 pub use placement::{
-    fuaran_session_duplicate, fuaran_session_nudge, fuaran_session_paste, fuaran_session_place,
+    fuaran_session_duplicate, fuaran_session_move, fuaran_session_nudge, fuaran_session_paste,
+    fuaran_session_place,
 };
 
 thread_local! {
