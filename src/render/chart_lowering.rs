@@ -415,6 +415,50 @@ fn truncate_to_width(font_size: f64, max_width: f64, text: &str) -> String {
 
 /// A "nice" number for the magnitude of `x` — the classic `{1,2,5}·10ⁿ`
 /// selection used for axis ticks.
+/// The reference host's `List.min` / `Array.min`, ported exactly (Phase 1677).
+///
+/// **Not `fold(f64::INFINITY, f64::min)`, which is what this file used and what
+/// diverges.** Two differences, both observable:
+///
+///   * `f64::min` DISCARDS a NaN — it returns the other operand — where the
+///     reference seeds on the FIRST element and moves only on `x < acc`. Since
+///     every comparison against NaN is false, a NaN that arrives first is never
+///     displaced and the extent IS NaN; one that arrives later never displaces
+///     what is there. So the two hosts agree on a NaN in the middle of a series
+///     and disagree on a NaN at its head, which is the discriminating case.
+///   * seeding on ±∞ means an all-NaN series lowers to a `+∞ .. -∞` domain — an
+///     inverted axis nothing in the pipeline refuses — where the reference
+///     yields NaN and the downstream formatter shows it as such. An impossible
+///     domain that renders is worse than a visibly absent one.
+///
+/// Returns `None` for an empty slice rather than a sentinel: the reference
+/// throws there, and both call sites already guard emptiness with their own
+/// value (`[0.0]` for the value axis, `0.0 .. 1.0` for a scatter's x). Handing
+/// back a number would mean inventing the guard a third time, differently.
+fn reference_min(values: &[f64]) -> Option<f64> {
+    let (first, rest) = values.split_first()?;
+    let mut acc = *first;
+    for &v in rest {
+        if v < acc {
+            acc = v;
+        }
+    }
+    Some(acc)
+}
+
+/// The reference host's `List.max` / `Array.max` — `reference_min`'s twin, and
+/// the same reasoning with the comparison reversed.
+fn reference_max(values: &[f64]) -> Option<f64> {
+    let (first, rest) = values.split_first()?;
+    let mut acc = *first;
+    for &v in rest {
+        if v > acc {
+            acc = v;
+        }
+    }
+    Some(acc)
+}
+
 fn nice_num(x: f64, round_it: bool) -> f64 {
     if x <= 0.0 {
         return 0.0;
@@ -1757,8 +1801,10 @@ pub fn lower_chart_with(
     } else {
         all_values
     };
-    let data_min = all_values.iter().copied().fold(f64::INFINITY, f64::min);
-    let data_max = all_values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    // `all_values` is non-empty by the guard above, so the reference's own
+    // throw-on-empty case is unreachable and the fallbacks are never taken.
+    let data_min = reference_min(&all_values).unwrap_or(0.0);
+    let data_max = reference_max(&all_values).unwrap_or(0.0);
     // Bars + lines share a zero-anchored domain — deterministic + honest for
     // bars. Stacked domains come from the cumulative partial sums, so the axis
     // covers the stack totals, never a single series' range.
@@ -2007,8 +2053,10 @@ pub fn lower_chart_with(
                 if x_values.is_empty() {
                     nice_domain(0.0, 1.0)
                 } else {
-                    let lo = x_values.iter().copied().fold(f64::INFINITY, f64::min);
-                    let hi = x_values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                    // Guarded non-empty one line up, matching the reference's
+                    // `Array.isEmpty` test, so the fallbacks are unreachable.
+                    let lo = reference_min(&x_values).unwrap_or(0.0);
+                    let hi = reference_max(&x_values).unwrap_or(1.0);
                     nice_domain(lo, hi)
                 }
             } else {
@@ -3979,5 +4027,58 @@ pub fn project_row(row: &crate::canonical::JVal, x_field: &str, y_fields: &[Stri
         category,
         x_value,
         values,
+    }
+}
+
+#[cfg(test)]
+mod extent_tests {
+    use super::{reference_max, reference_min};
+
+    /// The reference host computes a chart's value extent with `List.min` /
+    /// `List.max`, whose float comparisons make every test against NaN false. This
+    /// file used `fold(f64::INFINITY, f64::min)`, which does neither of those
+    /// things, and the two agree on every series that carries no NaN — which is
+    /// why nothing caught it.
+    ///
+    /// These pin the three cases that separate them.
+    #[test]
+    fn a_nan_at_the_head_survives_as_the_extent() {
+        // `f64::min` would have DISCARDED it and answered 1.0.
+        assert!(reference_min(&[f64::NAN, 1.0, 3.0]).unwrap().is_nan());
+        assert!(reference_max(&[f64::NAN, 1.0, 3.0]).unwrap().is_nan());
+    }
+
+    #[test]
+    fn a_nan_after_the_head_does_not_displace_what_is_there() {
+        // Both readings agree here — recorded so a "fix" that propagated every NaN
+        // is seen to be a different behaviour rather than a tidier one.
+        assert_eq!(reference_min(&[1.0, f64::NAN, 3.0]), Some(1.0));
+        assert_eq!(reference_max(&[1.0, f64::NAN, 3.0]), Some(3.0));
+    }
+
+    #[test]
+    fn an_all_nan_series_does_not_lower_to_an_inverted_infinite_domain() {
+        // The seeded fold answered +inf for the minimum and -inf for the maximum:
+        // an inverted domain nothing downstream refuses, which then renders.
+        assert!(reference_min(&[f64::NAN, f64::NAN]).unwrap().is_nan());
+        assert!(reference_max(&[f64::NAN, f64::NAN]).unwrap().is_nan());
+    }
+
+    #[test]
+    fn an_empty_series_has_no_extent_rather_than_an_infinite_one() {
+        // The reference throws here; both call sites guard emptiness with their own
+        // value before asking, so `None` is what keeps that guard the only one.
+        assert_eq!(reference_min(&[]), None);
+        assert_eq!(reference_max(&[]), None);
+    }
+
+    #[test]
+    fn an_ordinary_series_is_unaffected() {
+        // Verify the probe: the three tests above would pass on a function that
+        // answered NaN for everything.
+        assert_eq!(reference_min(&[3.0, -1.0, 2.0]), Some(-1.0));
+        assert_eq!(reference_max(&[3.0, -1.0, 2.0]), Some(3.0));
+        assert_eq!(reference_min(&[7.5]), Some(7.5));
+        assert_eq!(reference_max(&[7.5]), Some(7.5));
     }
 }
