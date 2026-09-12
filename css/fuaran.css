@@ -3186,6 +3186,14 @@ html[data-fuaran-disconnected]::before {
   inline-size: max-content;
   overflow-wrap: anywhere;
 
+  /* Declared because this sheet imposes no global reset, so without it the cap
+     above is a CONTENT-box cap and the hint's real border box is 26px wider
+     than the number says (12px inline padding + 1px border, twice). Measured
+     in a browser at 375px: the cap resolved to 320px and the box rendered at
+     346px. The comment above was describing an intent the sheet did not
+     implement; this is the declaration that makes it true. */
+  box-sizing: border-box;
+
   /* Tokenised against the existing vocabulary — this phase mints no new theme
      token. The hint reads as a subdued surface with the default border, which
      is what a host re-binding the tone families already controls. */
@@ -3204,18 +3212,54 @@ html[data-fuaran-disconnected]::before {
      alongside opacity. */
   visibility: hidden;
   opacity: 0;
+
+  /* AND COLLAPSED, which is a separate claim from hidden (Phase 1702).
+     `visibility: hidden` keeps the box in layout, and an absolutely positioned
+     box still contributes its bounds to the scrollable overflow region of the
+     viewport — so a hint nobody has hovered was widening the document. Measured
+     in a browser at 375px: `documentElement.scrollWidth` 482 against a
+     `clientWidth` of 375, on a page whose only wide thing was invisible. The
+     reader gets a horizontal scrollbar and nothing to scroll to, which is the
+     worst kind of defect to report because there is nothing to point at.
+
+     A degenerate `scale(0)` is what collapses it: scrollable overflow is
+     computed from TRANSFORMED boxes, so a zero-area box contributes nothing,
+     while the element keeps `visibility` semantics, keeps its text in the DOM
+     for the `aria-describedby` reason above, and keeps the fade. Three other
+     candidates were measured and rejected. `display: none` collapses it too but
+     discards the paragraph above. Clipping the WRAPPER while it rests collapses
+     it too, and clips every descendant's focus ring and shadow in the state a
+     page spends all its time in. Clamping the hint to its wrapper's width
+     (`max-inline-size: 100%`) collapses it and ruins it — measured at 78px wide
+     by 303px tall, a column of single words.
+
+     The collapse rides the SAME 120ms delay `visibility` already uses, so the
+     fade-OUT still plays: at t+50ms after the pointer leaves, the hint is still
+     painted at full size with opacity 0.26, and only at 120ms does it both
+     vanish and collapse. Snapping the transform at t=0 instead would have
+     deleted the fade-out while leaving the fade-in, which is the kind of
+     asymmetry nobody reports and everybody notices.
+
+     This fixes the PHANTOM only. A hint that is actually on screen near the
+     right edge still overflows, and still should: collision-aware flipping is
+     the client-tier enhancement the note above declines to claim. */
+  transform: scale(0);
+  transform-origin: 0 0;
   transition:
     opacity 120ms ease-out,
-    visibility 0s linear 120ms;
+    visibility 0s linear 120ms,
+    transform 0s linear 120ms;
 }
 
 .fuaran-has-tooltip:hover > .fuaran-tooltip,
 .fuaran-has-tooltip:focus-within > .fuaran-tooltip {
   visibility: visible;
   opacity: 1;
+  transform: none;
   transition:
     opacity 120ms ease-out,
-    visibility 0s linear 0s;
+    visibility 0s linear 0s,
+    transform 0s linear 0s;
 }
 
 /* Escape dismisses (WCAG 1.4.13), by way of the marker the client tier's
@@ -3227,6 +3271,11 @@ html[data-fuaran-disconnected]::before {
 .fuaran-has-tooltip[data-fuaran-tooltip-dismissed]:focus-within > .fuaran-tooltip {
   visibility: hidden;
   opacity: 0;
+  /* The collapse is re-asserted here for the same reason `visibility` is: this
+     rule beats the reveal rule, and a dismissed hint that stayed uncollapsed
+     would carry the phantom scroll width back with it while the pointer sits
+     on the node. */
+  transform: scale(0);
 }
 
 /* The wrapper takes a focus stop only where the node's own body is not one, so
