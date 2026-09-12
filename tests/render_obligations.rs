@@ -1294,13 +1294,6 @@ fn owes_style_direction_no_derived_direction_behaviour() {
     );
 }
 
-/// Which (kind, claim) pairs this host asserts, and how.
-///
-/// Keyed by the claim's WIRE token, because the enumeration it is matched
-/// against comes from the artefact. The value is a pointer to the `#[test]`
-/// that asserts it, so a registry entry naming a claim nothing implements does
-/// not compile.
-
 // ─── Phase 1704 — Sparkline float-sequence resolution (§24.7) ────────────────
 //
 // The claims are about a HOST-FED series, so these two checkers are the only
@@ -1438,6 +1431,12 @@ fn owes_sparkline_float_seq_accept_set_closed() {
     }
 }
 
+/// Which (kind, claim) pairs this host asserts, and how.
+///
+/// Keyed by the claim's WIRE token, because the enumeration it is matched
+/// against comes from the artefact. The value is a pointer to the `#[test]`
+/// that asserts it, so a registry entry naming a claim nothing implements does
+/// not compile.
 const CHECKERS: &[(&str, fn())] = &[
     (
         "Media/accessible-name-always",
