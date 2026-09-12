@@ -1294,6 +1294,79 @@ fn owes_style_direction_no_derived_direction_behaviour() {
     );
 }
 
+// ─── DataGrid: the interactive-row class (3.6.24, Phase 1701) ────────────────
+//
+// Built from RAW canonical JSON, for the reason the direction checkers give:
+// `onRowClick` is a closure-bearing slot whose whole wire content is its
+// PRESENCE, so authoring it through a surface would put the surface under test
+// rather than the renderer.
+
+const INTERACTIVE_ROW_MARKER: &str = "fuaran-grid-row-interactive";
+
+/// A data-bound grid over two static rows, with the row action declared or
+/// omitted.
+fn bound_grid(row_action: bool) -> String {
+    let action = if row_action {
+        r#""onRowClick":"<closure>","#
+    } else {
+        ""
+    };
+    render(&format!(
+        r#"{{"id":"g","kind":{{"$type":"DataGrid","columns":[{{"field":"reference","kind":{{"$type":"Text"}},"label":"Reference"}}],{action}"source":{{"$type":"Static","value":[{{"reference":"S-1"}},{{"reference":"S-2"}}]}}}}}}"#
+    ))
+}
+
+/// The same grid in `staticRows` mode, which honours no row action in any tier.
+fn static_rows_grid(row_action: bool) -> String {
+    let action = if row_action {
+        r#""onRowClick":"<closure>","#
+    } else {
+        ""
+    };
+    render(&format!(
+        r#"{{"id":"g","kind":{{"$type":"DataGrid","columns":[],{action}"source":{{"$type":"Static","value":[]}},"staticRows":{{"headers":["Reference"],"rows":[["S-1"]]}}}}}}"#
+    ))
+}
+
+/// 3.6.24 - a rendered grid row carries the interactive-row marker only where
+/// the grid declares a row action.
+#[test]
+fn owes_data_grid_interactive_row_only_with_action() {
+    // Rule 1, both directions. An emission test alone cannot tell a renderer
+    // that honours the declaration from one that marks every row.
+    let declared = bound_grid(true);
+    assert!(
+        declared.contains(INTERACTIVE_ROW_MARKER),
+        "a grid declaring a row action must mark its rows, so the pointer affordance keyed on the marker promises a click the document declared: {declared}"
+    );
+
+    let undeclared = bound_grid(false);
+    assert!(
+        !undeclared.contains(INTERACTIVE_ROW_MARKER),
+        "a grid declaring no row action must mark no row - a pointer over inert content is a promise the markup does not keep: {undeclared}"
+    );
+    // ...and the rows are there either way, so the negative above is about the
+    // DECLARATION rather than about an empty render.
+    assert!(
+        undeclared.contains(r#"<tr class="fuaran-grid-row">"#),
+        "the undeclared grid is expected to render real rows - the assertion above means nothing if it rendered none: {undeclared}"
+    );
+
+    // Rule 2 - the static leg renders real rows AND can read the declaration,
+    // and must still mark none: the mode honours no row action in any tier, so
+    // a marked row there would promise a click nothing can deliver.
+    let static_declared = static_rows_grid(true);
+    assert!(
+        static_declared.contains("fuaran-table-row"),
+        "the static leg is expected to render real rows - the assertion below means nothing if it rendered none: {static_declared}"
+    );
+    assert!(
+        !static_declared.contains(INTERACTIVE_ROW_MARKER),
+        "a `staticRows` grid honours no row action in any tier, so its rows carry no interactive-row marker whatever the grid declares: {static_declared}"
+    );
+    assert!(!static_rows_grid(false).contains(INTERACTIVE_ROW_MARKER));
+}
+
 /// Which (kind, claim) pairs this host asserts, and how.
 ///
 /// Keyed by the claim's WIRE token, because the enumeration it is matched
@@ -1396,6 +1469,11 @@ const CHECKERS: &[(&str, fn())] = &[
     (
         "style.direction/no-derived-direction-behaviour",
         owes_style_direction_no_derived_direction_behaviour,
+    ),
+    // Phase 1701 - the row-action affordance.
+    (
+        "DataGrid/interactive-row-only-with-action",
+        owes_data_grid_interactive_row_only_with_action,
     ),
 ];
 
