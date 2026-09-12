@@ -113,8 +113,25 @@ struct KindRow {
     obligations: Vec<Obligation>,
 }
 
+/// One `traits` row (WIRE_FORMAT.md §13, Phase 1696): a node-level member whose
+/// claims ride the ENVELOPE rather than any one kind, so every kind this host
+/// renders owes them and none of them owns them.
+///
+/// `trait_id` is the wire path of the member it governs, which is why it shares
+/// one registry with the kind names: a dotted path can never collide with a
+/// `kind.$type`. `scope` is the tagged `appliesTo.scope` - `allKinds`, or
+/// `namedKinds` with the list beside it - because "every kind" must not be
+/// spellable as an empty array, which reads as the opposite claim.
+struct TraitRow {
+    trait_id: String,
+    scope: String,
+    scope_kinds: Vec<String>,
+    obligations: Vec<Obligation>,
+}
+
 struct RenderFidelityManifest {
     obligation_vocabulary: Vec<VocabularyEntry>,
+    traits: Vec<TraitRow>,
     kinds: Vec<KindRow>,
 }
 
@@ -140,6 +157,48 @@ fn parse_manifest(text: &str) -> RenderFidelityManifest {
         // with a message saying which of the two possible causes to look at.
         _ => Vec::new(),
     };
+    // Absent is a legal shape for an artefact predating §13's trait block, on
+    // exactly the terms the vocabulary above is: the gate's own non-zero guard
+    // is what refuses an artefact that declares nothing at all.
+    let traits = match root.field("traits") {
+        Some(JVal::Arr(rows)) => rows
+            .iter()
+            .map(|row| {
+                let applies_to = row.field("appliesTo");
+                let scope = match applies_to.and_then(|a| a.field("scope")) {
+                    Some(JVal::Str(v)) => v.clone(),
+                    other => panic!("a trait row carries no appliesTo.scope: {other:?}"),
+                };
+                let scope_kinds = match applies_to.and_then(|a| a.field("kinds")) {
+                    Some(JVal::Arr(ks)) => ks
+                        .iter()
+                        .map(|k| match k {
+                            JVal::Str(v) => v.clone(),
+                            other => panic!("appliesTo.kinds holds a non-string: {other:?}"),
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                TraitRow {
+                    trait_id: str_field(row, "trait"),
+                    scope,
+                    scope_kinds,
+                    obligations: match row.field("obligations") {
+                        Some(JVal::Arr(items)) => items
+                            .iter()
+                            .map(|o| Obligation {
+                                id: str_field(o, "id"),
+                                statement: str_field(o, "statement"),
+                                section: str_field(o, "section"),
+                            })
+                            .collect(),
+                        _ => Vec::new(),
+                    },
+                }
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
     let kinds = match root.field("kinds") {
         Some(JVal::Arr(rows)) => rows
             .iter()
@@ -162,6 +221,7 @@ fn parse_manifest(text: &str) -> RenderFidelityManifest {
     };
     RenderFidelityManifest {
         obligation_vocabulary: vocabulary,
+        traits,
         kinds,
     }
 }
@@ -213,13 +273,23 @@ struct ObligationReport {
     outcome: ObligationOutcome,
 }
 
-/// Every declared obligation, paired with the kind that owes it, in table
-/// order.
+/// Every declared obligation, paired with the SUBJECT that owes it, in table
+/// order: the kind rows first, then the trait rows.
+///
+/// Both arrays, deliberately. The whole mechanism is that the ENUMERATION is
+/// the artefact's, so a trait declared tomorrow must reach this host's report
+/// without this host changing anything but its answer - and a reader iterating
+/// `kinds` alone would hold a green gate over an unowed claim.
 fn all_obligations(manifest: &RenderFidelityManifest) -> Vec<(&str, &Obligation)> {
     manifest
         .kinds
         .iter()
         .flat_map(|row| row.obligations.iter().map(move |o| (row.kind.as_str(), o)))
+        .chain(manifest.traits.iter().flat_map(|row| {
+            row.obligations
+                .iter()
+                .map(move |o| (row.trait_id.as_str(), o))
+        }))
         .collect()
 }
 
@@ -1072,6 +1142,158 @@ fn owes_modal_aria_modal_only_when_blocking() {
     );
 }
 
+// ─── Phase 1696 — the `style.direction` trait (§3.1) ─────────────────────────
+//
+// A trait rides the node ENVELOPE, so these five checkers are written against a
+// kind chosen for being uninteresting: the claims are about the wrapper, and a
+// checker leaning on some kind's own markup would be asserting that kind.
+//
+// The emission itself has been correct here since Phase 1472. What is new is
+// that the claim is ENUMERABLE: the roster declares it, so a regression is
+// reported by name rather than noticed by whoever next reads §3.1.
+//
+// Two of the five are COMPARISONS rather than emission assertions, and that is
+// what makes them checkable at all. Rule 4 says `auto` is the absence of a
+// declaration, and the honest test is that the two emissions are byte-identical:
+// the reference host emits `dir="auto"` for a bidi-isolated display leaf under a
+// heuristic this host has deliberately not adopted, so "emits nothing" would be
+// a claim that means different things on different hosts. Rule 5 says nothing
+// else is derived, and the test is that a declared emission differs from the
+// undeclared one by the direction and its isolation ALONE - a subtraction no
+// single-node assertion can express.
+
+/// One leaf whose `style.direction` is as given; `None` omits the member.
+fn direction_leaf(direction: Option<&str>, text: &str) -> String {
+    let style = match direction {
+        Some(d) => format!(r#","style":{{"direction":"{d}"}}"#),
+        None => String::new(),
+    };
+    render(&format!(
+        r#"{{"id":"d","kind":{{"$type":"Badge","label":"{text}","variant":"Neutral"}}{style}}}"#
+    ))
+}
+
+/// An `rtl` container holding one child, so the two claims a single leaf cannot
+/// carry - inheritance and descendant emission - have a tree to act on.
+fn direction_block(child_direction: Option<&str>) -> String {
+    let child_style = match child_direction {
+        Some(d) => format!(r#","style":{{"direction":"{d}"}}"#),
+        None => String::new(),
+    };
+    render(&format!(
+        r#"{{"id":"block","kind":{{"$type":"Box","children":[{{"id":"child","kind":{{"$type":"Badge","label":"RR123456789IL","variant":"Neutral"}}{child_style}}}],"layout":{{"$type":"Flex","direction":"Vertical","wrap":false}},"role":"Group"}},"style":{{"direction":"rtl"}}}}"#
+    ))
+}
+
+/// §3.1 rule 1 — the declared direction is EMITTED on the element carrying the
+/// node's own run.
+#[test]
+fn owes_style_direction_declared_direction_emitted() {
+    let ltr = direction_leaf(Some("ltr"), "RR123456789IL");
+    let rtl = direction_leaf(Some("rtl"), "\u{5e9}\u{5dc}\u{5d5}\u{5dd}");
+    assert!(
+        ltr.contains(r#" dir="ltr""#),
+        "a declared ltr direction is emitted on the node's own wrapper: {ltr}"
+    );
+    assert!(
+        rtl.contains(r#" dir="rtl""#),
+        "and so is a declared rtl one: {rtl}"
+    );
+
+    // The twin. Without it a renderer emitting `dir="ltr"` on every node would
+    // pass both assertions above while saying nothing true.
+    let undeclared = direction_leaf(None, "plain");
+    assert!(
+        !undeclared.contains(" dir="),
+        "an undeclared node must not carry a direction it never declared: {undeclared}"
+    );
+}
+
+/// §3.1 rule 2 — the declared run is ISOLATED from the surrounding
+/// bidirectional context.
+///
+/// The isolation is the class, whose reference-stylesheet rule is
+/// `unicode-bidi: isolate`. `dir` alone states a direction and leaves the text
+/// AROUND the run reordered, which is the half that is invisible when you look
+/// only at the value itself.
+#[test]
+fn owes_style_direction_declared_run_isolated() {
+    let ltr = direction_leaf(Some("ltr"), "RR123456789IL");
+    let rtl = direction_leaf(Some("rtl"), "\u{5e9}\u{5dc}\u{5d5}\u{5dd}");
+    assert!(
+        ltr.contains("fuaran-dir-ltr"),
+        "a declared ltr run carries the isolating class: {ltr}"
+    );
+    assert!(
+        rtl.contains("fuaran-dir-rtl"),
+        "and so does a declared rtl one: {rtl}"
+    );
+
+    let undeclared = direction_leaf(None, "plain");
+    assert!(
+        !undeclared.contains("fuaran-dir-"),
+        "an undeclared node is isolated by nothing, because it declared nothing: {undeclared}"
+    );
+}
+
+/// §3.1 rule 3 — the DECLARATION wins over any direction the host would
+/// otherwise infer, an inherited one included.
+#[test]
+fn owes_style_direction_declaration_wins_over_inference() {
+    // An `ltr` reference INSIDE an `rtl` block - the case the member exists for.
+    let html = direction_block(Some("ltr"));
+    assert!(
+        html.contains(r#" dir="rtl""#),
+        "the declaring container keeps its own direction: {html}"
+    );
+    assert!(
+        html.contains(r#" dir="ltr""#),
+        "the nested declaration did not win over the inherited direction: {html}"
+    );
+}
+
+/// §3.1 rule 4 — `auto` is the ABSENCE of a declaration, as a byte comparison.
+#[test]
+fn owes_style_direction_auto_is_no_declaration() {
+    let explicit = direction_leaf(Some("auto"), "plain");
+    let omitted = direction_leaf(None, "plain");
+    assert_eq!(
+        explicit, omitted,
+        "a node declaring `auto` must render identically to the same node omitting the member - \
+         `auto` IS the absence of a declaration"
+    );
+}
+
+/// §3.1 rule 5 — NOTHING else is derived from the declaration.
+#[test]
+fn owes_style_direction_no_derived_direction_behaviour() {
+    // The SUBTRACTION: a renderer that also flipped an alignment, swapped a
+    // layout side or pushed a direction onto descendants fails here and passes
+    // every assertion above.
+    let declared = direction_leaf(Some("rtl"), "RR123456789IL");
+    let undeclared = direction_leaf(None, "RR123456789IL");
+    let stripped = declared
+        .replacen(r#" dir="rtl""#, "", 1)
+        .replacen(" fuaran-dir-rtl", "", 1);
+    assert_eq!(
+        stripped, undeclared,
+        "a declared direction changed something other than the direction and its isolation - no \
+         layout side, locale, alignment or descendant direction may be derived from it"
+    );
+
+    // ...and the descendant half, stated separately because a single leaf
+    // cannot carry it: an undeclared child inside a declaring parent emits no
+    // direction of its own. Inheritance is the receiving surface's, not a
+    // second emission.
+    let html = direction_block(None);
+    assert_eq!(
+        html.matches(" dir=").count(),
+        1,
+        "exactly one element declared a direction, so exactly one may carry it - a direction \
+         pushed onto descendants is a derived behaviour rule 5 forbids: {html}"
+    );
+}
+
 /// Which (kind, claim) pairs this host asserts, and how.
 ///
 /// Keyed by the claim's WIRE token, because the enumeration it is matched
@@ -1153,6 +1375,27 @@ const CHECKERS: &[(&str, fn())] = &[
     (
         "Modal/aria-modal-only-when-blocking",
         owes_modal_aria_modal_only_when_blocking,
+    ),
+    // Phase 1696 - the node-level trait, keyed by its id rather than a kind.
+    (
+        "style.direction/declared-direction-emitted",
+        owes_style_direction_declared_direction_emitted,
+    ),
+    (
+        "style.direction/declared-run-isolated",
+        owes_style_direction_declared_run_isolated,
+    ),
+    (
+        "style.direction/declaration-wins-over-inference",
+        owes_style_direction_declaration_wins_over_inference,
+    ),
+    (
+        "style.direction/auto-is-no-declaration",
+        owes_style_direction_auto_is_no_declaration,
+    ),
+    (
+        "style.direction/no-derived-direction-behaviour",
+        owes_style_direction_no_derived_direction_behaviour,
     ),
 ];
 
