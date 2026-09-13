@@ -133,11 +133,28 @@ pub fn resolve<'a>(sources: &'a BindingSources, binding: &'a Binding) -> Resolut
                 None => Resolution::NotResolved,
             },
         },
+        // Phase 1690 (§24.8) — a bare `State`, one the DOCUMENT declared no
+        // default for, is UNRESOLVED at a slot nothing has written. `State`
+        // joins the two arms §24.1 calls its mirrors: `Filter` and `Selection`
+        // above already answer this way, and the ruling that made `State`
+        // resolve a DECLARED default is the same ruling's other half.
+        //
+        // This arm used to resolve `default_value` unconditionally. That field
+        // is the RESOLUTION default — the slot's typed placeholder, which the
+        // decoder fills in whether or not the document said anything — so an
+        // undeclared default resolved to a fabricated `0` at a numeric slot,
+        // and a reader could not tell it from a figure the host furnished.
+        // `default_declared` is the wire fact beside it (Phase 1656), and it is
+        // exactly what this arm needs; the pair exists because one field cannot
+        // carry both.
         Binding::State {
-            key, default_value, ..
+            key,
+            default_value,
+            default_declared,
         } => match sources.state.get(key) {
             Some(raw) => Resolution::Resolved(Value::Json(raw)),
-            None => Resolution::Resolved(Value::Static(default_value)),
+            None if *default_declared => Resolution::Resolved(Value::Static(default_value)),
+            None => Resolution::NotResolved,
         },
         // Host-only on the wire (§5.1): the case's whole payload is a host
         // closure and it crosses the wire as the `"<closure>"` sentinel, so a

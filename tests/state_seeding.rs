@@ -361,11 +361,23 @@ fn rule5_a_host_reserved_key_is_never_seeded() {
 /// with the rest of the roster. The walk reads the canonical re-encode, so it
 /// stopped seeing a declaration the moment the encoder stopped writing one.
 ///
-/// RESOLUTION is untouched, and that separation is the whole point of carrying
-/// the two facts apart: an unwritten numeric state slot still resolves to `0`
-/// and an unwritten bool one to `false`, which is what keeps §3.6's `visible`
-/// rule removing a node whose unwritten predicate resolves `false`. Only the
-/// ENCODER moved, and only to stop writing a `defaultValue` no document carried.
+/// RESOLUTION MOVED TOO, at Phase 1690, and the paragraph that used to stand
+/// here is kept in view because its reasoning is what §24.8 corrects. It read:
+/// "an unwritten numeric state slot still resolves to `0` and an unwritten bool
+/// one to `false`, which is what keeps §3.6's `visible` rule removing a node
+/// whose unwritten predicate resolves `false`."
+///
+/// That has the removal rule backwards. A node is removed ONLY on a resolved
+/// `false`, because content that vanishes for want of a source is the one
+/// failure a reader can neither see nor report — so a FABRICATED `false` is the
+/// hazard the rule exists to avoid, not the mechanism it depends on. §24.8 rules
+/// the undeclared case UNRESOLVED at every slot, so the numeric slot below shows
+/// its absence placeholder and an unwritten predicate leaves its node rendered.
+///
+/// What the 1656 separation bought is unchanged and is what makes this
+/// expressible: `default_value` carries the resolution placeholder the decoder
+/// synthesises, `default_declared` carries what the DOCUMENT said, and the
+/// resolver reads the second.
 #[test]
 fn a_bare_state_round_trips_and_declares_nothing_to_seed() {
     let doc = metric("m", "users", "");
@@ -380,14 +392,18 @@ fn a_bare_state_round_trips_and_declares_nothing_to_seed() {
         None,
         "rule 1 — a reader that declares nothing declares nothing; the fabricated default is gone"
     );
-    // RESOLUTION still yields the slot's typed default, which is the half the
-    // encoder fix had to leave alone — asserted end to end through the render
-    // rather than through an accessor, because it is the rendered figure a
-    // reader sees that the parity argument is about.
+    // RESOLUTION yields ABSENCE (§24.8) — asserted end to end through the render
+    // rather than through an accessor, because it is the rendered figure a reader
+    // sees that the parity argument is about, and the fabricated `0` was only a
+    // defect because it reached the page.
+    let html = fuaran_rs::render::render_to_html(&t, &fuaran_rs::render::BindingSources::default());
     assert!(
-        fuaran_rs::render::render_to_html(&t, &fuaran_rs::render::BindingSources::default())
-            .contains(">0<"),
-        "an unwritten numeric state slot still resolves to the slot's typed default"
+        html.contains(r#"<div class="fuaran-metric-value">—</div>"#),
+        "§24.8 — an unwritten, undeclared numeric state slot resolves to nothing:\n{html}"
+    );
+    assert!(
+        !html.contains(r#"<div class="fuaran-metric-value">0</div>"#),
+        "the fabricated zero must not reach the page:\n{html}"
     );
 
     // The text-shaped slot the rule tests use, faithful before and after.
