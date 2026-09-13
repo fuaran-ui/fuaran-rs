@@ -1,5 +1,5 @@
-//! The client-effect vocabulary — six closed arms, and the one envelope on this
-//! wire that is **not** canonical.
+//! The client-effect vocabulary — eight closed arms, and the one envelope on
+//! this wire that is **not** canonical.
 //!
 //! A program reaches a rendering surface only through these arms. The
 //! specification pins them *as they are emitted*, because their wire form
@@ -62,6 +62,35 @@ pub enum ClientEffect {
     /// Read the body of a selected file; `encoding` is one of `Text`, `Base64`,
     /// `DataUrl`.
     ReadFileBody { node_id: String, encoding: String },
+    /// Phase 1689 — open the reader's own print dialogue. Format version 2.
+    ///
+    /// The ONLY payload-free arm in either vocabulary, and the emptiness is
+    /// normative rather than an omission: the paged medium belongs to the host
+    /// and every parameter of the printing — size, sheet range, margins, copies,
+    /// which subtree — belongs to the reader's own dialogue. There is nothing
+    /// here a program could constrain, so `{"kind":"Print"}` is the whole
+    /// document and a decoder must refuse any member beside `kind` rather than
+    /// ignore it.
+    ///
+    /// It returns nothing. A surface reports neither whether the reader printed
+    /// nor what they chose, so unlike `ReadFileBody` there is no result event,
+    /// and a host that invented one would be reporting a fact it does not have.
+    Print,
+    /// Phase 1689 — ask the reader `prompt` and send the answer back, keyed by
+    /// `token`. Format version 2.
+    ///
+    /// **The continuations are deliberately NOT here.** The instruction says
+    /// what to ask and nothing about what happens next; the branches belong to
+    /// whoever holds the tree, the gate and the egress policy, and a surface
+    /// handed them is a surface that can perform them without ever asking.
+    ///
+    /// `token` says WHICH confirmation in the originating gesture is being
+    /// answered, so a chain raising two of them is unambiguous. The answer
+    /// returns on the ORIGINATING event, re-delivered with `confirmToken` and
+    /// `confirmAccepted`, so it meets the same validation boundary the first
+    /// delivery met. A token is untrusted payload like every other value on this
+    /// wire: it addresses a question, it never authorises an answer.
+    Confirm { prompt: String, token: String },
 }
 
 /// Every arm of the closed vocabulary, in declaration order. A host's coverage
@@ -73,6 +102,8 @@ pub const CLIENT_EFFECT_ARMS: &[&str] = &[
     "Focus",
     "Download",
     "ReadFileBody",
+    "Print",
+    "Confirm",
 ];
 
 impl ClientEffect {
@@ -88,6 +119,8 @@ impl ClientEffect {
             ClientEffect::Focus { .. } => "Focus",
             ClientEffect::Download { .. } => "Download",
             ClientEffect::ReadFileBody { .. } => "ReadFileBody",
+            ClientEffect::Print => "Print",
+            ClientEffect::Confirm { .. } => "Confirm",
         }
     }
 
@@ -134,6 +167,16 @@ impl ClientEffect {
                 "{{\"kind\":\"ReadFileBody\",\"nodeId\":{},\"encoding\":{}}}",
                 quoted(node_id),
                 quoted(encoding)
+            ),
+            // No members, so the discriminator IS the document — the only arm
+            // here whose encoding takes no value at all.
+            ClientEffect::Print => "{\"kind\":\"Print\"}".to_string(),
+            // Declaration order, which §5.2 says for this family is the order
+            // its Members column lists: `prompt` before `token`.
+            ClientEffect::Confirm { prompt, token } => format!(
+                "{{\"kind\":\"Confirm\",\"prompt\":{},\"token\":{}}}",
+                quoted(prompt),
+                quoted(token)
             ),
         }
     }
@@ -312,7 +355,18 @@ fn destination_of(
             Some((EgressClass::Download, classify_destination(url)))
         }
         ClientEffect::ReadFileBody { .. } => Some((EgressClass::FileRead, Destination::Local)),
-        ClientEffect::WriteToClipboard { .. } | ClientEffect::Focus { .. } => None,
+        // Neither of the format-version-2 arms names a destination, and neither
+        // absence is a convenience. A print instruction reaches the reader's own
+        // dialogue and carries no value at all; a confirmation's `prompt` is
+        // text put to the reader and its `token` an opaque address, so there is
+        // nothing here for an allowlist to be about. Inventing a destination for
+        // either would only make the denial record dishonest — an effect naming
+        // no destination is governed by the discriminator gate and by nothing
+        // else, which is what an absent `origin` on its denial correctly says.
+        ClientEffect::WriteToClipboard { .. }
+        | ClientEffect::Focus { .. }
+        | ClientEffect::Print
+        | ClientEffect::Confirm { .. } => None,
     }
 }
 
@@ -783,5 +837,157 @@ mod tests {
             EffectPolicy::named(Some("anything-goes")).is_err(),
             "a fallback would report a scenario this host could not evaluate as one it passed"
         );
+    }
+
+    /// One value per arm of the closed vocabulary. Constructed here so the
+    /// tests below enumerate the vocabulary rather than a sample of it: the
+    /// `capability()` match is exhaustive, so a NEW arm makes this list fail to
+    /// compile at the assertion below rather than being silently uncovered.
+    fn one_of_every_arm() -> Vec<ClientEffect> {
+        vec![
+            ClientEffect::Navigate {
+                route: "/orders".into(),
+                target: NavigateTarget::Self_,
+            },
+            ClientEffect::PushState {
+                route: "/orders?page=2".into(),
+            },
+            ClientEffect::WriteToClipboard {
+                text: "ORD-4417".into(),
+            },
+            ClientEffect::Focus {
+                node_id: "orders-search".into(),
+            },
+            ClientEffect::Download {
+                url: "https://example.invalid/report.csv".into(),
+                name: "report.csv".into(),
+            },
+            ClientEffect::ReadFileBody {
+                node_id: "upload-1".into(),
+                encoding: "Text".into(),
+            },
+            ClientEffect::Print,
+            ClientEffect::Confirm {
+                prompt: "Settle ORD-4417 for GBP 1250?".into(),
+                token: "btn-settle#0".into(),
+            },
+        ]
+    }
+
+    /// Phase 1689, closing the hazard Phase 1664 recorded: a text merge of a
+    /// branch that predated a landed one appended a SECOND `Confirm` and a
+    /// second `Focus` to an enum that already had both. The compiler catches
+    /// THAT shape — a repeated variant name does not build — which is precisely
+    /// why the pin has to be somewhere the compiler is silent.
+    ///
+    /// It is silent here. `CLIENT_EFFECT_ARMS` is a plain slice of strings, so a
+    /// duplicated entry compiles, and a host reading it as its registrable
+    /// vocabulary would go on believing it registered eight arms while holding
+    /// seven. The reverse gap is equally quiet: an arm added to the enum and
+    /// forgotten in the slice is unreachable through `EffectPolicy::register`,
+    /// which refuses any name not in it — so the arm exists on the wire and no
+    /// host can ever serve it.
+    ///
+    /// So the assertion is a SET EQUALITY in both directions, plus a count, and
+    /// each half fails a different mistake.
+    #[test]
+    fn every_arm_is_defined_exactly_once() {
+        use std::collections::BTreeSet;
+
+        let listed: Vec<&str> = CLIENT_EFFECT_ARMS.to_vec();
+        let unique: BTreeSet<&str> = listed.iter().copied().collect();
+        assert_eq!(
+            listed.len(),
+            unique.len(),
+            "CLIENT_EFFECT_ARMS repeats an arm: {listed:?}"
+        );
+
+        let from_match: BTreeSet<&str> = one_of_every_arm()
+            .iter()
+            .map(ClientEffect::capability)
+            .collect();
+        assert_eq!(
+            from_match.len(),
+            one_of_every_arm().len(),
+            "two arms derive the same capability, so a denial cannot say which was declined"
+        );
+
+        assert_eq!(
+            unique, from_match,
+            "the declared arm list and the capability match describe different vocabularies"
+        );
+        assert_eq!(
+            unique.len(),
+            8,
+            "§5.2 closes at eight arms at format version 2"
+        );
+
+        // The list is what `register` consults, so the equality above is only
+        // half the claim until every listed arm is actually registrable.
+        for arm in CLIENT_EFFECT_ARMS {
+            assert!(
+                EffectPolicy::default().register(arm).is_ok(),
+                "{arm} is declared but not registrable"
+            );
+        }
+    }
+
+    /// §5.2's arm seven. The discriminator IS the document — no member, no
+    /// trailing comma, no empty object beside it — and this is the only arm in
+    /// either vocabulary of which that is true.
+    #[test]
+    fn print_encodes_to_its_discriminator_and_nothing_else() {
+        assert_eq!(ClientEffect::Print.encode(), "{\"kind\":\"Print\"}");
+        assert_eq!(ClientEffect::Print.capability(), "Print");
+    }
+
+    /// §5.2's arm eight, in declaration order: `prompt` before `token`, which is
+    /// what the Members column lists and therefore what this family's normative
+    /// order is. Ordinal order would agree here by accident, so the assertion
+    /// below states the order it is actually pinning.
+    #[test]
+    fn confirm_encodes_prompt_before_token() {
+        let encoded = ClientEffect::Confirm {
+            prompt: "Settle ORD-4417 for GBP 1250?".into(),
+            token: "btn-settle#0".into(),
+        }
+        .encode();
+        assert_eq!(
+            encoded,
+            "{\"kind\":\"Confirm\",\"prompt\":\"Settle ORD-4417 for GBP 1250?\",\"token\":\"btn-settle#0\"}"
+        );
+        assert!(encoded.find("\"prompt\"") < encoded.find("\"token\""));
+    }
+
+    /// Neither format-version-2 arm names a destination, so neither is subject
+    /// to the egress floor — and the honest consequence is that a host which
+    /// declines one declines it at the DISCRIMINATOR gate, whose denial
+    /// correctly carries no origin. Pinned because the tempting alternative is
+    /// to invent a destination for a confirmation's prompt, which would put a
+    /// reader-facing string into a denial record that outlives the session.
+    #[test]
+    fn the_payload_free_and_reader_facing_arms_name_no_destination() {
+        let strict = EffectPolicy::permissive().with_egress(EgressFloor::LocalOnly);
+        for effect in [
+            ClientEffect::Print,
+            ClientEffect::Confirm {
+                prompt: "Settle ORD-4417 for GBP 1250?".into(),
+                token: "btn-settle#0".into(),
+            },
+        ] {
+            assert_eq!(
+                strict.decide(&effect),
+                None,
+                "an arm naming no destination is unaffected by the destination floor"
+            );
+
+            let closed = EffectPolicy::default();
+            match closed.decide(&effect) {
+                Some(Denial::Unregistered { capability }) => {
+                    assert_eq!(capability, effect.capability());
+                }
+                other => panic!("an unregistered arm must be declined audibly, got {other:?}"),
+            }
+        }
     }
 }

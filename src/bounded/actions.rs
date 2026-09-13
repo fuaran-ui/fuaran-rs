@@ -406,21 +406,40 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
         // no update function to fold it through; a local-buffer commit is a host
         // concern whose flushed value arrives as the event payload instead.
         //
-        // `Print` and `Confirm` are documented no-ops here for a NARROWER
-        // reason, and it is a boundary rather than an omission. This
-        // placement's client-effect vocabulary is CLOSED and its wire is
-        // specified elsewhere, so neither a print gesture nor a modal
-        // round-trip has an effect to reach — and inventing one would mint
-        // vocabulary on a wire this phase does not own. A no-op with the
-        // `UnsupportedOnBoundedPath` diagnostic is what says so out loud;
-        // silently succeeding would tell an author a printing happened.
+        // Phase 1689 — `Confirm` is STILL a documented no-op, and `Print` is no
+        // longer one. The reason both used to sit here was that this
+        // placement's client-effect vocabulary was CLOSED at six arms and its
+        // wire specified elsewhere, so neither gesture had an effect to reach
+        // and inventing one would have minted vocabulary on a wire this crate
+        // does not own. Format version 2 declares both arms, so that half of
+        // the reason is simply gone, and leaving it written here would leave a
+        // false sentence standing.
+        //
+        // What is left is a real boundary and it applies to one of them. A
+        // `Confirm` is a ROUND TRIP: ask, answer, re-validate, then dispatch
+        // the chosen continuation through its own gate. The token addresses a
+        // structural path inside a resolved action, and the answer re-enters as
+        // the originating event re-delivered. This placement models none of
+        // that — no path minting, no answer re-delivery, no continuation
+        // resolution — so the arm being expressible on the wire does not make
+        // it performable here. That is a placement capability, and claiming it
+        // by emitting the instruction would tell an author a question was asked
+        // that nothing will ever answer.
         Action::Notify { .. }
         | Action::AiTool { .. }
         | Action::Invoke { .. }
         | Action::Dispatch
-        | Action::Print
         | Action::Confirm { .. }
         | Action::CommitLocal { .. } => no_op(node_id, action, store),
+
+        // `Print` has no round trip to model. It is payload-free, it returns
+        // nothing, and format version 2 gives it a declared arm — so the whole
+        // of performing it is reporting that the program asked, which is
+        // exactly what this fold's `effects` are. Emitting it rather than
+        // diagnosing it is the completion the codec arm exists for: a no-op
+        // would now be this placement declining an instruction it can express,
+        // for no reason it could state.
+        Action::Print => emitted(store, ClientEffect::Print),
 
         // A call that ALSO declares where its answer should land is refused
         // rather than honoured or quietly ignored. Result-target ownership sits

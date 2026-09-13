@@ -6,6 +6,23 @@
 # consumer does `cargo add fuaran-ui` then `use fuaran_rs::…`.
 [package]
 name = "fuaran-ui"
+# 0.0.6-alpha.1 is a DRAFT SLOT and this change RIDES it rather than moving it.
+# The crate carries no tag, nothing publishes it yet, and no consumer pins it —
+# so by the estate's draft-slot rule a change advances the number only when it is
+# of a HIGHER class than the draft already carries.
+#
+# It is not. The draft already carries a breaking client-effect widening: Phase
+# 1664 gave `ClientEffect::Navigate` its browsing-context field, which breaks
+# every exhaustive match over the enum exactly as Phase 1689's two new arms do.
+# Same class, same enum, same arc — one number is the honest record of it.
+#
+# Recorded here because the fact that WOULD tempt an advance is real and worth
+# naming: this change moves the program wire specification's FORMAT VERSION from
+# 1 to 2. That is a fact about the corpus this host certifies against, not about
+# what adopting this crate costs a consumer, and the version number answers the
+# second question. A consumer's cost is the enum widening, which the draft
+# already carries. When this crate takes its first tag, that tag is what makes
+# the slot someone's contract, and the rule bites from there.
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"
