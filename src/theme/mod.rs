@@ -17,3 +17,20 @@ pub use manifest::{
     project_from_css_custom_properties, project_from_dtcg, project_from_fuaran_tone_vars,
     scan_css_blocks, tone_contrast, tone_of_string, tone_rgba,
 };
+
+// The style-observer pure tier — resolved-style FACTS in, typed `StyleFlag`s
+// out, byte-identical to the sibling hosts. "Style is read, not looked at": no
+// DOM and no pixels reach the derivation, and the live `getComputedStyle`
+// read-back stays outside the crate (see `observer`).
+pub mod flags;
+pub mod manifest_flags;
+pub mod observer;
+
+pub use flags::{
+    FontRole, StyleFlag, StyleInput, StyleObservation, StyleObserverOptions, baseline_style_input,
+    contrast as style_contrast, derive_style_flags, encode_rgba, encode_style_flag,
+    encode_style_observation, flags_equal, font_role_of, resolved_background, resolved_foreground,
+    same_rgb, to_style_observation, try_parse_hex,
+};
+pub use manifest_flags::{NodeArea, per_node_flags, verify_usage_budgets};
+pub use observer::{InMemoryStyleObserver, SubscriptionId};

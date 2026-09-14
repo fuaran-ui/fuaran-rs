@@ -26,6 +26,7 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 | `introspection` (getNodeState / assertions over the tree) | ✅ | `introspect/` | behaviour suite (facts, restyle-proof assertions) |
 | `search-pattern` (structural search over trees) | ✅ | `introspect/` | behaviour suite (structural query → matched ids) |
 | `layout-observe` (structural overflow/reflow flags) | ✅ | `introspect/layout.rs` | `LayoutObserver.Flags.derive` port + behaviour suite |
+| `style-observe` (resolved-style legibility flags + manifest fidelity + usage budgets) | ✅ | `theme/{flags,manifest_flags,observer}.rs` | ported sibling-host cases, byte-identical (the Python and Go hosts emitted the same bytes independently) + per-flag behaviour suite + a threshold-flip go-red |
 | `transform-eval` (Binding.Transform dataframe pipeline) | ✅ | `transform/` | pinned cross-host semantics (null/coercion/round-half-away/div-by-zero/stability) + canonical round-trip |
 | `theme-contrast` (theme resolve + WCAG contrast) | ✅ | `theme/` | WCAG reference constants (black/white = 21.0, #767676 grey = AA boundary, alpha compositing) |
 | `teleport` (FT1 deflate+base64url+SHA-256 envelope, §17) | ✅ | `teleport/` | byte-exact string round-trip + digest-tamper/version/oversize rejects; hand-written RFC 1951 DEFLATE (self round-trip + stored/fixed/dynamic inflate) |
