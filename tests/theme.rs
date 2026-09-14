@@ -2,6 +2,15 @@
 //! (Infinite Skins contrast auditor, Kintsugi's contrast sense). Pinned to the
 //! WCAG reference constants so a restyle that drops a pair below AA is caught
 //! structurally, with no pixels in the conclusion.
+//!
+//! **The style-observer encode literals in this file are the GO-RED PARTNER of
+//! the shared `style-observer/` corpus family, not a duplicate of it** (Phase
+//! 1752). Phase 1724 ported them here from the Python host by hand;
+//! `tests/style_observer_corpus.rs` now certifies this host against the family
+//! the reference host emits. Keeping both is the point: a regression that moved
+//! the implementation AND the emitted family together would satisfy the corpus
+//! checker and fail here, which is the one failure a family emitted from the
+//! thing it certifies cannot see on its own. Do not delete them as redundant.
 
 use fuaran_rs::theme::{
     ContrastVerdict, Rgba, composite, contrast_ratio, effective_background, foreground_contrast,
