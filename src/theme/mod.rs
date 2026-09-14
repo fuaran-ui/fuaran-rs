@@ -13,7 +13,7 @@ pub use contrast::{
 };
 pub use manifest::{
     DEFAULT_WEIGHT, Invariant, InvariantKind, ManifestMeta, ManifestRole, ManifestToken,
-    MotionBudget, RoleBinding, TONES, ThemeManifest, decode, merge, of_json,
+    MotionBudget, RoleBinding, TONES, ThemeManifest, decode, encode, merge, of_json,
     project_from_css_custom_properties, project_from_dtcg, project_from_fuaran_tone_vars,
-    scan_css_blocks, tone_contrast, tone_of_string, tone_rgba,
+    scan_css_blocks, to_json, tone_contrast, tone_of_string, tone_rgba,
 };

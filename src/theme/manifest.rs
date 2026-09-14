@@ -7,7 +7,7 @@
 //! (`"Default"`…`"Info"`). A sibling of the F#/TS/Python/Go ThemeManifest tiers,
 //! built to the same shapes; the closed role + invariant DUs are native `enum`s.
 
-use crate::canonical::{JVal, parse};
+use crate::canonical::{JVal, parse, render_canonical};
 use crate::theme::contrast::{ContrastVerdict, Rgba, verdict};
 
 /// The canonical `ToneVariant` palette, as wire strings.
@@ -349,6 +349,215 @@ pub fn decode(json: &str) -> Option<ThemeManifest> {
 /// unmined). The decoder *is* the projection for a DTCG source.
 pub fn project_from_dtcg(json: &str) -> Option<ThemeManifest> {
     decode(json)
+}
+
+// ─── Encode (the inverse of `of_json` / `decode`) ────────────────────────────
+
+/// Push a string member only when it is non-empty — the omit-at-default rule for
+/// every member the decoder reads through `str_or(_, "")`, which cannot tell an
+/// absent key from an empty one.
+fn put_str(fields: &mut Vec<(String, JVal)>, key: &str, value: &str) {
+    if !value.is_empty() {
+        fields.push((key.to_string(), JVal::Str(value.to_string())));
+    }
+}
+
+/// Push a numeric member only when it differs from the value `num_or` supplies
+/// in its absence.
+fn put_num(fields: &mut Vec<(String, JVal)>, key: &str, value: f64, default: f64) {
+    if value != default {
+        fields.push((key.to_string(), JVal::Num(value)));
+    }
+}
+
+/// One DTCG token node. `$value` is the leaf discriminator `walk_tokens` stops
+/// on, so it is emitted unconditionally — an empty value included.
+fn token_leaf(t: &ManifestToken) -> JVal {
+    let mut fields = vec![];
+    put_str(&mut fields, "$type", &t.token_type);
+    fields.push(("$value".to_string(), JVal::Str(t.value.clone())));
+    if let Some(d) = &t.description {
+        fields.push(("$description".to_string(), JVal::Str(d.clone())));
+    }
+    if let Some(role) = &t.role {
+        fields.push((
+            "$extensions".to_string(),
+            JVal::Obj(vec![(
+                "fuaran".to_string(),
+                JVal::Obj(vec![("role".to_string(), JVal::Str(role.clone()))]),
+            )]),
+        ));
+    }
+    JVal::Obj(fields)
+}
+
+/// Does the decoder's token walk stop at this node?
+fn is_leaf(v: &JVal) -> bool {
+    matches!(v, JVal::Obj(f) if get(f, "$value").is_some())
+}
+
+/// Place one token at its dotted path, replacing whatever occupies that path.
+///
+/// A DTCG path addresses a group **or** a token, never both, so two tokens whose
+/// names collide (equal, or one a strict prefix of the other) are not jointly
+/// representable. The later write wins — the same precedence [`dedupe_tokens`]
+/// and [`merge`] already apply throughout this module — which is why descending
+/// past a leaf clears it: leaving its `$value` in place would hide every
+/// descendant from the decoder and make the *earlier* token win instead.
+fn insert_at(tree: &mut Vec<(String, JVal)>, segments: &[&str], leaf: JVal) {
+    let Some((head, rest)) = segments.split_first() else {
+        return;
+    };
+    let slot = match tree.iter().position(|(k, _)| k == head) {
+        Some(i) => i,
+        None => {
+            tree.push(((*head).to_string(), JVal::Obj(vec![])));
+            tree.len() - 1
+        }
+    };
+    if rest.is_empty() {
+        tree[slot].1 = leaf;
+        return;
+    }
+    if is_leaf(&tree[slot].1) {
+        tree[slot].1 = JVal::Obj(vec![]);
+    }
+    if let JVal::Obj(children) = &mut tree[slot].1 {
+        insert_at(children, rest, leaf);
+    }
+}
+
+fn tokens_tree(tokens: &[ManifestToken]) -> JVal {
+    let mut root = vec![];
+    for t in tokens {
+        let segments: Vec<&str> = t.name.split('.').collect();
+        insert_at(&mut root, &segments, token_leaf(t));
+    }
+    JVal::Obj(root)
+}
+
+fn role_json(r: &ManifestRole) -> JVal {
+    let (key, value) = match r {
+        ManifestRole::Tone(t) => ("tone", t),
+        ManifestRole::Named(n) => ("named", n),
+    };
+    JVal::Obj(vec![(key.to_string(), JVal::Str(value.clone()))])
+}
+
+fn role_binding_json(b: &RoleBinding) -> JVal {
+    // `token` is required — `parse_role_binding` drops a binding without it.
+    let mut fields = vec![("token".to_string(), JVal::Str(b.token_name.clone()))];
+    // An absent `role` decodes to `Named("")`, so that one value is omitted.
+    if b.role != ManifestRole::Named(String::new()) {
+        fields.push(("role".to_string(), role_json(&b.role)));
+    }
+    JVal::Obj(fields)
+}
+
+fn invariant_json(inv: &Invariant) -> JVal {
+    // `kind` is the discriminator — an unrecognised or absent one drops the
+    // invariant at decode, so it is never omitted.
+    let mut fields = vec![(
+        "kind".to_string(),
+        JVal::Str(inv.kind.kind_name().to_string()),
+    )];
+    match &inv.kind {
+        InvariantKind::ContrastFloor { role, min_ratio } => {
+            put_str(&mut fields, "role", role);
+            put_num(&mut fields, "minRatio", *min_ratio, 0.0);
+        }
+        InvariantKind::UsageBudget {
+            token,
+            target_pct,
+            tolerance_pct,
+        } => {
+            put_str(&mut fields, "token", token);
+            put_num(&mut fields, "targetPct", *target_pct, 0.0);
+            put_num(&mut fields, "tolerancePct", *tolerance_pct, 0.0);
+        }
+        InvariantKind::MotionVoice { budget } => {
+            put_num(
+                &mut fields,
+                "maxDurationMs",
+                budget.max_duration_ms as f64,
+                0.0,
+            );
+            if let Some(e) = &budget.easing {
+                fields.push(("easing".to_string(), JVal::Str(e.clone())));
+            }
+        }
+    }
+    put_num(&mut fields, "weight", inv.weight, DEFAULT_WEIGHT);
+    JVal::Obj(fields)
+}
+
+fn meta_json(meta: &ManifestMeta) -> Option<JVal> {
+    if meta == &ManifestMeta::default() {
+        return None;
+    }
+    let mut fields = vec![];
+    put_str(&mut fields, "name", &meta.name);
+    put_str(&mut fields, "version", &meta.version);
+    if let Some(d) = &meta.description {
+        fields.push(("description".to_string(), JVal::Str(d.clone())));
+    }
+    Some(JVal::Obj(fields))
+}
+
+/// Build the JSON value for a manifest — the inverse of [`of_json`], for a host
+/// embedding a manifest in a larger document rather than emitting it alone.
+///
+/// Always the Fuaran wrapper shape, never a bare DTCG tree: a top-level `tokens`
+/// key is what selects the wrapper branch in [`of_json`], so omitting it at empty
+/// would decode the document as vanilla DTCG and silently discard meta, roles and
+/// invariants.
+pub fn to_json(m: &ThemeManifest) -> JVal {
+    let mut fields = vec![];
+    if let Some(meta) = meta_json(&m.meta) {
+        fields.push(("meta".to_string(), meta));
+    }
+    fields.push(("tokens".to_string(), tokens_tree(&m.tokens)));
+    if !m.roles.is_empty() {
+        let items: Vec<JVal> = m.roles.iter().map(role_binding_json).collect();
+        fields.push(("roles".to_string(), JVal::Arr(items)));
+    }
+    if !m.invariants.is_empty() {
+        let items: Vec<JVal> = m.invariants.iter().map(invariant_json).collect();
+        fields.push(("invariants".to_string(), JVal::Arr(items)));
+    }
+    JVal::Obj(fields)
+}
+
+/// Encode a manifest as canonical JSON — the round trip the projectors and
+/// [`merge`] had no way to emit, so a host that merged a brand override over a
+/// base can hand the result back over the wire.
+///
+/// Canonical in the crate's one sense (`canonical::render_canonical`): Ordinal-
+/// sorted keys, no whitespace, the §2 rule-5 number layout, the rule-6 escapes.
+/// Every member the decoder tolerates the absence of is omitted at its default,
+/// so a projected manifest does not carry a page of empty strings.
+///
+/// **The round trip, stated precisely.** `encode(decode(bytes)) == bytes` for
+/// canonical bytes already in this shape, and `decode(encode(m)) == m` for any
+/// manifest whose tokens are in the wire's own order — every manifest [`decode`]
+/// produces is one. A projector or [`merge`] result carries tokens in
+/// first-appearance order instead, and the wire's order is sorted, so the round
+/// trip there preserves the token *set* and normalises the order; the total
+/// statement that covers every manifest is that `encode` is a fixpoint through
+/// it — `encode(decode(encode(m))) == encode(m)`.
+///
+/// **Three model states the wire cannot carry**, recorded rather than hidden
+/// because each is reachable only by hand-building a `ThemeManifest` — no
+/// decoder or projector in this module produces one. Two token names that
+/// collide (equal, or one a strict prefix of the other) resolve last-write-wins,
+/// per `insert_at`. A name whose first segment starts with `$` is emitted but is
+/// unreachable to the decoder, which skips `$`-prefixed keys as DTCG metadata. A
+/// `ManifestRole::Tone` holding a string outside [`TONES`] decodes back as
+/// `ManifestRole::Named`, since `parse_role` validates the tone. Widening any of
+/// these is a wire-format question for every host at once, not a change this host
+/// makes alone.
+pub fn encode(m: &ThemeManifest) -> String {
+    render_canonical(&to_json(m))
 }
 
 // ─── CSS token-surface projectors ────────────────────────────────────────────

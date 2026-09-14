@@ -27,7 +27,7 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 | `search-pattern` (structural search over trees) | ✅ | `introspect/` | behaviour suite (structural query → matched ids) |
 | `layout-observe` (structural overflow/reflow flags) | ✅ | `introspect/layout.rs` | `LayoutObserver.Flags.derive` port + behaviour suite |
 | `transform-eval` (Binding.Transform dataframe pipeline) | ✅ | `transform/` | pinned cross-host semantics (null/coercion/round-half-away/div-by-zero/stability) + canonical round-trip |
-| `theme-contrast` (theme resolve + WCAG contrast) | ✅ | `theme/` | WCAG reference constants (black/white = 21.0, #767676 grey = AA boundary, alpha compositing) |
+| `theme-contrast` (theme resolve + WCAG contrast; manifest decode / project / merge / **encode**) | ✅ | `theme/` | WCAG reference constants (black/white = 21.0, #767676 grey = AA boundary, alpha compositing); manifest round trip — canonical byte pins, `decode∘encode` the identity on a decoded manifest, `encode` a fixpoint through it. **This host emits first**: no sibling host has a theme-manifest encoder, so the pinned bytes are the oracle rather than a copy of one |
 | `teleport` (FT1 deflate+base64url+SHA-256 envelope, §17) | ✅ | `teleport/` | byte-exact string round-trip + digest-tamper/version/oversize rejects; hand-written RFC 1951 DEFLATE (self round-trip + stored/fixed/dynamic inflate) |
 | `action-gate` (default-deny dispatch/decode gate) | ✅ | `gate/` + `wire/` + `validator/` | decode-reject is the structural gate; `gate/` adds the default-deny capability allowlist (per-mount + per-Invoke) |
 | `tree-diff` (before→after op-script) | ✅ | `diff/` | `apply(diff(a,b), a) == b` over changed-leaf / heading / root-swap / child add+remove |
