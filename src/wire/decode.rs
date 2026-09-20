@@ -1299,12 +1299,21 @@ fn decode_col_expr(j: &JVal) -> CResult<ColExpr> {
     }
 }
 
-/// One of the canonical field or its observed alias — Core Phase 92's
-/// `fieldAliased` (both present is not distinguished here; canonical wins).
+/// One of the canonical field or its observed alias — Core Phase 92's `fieldAliased`.
+/// Exactly one: BOTH present is refused as ambiguous rather than resolved to the
+/// canonical. The two spellings can carry different values, so there is no reading of
+/// the document that says which the author meant, and a silent winner turns an author's
+/// mistake into a document that decodes to something they did not write. This matches
+/// the reference codec and every sibling host; until 0.28.0 this host let the canonical
+/// win, which was the one behaviour of the family it did not share.
 fn c_field_aliased<'a>(fields: &'a Fields, canonical: &str, alias: &str) -> CResult<&'a JVal> {
-    get(fields, canonical)
-        .or_else(|| get(fields, alias))
-        .ok_or_else(|| format!("missing field: {canonical}"))
+    match (get(fields, canonical), get(fields, alias)) {
+        (Some(_), Some(_)) => Err(format!(
+            "malformed: give \"{canonical}\" (canonical) or \"{alias}\" (alias), not both"
+        )),
+        (Some(v), None) | (None, Some(v)) => Ok(v),
+        (None, None) => Err(format!("missing field: {canonical}")),
+    }
 }
 
 /// The `args` of an apply-shaped node: the canonical array, or a lone `expr`
@@ -1343,11 +1352,13 @@ fn decode_agg(j: &JVal) -> CResult<Agg> {
 
 fn decode_order(j: &JVal) -> CResult<SortKey> {
     let fields = c_obj(j)?;
-    // Lenient-ingest (Core Phases 92/93) — `column` aliases `col`; direction
-    // is one of `dir` (canonical asc|desc), boolean `descending`, or
-    // `direction`; a directionless entry is the SQL default (asc). Only
-    // "desc" sorts descending; anything else reads ascending.
-    let col = c_str(c_field_aliased(fields, "col", "column")?)?;
+    // Core Phase 92 admitted `column` as an alias of `col`; 0.28.0 SWAPPED which of the
+    // two is canonical — a member whose only honest name is "the column" is spelled out
+    // in full — so both still decode, `column` re-encodes, and giving both is refused.
+    // Direction is one of `dir` (canonical asc|desc), boolean `descending`, or
+    // `direction`; a directionless entry is the SQL default (asc). Only "desc" sorts
+    // descending; anything else reads ascending.
+    let col = c_str(c_field_aliased(fields, "column", "col")?)?;
     let dir = match (
         get(fields, "dir"),
         get(fields, "descending"),
@@ -1429,7 +1440,8 @@ fn decode_transform_step(j: &JVal) -> CResult<TransformStep> {
             })
         }
         "project" => {
-            let cols = c_arr(c_field(fields, "cols")?)?
+            // 0.28.0 — `columns` canonical, `cols` a decode alias, both-present refused.
+            let cols = c_arr(c_field_aliased(fields, "columns", "cols")?)?
                 .iter()
                 .map(decode_col_pair)
                 .collect::<CResult<Vec<_>>>()?;

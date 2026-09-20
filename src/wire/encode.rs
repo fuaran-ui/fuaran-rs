@@ -338,9 +338,12 @@ fn agg_json(a: &Agg) -> String {
     ])
 }
 
+// 0.28.0 — the member is `column`, not `col`: a wire member whose only honest name is
+// "the column" is spelled out in full. `col` remains a decode alias and is never emitted.
+// The model field keeps its own name; this is a wire rename, not an API one.
 fn order_json(k: &SortKey) -> String {
     obj(vec![
-        field("col", s(&k.col)),
+        field("column", s(&k.col)),
         field("dir", s(k.dir.as_str())),
     ])
 }
@@ -350,7 +353,7 @@ fn transform_step(t: &TransformStep) -> String {
         TransformStep::Filter { pred } => case_obj("filter", vec![field("pred", col_expr(pred))]),
         TransformStep::Project { cols } => case_obj(
             "project",
-            vec![field("cols", arr(cols.iter().map(col_pair).collect()))],
+            vec![field("columns", arr(cols.iter().map(col_pair).collect()))],
         ),
         TransformStep::Derive { name, expr } => case_obj(
             "derive",
