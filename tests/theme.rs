@@ -502,6 +502,81 @@ fn a_breached_usage_budget_reports_the_declared_and_observed_share() {
 }
 
 #[test]
+fn same_valued_tokens_attribute_to_the_path_first_token() {
+    // Phase 1727 — the palette-attribution tie-break. Two colour tokens carry
+    // the same value, declared secondary-before-brand; the rule (fuaran-dotnet's
+    // docs/THEME-BRIDGE-GUIDE.md, "Palette attribution order") attributes the
+    // fill to the FIRST token in canonical token-path order, so `color.brand`
+    // takes the 60px² and `color.secondary` takes none. This host meets the rule
+    // through its decoder's sorted walk, so the case goes through `decode`
+    // rather than a token-list literal: a decoder that stopped sorting, or an
+    // attribution that stopped trusting the list order, goes red here rather
+    // than silently re-diverging. The corpus vector of the same name is the
+    // cross-host law; this is its go-red partner.
+    let manifest = fuaran_rs::theme::decode(concat!(
+        r##"{"meta":{"name":"t","version":"1"},"tokens":{"color":{"##,
+        r##""secondary":{"$type":"color","$value":"#010203"},"##,
+        r##""brand":{"$type":"color","$value":"#010203"}}},"roles":[],"invariants":["##,
+        r##"{"kind":"UsageBudget","token":"color.brand","targetPct":10,"tolerancePct":5},"##,
+        r##"{"kind":"UsageBudget","token":"color.secondary","targetPct":0,"tolerancePct":5}]}"##,
+    ))
+    .expect("the tie manifest decodes");
+    let fill = observe("a", &input(Rgba::BLACK, &[rgb(1.0, 2.0, 3.0)]));
+    let other = observe("b", &input(Rgba::BLACK, &[rgb(9.0, 9.0, 9.0)]));
+    let nodes = vec![
+        NodeArea {
+            obs: fill,
+            area: 60.0,
+        },
+        NodeArea {
+            obs: other,
+            area: 40.0,
+        },
+    ];
+    assert_eq!(
+        encoded_flags(&verify_usage_budgets(&manifest, &nodes)),
+        vec![
+            r#"{"kind":"UsageBudgetExceeded","token":"color.brand","declaredPct":10.00,"observedPct":60.00}"#
+        ],
+        "a document-order attribution breaches both budgets"
+    );
+}
+
+#[test]
+fn token_path_order_is_segment_wise_not_a_string_sort() {
+    // Phase 1727 — `color.brand.base` precedes `color.brand-alt` because the
+    // key `brand` precedes `brand-alt`, although `-` sorts before `.` as a
+    // character: a sort of the joined path would put `brand-alt` first and
+    // diverge from every host that sorts per group.
+    let manifest = fuaran_rs::theme::decode(concat!(
+        r##"{"meta":{"name":"t","version":"1"},"tokens":{"color":{"##,
+        r##""brand-alt":{"$type":"color","$value":"#010203"},"##,
+        r##""brand":{"base":{"$type":"color","$value":"#010203"}}}},"roles":[],"invariants":["##,
+        r##"{"kind":"UsageBudget","token":"color.brand.base","targetPct":10,"tolerancePct":5},"##,
+        r##"{"kind":"UsageBudget","token":"color.brand-alt","targetPct":0,"tolerancePct":5}]}"##,
+    ))
+    .expect("the segment-order manifest decodes");
+    let fill = observe("a", &input(Rgba::BLACK, &[rgb(1.0, 2.0, 3.0)]));
+    let other = observe("b", &input(Rgba::BLACK, &[rgb(9.0, 9.0, 9.0)]));
+    let nodes = vec![
+        NodeArea {
+            obs: fill,
+            area: 60.0,
+        },
+        NodeArea {
+            obs: other,
+            area: 40.0,
+        },
+    ];
+    assert_eq!(
+        encoded_flags(&verify_usage_budgets(&manifest, &nodes)),
+        vec![
+            r#"{"kind":"UsageBudgetExceeded","token":"color.brand.base","declaredPct":10.00,"observedPct":60.00}"#
+        ]
+    );
+}
+
+#[test]
 fn no_measured_area_verifies_nothing() {
     // A budget is a statement about SHARE, and a share of nothing is not a
     // breach — so a tree whose areas were never measured is silent rather than

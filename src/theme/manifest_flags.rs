@@ -137,14 +137,17 @@ pub fn verify_usage_budgets(manifest: &ThemeManifest, nodes: &[NodeArea]) -> Vec
     let palette = palette_rgba(manifest);
     let mut area_by_token: HashMap<&str, f64> = HashMap::new();
     for node in nodes {
-        // First match wins, as on the sibling hosts. Note what that leaves open,
-        // rather than leaving it to be discovered: the tie-break is the TOKEN
-        // ORDER, and this host's manifest decoder sorts the DTCG token tree by
-        // key where the Python one preserves document order. A manifest
-        // declaring two `color` tokens with the SAME value would therefore
-        // attribute the area to different token names on different hosts. That
-        // is a property of the manifest tier's walk, not of this check, and no
-        // fixture here relies on it — every palette colour below is distinct.
+        // First match wins, and the tie-break between two same-valued tokens is
+        // RULED (Phase 1727): attribution iterates in canonical token-path
+        // order — segment by segment, a shorter prefix first, each segment by
+        // Unicode code point; document order plays no part. The rule is stated
+        // once, in fuaran-dotnet's `docs/THEME-BRIDGE-GUIDE.md` under "Palette
+        // attribution order", and pinned by the corpus's
+        // `style-observer/budget-same-valued-tokens-*` vectors. This host meets
+        // it through its DECODER, whose DTCG walk visits every group's keys in
+        // sorted order (`manifest.rs`, `sorted_keys`), so `palette` already
+        // arrives in that order; `tests/theme.rs` keeps the case red if either
+        // half stops holding.
         if let Some((_, name)) = palette
             .iter()
             .find(|(c, _)| same_rgb(*c, node.obs.effective_background))
