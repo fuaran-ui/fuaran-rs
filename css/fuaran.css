@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:253483dae447ee83
+/* fuaran-vocabulary-fingerprint: fv1:5da0294509d8be2b
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -2482,9 +2482,13 @@ body {
    two fragment-resolution refusals. Each rendered as an unstyled text run,
    which is precisely what this rule exists to prevent; that they were the
    `fuaran-custom-placeholder` case all along is what the coverage enumeration
-   made visible. */
+   made visible. Phase 1812 adds `fuaran-unknown-placeholder`: the WIRE_FORMAT
+   §15.3 labelled degrade a BEHIND reader renders for a kind it cannot read and
+   for which no `fallback` was authored ("needs core@1.4") — the same visible
+   bracketed-diagnostic class, emitted by both renderers' `renderBehind`. */
 .fuaran-custom-placeholder,
 .fuaran-kind-custom-placeholder,
+.fuaran-unknown-placeholder,
 .fuaran-node-fallback,
 .fuaran-depth-exceeded,
 .fuaran-mount-placeholder,
