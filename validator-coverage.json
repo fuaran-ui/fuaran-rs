@@ -11,6 +11,7 @@
     "FUARAN049",
     "FUARAN069",
     "FUARAN073",
+    "FUARAN075",
     "FUARAN082",
     "FUARAN083",
     "FUARAN086",
@@ -40,5 +41,5 @@
   },
   "otherFamiliesNote": "Codes this host raises that belong to the reference's BUILD-TIME source-AST walker, not the pre-emit family enumerated in the vocabulary. Recorded so the gate reads them as a different family rather than as a code this host invented. That second family is not yet enumerated; until it is, this list is a declaration of intent, not something the gate can verify.",
   "machineChecked": true,
-  "machineCheckedNote": "This host carries the code as a value on the finding, so `implemented` is checkable against the validator source. The check is not yet wired — the gate verifies the declaration against the vocabulary only."
+  "machineCheckedNote": "This host carries the code as a value on the finding, so `implemented` is checkable against the validator source. The general check is not yet wired — the corpus gate verifies the declaration against the vocabulary only. One slice IS wired, in this host's own suite (Phase 1836): for every code the corpus exercises with a MARKED negative/control fixture pair (`RULE_MARKED_TWINS` in `tests/conformance.rs`, FUARAN075 today), the declaration is held to what the validator does on the pair — `implemented` must refuse the negative and pass the control, `abstained` must be true, and a marked code in neither set fails."
 }

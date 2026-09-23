@@ -24,6 +24,7 @@
 //! | `FUARAN064` | Warning | Button `disabled` bound to `Static(false)` (no-op) |
 //! | `FUARAN069` | Warning | inert control: omitted handler over a non-writable value binding (write-back default cannot arm; `Local` exempt) |
 //! | `FUARAN073` | Warning | fire-and-forget `Action.Call` (no `into`, no `onResult`) |
+//! | `FUARAN075` | Error | a DECLARED filter edge (`Query.dependsOn`, or a `Transform` / `Expr` param whose `from` is a `Filter`) naming a chip no `Filters` node in the tree declares (Phase 1836) |
 //! | `FUARAN082` | Warning | duplicate `Switch` case match values (first-match-wins shadows the rest) |
 //! | `FUARAN083` | Warning | ungrounded `Switch` selector: an empty-key `State` binding can never resolve a case (any other `Binding` names its source and is grounded by construction) |
 //! | `FUARAN086` | Error | chart field reference absent from the statically-known data schema (Phase 640) |
@@ -34,10 +35,12 @@
 //! | `FUARAN108` | Error | a `Media` node with an empty literal label — a transport has no decorative case (Phase 1076) |
 //! | `FUARAN084` | Warning / Error | `Binding.Computed` — host-only, erases on the wire (Error in orchestrated runs) |
 
-use crate::canonical::JVal;
+use std::collections::HashSet;
+
+use crate::canonical::{JVal, parse};
 use crate::wire::{
     Action, Binding, FormFieldKind, MediaKind, Node, NodeKind, StaticValue, SwitchCondition,
-    TextSource, TreeOp,
+    TextSource, TreeOp, encode_node,
 };
 
 /// Finding severity, matching the sibling validators' two-level surface.
@@ -844,6 +847,191 @@ impl Walker {
     }
 }
 
+// ── FUARAN075 — the dangling-filter-reference rule (Phase 1836) ─────────────
+//
+// A node DECLARES a filter edge on a name no `Filters` chip in the tree
+// declares. Two shapes carry such an edge: a `Query`'s `dependsOn` entry, and a
+// `Transform` / `Expr` param whose `from` is a `Filter` binding. A plain
+// `Binding.Filter` VALUE read elsewhere is NOT an edge and is not judged — a
+// host may legitimately feed filter values without chips — and neither is a
+// chip's own self-read, which is a declaration.
+//
+// An ERROR because nothing downstream of the tree can notice: an undeclared
+// chip resolves exactly as an UNSET one does, the lenient "unset filter ⇒ no
+// constraint" prune drops the dependent step, and the consumer silently shows
+// the UNFILTERED set; on the `dependsOn` arm the name subscribes the consumer
+// to a slot nothing can ever write. Both documents are legal wire and
+// round-trip byte-identically, which is why the corpus carries each arm as a
+// PAIR differing in one thing (`nodes/filters-param-source-{declared,undeclared}`
+// and `nodes/filters-dependson-{declared,undeclared}`).
+//
+// Why the edges are found over the CANONICAL JSON, and the readers over the
+// typed tree: before this rule the walker inspected bindings only where a
+// named rule reached into a named slot, so the edge set had no operands here
+// (Phase 1800's finding: `findings=0` on both twins). Reaching every binding in
+// every slot of every `NodeKind` by typed `match` would carry the standing
+// forward-coupling duty `render::seeds` records — a binding-bearing slot added
+// tomorrow would stop being judged without failing to compile, and silence is
+// the exact failure this rule exists to remove. So the edges and the declared
+// chips are found STRUCTURALLY, by wire discriminator, over the tree's own
+// canonical encoding: the same choice, for the same reason, as the seeding
+// walk, and the same shape the Python and TypeScript hosts use.
+//
+// Attribution is by NEAREST ENCLOSING NODE, which is what the reference's
+// binding walk calls the edge's READER. Node boundaries come from the typed
+// tree, not from a JSON heuristic: an `{"id", "kind"}` object is not
+// necessarily a node (a `Form`'s `FormField` has both), so a child's subtree is
+// excluded from its parent's scan only when the object IS that child's
+// encoding. A node slot `child_nodes` does not list degrades to attribution to
+// the enclosing node — the finding still fires; it is never lost.
+//
+// Judged tree-wide, after the per-node walk: "names a chip this tree declares"
+// is only answerable once the whole tree has been seen, since a consumer may
+// precede its `Filters` sibling in document order.
+
+impl Walker {
+    fn check_filter_edges(&mut self, tree: &Node) {
+        // The canonical encoding of a decoded tree is the document it was
+        // decoded from, so this parse cannot fail on one. It CAN fail on a tree
+        // built in code and nested past MAX_JSON_DEPTH — a document no host can
+        // decode, so no emitter can ship it and there is no reader to protect.
+        let Ok(doc) = parse(&encode_node(tree)) else {
+            return;
+        };
+        let mut declared: HashSet<String> = HashSet::new();
+        declared_filter_names(&doc, &mut declared);
+
+        let mut uses: Vec<(String, String)> = Vec::new();
+        filter_edge_uses(tree, &doc, &mut uses);
+
+        for (reader, name) in uses {
+            if !declared.contains(&name) {
+                self.push(
+                    Severity::Error,
+                    "FUARAN075",
+                    &reader,
+                    format!(
+                        "'{reader}' declares a filter edge on '{name}' (dependsOn / Transform param source) but no Filters chip declares that name — the edge can never fire, and the consumer silently reads the unfiltered set. Declare the chip in a Filters node, or fix the name."
+                    ),
+                );
+            }
+        }
+    }
+}
+
+fn jfield<'a>(fields: &'a [(String, JVal)], name: &str) -> Option<&'a JVal> {
+    fields.iter().find(|(k, _)| k == name).map(|(_, v)| v)
+}
+
+fn jtag(fields: &[(String, JVal)]) -> Option<&str> {
+    match jfield(fields, "$type") {
+        Some(JVal::Str(t)) => Some(t.as_str()),
+        _ => None,
+    }
+}
+
+/// Every chip name a `Filters` node anywhere in the document declares.
+fn declared_filter_names(value: &JVal, out: &mut HashSet<String>) {
+    match value {
+        JVal::Arr(items) => {
+            for item in items {
+                declared_filter_names(item, out);
+            }
+        }
+        JVal::Obj(fields) => {
+            if jtag(fields) == Some("Filters")
+                && let Some(JVal::Arr(items)) = jfield(fields, "items")
+            {
+                for item in items {
+                    if let JVal::Obj(chip) = item
+                        && let Some(JVal::Str(name)) = jfield(chip, "name")
+                    {
+                        out.insert(name.clone());
+                    }
+                }
+            }
+            for (_, v) in fields {
+                declared_filter_names(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every declared filter edge as `(reader node id, filter name)`, in document
+/// order. `doc` is `node`'s own canonical encoding.
+fn filter_edge_uses(node: &Node, doc: &JVal, out: &mut Vec<(String, String)>) {
+    let children: Vec<(&Node, JVal)> = child_nodes(node)
+        .into_iter()
+        .filter_map(|c| parse(&encode_node(c)).ok().map(|d| (c, d)))
+        .collect();
+    let mut claimed = vec![false; children.len()];
+    scan_edges(doc, &node.id, &children, &mut claimed, out);
+    for (child, child_doc) in &children {
+        filter_edge_uses(child, child_doc, out);
+    }
+}
+
+fn scan_edges(
+    value: &JVal,
+    reader: &str,
+    children: &[(&Node, JVal)],
+    claimed: &mut [bool],
+    out: &mut Vec<(String, String)>,
+) {
+    let fields = match value {
+        JVal::Arr(items) => {
+            for item in items {
+                scan_edges(item, reader, children, claimed, out);
+            }
+            return;
+        }
+        JVal::Obj(fields) => fields,
+        _ => return,
+    };
+
+    // A child node's subtree is its own reader's — it is scanned when that
+    // child is visited, against its own children.
+    if let Some(JVal::Str(id)) = jfield(fields, "id") {
+        for (i, (child, child_doc)) in children.iter().enumerate() {
+            if !claimed[i] && child.id == *id && child_doc == value {
+                claimed[i] = true;
+                return;
+            }
+        }
+    }
+
+    match jtag(fields) {
+        Some("Query") => {
+            if let Some(JVal::Arr(names)) = jfield(fields, "dependsOn") {
+                for name in names {
+                    if let JVal::Str(name) = name {
+                        out.push((reader.to_string(), name.clone()));
+                    }
+                }
+            }
+        }
+        Some("Transform" | "Expr") => {
+            if let Some(JVal::Arr(params)) = jfield(fields, "params") {
+                for param in params {
+                    if let JVal::Obj(param) = param
+                        && let Some(JVal::Obj(from)) = jfield(param, "from")
+                        && jtag(from) == Some("Filter")
+                        && let Some(JVal::Str(name)) = jfield(from, "name")
+                    {
+                        out.push((reader.to_string(), name.clone()));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    for (_, v) in fields {
+        scan_edges(v, reader, children, claimed, out);
+    }
+}
+
 /// Every immediate sub-node the validator descends into — the same traversal
 /// the apply engine's structural checks run.
 fn child_nodes(n: &Node) -> Vec<&Node> {
@@ -911,12 +1099,32 @@ fn child_nodes(n: &Node) -> Vec<&Node> {
 /// Validate a decoded tree pre-emit. Findings come back in walk order; an
 /// empty list means the tree passes the structural surface.
 pub fn validate_with(tree: &Node, options: ValidateOptions) -> Vec<Finding> {
+    validate_scoped(tree, options, Scope::WholeTree)
+}
+
+/// What the tree handed to the validator IS — which decides whether a rule that
+/// quantifies over the WHOLE document may run at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    /// A complete document: every declaration it relies on is inside it.
+    WholeTree,
+    /// A subtree bound for insertion under a tree this call cannot see
+    /// (`TreeOp::InsertChild`). A rule reasoning from what the document does NOT
+    /// declare would be judging the fragment's host's declarations from outside
+    /// it, so those rules do not run here.
+    Fragment,
+}
+
+fn validate_scoped(tree: &Node, options: ValidateOptions, scope: Scope) -> Vec<Finding> {
     let mut walker = Walker {
         orchestrated: options.orchestrated,
         findings: Vec::new(),
         seen_ids: std::collections::HashMap::new(),
     };
     walker.walk(tree);
+    if scope == Scope::WholeTree {
+        walker.check_filter_edges(tree);
+    }
     // FUARAN001 — one finding per duplicated id (not per occurrence past the
     // first: the id names the collision).
     let mut duplicate_ids: Vec<&String> = walker
@@ -949,7 +1157,9 @@ pub fn validate(tree: &Node) -> Vec<Finding> {
 /// `ReplaceRoot.node` carry whole subtrees; `Batch` recurses.
 pub fn validate_op(op: &TreeOp) -> Vec<Finding> {
     match op {
-        TreeOp::InsertChild { child, .. } => validate(child),
+        TreeOp::InsertChild { child, .. } => {
+            validate_scoped(child, ValidateOptions::default(), Scope::Fragment)
+        }
         TreeOp::ReplaceRoot { node } => validate(node),
         TreeOp::Batch(ops) => ops.iter().flat_map(validate_op).collect(),
         TreeOp::EditNode { .. }

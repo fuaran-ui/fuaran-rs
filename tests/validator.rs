@@ -240,3 +240,177 @@ fn empty_media_label_is_fuaran108() {
     let deferred = r#"{"id":"m","kind":{"$type":"Media","kind":{"$type":"Audio"},"label":{"$type":"I18n","args":{},"key":"clip.name"},"src":{"$type":"Static","value":"/c.mp3"}}}"#;
     assert!(codes(deferred).is_empty());
 }
+
+// ── FUARAN075 — the dangling-filter-reference rule (Phase 1836) ──────────────
+//
+// Hand-built trees, so every arm can be driven in the direction that FAILS. The
+// corpus-bound twins (`nodes/filters-{dependson,param-source}-{declared,undeclared}`)
+// are asserted in `tests/conformance.rs` against the corpus's own bytes, beside
+// the check that `validator-coverage.json` declares what this host does.
+
+const CHIPS_REGION: &str = r#"{"id":"chips","kind":{"$type":"Filters","items":[{"kind":{"$type":"Choice","options":{"$type":"Static","value":[{"label":"EMEA","value":"emea"}]}},"label":"Region","name":"region"}]}}"#;
+
+const CHIPS_REGION_GENRE: &str = r#"{"id":"chips","kind":{"$type":"Filters","items":[{"kind":{"$type":"Choice","options":{"$type":"Static","value":[{"label":"EMEA","value":"emea"}]}},"label":"Region","name":"region"},{"kind":{"$type":"Choice","options":{"$type":"Static","value":[{"label":"Drama","value":"drama"}]}},"label":"Genre","name":"genre"}]}}"#;
+
+fn metric(id: &str, value: &str) -> String {
+    format!(r#"{{"id":"{id}","kind":{{"$type":"Metric","label":"Revenue","value":{value}}}}}"#)
+}
+
+fn query_depending_on(names: &[&str]) -> String {
+    let deps = names
+        .iter()
+        .map(|n| format!("\"{n}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(r#"{{"$type":"Query","dependsOn":[{deps}],"name":"orders"}}"#)
+}
+
+fn boxed(id: &str, children: &[&str]) -> String {
+    format!(
+        r#"{{"id":"{id}","kind":{{"$type":"Box","children":[{}],"layout":{{"$type":"Flex","direction":"Vertical","wrap":false}},"role":"Group"}}}}"#,
+        children.join(",")
+    )
+}
+
+fn fuaran075(json: &str) -> Vec<(String, String)> {
+    let tree = decode_node(json).expect("test tree decodes");
+    validate(&tree)
+        .into_iter()
+        .filter(|f| f.code == "FUARAN075")
+        .map(|f| {
+            assert_eq!(f.severity, Severity::Error, "FUARAN075 is an Error");
+            (f.node_id, f.message)
+        })
+        .collect()
+}
+
+#[test]
+fn dependson_naming_an_undeclared_chip_is_fuaran075() {
+    let m = metric("scoped", &query_depending_on(&["region", "genre"]));
+    let undeclared = boxed("root", &[CHIPS_REGION, &m]);
+    let found = fuaran075(&undeclared);
+    assert_eq!(
+        found.len(),
+        1,
+        "exactly the undeclared name is reported: {found:?}"
+    );
+    let (reader, message) = &found[0];
+    assert_eq!(
+        reader, "scoped",
+        "attributed to the edge's reader, not the root"
+    );
+    assert!(
+        message.contains("'genre'") && message.contains("'scoped'"),
+        "the message names the reader and the undeclared name: {message}"
+    );
+    assert!(
+        !message.contains("'region'"),
+        "the declared name is not reported"
+    );
+
+    let declared = boxed("root", &[CHIPS_REGION_GENRE, &m]);
+    assert!(fuaran075(&declared).is_empty(), "the declared twin passes");
+}
+
+#[test]
+fn transform_param_sourced_from_an_undeclared_chip_is_fuaran075() {
+    let transform = r#"{"$type":"Transform","params":[{"from":{"$type":"Filter","name":"region"},"name":"region"},{"from":{"$type":"Filter","name":"genre"},"name":"genre"}],"pipeline":[{"$type":"filter","pred":{"$type":"binary","left":{"$type":"col","name":"region"},"op":"eq","right":{"$type":"param","name":"region"}}},{"$type":"filter","pred":{"$type":"binary","left":{"$type":"col","name":"genre"},"op":"eq","right":{"$type":"param","name":"genre"}}}],"source":{"columns":{"genre":{"validity":[true],"values":["drama"]},"region":{"validity":[true],"values":["emea"]}},"schema":[{"name":"region","type":"string"},{"name":"genre","type":"string"}]}}"#;
+    let grid = format!(
+        r#"{{"id":"grid","kind":{{"$type":"DataGrid","columns":[{{"field":"region","kind":{{"$type":"Text"}},"label":"Region"}}],"rowKeyField":"region","source":{transform}}}}}"#
+    );
+    let undeclared = boxed("root", &[CHIPS_REGION, &grid]);
+    let found = fuaran075(&undeclared);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, "grid");
+    assert!(found[0].1.contains("'genre'"));
+
+    let declared = boxed("root", &[CHIPS_REGION_GENRE, &grid]);
+    assert!(fuaran075(&declared).is_empty());
+}
+
+#[test]
+fn expr_param_sourced_from_an_undeclared_chip_is_fuaran075() {
+    let expr = r#"{"$type":"Expr","expr":{"$type":"binary","left":{"$type":"param","name":"g"},"op":"eq","right":{"$type":"lit","cell":{"$type":"Str","value":"drama"}}},"params":[{"from":{"$type":"Filter","name":"genre"},"name":"g"}]}"#;
+    let m = metric("flag", expr);
+    let found = fuaran075(&boxed("root", &[CHIPS_REGION, &m]));
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, "flag");
+    assert!(found[0].1.contains("'genre'"));
+    assert!(fuaran075(&boxed("root", &[CHIPS_REGION_GENRE, &m])).is_empty());
+}
+
+#[test]
+fn a_tree_with_no_filters_node_declares_nothing() {
+    // The reference judges against the chips the TREE declares; a tree with none
+    // declares none, so every declared edge dangles.
+    let m = metric("scoped", &query_depending_on(&["region"]));
+    let found = fuaran075(&boxed("root", &[&m]));
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].0, "scoped");
+}
+
+#[test]
+fn a_plain_filter_value_read_is_not_an_edge() {
+    // A host may feed filter values without chips; only a DECLARED edge is judged.
+    let m = metric("plain", r#"{"$type":"Filter","name":"genre"}"#);
+    assert!(fuaran075(&boxed("root", &[&m])).is_empty());
+}
+
+#[test]
+fn a_chip_declared_after_its_consumer_still_grounds_it() {
+    let m = metric("scoped", &query_depending_on(&["region", "genre"]));
+    assert!(fuaran075(&boxed("root", &[&m, CHIPS_REGION_GENRE])).is_empty());
+}
+
+#[test]
+fn a_chip_declared_anywhere_in_the_tree_grounds_the_edge() {
+    let m = metric("scoped", &query_depending_on(&["genre"]));
+    let deep_chips = boxed("inner", &[CHIPS_REGION_GENRE]);
+    assert!(fuaran075(&boxed("root", &[&m, &deep_chips])).is_empty());
+}
+
+#[test]
+fn edges_attribute_to_their_nearest_enclosing_node() {
+    // Nested two deep, and inside a node-level `state.onEmpty` child: each edge
+    // is reported against the node that carries it, never an ancestor.
+    let deep = metric("deep", &query_depending_on(&["genre"]));
+    let placeholder = metric("placeholder", &query_depending_on(&["season"]));
+    let with_empty = format!(
+        r#"{{"id":"host","kind":{{"$type":"Metric","label":"Revenue","value":{}}},"state":{{"onEmpty":{placeholder}}}}}"#,
+        query_depending_on(&["region"])
+    );
+    let tree = boxed(
+        "root",
+        &[CHIPS_REGION, &boxed("mid", &[&deep]), &with_empty],
+    );
+    let mut readers: Vec<String> = fuaran075(&tree).into_iter().map(|(r, _)| r).collect();
+    readers.sort();
+    assert_eq!(readers, vec!["deep".to_string(), "placeholder".to_string()]);
+}
+
+#[test]
+fn an_inserted_fragment_is_not_judged_against_chips_it_cannot_see() {
+    // An InsertChild subtree is grounded by the tree it lands in, which this call
+    // does not have: judging the fragment alone would accuse every idiomatic
+    // consumer inserted under a Filters-declaring page.
+    let m = metric("inserted", &query_depending_on(&["region"]));
+    let insert = format!(r#"{{"$type":"InsertChild","child":{m},"parentId":"root"}}"#);
+    let op = fuaran_rs::wire::decode_op(&insert).expect("insert decodes");
+    assert!(
+        fuaran_rs::validator::validate_op(&op)
+            .iter()
+            .all(|f| f.code != "FUARAN075")
+    );
+
+    // A ReplaceRoot carries a WHOLE tree, so the rule applies to it.
+    let replace = format!(
+        r#"{{"$type":"ReplaceRoot","node":{}}}"#,
+        boxed("root", &[&m])
+    );
+    let op = fuaran_rs::wire::decode_op(&replace).expect("replace decodes");
+    assert!(
+        fuaran_rs::validator::validate_op(&op)
+            .iter()
+            .any(|f| f.code == "FUARAN075" && f.node_id == "inserted")
+    );
+}

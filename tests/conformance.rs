@@ -986,3 +986,139 @@ fn corpus_families_beyond_the_floor_are_explicitly_skipped() {
         eprintln!("skipped family (beyond the codec floor): {kind} × {count}");
     }
 }
+
+// ── Rule-marked twins — the validator declaration, checked against behaviour ──
+//
+// Phase 1836. Most of this corpus certifies the CODEC, and a round-trip fixture
+// says nothing about a validator: `filters-dependson-undeclared` round-trips
+// byte-identically on a host with no FUARAN075 at all, which is exactly how this
+// host passed it silently until Phase 1800 measured it. So the fixtures that
+// exist to exercise a validator rule are MARKED here, each negative with its
+// control, and `validator-coverage.json` is held to what the validator does on
+// them: `implemented` must refuse the negative (with the reader's id and the
+// offending name) and pass the control; `abstained` must be true — a validator
+// that raises the code while the file says it does not is a lie in the other
+// direction. A marked code in NEITHER set is a failure, not a default.
+
+/// `(code, negative fixture id, reader node id, offending name, control fixture id)`.
+const RULE_MARKED_TWINS: &[(&str, &str, &str, &str, &str)] = &[
+    (
+        "FUARAN075",
+        "filters-dependson-undeclared",
+        "scoped-metric",
+        "genre",
+        "filters-dependson-declared",
+    ),
+    (
+        "FUARAN075",
+        "filters-param-source-undeclared",
+        "scoped-grid",
+        "genre",
+        "filters-param-source-declared",
+    ),
+];
+
+#[derive(Debug, PartialEq, Eq)]
+enum Declared {
+    Implemented,
+    Abstained,
+}
+
+/// What this host's `validator-coverage.json` says about `code` — and a panic
+/// when it says both, or nothing.
+fn declared_stance(code: &str) -> Declared {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("validator-coverage.json");
+    let raw = std::fs::read_to_string(&path).expect("reading validator-coverage.json");
+    let decl = parse(&raw).expect("validator-coverage.json parses");
+    let implemented = matches!(
+        decl.field("implemented"),
+        Some(JVal::Arr(codes)) if codes.iter().any(|c| matches!(c, JVal::Str(s) if s == code))
+    );
+    let abstained = matches!(
+        decl.field("abstained"),
+        Some(JVal::Obj(entries)) if entries.iter().any(|(k, _)| k == code)
+    );
+    match (implemented, abstained) {
+        (true, false) => Declared::Implemented,
+        (false, true) => Declared::Abstained,
+        (true, true) => panic!(
+            "validator-coverage.json names {code} in BOTH `implemented` and `abstained` — one \
+             of them is false"
+        ),
+        (false, false) => panic!(
+            "validator-coverage.json names {code} in neither `implemented` nor `abstained`, but \
+             the corpus carries fixtures marked for it. The abstention default is not a \
+             decision; record one."
+        ),
+    }
+}
+
+#[test]
+fn every_rule_marked_code_is_declared_exactly_once() {
+    for (code, ..) in RULE_MARKED_TWINS {
+        declared_stance(code);
+    }
+}
+
+#[test]
+fn corpus_rule_marked_twins_decide_as_declared() {
+    let Some(corpus) = find_corpus() else {
+        return;
+    };
+    let manifest = load_manifest(&corpus);
+    let findings_on = |id: &str| {
+        let fixture = manifest
+            .iter()
+            .find(|f| f.id == id)
+            .unwrap_or_else(|| panic!("the corpus has no fixture '{id}' — a marked twin moved"));
+        let tree = decode_node(&read_fixture(&corpus, &fixture.input_file))
+            .unwrap_or_else(|e| panic!("marked fixture '{id}' does not decode: {e:?}"));
+        fuaran_rs::validator::validate(&tree)
+    };
+
+    for (code, negative, reader, name, control) in RULE_MARKED_TWINS {
+        let on_negative: Vec<_> = findings_on(negative)
+            .into_iter()
+            .filter(|f| f.code == *code)
+            .collect();
+        let on_control: Vec<_> = findings_on(control)
+            .into_iter()
+            .filter(|f| f.code == *code)
+            .collect();
+        match declared_stance(code) {
+            Declared::Implemented => {
+                assert_eq!(
+                    on_negative.len(),
+                    1,
+                    "{code} is declared implemented, so '{negative}' must be refused exactly \
+                     once; got {on_negative:?}"
+                );
+                let f = &on_negative[0];
+                assert_eq!(
+                    f.node_id, *reader,
+                    "'{negative}': {code} anchors to the edge's reader"
+                );
+                assert!(
+                    f.message.contains(&format!("'{name}'")),
+                    "'{negative}': {code}'s message names '{name}': {}",
+                    f.message
+                );
+                assert!(
+                    on_control.is_empty(),
+                    "'{control}' is the declared twin of '{negative}' and must pass: {on_control:?}"
+                );
+            }
+            Declared::Abstained => {
+                assert!(
+                    on_negative.is_empty() && on_control.is_empty(),
+                    "{code} is declared ABSTAINED but the validator raises it — the declaration \
+                     is false"
+                );
+                eprintln!(
+                    "{code}: '{negative}' is ABSTAINED on this host, not passed — the silent \
+                     no-op is declared, and nothing here certifies it"
+                );
+            }
+        }
+    }
+}
