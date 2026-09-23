@@ -348,6 +348,7 @@ fn mk_node(
         accessibility,
         tooltip: None,
         visible: None,
+        fallback: None,
     }
 }
 

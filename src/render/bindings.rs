@@ -32,7 +32,7 @@ use crate::transform::{self, Table};
 use crate::wire::{
     Accessibility, AggFn, Binding, Cell, CellFormat, ColExpr, DataSource, DateStyle, DurationStyle,
     DurationUnit, Format, I18nArg, LocaleSource, RelativeTimeUnit, SelectOption, StaticValue,
-    TextSource, TimeGrain, TransformParam, TransformSource, TransformStep,
+    TextSource, TimeGrain, TimeStyle, TransformParam, TransformSource, TransformStep,
 };
 
 /// The em-dash placeholder an unresolved value renders as.
@@ -1407,7 +1407,7 @@ pub fn format_number(format: &CellFormat, value: f64) -> String {
             format!("{:.*}%", d, value * 100.0)
         }
         CellFormat::SignificantDigits { digits } => to_precision(value, *digits),
-        CellFormat::Date { .. } => display_number(value),
+        CellFormat::DateTime { .. } => display_number(value),
         CellFormat::Duration { style, unit } => format_duration(*unit, *style, value),
         CellFormat::RelativeTime { unit } => format_relative_english(*unit, value),
         CellFormat::Custom => "<closure>".to_string(),
@@ -1465,15 +1465,36 @@ pub fn format_locale_value(_locale: &LocaleSource, format: &Format, value: f64) 
             let d = decimals.unwrap_or(0).clamp(0, 17) as usize;
             format!("{:.*}%", d, value * 100.0)
         }
-        Format::Date { date_style } => {
-            let (y, m, d) = civil_from_unix_seconds(value);
-            let month_name = MONTHS[(m as usize).saturating_sub(1).min(11)];
-            match date_style {
-                DateStyle::Short => format!("{y:04}-{m:02}-{d:02}"),
-                DateStyle::Medium | DateStyle::Long | DateStyle::Full => {
-                    format!("{d} {month_name} {y}")
-                }
+        Format::DateTime {
+            date_style,
+            time_style,
+        } => {
+            // Phase 1810 — the date half and the time-of-day half render
+            // independently and join with a space; either alone is the whole
+            // string. This host's invariant fallback (no locale database): the
+            // conformance vectors list this case as `excluded` for text parity.
+            let mut parts: Vec<String> = vec![];
+            if let Some(ds) = date_style {
+                let (y, m, d) = civil_from_unix_seconds(value);
+                let month_name = MONTHS[(m as usize).saturating_sub(1).min(11)];
+                parts.push(match ds {
+                    DateStyle::Short => format!("{y:04}-{m:02}-{d:02}"),
+                    DateStyle::Medium | DateStyle::Long | DateStyle::Full => {
+                        format!("{d} {month_name} {y}")
+                    }
+                });
             }
+            if let Some(ts) = time_style {
+                let secs = value.rem_euclid(86_400.0).floor() as i64;
+                let (h, mi, se) = (secs / 3_600, (secs % 3_600) / 60, secs % 60);
+                parts.push(match ts {
+                    TimeStyle::Short => format!("{h:02}:{mi:02}"),
+                    TimeStyle::Medium | TimeStyle::Long | TimeStyle::Full => {
+                        format!("{h:02}:{mi:02}:{se:02}")
+                    }
+                });
+            }
+            parts.join(" ")
         }
         Format::RelativeTime { unit } => {
             let unit_name = unit.as_str().to_lowercase();

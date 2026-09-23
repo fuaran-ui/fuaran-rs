@@ -455,10 +455,10 @@ impl Walker {
             | FormFieldKind::RangedNumber {
                 value, on_change, ..
             }
-            | FormFieldKind::Date {
+            | FormFieldKind::DateTime {
                 value, on_change, ..
             }
-            | FormFieldKind::DateRange {
+            | FormFieldKind::DateTimeRange {
                 value, on_change, ..
             } => {
                 if on_change.is_none() {

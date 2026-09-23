@@ -387,6 +387,7 @@ fn lowered_json(name: &str, input: &str) -> String {
         accessibility: None,
         tooltip: None,
         visible: None,
+        fallback: None,
     };
     fuaran_rs::wire::encode_node(&node)
 }

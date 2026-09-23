@@ -71,6 +71,7 @@ fn metric(id: &str, label: &str, value: f64) -> Node {
         accessibility: None,
         tooltip: None,
         visible: None,
+        fallback: None,
     }
 }
 
@@ -102,6 +103,7 @@ fn flex_box(
         accessibility: None,
         tooltip: None,
         visible: None,
+        fallback: None,
     }
 }
 

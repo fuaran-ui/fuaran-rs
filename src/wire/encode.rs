@@ -808,7 +808,7 @@ fn cell_format(f: &CellFormat) -> String {
             "SignificantDigits",
             vec![field("digits", num(*digits as f64))],
         ),
-        CellFormat::Date { format } => case_obj("Date", vec![field("format", s(format))]),
+        CellFormat::DateTime { format } => case_obj("DateTime", vec![field("format", s(format))]),
         // Phase 819 — canonical field order alphabetical: `style` before `unit`.
         CellFormat::Duration { style, unit } => case_obj(
             "Duration",
@@ -839,8 +839,20 @@ fn format_intent(f: &Format) -> String {
                 .map(|d| vec![field("decimals", num(d as f64))])
                 .unwrap_or_default(),
         ),
-        Format::Date { date_style } => {
-            case_obj("Date", vec![field("dateStyle", s(date_style.as_str()))])
+        Format::DateTime {
+            date_style,
+            time_style,
+        } => {
+            // Phase 1810 — each style rides only when present; alphabetical field
+            // order (dateStyle before timeStyle), the canonical rule.
+            let mut fields = vec![];
+            if let Some(d) = date_style {
+                fields.push(field("dateStyle", s(d.as_str())));
+            }
+            if let Some(t) = time_style {
+                fields.push(field("timeStyle", s(t.as_str())));
+            }
+            case_obj("DateTime", fields)
         }
         Format::RelativeTime { unit } => {
             case_obj("RelativeTime", vec![field("unit", s(unit.as_str()))])
@@ -1537,10 +1549,10 @@ mod control_value_defaults {
     pub fn range() -> StaticValue {
         StaticValue::FloatPair(0.0, 0.0)
     }
-    pub fn date() -> StaticValue {
+    pub fn date_time() -> StaticValue {
         StaticValue::Ast(JVal::Str(String::new()))
     }
-    pub fn date_range() -> StaticValue {
+    pub fn date_time_range() -> StaticValue {
         StaticValue::StringPair(String::new(), String::new())
     }
     pub fn tokens() -> StaticValue {
@@ -1769,7 +1781,7 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
             ));
             case_obj("TextArea", fields)
         }
-        FormFieldKind::Date {
+        FormFieldKind::DateTime {
             value,
             variant,
             min,
@@ -1780,7 +1792,7 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
             let mut fields = handler_field("onChange", on_change);
             fields.extend(control_value_field(
                 auto_bind,
-                control_value_defaults::date(),
+                control_value_defaults::date_time(),
                 value,
             ));
             fields.push(field("variant", s(variant.as_str())));
@@ -1793,13 +1805,13 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
             if let Some(step) = step {
                 fields.push(field("step", num(*step)));
             }
-            case_obj("Date", fields)
+            case_obj("DateTime", fields)
         }
         // 0.7.0 — the single-control date range. Modelled on the `Range` arm, NOT
         // on `Date`: `control_value_field` emits `binding(value)`, which wraps a
         // `Static` in the `{"$type":"Static","value":…}` envelope — wrong for this
         // slot, whose canonical form is the bare `{from, to}` object.
-        FormFieldKind::DateRange {
+        FormFieldKind::DateTimeRange {
             value,
             variant,
             min,
@@ -1826,7 +1838,7 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
                     Binding::State {
                         key, default_value, ..
                     },
-                ) => key == id && *default_value == control_value_defaults::date_range(),
+                ) => key == id && *default_value == control_value_defaults::date_time_range(),
                 _ => false,
             };
             if !is_auto {
@@ -1848,7 +1860,7 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
             if let Some(step) = step {
                 fields.push(field("step", num(*step)));
             }
-            case_obj("DateRange", fields)
+            case_obj("DateTimeRange", fields)
         }
         // Phase 1121 — `allowFreeText` omits at TRUE here (the opposite of
         // `Combobox`), so the shortest document `{"$type":"Tokens"}` is the
@@ -2952,6 +2964,10 @@ fn accessibility(a: &Accessibility) -> String {
     if let Some(hidden) = &a.hidden {
         fields.push(field("hidden", binding(hidden)));
     }
+    // Phase 1812 — the bare-string canonical form for a literal, as `tooltip`.
+    if let Some(speak) = &a.speak {
+        fields.push(field("speak", text_source(speak)));
+    }
     obj(fields)
 }
 
@@ -2976,6 +2992,11 @@ fn node(n: &Node) -> String {
     // byte-identical to what it was before the trait existed.
     if let Some(v) = &n.visible {
         fields.push(field("visible", binding(v)));
+    }
+    // Phase 1812 — the author-declared fallback re-encodes byte-for-byte like
+    // any other envelope field; the canonical key order places it by name.
+    if let Some(f) = &n.fallback {
+        fields.push(field("fallback", node(f)));
     }
     obj(fields)
 }

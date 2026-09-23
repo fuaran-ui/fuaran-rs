@@ -66,6 +66,7 @@ fn project_node(sources: &BindingSources, node: &Node) -> Node {
         // renderer that consumes it, and folding the answer in here would strip
         // a node from a tree that is also used for editing.
         visible: node.visible.clone(),
+        fallback: node.fallback.clone(),
     }
 }
 

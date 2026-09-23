@@ -53,6 +53,7 @@ fn quickstart() -> String {
                 accessibility: None,
                 tooltip: None,
                 visible: None,
+                fallback: None,
             }],
             heading: None,
             layout: BoxLayout::Auto,
@@ -65,6 +66,7 @@ fn quickstart() -> String {
         accessibility: None,
         tooltip: None,
         visible: None,
+        fallback: None,
     };
 
     let wire: String = encode_node(&tree); // canonical wire JSON, byte-identical to every host

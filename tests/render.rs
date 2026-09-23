@@ -1021,7 +1021,7 @@ fn date_range_renders_two_variant_typed_inputs_over_the_pair() {
     // separator, where only the FROM end carries `data-fuaran-field` (the pair's
     // addressable slot) and both ends share the min/max/step constraints.
     let html = render(
-        r#"{"id":"f1","kind":{"$type":"Form","fields":[{"id":"stay","kind":{"$type":"DateRange","max":"2026-12-31","min":"2026-01-01","value":{"from":"2026-03-01","to":"2026-03-08"},"variant":"Date"},"label":"Stay","required":true}],"onSubmit":{"$type":"Dispatch"},"submitLabel":"Book"}}"#,
+        r#"{"id":"f1","kind":{"$type":"Form","fields":[{"id":"stay","kind":{"$type":"DateTimeRange","max":"2026-12-31","min":"2026-01-01","value":{"from":"2026-03-01","to":"2026-03-08"},"variant":"Date"},"label":"Stay","required":true}],"onSubmit":{"$type":"Dispatch"},"submitLabel":"Book"}}"#,
     );
     assert!(
         html.contains("<span class=\"fuaran-field-range\">"),
@@ -1056,7 +1056,7 @@ fn date_range_renders_two_variant_typed_inputs_over_the_pair() {
 fn date_range_variants_select_their_native_input_type() {
     for (variant, expected) in [("Time", "time"), ("DateTime", "datetime-local")] {
         let html = render(&format!(
-            r#"{{"id":"f1","kind":{{"$type":"Form","fields":[{{"id":"w","kind":{{"$type":"DateRange","variant":"{variant}"}},"label":"W","required":false}}],"onSubmit":{{"$type":"Dispatch"}},"submitLabel":"Go"}}}}"#
+            r#"{{"id":"f1","kind":{{"$type":"Form","fields":[{{"id":"w","kind":{{"$type":"DateTimeRange","variant":"{variant}"}},"label":"W","required":false}}],"onSubmit":{{"$type":"Dispatch"}},"submitLabel":"Go"}}}}"#
         ));
         assert_eq!(
             html.matches(&format!("type=\"{expected}\"")).count(),
@@ -1569,8 +1569,8 @@ fn form_control_class_vocabulary_matches_the_reference_renderer() {
         r#"{"id":"f-area","kind":{"$type":"TextArea","rows":3},"label":"A","required":false}"#,
         r#"{"id":"f-rnum","kind":{"$type":"RangedNumber","max":10,"min":0},"label":"R","required":false}"#,
         r#"{"id":"f-range","kind":{"$type":"Range","max":10,"min":0,"value":{"max":8,"min":2}},"label":"Rg","required":false}"#,
-        r#"{"id":"f-date","kind":{"$type":"Date","variant":"Date"},"label":"D","required":false}"#,
-        r#"{"id":"f-drange","kind":{"$type":"DateRange","value":{"from":"2026-03-01","to":"2026-03-08"},"variant":"Date"},"label":"DR","required":false}"#,
+        r#"{"id":"f-date","kind":{"$type":"DateTime","variant":"Date"},"label":"D","required":false}"#,
+        r#"{"id":"f-drange","kind":{"$type":"DateTimeRange","value":{"from":"2026-03-01","to":"2026-03-08"},"variant":"Date"},"label":"DR","required":false}"#,
     ];
     let json = format!(
         r#"{{"id":"form","kind":{{"$type":"Form","fields":[{}],"onSubmit":{{"$type":"Dispatch"}},"submitLabel":"Go"}}}}"#,

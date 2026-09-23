@@ -152,7 +152,9 @@ bare_enum!(TextDirection { Auto => "auto", Ltr => "ltr", Rtl => "rtl" });
 // own the emission strategy). Lower-case on the wire, like `SortDirection`.
 bare_enum!(LinkProtection { Email => "email" });
 bare_enum!(MathDisplay { Inline => "Inline", Block => "Block" });
-bare_enum!(DateVariant { Date => "Date", Time => "Time", DateTime => "DateTime" });
+// Phase 1811 — `DateTimeVariant` (was `DateVariant`): the temporal breadth of a
+// `DateTime` / `DateTimeRange` field. The three cases did not move.
+bare_enum!(DateTimeVariant { Date => "Date", Time => "Time", DateTime => "DateTime" });
 bare_enum!(FileReadEncoding { Text => "Text", Base64 => "Base64", DataUrl => "DataUrl" });
 // Phase 1536 — `Action::Navigate`'s destination window. A CLOSED enum of two,
 // deliberately not HTML's `target` attribute: that vocabulary also carries
@@ -178,6 +180,10 @@ bare_enum!(LiveRegionKind { Polite => "polite", Assertive => "assertive", Off =>
 // the wire, like `LiveRegionKind` and unlike most enums here.
 bare_enum!(SortDirection { Asc => "asc", Desc => "desc" });
 bare_enum!(DateStyle { Short => "Short", Medium => "Medium", Long => "Long", Full => "Full" });
+// Phase 1810 — the time-of-day half of `Format::DateTime`'s `dateStyle` /
+// `timeStyle` pair. The same four cases as `DateStyle`, deliberately a SEPARATE
+// enum: the two name breadths of different things.
+bare_enum!(TimeStyle { Short => "Short", Medium => "Medium", Long => "Long", Full => "Full" });
 bare_enum!(RelativeTimeUnit { Second => "Second", Minute => "Minute", Hour => "Hour", Day => "Day", Week => "Week", Month => "Month", Year => "Year" });
 // Phase 1533 — the resolution a `Binding::Now` declares for the host-furnished
 // instant. FOUR members and not `RelativeTimeUnit`'s seven, deliberately: this
@@ -454,8 +460,14 @@ pub enum Format {
     Percent {
         decimals: Option<i64>,
     },
-    Date {
-        date_style: DateStyle,
+    /// Phase 1810 — `dateStyle` / `timeStyle` are BOTH optional: `timeStyle`
+    /// alone is a time of day, both together a date-time, `dateStyle` alone the
+    /// shape every pre-1810 document carries. Neither present is a validator
+    /// concern (FUARAN155 on the reference host), not a decode refusal.
+    /// Phase 1811 — `DateTime` (was `Date`): an honest name once it renders a time.
+    DateTime {
+        date_style: Option<DateStyle>,
+        time_style: Option<TimeStyle>,
     },
     RelativeTime {
         unit: RelativeTimeUnit,
@@ -638,7 +650,9 @@ pub enum CellFormat {
     SignificantDigits {
         digits: i64,
     },
-    Date {
+    /// Phase 1811 — `DateTime` (was `Date`): the host-formatter pattern it
+    /// carries renders a date, a time or both.
+    DateTime {
         format: String,
     },
     /// Phase 819 — trendable duration cells: raw float counts `unit`s,
@@ -1230,24 +1244,27 @@ pub enum FormFieldKind {
         value: Binding,
         on_change: Option<Closure>,
     },
-    Date {
+    /// Phase 1811 — `DateTime` (was `Date`): the field already took a date, a
+    /// time of day or both via `variant`; the name now says so.
+    DateTime {
         value: Binding,
-        variant: DateVariant,
+        variant: DateTimeVariant,
         min: Option<String>,
         max: Option<String>,
         step: Option<f64>,
         on_change: Option<Closure>,
     },
-    /// 0.7.0 — the single-control date range: `Range`'s pair mechanics with
-    /// `Date`'s value conventions (an identical field list to `Date`). A `Static`
+    /// 0.7.0 — the single-control date range (`DateTimeRange` since Phase 1811):
+    /// `Range`'s pair mechanics with `DateTime`'s value conventions (an identical
+    /// field list to `DateTime`). A `Static`
     /// pair rides as the bare `{"from":…,"to":…}` object; `variant` is always
     /// emitted; `min`/`max` (ISO strings) and `step` (seconds) bound BOTH ends and
     /// are omitted when absent. In a filter context the pair binds ONE filter
     /// param, not two — the reason the case exists rather than two coordinated
-    /// `Date` fields.
-    DateRange {
+    /// `DateTime` fields.
+    DateTimeRange {
         value: Binding,
-        variant: DateVariant,
+        variant: DateTimeVariant,
         min: Option<String>,
         max: Option<String>,
         step: Option<f64>,
@@ -2433,8 +2450,8 @@ pub const CANONICAL_FORM_FIELD_KINDS: &[&str] = &[
     "RangedNumber",
     "SegmentedChoice",
     "TextArea",
-    "Date",
-    "DateRange",
+    "DateTime",
+    "DateTimeRange",
     "Combobox",
     "Tokens",
     "Rating",
@@ -2502,6 +2519,10 @@ pub struct Accessibility {
     pub role: Option<String>,
     pub live_region: Option<LiveRegionKind>,
     pub hidden: Option<Binding>,
+    /// Phase 1812 — the node's SPOKEN rendering for a voice surface: an ordinary
+    /// `TextSource` (bare-string canonical for a literal, as `tooltip`). Inert to
+    /// every visual renderer: it MUST reach no attribute and no visible text.
+    pub speak: Option<TextSource>,
 }
 
 /// The typed UI tree node (§3.1). `motion` / `extraAttributes` are wire-omitted
@@ -2536,6 +2557,11 @@ pub struct Node {
     /// and errored included: hiding on absence is the one failure a reader
     /// cannot see, cannot report and cannot work around.
     pub visible: Option<Binding>,
+    /// Phase 1812 — the author-declared degraded rendering: a full node a BEHIND
+    /// reader (one that meets this node's kind as a transport-only `Unknown`)
+    /// renders in place of its placeholder. A current reader decodes, preserves
+    /// and re-encodes it byte-for-byte and never renders it. Omitted when absent.
+    pub fallback: Option<Box<Node>>,
 }
 
 // ─── TreeOp (§3.4) ───────────────────────────────────────────────────────────

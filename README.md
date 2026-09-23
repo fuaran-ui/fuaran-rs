@@ -39,6 +39,7 @@ let tree = Node {
             accessibility: None,
             tooltip: None,
             visible: None,
+            fallback: None,
         }],
         heading: None,
         layout: BoxLayout::Auto,
@@ -51,6 +52,7 @@ let tree = Node {
     accessibility: None,
     tooltip: None,
     visible: None,
+    fallback: None,
 };
 
 let wire: String = encode_node(&tree);   // canonical wire JSON, byte-identical to every host

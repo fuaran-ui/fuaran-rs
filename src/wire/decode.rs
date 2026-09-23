@@ -564,7 +564,7 @@ decode_bare_enum!(decode_modality_kind, ModalityKind, "ModalityKind");
 decode_bare_enum!(decode_text_direction, TextDirection, "TextDirection");
 decode_bare_enum!(decode_link_protection, LinkProtection, "LinkProtection");
 decode_bare_enum!(decode_math_display, MathDisplay, "MathDisplay");
-decode_bare_enum!(decode_date_variant, DateVariant, "DateVariant");
+decode_bare_enum!(decode_date_time_variant, DateTimeVariant, "DateTimeVariant");
 // Phase 1536 — `Action::Navigate`'s destination window. BARE, so `"_blank"`
 // reports at `$.kind.onClick.target` with no `.$type` suffix, and is refused
 // rather than aliased: the HTML vocabulary it comes from also contains
@@ -585,6 +585,7 @@ decode_bare_enum!(
 decode_bare_enum!(decode_live_region, LiveRegionKind, "LiveRegionKind");
 decode_bare_enum!(decode_sort_direction, SortDirection, "SortDirection");
 decode_bare_enum!(decode_date_style, DateStyle, "DateStyle");
+decode_bare_enum!(decode_time_style, TimeStyle, "TimeStyle");
 decode_bare_enum!(
     decode_relative_time_unit,
     RelativeTimeUnit,
@@ -1766,7 +1767,7 @@ impl StaticSlot {
                             DecodeErrorCode::WrongType,
                             path,
                             format!(
-                                "date-range start '{from}' is after end '{to}' — a DateRange pair \
+                                "date-range start '{from}' is after end '{to}' — a DateTimeRange pair \
                                  is ordered (from <= to); ISO-8601 strings of one variant compare \
                                  lexicographically, so swap the two values"
                             ),
@@ -1873,10 +1874,22 @@ fn decode_format(path: &str, j: &JVal) -> DResult<Format> {
         "Percent" => Ok(Format::Percent {
             decimals: opt_int(path, fields, "decimals")?,
         }),
-        "Date" => {
-            let v = req(path, fields, "dateStyle", "DateStyle string")?;
-            Ok(Format::Date {
-                date_style: decode_date_style(&format!("{path}.dateStyle"), v)?,
+        // Phase 1811 — `DateTime` is canonical; `Date` (the pre-rename spelling) is
+        // its §16 lenient alias, decoded to the same value and re-encoded canonical.
+        // Phase 1810 — BOTH style slots are optional; neither present decodes
+        // structurally and is the validator's subject, not a shape error.
+        "DateTime" | "Date" => {
+            let date_style = match get(fields, "dateStyle") {
+                None => None,
+                Some(v) => Some(decode_date_style(&format!("{path}.dateStyle"), v)?),
+            };
+            let time_style = match get(fields, "timeStyle") {
+                None => None,
+                Some(v) => Some(decode_time_style(&format!("{path}.timeStyle"), v)?),
+            };
+            Ok(Format::DateTime {
+                date_style,
+                time_style,
             })
         }
         "RelativeTime" => {
@@ -1938,7 +1951,9 @@ fn decode_cell_format(path: &str, j: &JVal) -> DResult<CellFormat> {
         "SignificantDigits" => Ok(CellFormat::SignificantDigits {
             digits: req_int(path, fields, "digits", "integer digit count")?,
         }),
-        "Date" => Ok(CellFormat::Date {
+        // Phase 1811 — `DateTime` is canonical; `Date` (the pre-rename spelling) is
+        // its §16 lenient alias, decoded to the same value and re-encoded canonical.
+        "DateTime" | "Date" => Ok(CellFormat::DateTime {
             format: req_string(path, fields, "format", "format string")?,
         }),
         "Duration" => {
@@ -3573,10 +3588,10 @@ mod control_value_defaults {
     pub fn range() -> StaticValue {
         StaticValue::FloatPair(0.0, 0.0)
     }
-    pub fn date() -> StaticValue {
+    pub fn date_time() -> StaticValue {
         StaticValue::Ast(JVal::Str(String::new()))
     }
-    pub fn date_range() -> StaticValue {
+    pub fn date_time_range() -> StaticValue {
         StaticValue::StringPair(String::new(), String::new())
     }
     /// Phase 1121 — the EMPTY LIST. The token list is ordered and the order is
@@ -3606,6 +3621,38 @@ pub fn is_hex_colour(s: &str) -> bool {
     bytes.len() == 7 && bytes[0] == b'#' && bytes[1..].iter().all(u8::is_ascii_hexdigit)
 }
 
+/// Phase 1811 — the `variant` of a `DateTime` / `DateTimeRange` field, read
+/// through the §16 `Time` / `TimeRange` alias rule. Under the canonical tag (or
+/// the pre-rename alias) `variant` is required as it always was. Under the
+/// time-alias tag the alias SUPPLIES `Time` when the member is absent, and an
+/// explicit member beside it must agree — a `$type` of `Time` carrying
+/// `variant: "Date"` is refused as ambiguous rather than resolved to either, the
+/// 0.28.0 column-member posture applied to a `$type`.
+fn temporal_variant(
+    path: &str,
+    fields: &Fields,
+    tag: &str,
+    time_alias: &str,
+) -> DResult<DateTimeVariant> {
+    let variant_path = format!("{path}.variant");
+    if tag != time_alias {
+        let v = req(path, fields, "variant", "DateTimeVariant")?;
+        return decode_date_time_variant(&variant_path, v);
+    }
+    match get(fields, "variant") {
+        None => Ok(DateTimeVariant::Time),
+        Some(v) => match decode_date_time_variant(&variant_path, v)? {
+            DateTimeVariant::Time => Ok(DateTimeVariant::Time),
+            _ => Err(wrong_type(
+                &variant_path,
+                &format!(
+                    "the variant Time, or no variant at all — a $type of {time_alias} already fixes the variant to Time, and a different one beside it is ambiguous"
+                ),
+            )),
+        },
+    }
+}
+
 fn decode_form_field_kind(
     auto_bind: ControlAutoBind<'_>,
     path: &str,
@@ -3623,7 +3670,8 @@ fn decode_form_field_kind(
             None => Ok(auto_bind.auto_binding(placeholder)),
         }
     };
-    match disc(path, fields)? {
+    let tag = disc(path, fields)?;
+    match tag {
         "Text" => Ok(FormFieldKind::Text {
             value: value_or(StaticSlot::Str, control_value_defaults::text())?,
             on_change,
@@ -3727,11 +3775,16 @@ fn decode_form_field_kind(
             value: value_or(StaticSlot::Str, control_value_defaults::text())?,
             on_change,
         }),
-        "Date" => {
-            let value = value_or(StaticSlot::Str, control_value_defaults::date())?;
-            let variant_j = req(path, fields, "variant", "DateVariant")?;
-            let variant = decode_date_variant(&format!("{path}.variant"), variant_j)?;
-            Ok(FormFieldKind::Date {
+        // Phase 1811 — `DateTime` is canonical. `Date` is the pre-rename spelling,
+        // kept as a §16 lenient alias by the reference host's D8 ruling; `Time` is
+        // the invented spelling the rename exists to make findable — a
+        // `DateTime{variant:"Time"}` reached for by intent, so the alias SUPPLIES
+        // the variant when absent and REFUSES a disagreeing one beside it. All
+        // three re-encode canonical.
+        "DateTime" | "Date" | "Time" => {
+            let value = value_or(StaticSlot::Str, control_value_defaults::date_time())?;
+            let variant = temporal_variant(path, fields, tag, "Time")?;
+            Ok(FormFieldKind::DateTime {
                 value,
                 variant,
                 min: opt_string(path, fields, "min")?,
@@ -3740,7 +3793,10 @@ fn decode_form_field_kind(
                 on_change,
             })
         }
-        "DateRange" => {
+        // Phase 1811 — `DateTimeRange` is canonical; `DateRange` (pre-rename) and
+        // `TimeRange` (invented, fixes `variant` to `Time`) are its §16 lenient
+        // aliases on exactly the `DateTime` rule above.
+        "DateTimeRange" | "DateRange" | "TimeRange" => {
             // The canonical Static pair rides as the BARE `{from, to}` object (no
             // `$type`) — accept it before the generic binding dispatch, exactly as
             // `Range` does above. The `value_or` fallback is what carries BOTH
@@ -3757,11 +3813,13 @@ fn decode_form_field_kind(
                             .parse(&format!("{path}.value"), &JVal::Obj(pf.clone()))?,
                     }
                 }
-                _ => value_or(StaticSlot::StringPair, control_value_defaults::date_range())?,
+                _ => value_or(
+                    StaticSlot::StringPair,
+                    control_value_defaults::date_time_range(),
+                )?,
             };
-            let variant_j = req(path, fields, "variant", "DateVariant")?;
-            let variant = decode_date_variant(&format!("{path}.variant"), variant_j)?;
-            Ok(FormFieldKind::DateRange {
+            let variant = temporal_variant(path, fields, tag, "TimeRange")?;
+            Ok(FormFieldKind::DateTimeRange {
                 value,
                 variant,
                 min: opt_string(path, fields, "min")?,
@@ -6145,6 +6203,9 @@ fn decode_accessibility(path: &str, j: &JVal) -> DResult<Accessibility> {
         Some(v) => Some(decode_live_region(&format!("{path}.liveRegion"), v)?),
     };
     let hidden = opt_binding_slot(path, fields, "hidden", StaticSlot::Bool)?;
+    // Phase 1812 — the spoken rendering, an ordinary `TextSource` slot like
+    // `tooltip`; inert to the visual projection.
+    let speak = opt_text_source(path, fields, "speak")?;
     Ok(Accessibility {
         label,
         labelled_by,
@@ -6152,6 +6213,7 @@ fn decode_accessibility(path: &str, j: &JVal) -> DResult<Accessibility> {
         role,
         live_region,
         hidden,
+        speak,
     })
 }
 
@@ -6196,6 +6258,13 @@ fn decode_node_ast(path: &str, j: &JVal) -> DResult<Node> {
     // slot beside `tooltip`. The §3.6 bare-scalar coercion reaches it like any
     // other binding slot.
     let visible = opt_binding_slot(path, fields, "visible", StaticSlot::Bool)?;
+    // Phase 1812 — the author-declared fallback: a full node, walked by the same
+    // policy-gated decoder as any nested node (so the §21 bounds apply), preserved
+    // and re-encoded verbatim, never rendered by a reader that decodes the kind.
+    let fallback = match get(fields, "fallback") {
+        None => None,
+        Some(v) => Some(Box::new(decode_node_ast(&format!("{path}.fallback"), v)?)),
+    };
     Ok(Node {
         id: id.to_string(),
         kind,
@@ -6204,6 +6273,7 @@ fn decode_node_ast(path: &str, j: &JVal) -> DResult<Node> {
         accessibility,
         tooltip,
         visible,
+        fallback,
     })
 }
 

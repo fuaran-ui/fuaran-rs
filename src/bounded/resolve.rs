@@ -131,6 +131,7 @@ pub fn resolve_tree(sources: &BindingSources, node: &Node) -> Node {
         // resolved at render, where a `false` removes the node, so re-resolving
         // it here would substitute an answer for the question.
         visible: node.visible.clone(),
+        fallback: node.fallback.clone(),
     }
 }
 

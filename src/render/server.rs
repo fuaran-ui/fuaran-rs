@@ -3116,7 +3116,7 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
             value,
             ..
         } => render_segmented_choice(ctx, &field.id, options, value, *orientation),
-        FormFieldKind::Date {
+        FormFieldKind::DateTime {
             value,
             variant,
             min,
@@ -3125,9 +3125,9 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
             ..
         } => {
             let input_type = match variant {
-                crate::wire::DateVariant::Time => "time",
-                crate::wire::DateVariant::DateTime => "datetime-local",
-                crate::wire::DateVariant::Date => "date",
+                crate::wire::DateTimeVariant::Time => "time",
+                crate::wire::DateTimeVariant::DateTime => "datetime-local",
+                crate::wire::DateTimeVariant::Date => "date",
             };
             let current = try_string(ctx.sources, value).unwrap_or_default();
             let mut attrs: Vec<Attr> = vec![
@@ -3148,7 +3148,7 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
             }
             void_el("input", &attrs)
         }
-        FormFieldKind::DateRange {
+        FormFieldKind::DateTimeRange {
             value,
             variant,
             min,
@@ -3165,9 +3165,9 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
             // NOT this file's older `fuaran-form-range*` spellings, which have no
             // counterpart there.
             let input_type = match variant {
-                crate::wire::DateVariant::Time => "time",
-                crate::wire::DateVariant::DateTime => "datetime-local",
-                crate::wire::DateVariant::Date => "date",
+                crate::wire::DateTimeVariant::Time => "time",
+                crate::wire::DateTimeVariant::DateTime => "datetime-local",
+                crate::wire::DateTimeVariant::Date => "date",
             };
             let (from_v, to_v) = resolve_string_pair(ctx.sources, value)
                 .unwrap_or_else(|| (String::new(), String::new()));
@@ -3889,6 +3889,7 @@ fn render_grid_cell(ctx: &Ctx<'_>, col: &ColumnErased, row: &JVal) -> String {
                 accessibility: None,
                 tooltip: None,
                 visible: None,
+                fallback: None,
             };
             render_node(ctx, &placeholder)
         }

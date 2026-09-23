@@ -211,6 +211,7 @@ fn collect_op_missing(gate: &CapabilityGate, op: &TreeOp, missing: &mut BTreeSet
                 accessibility: None,
                 tooltip: None,
                 visible: None,
+                fallback: None,
             };
             collect_node_missing(gate, &scratch, missing);
         }
