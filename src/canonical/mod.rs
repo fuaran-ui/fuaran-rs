@@ -3,11 +3,12 @@
 //! JSON value model + parser the decoder consumes. The number form is the
 //! make-or-break of any host (§5) — it was the first brick `fuaran-rs` shipped.
 
-mod float;
 mod json;
 
-pub use float::format_finite_double;
+// The number form is a Core twin, so it lives behind the Core boundary and is
+// re-exported here under its published paths.
+pub use crate::core::number::{format_finite_double, format_number};
 pub use json::{
-    JVal, ParseError, escape_string, format_number, ordinal_cmp, parse, render_array,
-    render_canonical, render_object,
+    JVal, ParseError, escape_string, ordinal_cmp, parse, render_array, render_canonical,
+    render_object,
 };

@@ -14,7 +14,7 @@
 //! number outside the RFC 8259 grammar, a bare `NaN`, a raw C0 control
 //! character and an unpaired surrogate are each refused here, on the way down.
 
-use super::float::format_finite_double;
+use crate::core::number::format_number;
 
 /// A parsed JSON value. `Obj` preserves parse order (the decoder looks fields up
 /// by name per §2 rule 2; the canonical renderer re-sorts on emit). A duplicated
@@ -610,20 +610,6 @@ pub fn escape_string(s: &str) -> String {
     }
     out.push('"');
     out
-}
-
-/// The §2 rule-5 number form: finite doubles in the canonical layout, the IEEE
-/// specials as quoted sentinel strings, negative zero collapsed to `0`.
-pub fn format_number(n: f64) -> String {
-    if n.is_nan() {
-        "\"NaN\"".to_string()
-    } else if n == f64::INFINITY {
-        "\"Infinity\"".to_string()
-    } else if n == f64::NEG_INFINITY {
-        "\"-Infinity\"".to_string()
-    } else {
-        format_finite_double(n)
-    }
 }
 
 /// Ordinal comparison on UTF-16 code units — `StringComparer.Ordinal`, the §2

@@ -497,6 +497,23 @@ This host declares no stability policy yet (pre-1.0), so the change is recorded 
 rather than in a `STABILITY.md` it does not have; the version advances
 `0.0.1-alpha.1` -> `0.0.2-alpha.1`.
 
+## The Core boundary — `src/core/`
+
+The subsystems this host reimplements from the `Fuaran.Core` reference live in one
+private module, `src/core/`: the dataframe model, the Transform evaluator with its
+list-param substitution, the signature-searchable function registry
+(`findBySignature`) and the canonical number form. The boundary mirrors
+`Fuaran.Core` — the same subsystems, certified against the same shared corpus
+families.
+
+Code inside it imports only the standard library and other `core` modules, never
+a domain module of this crate (`wire`, `render`, `ops`, …), and
+`tests/core_boundary.rs` fails the suite the moment it does. The published paths
+did not move: `transform`, `function`, `wire` and `canonical` re-export the
+boundary, so `fuaran_rs::transform::eval_pipeline` and every other public name read
+as before. The point is the future: if these twins are ever wanted as a crate of
+their own, lifting them out is a copy, not an untangling.
+
 ## Layout
 
 ```
@@ -504,7 +521,9 @@ fuaran-rs/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs           # crate doc + VERSION
-│   ├── canonical/       # canonical-JSON layer — number form, parser, canonical renderer
+│   ├── core/            # the Core boundary — dataframe model, Transform evaluator,
+│   │                    #   function registry, number form (imports nothing else here)
+│   ├── canonical/       # canonical-JSON layer — parser, canonical renderer (+ number form re-export)
 │   ├── wire/            # typed wire model + Node / TreeOp codec + DecodeError envelope
 │   ├── ops/             # tree-op apply engine + ApplyError envelope + dry-run
 │   │                    #   + placement.rs (placed insert / move / nudge + clone verbs)

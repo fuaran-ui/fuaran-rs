@@ -30,6 +30,13 @@
 pub mod bounded;
 pub mod canonical;
 pub mod client;
+/// The Core boundary (Phase 1863) — this host's twins of the Core reference
+/// subsystems (the dataframe model, the Transform evaluator, the function
+/// registry, the canonical number form), kept in one module that imports
+/// nothing else from this crate. Private: [`transform`], [`function`], [`wire`]
+/// and [`canonical`] re-export it under their published paths. The rule is held
+/// by `tests/core_boundary.rs`.
+mod core;
 pub mod dag;
 pub mod diff;
 /// Edge hosting of the certified core — a single-owner session whose op-stream

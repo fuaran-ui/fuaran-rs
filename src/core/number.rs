@@ -1,5 +1,21 @@
 //! The canonical number formatter — the `.NET Double.ToString("R", InvariantCulture)`
-//! layout the Fuaran wire form requires (`WIRE_FORMAT.md` §5).
+//! layout the Fuaran wire form requires (`WIRE_FORMAT.md` §5). The Core twin of
+//! the reference `formatFiniteDouble` (`Fuaran.Core.Wire`); `crate::canonical`
+//! re-exports both functions here, so their published paths are unchanged.
+
+/// The §2 rule-5 number form: finite doubles in the canonical layout, the IEEE
+/// specials as quoted sentinel strings, negative zero collapsed to `0`.
+pub fn format_number(n: f64) -> String {
+    if n.is_nan() {
+        "\"NaN\"".to_string()
+    } else if n == f64::INFINITY {
+        "\"Infinity\"".to_string()
+    } else if n == f64::NEG_INFINITY {
+        "\"-Infinity\"".to_string()
+    } else {
+        format_finite_double(n)
+    }
+}
 
 /// Renders a finite `f64` in the canonical Fuaran wire form, matching
 /// `.NET Double.ToString("R", InvariantCulture)`:
