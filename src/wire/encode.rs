@@ -2294,6 +2294,14 @@ fn grid_spec(spec: &GridSpec) -> String {
     if let Some(key) = &spec.transfer_out_key {
         fields.push(field("transferOutKey", s(key)));
     }
+    // Phase 1892 — both omitted when absent, so every pre-1892 grid stays
+    // byte-identical.
+    if let Some(key) = &spec.window_state_key {
+        fields.push(field("windowStateKey", s(key)));
+    }
+    if let Some(total) = &spec.row_total {
+        fields.push(field("rowTotal", binding(total)));
+    }
     obj(fields)
 }
 

@@ -478,6 +478,10 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             }),
             keep_rows_together: spec.keep_rows_together,
             repeat_header: spec.repeat_header,
+            // Phase 1892 — a state-key name and an int binding, not text; both
+            // project through untouched.
+            window_state_key: spec.window_state_key.clone(),
+            row_total: spec.row_total.clone(),
         }),
         NodeKind::Chart(spec) => NodeKind::Chart(ChartSpec {
             kind: spec.kind,

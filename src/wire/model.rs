@@ -1398,6 +1398,14 @@ pub struct GridSpec {
     /// continues onto. What survives on `DataGrid` is precisely what no
     /// arrangement of existing kinds reaches.
     pub repeat_header: bool,
+    /// Phase 1892 — names the State key carrying the row-window descriptor
+    /// `{"offset": N, "count": M}`. Omitted on the wire when absent. Codec
+    /// only on this host: the window function is pending.
+    pub window_state_key: Option<String>,
+    /// Phase 1892 — the declared row total, an int `Binding` (the same slot
+    /// shape as `Tabs.activeIndex` / `Stepper.activeStep`). Omitted on the
+    /// wire when absent.
+    pub row_total: Option<Binding>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

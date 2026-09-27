@@ -4706,6 +4706,10 @@ fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
         // reported at its own path.
         transfer_in_key: opt_string(path, fields, "transferInKey")?,
         transfer_out_key: opt_string(path, fields, "transferOutKey")?,
+        // Phase 1892 — the row window and the declared total: a string key and
+        // an int Binding decoded as the other int Binding slots are.
+        window_state_key: opt_string(path, fields, "windowStateKey")?,
+        row_total: opt_binding_slot(path, fields, "rowTotal", StaticSlot::Int)?,
     })
 }
 
