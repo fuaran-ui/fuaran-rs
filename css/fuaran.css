@@ -3632,6 +3632,37 @@ html[data-fuaran-disconnected]::before {
   cursor: pointer;
 }
 
+/* The deterministic highlighting tier (Phase 1854) — class-only token spans the
+   renderers emit for a CodeBlock whose language has a grammar (F*, F#; see
+   fuaran-dotnet/docs/CODE-HIGHLIGHT.md). Colours are EXISTING theme tokens, read
+   on the code surface (`--fuaran-code-bg`); every pair clears the 4.5:1 text
+   contrast floor against that surface's fallback, which a test pins. A host
+   re-colours by overriding these six rules. */
+.fuaran-codeblock-code .tok-kw {
+  color: var(--fuaran-tone-brand-border, #93c5fd);
+}
+
+.fuaran-codeblock-code .tok-ty {
+  color: var(--fuaran-tone-success-border, #6ee7b7);
+}
+
+.fuaran-codeblock-code .tok-str {
+  color: var(--fuaran-tone-warning-border, #fcd34d);
+}
+
+.fuaran-codeblock-code .tok-num {
+  color: var(--fuaran-tone-critical-border, #fca5a5);
+}
+
+.fuaran-codeblock-code .tok-op {
+  color: var(--fuaran-tone-brand-hover-border, #60a5fa);
+}
+
+.fuaran-codeblock-code .tok-com {
+  color: var(--fuaran-tone-subdued-hover-border, #9ca3af);
+  font-style: italic;
+}
+
 /* ── Math (Phase 293) ──────────────────────────────────────────── */
 .fuaran-math-block {
   display: block;
