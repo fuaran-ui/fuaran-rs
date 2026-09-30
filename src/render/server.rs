@@ -4780,6 +4780,14 @@ pub fn render_with_islands_with_egress(
 /// specification, not from any host) through THIS host's own sort, page slice,
 /// descriptor reader and window function, exactly as the family's description
 /// prescribes; the render half pins the ARIA annotations and the pager.
+///
+/// The render half lives here rather than in `render-fidelity.json` by decision
+/// (Phase 1919): the shared table's DataGrid entry carries no window
+/// obligation, because the specification states the annotations as a SHOULD
+/// and the table's obligations are closed-vocabulary claims every host
+/// rendering the kind must assert. The rows and the total are certified
+/// cross-host by the `grid-window/` vectors; promoting the annotations is a
+/// specification change (SHOULD to MUST) before it is a table edit.
 #[cfg(test)]
 mod grid_window_tests {
     use super::*;
