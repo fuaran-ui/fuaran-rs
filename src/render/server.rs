@@ -3928,7 +3928,11 @@ fn render_grid(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &GridSpec) -> String
     // (which also honours `defaultSort`), then the client page, then the window,
     // all from the seeded State, with the pager a paged grid carries. A grid
     // naming no window key renders exactly as it did before Phase 1892.
-    type Windowed<'r> = (std::borrow::Cow<'r, [JVal]>, Option<PresentedWindow>, Option<GridPage>);
+    type Windowed<'r> = (
+        std::borrow::Cow<'r, [JVal]>,
+        Option<PresentedWindow>,
+        Option<GridPage>,
+    );
     let (rows, window, page): Windowed<'_> = match &spec.window_state_key {
         None => (std::borrow::Cow::Borrowed(rows), None, None),
         Some(window_key) => {
@@ -3947,7 +3951,11 @@ fn render_grid(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &GridSpec) -> String
             } else {
                 None
             };
-            let descriptor = ctx.sources.state.get(window_key).and_then(grid_window_of_value);
+            let descriptor = ctx
+                .sources
+                .state
+                .get(window_key)
+                .and_then(grid_window_of_value);
             let window = present_grid_window(host_windows, declared, descriptor, page_rows.len());
             let presented = page_rows[window.start..window.end].to_vec();
             (std::borrow::Cow::Owned(presented), Some(window), page)
@@ -4129,7 +4137,12 @@ fn grid_sort_descriptor(descriptor: &JVal) -> Option<(usize, bool)> {
 
 /// Sort rows STABLY by the addressed column's `field`; `None` (the authored
 /// order stands) for an out-of-range column or a field-less closure column.
-fn grid_sort_rows(spec: &GridSpec, column: usize, ascending: bool, rows: &[JVal]) -> Option<Vec<JVal>> {
+fn grid_sort_rows(
+    spec: &GridSpec,
+    column: usize,
+    ascending: bool,
+    rows: &[JVal],
+) -> Option<Vec<JVal>> {
     let field = spec.columns.get(column)?.field.as_ref()?;
     Some(grid_sort_rows_by(field, ascending, rows))
 }
@@ -4238,7 +4251,8 @@ fn grid_page(sources: &BindingSources, spec: &GridSpec, row_count: usize) -> Opt
         .filter(|p| *p >= 1)
         .map_or(1, |p| p as usize);
     let last_page = if host_pages {
-        resolve_row_total(sources, spec.row_total.as_ref()).map(|total| grid_page_count_of(size, total))
+        resolve_row_total(sources, spec.row_total.as_ref())
+            .map(|total| grid_page_count_of(size, total))
     } else {
         Some(grid_page_count_of(size, row_count))
     };
@@ -4296,7 +4310,8 @@ impl PresentedWindow {
     /// The table's `aria-rowcount`: the total plus the header row, `-1` where
     /// the total is unknown; `None` where no window is in effect.
     fn row_count(&self) -> Option<i64> {
-        self.windowed.then(|| self.total.map_or(-1, |t| t as i64 + 1))
+        self.windowed
+            .then(|| self.total.map_or(-1, |t| t as i64 + 1))
     }
 
     /// A presented row's `aria-rowindex` (its 0-based index in the range plus 2,
@@ -4816,13 +4831,19 @@ mod grid_window_tests {
         };
         let path = root.join("grid-window").join("grid-window-vectors.json");
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
-            panic!("{}: a behaviour family cannot be certified by reading nothing ({e})", path.display())
+            panic!(
+                "{}: a behaviour family cannot be certified by reading nothing ({e})",
+                path.display()
+            )
         });
         let family = parse(&text).expect("the grid-window family parses");
         let Some(JVal::Arr(vectors)) = family.field("vectors") else {
             panic!("the grid-window family carries no vectors array");
         };
-        assert!(vectors.len() >= 20, "the family carries its full vector set");
+        assert!(
+            vectors.len() >= 20,
+            "the family carries its full vector set"
+        );
         for vector in vectors {
             let id = match vector.field("id") {
                 Some(JVal::Str(s)) => s.clone(),
@@ -4842,7 +4863,10 @@ mod grid_window_tests {
             };
             let mut rows: Vec<JVal> = rows.clone();
             if let Some(sort) = input.field("sort") {
-                let column = sort.field("column").and_then(grid_json_int).expect("sort column") as usize;
+                let column = sort
+                    .field("column")
+                    .and_then(grid_json_int)
+                    .expect("sort column") as usize;
                 let Some(JVal::Str(field)) = columns.get(column) else {
                     panic!("{id}: the sort column does not index the columns");
                 };
@@ -4852,7 +4876,10 @@ mod grid_window_tests {
             if slicing == "client"
                 && let Some(page) = input.field("page")
             {
-                let size = page.field("size").and_then(grid_json_int).expect("page size") as usize;
+                let size = page
+                    .field("size")
+                    .and_then(grid_json_int)
+                    .expect("page size") as usize;
                 let number = page.field("page").and_then(grid_json_int).expect("page") as usize;
                 rows = slice_grid_rows_to_page(size, number, &rows).to_vec();
             }
@@ -4876,7 +4903,10 @@ mod grid_window_tests {
             } else {
                 None
             };
-            let descriptor = sources.state.get("vector-window").and_then(grid_window_of_value);
+            let descriptor = sources
+                .state
+                .get("vector-window")
+                .and_then(grid_window_of_value);
             let window = present_grid_window(host_windows, declared, descriptor, rows.len());
             let presented = ids(&rows[window.start..window.end]);
             let want_ids: Vec<String> = match expected.field("rowIds") {
@@ -4889,8 +4919,14 @@ mod grid_window_tests {
                     .collect(),
                 _ => panic!("{id}: no expected rowIds"),
             };
-            let want_total = expected.field("total").and_then(grid_json_int).map(|t| t as usize);
-            let want_offset = expected.field("offset").and_then(grid_json_int).expect("offset") as usize;
+            let want_total = expected
+                .field("total")
+                .and_then(grid_json_int)
+                .map(|t| t as usize);
+            let want_offset = expected
+                .field("offset")
+                .and_then(grid_json_int)
+                .expect("offset") as usize;
             let want_windowed = matches!(expected.field("windowed"), Some(JVal::Bool(true)));
             assert_eq!(presented, want_ids, "{id}: rowIds");
             assert_eq!(window.offset, want_offset, "{id}: offset");
@@ -4947,7 +4983,10 @@ mod grid_window_tests {
         let html = render(r#","windowStateKey":"w""#, vec![("w", window(4.0, 3.0))]);
         assert!(html.contains(r#"aria-rowcount="13""#), "{html}");
         assert_eq!(html.matches("aria-rowindex=").count(), 3, "{html}");
-        assert!(html.contains(r#"aria-rowindex="6""#) && html.contains(r#"aria-rowindex="8""#), "{html}");
+        assert!(
+            html.contains(r#"aria-rowindex="6""#) && html.contains(r#"aria-rowindex="8""#),
+            "{html}"
+        );
         assert!(html.contains(">r04<") && html.contains(">r06<"), "{html}");
         assert!(!html.contains(">r03<") && !html.contains(">r07<"), "{html}");
     }
@@ -4971,21 +5010,33 @@ mod grid_window_tests {
             vec![("w", window(0.0, 2.0)), ("p", page)],
         );
         assert!(html.contains(">r10<") && html.contains(">r11<"), "{html}");
-        assert!(html.contains(r#"<div class="fuaran-grid-paged">"#), "{html}");
+        assert!(
+            html.contains(r#"<div class="fuaran-grid-paged">"#),
+            "{html}"
+        );
         assert!(html.contains("Page 3 of 3"), "{html}");
     }
 
     #[test]
     fn a_host_windowed_grid_slices_nothing_and_reports_the_declared_total() {
         let mut sources = BindingSources::default();
-        let JVal::Arr(all) = twelve_rows() else { unreachable!() };
-        sources.query_results.insert("orders".into(), JVal::Arr(all[..5].to_vec()));
-        sources.query_results.insert("orders.total".into(), JVal::Num(5000.0));
+        let JVal::Arr(all) = twelve_rows() else {
+            unreachable!()
+        };
+        sources
+            .query_results
+            .insert("orders".into(), JVal::Arr(all[..5].to_vec()));
+        sources
+            .query_results
+            .insert("orders.total".into(), JVal::Num(5000.0));
         sources.state.insert("w".into(), window(100.0, 5.0));
         let json = r#"{"id":"g","kind":{"$type":"DataGrid","columns":[{"field":"id","kind":{"$type":"Text"},"label":"Id"}],"rowTotal":{"$type":"Query","name":"orders.total"},"source":{"$type":"Query","dependsOn":["w"],"name":"orders"},"windowStateKey":"w"}}"#;
         let html = render_to_html(&decode_node(json).expect("decodes"), &sources);
         assert!(html.contains(r#"aria-rowcount="5001""#), "{html}");
-        assert!(html.contains(r#"aria-rowindex="102""#) && html.contains(r#"aria-rowindex="106""#), "{html}");
+        assert!(
+            html.contains(r#"aria-rowindex="102""#) && html.contains(r#"aria-rowindex="106""#),
+            "{html}"
+        );
         assert_eq!(html.matches("aria-rowindex=").count(), 5, "{html}");
     }
 }
