@@ -230,8 +230,11 @@ impl Walker {
                 }
             }
             NodeKind::Select(s) => {
-                if s.on_change.is_none() && !s.multiple {
-                    self.check_writable(id, "value", &s.value);
+                if let Some(value) = &s.value
+                    && s.on_change.is_none()
+                    && !s.multiple
+                {
+                    self.check_writable(id, "value", value);
                 }
                 if let Some(values) = &s.values
                     && s.on_change_multi.is_none()
@@ -239,7 +242,9 @@ impl Walker {
                     self.check_writable(id, "values", values);
                 }
                 self.check_binding(id, &s.source);
-                self.check_binding(id, &s.value);
+                if let Some(value) = &s.value {
+                    self.check_binding(id, value);
+                }
                 if let Some(values) = &s.values {
                     self.check_binding(id, values);
                 }

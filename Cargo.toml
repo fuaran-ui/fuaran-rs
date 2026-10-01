@@ -23,6 +23,11 @@ name = "fuaran-ui"
 # second question. A consumer's cost is the enum widening, which the draft
 # already carries. When this crate takes its first tag, that tag is what makes
 # the slot someone's contract, and the rule bites from there.
+#
+# Phase 1962 rides the same draft for the same reason: `SelectSpec.value`
+# becomes `Option<Binding>` (a multi-select carries `values` and no `value`),
+# which breaks every full-literal construction and every read of the field — a
+# breaking change, the class the draft already carries, on a still-untagged slot.
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"

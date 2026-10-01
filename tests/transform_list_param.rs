@@ -141,9 +141,22 @@ fn substitution_walks_nested_positions_and_non_filter_steps() {
 
 // ─── the corpus fixture (behaviours 1–3, end to end on the server path) ──────
 
-/// Walks up from the crate directory looking for the shared corpus, matching
-/// `tests/conformance.rs`.
+/// Resolves the shared corpus the way `tests/conformance.rs` does: a declared
+/// `FUARAN_WIRE_FIXTURES` wins (and is refused, not ignored, when it names no
+/// corpus); otherwise walk up from the crate directory.
 fn corpus_nodes_dir() -> Option<PathBuf> {
+    if let Ok(declared) = std::env::var("FUARAN_WIRE_FIXTURES")
+        && !declared.is_empty()
+    {
+        let root = PathBuf::from(declared);
+        assert!(
+            root.join("manifest.json").is_file(),
+            "FUARAN_WIRE_FIXTURES names '{}', which holds no manifest.json. It is refused rather \
+             than ignored: falling back to the walk would certify against a corpus nobody named.",
+            root.display()
+        );
+        return Some(root.join("nodes"));
+    }
     let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
     loop {
         let root = dir.join("wire-format-fixtures");

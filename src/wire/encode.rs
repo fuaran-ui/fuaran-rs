@@ -2013,8 +2013,11 @@ fn select_spec(spec: &SelectSpec) -> String {
     let mut fields = vec![
         field("label", text_source(&spec.label)),
         field("source", binding(&spec.source)),
-        field("value", binding(&spec.value)),
     ];
+    // Phase 1962 — emitted only when present; a multi-select carries none.
+    if let Some(value) = &spec.value {
+        fields.push(field("value", binding(value)));
+    }
     if spec.on_change.is_some() {
         fields.push(field("onChange", CLOSURE.to_string()));
     }

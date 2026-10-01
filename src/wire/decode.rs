@@ -4112,13 +4112,41 @@ fn decode_select_spec(path: &str, j: &JVal) -> DResult<SelectSpec> {
         "Select source binding",
         StaticSlot::Options,
     )?;
-    let value = req_binding_slot(
-        path,
-        fields,
-        "value",
-        "Select value binding",
-        StaticSlot::StringOpt,
-    )?;
+    // Phase 1962 — the `value` rule (WIRE_FORMAT.md §3.2): a single-select
+    // REQUIRES `value`; a multi-select carries `values` and no `value`. The
+    // empty-`Static` placeholder every pre-1962 multi-select carried is a §16
+    // lenient accept that normalises to absent; any other `value` on a
+    // multi-select is a second selection the control never reads and is
+    // refused. A malformed `multiple` is its own defect, so the presence rule
+    // is not applied on top of it (`value` decodes if present, is not demanded).
+    let multiple_raw = get(fields, "multiple");
+    let value = match multiple_raw {
+        Some(JVal::Bool(true)) => match get(fields, "value") {
+            None => None,
+            Some(v) => {
+                let value_path = format!("{path}.value");
+                match decode_binding_slot(&value_path, v, StaticSlot::StringOpt)? {
+                    Binding::Static {
+                        value: StaticValue::StringOpt(None),
+                    } if matches!(v, JVal::Obj(_)) => None,
+                    _ => {
+                        return Err(wrong_type(
+                            &value_path,
+                            "no value on a multi-select (its selection is `values`)",
+                        ));
+                    }
+                }
+            }
+        },
+        None | Some(JVal::Bool(false)) => Some(req_binding_slot(
+            path,
+            fields,
+            "value",
+            "Select value binding",
+            StaticSlot::StringOpt,
+        )?),
+        Some(_) => opt_binding_slot(path, fields, "value", StaticSlot::StringOpt)?,
+    };
     let placeholder = opt_text_source(path, fields, "placeholder")?;
     let disabled = opt_binding_slot(path, fields, "disabled", StaticSlot::Bool)?;
     let multiple = opt_bool(path, fields, "multiple")?;

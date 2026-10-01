@@ -1189,7 +1189,10 @@ pub struct ButtonSpec {
 pub struct SelectSpec {
     pub label: TextSource,
     pub source: Binding,
-    pub value: Binding,
+    /// The single-select value binding. Phase 1962: present exactly when the
+    /// select is NOT a multi-select — a `multiple: true` select carries its
+    /// selection in `values` and no `value` (WIRE_FORMAT.md §3.2).
+    pub value: Option<Binding>,
     pub on_change: Option<Closure>,
     pub placeholder: Option<TextSource>,
     pub disabled: Option<Binding>,
