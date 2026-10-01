@@ -4152,7 +4152,7 @@ fn decode_select_spec(path: &str, j: &JVal) -> DResult<SelectSpec> {
         on_change: opt_closure(fields, "onChange"),
         placeholder,
         disabled,
-        multiple: multiple == Some(true),
+        multiple,
         values,
         on_change_multi: opt_closure(fields, "onChangeMulti"),
     })

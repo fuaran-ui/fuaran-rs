@@ -29,7 +29,10 @@ name = "fuaran-ui"
 # which breaks every full-literal construction and every read of the field — a
 # breaking change, the class the draft already carries, on a still-untagged slot.
 # A `value` on a multi-select is decoded (a malformed one still refuses) and
-# then dropped, so a stored multi-select carrying one keeps reading.
+# then dropped, so a stored multi-select carrying one keeps reading. Its
+# amendment rides too: `SelectSpec.multiple` becomes `Option<bool>` so an
+# explicit `"multiple":false` re-encodes as written (not omit-at-default; the
+# corpus fixture nodes/select-multiple-false.json) and an absent one stays absent.
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"

@@ -1196,8 +1196,11 @@ pub struct SelectSpec {
     pub on_change: Option<Closure>,
     pub placeholder: Option<TextSource>,
     pub disabled: Option<Binding>,
-    /// Emitted only when `true` (Phase 291), so single-select stays byte-identical.
-    pub multiple: bool,
+    /// Phase 291 / 1962: an ordinary optional field, kept AS AUTHORED. `None`
+    /// (absent) is omitted, so single-select stays byte-identical; an explicit
+    /// `Some(false)` re-encodes as written — `multiple` is not omit-at-default
+    /// (WIRE_FORMAT.md §3.2, `nodes/select-multiple-false.json`).
+    pub multiple: Option<bool>,
     pub values: Option<Binding>,
     pub on_change_multi: Option<Closure>,
 }

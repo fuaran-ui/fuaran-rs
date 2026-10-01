@@ -2027,8 +2027,9 @@ fn select_spec(spec: &SelectSpec) -> String {
     if let Some(disabled) = &spec.disabled {
         fields.push(field("disabled", binding(disabled)));
     }
-    if spec.multiple {
-        fields.push(field("multiple", boolean(true)));
+    // Phase 1962: emitted as authored — an explicit `false` is kept.
+    if let Some(multiple) = spec.multiple {
+        fields.push(field("multiple", boolean(multiple)));
     }
     if let Some(values) = &spec.values {
         fields.push(field("values", binding(values)));
