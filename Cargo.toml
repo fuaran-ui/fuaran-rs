@@ -28,6 +28,8 @@ name = "fuaran-ui"
 # becomes `Option<Binding>` (a multi-select carries `values` and no `value`),
 # which breaks every full-literal construction and every read of the field — a
 # breaking change, the class the draft already carries, on a still-untagged slot.
+# A `value` on a multi-select is decoded (a malformed one still refuses) and
+# then dropped, so a stored multi-select carrying one keeps reading.
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"
