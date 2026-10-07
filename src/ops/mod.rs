@@ -194,8 +194,22 @@ fn kind_label(n: &Node) -> &'static str {
 /// Every immediate sub-node, in the shared traversal order: layout children /
 /// structural sub-trees first, then the `state` surfaces.
 fn child_nodes(n: &Node) -> Vec<&Node> {
+    let mut out = kind_child_nodes(&n.kind);
+    if let Some(b) = &n.state.on_loading {
+        out.push(b);
+    }
+    if let Some(b) = &n.state.on_empty {
+        out.push(b);
+    }
+    out
+}
+
+/// The sub-nodes a KIND holds — `child_nodes` without the node's `state`
+/// surfaces. What an `EditNode` puts below the node it rewrites, since the
+/// rewritten node keeps its existing `state`.
+fn kind_child_nodes(kind: &NodeKind) -> Vec<&Node> {
     let mut out: Vec<&Node> = Vec::new();
-    match &n.kind {
+    match kind {
         NodeKind::Box(s) => out.extend(&s.children),
         NodeKind::SplitPanel(s) => out.extend(&s.children),
         NodeKind::Tabs(s) => out.extend(&s.children),
@@ -248,12 +262,6 @@ fn child_nodes(n: &Node) -> Vec<&Node> {
         | NodeKind::FragmentRef(_)
         | NodeKind::Drawing(_)
         | NodeKind::Mount(_) => {}
-    }
-    if let Some(b) = &n.state.on_loading {
-        out.push(b);
-    }
-    if let Some(b) = &n.state.on_empty {
-        out.push(b);
     }
     out
 }
@@ -1719,17 +1727,46 @@ pub fn apply(tree: &Node, op: &TreeOp) -> Result<ApplyOutcome, ApplyError> {
 /// node that is not at fault and an operation long finished. This names the op
 /// that crossed the line, at the moment it crossed it.
 ///
-/// ONLY THE THREE GROWING OPS ARE CHECKED — `InsertChild`, `ReplaceRoot`, and a
-/// `Batch` containing either. The rest rewrite a node in place or shrink the
-/// tree, so charging them a full walk would establish what their own semantics
-/// already guarantee. `MoveNode` is the one worth naming: it relocates a
-/// subtree and so CAN deepen the tree, but only within a total node count that
-/// cannot change and to a depth the tree already passed.
+/// WHICH OPS ARE CHECKED IS DERIVED FROM WHAT THEY CARRY, not listed. An op
+/// whose [`inserted_nodes`] is non-empty puts nodes into the tree and is
+/// checked: `InsertChild`, `ReplaceRoot`, an `EditNode` whose new kind holds
+/// children, an `UpdateState` that attaches `onLoading` / `onEmpty`. The
+/// derivation reads NODES, never ids, because a payload whose ids repeat has
+/// fewer ids than nodes. `MoveNode` is checked as well: it adds no node, but
+/// moving one legal branch under the leaf of another stacks two depths that
+/// each passed. A `Batch` is checked when any member is.
+///
+/// The rest cannot grow the tree and are not charged a walk: `UpdateProp`,
+/// `ReplaceBinding` and `UpdateStyle` carry no node, `RemoveNode` shrinks, and
+/// `ReorderChildren` permutes. They still apply to a tree that is already over
+/// a limit, which they did not put there.
 fn op_can_grow(op: &TreeOp) -> bool {
     match op {
-        TreeOp::InsertChild { .. } | TreeOp::ReplaceRoot { .. } => true,
+        TreeOp::MoveNode { .. } => true,
         TreeOp::Batch(inner) => inner.iter().any(op_can_grow),
-        _ => false,
+        _ => !inserted_nodes(op).is_empty(),
+    }
+}
+
+/// The subtree roots `op` puts INTO the tree, in the order it names them: an
+/// inserted child, a replacement root, the nodes a new kind holds, a new
+/// `state` block's alternatives, and a `Batch`'s members' insertions.
+fn inserted_nodes(op: &TreeOp) -> Vec<&Node> {
+    match op {
+        TreeOp::InsertChild { child, .. } => vec![child],
+        TreeOp::ReplaceRoot { node } => vec![node],
+        TreeOp::EditNode { new_kind, .. } => kind_child_nodes(new_kind),
+        TreeOp::UpdateState { state, .. } => [&state.on_loading, &state.on_empty]
+            .into_iter()
+            .filter_map(|n| n.as_deref())
+            .collect(),
+        TreeOp::Batch(inner) => inner.iter().flat_map(inserted_nodes).collect(),
+        TreeOp::UpdateProp { .. }
+        | TreeOp::ReplaceBinding { .. }
+        | TreeOp::UpdateStyle { .. }
+        | TreeOp::RemoveNode { .. }
+        | TreeOp::MoveNode { .. }
+        | TreeOp::ReorderChildren { .. } => Vec::new(),
     }
 }
 
