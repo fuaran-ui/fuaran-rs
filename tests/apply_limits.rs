@@ -6,8 +6,9 @@
 //! attach `onLoading` / `onEmpty` subtrees, so both put nodes into the tree;
 //! `MoveNode` adds none, but moving one legal branch under the leaf of another
 //! stacks two depths that each passed. All three were accepted past the limit.
-//! The last test certifies this host against the shared
-//! `apply/limits-apply.json` corpus family.
+//! The last tests certify this host against the shared
+//! `apply/limits-apply.json` and `apply/duplicate-ids-apply.json` corpus
+//! families.
 
 use std::path::PathBuf;
 
@@ -268,6 +269,19 @@ fn text(v: &JVal) -> &str {
 
 #[test]
 fn limits_apply_corpus_holds_on_this_host() {
+    certify_apply_family("limitsApply");
+}
+
+/// The `apply/duplicate-ids-apply.json` family (Phase 2172): an op that leaves
+/// an id it installed held twice is refused with `DuplicateNodeId`. Certified
+/// by the same runner, so the two families cannot be read two ways.
+#[test]
+fn duplicate_ids_apply_corpus_holds_on_this_host() {
+    certify_apply_family("duplicateIdsApply");
+}
+
+/// Decode and apply every vector of one `apply/` family.
+fn certify_apply_family(family_id: &str) {
     let Some(root) = find_corpus() else {
         eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
         return;
@@ -282,8 +296,8 @@ fn limits_apply_corpus_holds_on_this_host() {
     };
     let family = families
         .iter()
-        .find(|f| text(field(f, "id")) == "limitsApply")
-        .expect("apply/manifest.json declares limitsApply");
+        .find(|f| text(field(f, "id")) == family_id)
+        .unwrap_or_else(|| panic!("apply/manifest.json declares {family_id}"));
     let declared = match field(family, "vectors") {
         JVal::Num(n) => *n as usize,
         _ => panic!("vectors is not a number"),

@@ -23,6 +23,12 @@ name = "fuaran-ui"
 # second question. A consumer's cost is the enum widening, which the draft
 # already carries. When this crate takes its first tag, that tag is what makes
 # the slot someone's contract, and the rule bites from there.
+#
+# Phase 2172 rides it too, a BEHAVIOUR change: `ops::apply` refuses with
+# `DuplicateNodeId` an op whose result holds an id the op installed more than
+# once (a ReplaceRoot payload repeating an id, an EditNode / UpdateState whose new
+# nodes collide with the tree, an InsertChild subtree repeating one within
+# itself). No signature moves, and the draft already carries a breaking class.
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"

@@ -1707,6 +1707,9 @@ pub fn apply(tree: &Node, op: &TreeOp) -> Result<ApplyOutcome, ApplyError> {
     if op_can_grow(op) {
         check_tree_limits(&new_tree)?;
     }
+    // The §8.1 id-uniqueness guard, AFTER the limits: an op breaching both
+    // reports `LimitExceeded` (the limitsApply corpus pins that order).
+    check_installed_ids(&inserted_nodes(op), &new_tree)?;
     Ok(ApplyOutcome {
         new_tree,
         emitted_telemetry: telem,
@@ -1808,6 +1811,54 @@ fn check_tree_limits(tree: &Node) -> Result<(), ApplyError> {
             ),
             batch_index: None,
         });
+    }
+    Ok(())
+}
+
+/// Refuse a result in which an id the op installed is held by more than one
+/// node (WIRE_FORMAT §8.1).
+///
+/// Every op addresses its target by id alone, so a tree that repeats one makes
+/// every later id-addressed op ambiguous. The decoder accepts a repeated id,
+/// and an apply could BUILD one from parts that each decoded cleanly: a
+/// `ReplaceRoot` whose payload repeats an id, an `EditNode` or `UpdateState`
+/// whose new nodes collide with the rest of the tree, an `InsertChild` whose
+/// subtree repeats one (Phase 2172).
+///
+/// It reads the RESULT and charges the op only for the ids it installed. That
+/// is what lets an `EditNode` restate the children it replaces and an
+/// `UpdateState` replace an alternative with one of the same id: the old node
+/// leaves as the new one arrives. A duplicate already present before the op is
+/// not the op's to refuse - the decoder admits such a tree, and refusing every
+/// later edit to it would strand a document the op did not break, the posture
+/// the limits guard takes toward a tree already over a limit. A `Batch` is
+/// checked once, on the tree it produces.
+///
+/// Cost: one walk of the result to count ids and one of the installed
+/// subtrees, paid only by an op that installs nodes. This host keeps no id
+/// index, so the rest of the tree must be walked to know what an installed id
+/// could collide with.
+fn check_installed_ids(installed: &[&Node], result: &Node) -> Result<(), ApplyError> {
+    if installed.is_empty() {
+        return Ok(());
+    }
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for id in all_node_ids(result) {
+        *counts.entry(id).or_insert(0) += 1;
+    }
+    for n in installed {
+        if let Some(duplicate) = all_node_ids(n)
+            .into_iter()
+            .find(|id| counts.get(id).copied().unwrap_or(0) > 1)
+        {
+            return Err(ApplyError {
+                code: ApplyErrorCode::DuplicateNodeId,
+                message: format!(
+                    "NodeId '{duplicate}' is already present in the tree; ids must be unique."
+                ),
+                batch_index: None,
+            });
+        }
     }
     Ok(())
 }
