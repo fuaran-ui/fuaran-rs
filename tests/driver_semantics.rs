@@ -499,7 +499,7 @@ fn a_host_that_performs_the_denied_effect_fails_exactly_the_scenario_that_record
 // structural (member order ignored, §30.2), so no encoder here derives them.
 //
 // The lowering and the interpreter are also held against each other: whatever
-// `run_bounded_action` EMITS for a vector must be within what `lowers_to`
+// a gesture (`run_gesture`) EMITS for a vector must be within what `lowers_to`
 // DECLARES for it, because a declaration is the upper bound a capability check
 // is made against.
 //
@@ -508,8 +508,7 @@ fn a_host_that_performs_the_denied_effect_fails_exactly_the_scenario_that_record
 // `wire-format-fixtures/` above this crate; nothing claimed and nothing found
 // reports NOT RUN and asserts nothing.
 
-use fuaran_rs::bounded::actions::{CoreArm, describe_action, lowers_to};
-use fuaran_rs::bounded::run_bounded_action;
+use fuaran_rs::bounded::actions::{CoreArm, describe_action, lowers_to, run_gesture};
 use fuaran_rs::canonical::{ordinal_cmp, render_canonical};
 use fuaran_rs::render::BindingSources;
 use fuaran_rs::wire::{Action, NodeKind, decode_node};
@@ -702,6 +701,26 @@ fn reading(arm: &CoreArm) -> JVal {
                 ),
             ),
         ]),
+        // Phase 2106 — the round-trip arm: the gesture's leaf, carrying
+        // `answer`, the reading of the answer's selection.
+        CoreArm::Ask {
+            leaf,
+            when_true,
+            when_false,
+        } => {
+            let JVal::Obj(mut members) = reading(&CoreArm::Leaf(leaf.clone())) else {
+                unreachable!("a leaf reads as an object")
+            };
+            members.push((
+                "answer".to_string(),
+                obj(vec![
+                    ("arm", s("Choose")),
+                    ("whenFalse", reading(when_false)),
+                    ("whenTrue", reading(when_true)),
+                ]),
+            ));
+            JVal::Obj(members)
+        }
     }
 }
 
@@ -725,6 +744,15 @@ fn declared_effect_kinds(arm: &CoreArm, into: &mut Vec<&'static str>) {
     match arm {
         CoreArm::Sequence(members) => members.iter().for_each(|m| declared_effect_kinds(m, into)),
         CoreArm::Leaf(declaration) => into.extend(declaration.effect_kinds.iter().copied()),
+        CoreArm::Ask {
+            leaf,
+            when_true,
+            when_false,
+        } => {
+            into.extend(leaf.effect_kinds.iter().copied());
+            declared_effect_kinds(when_true, into);
+            declared_effect_kinds(when_false, into);
+        }
         CoreArm::Assign { .. } | CoreArm::Call { .. } => {}
     }
 }
@@ -787,7 +815,9 @@ fn every_lowers_to_vector_lowers_to_the_reading_the_table_states() {
         // The interpreter stays inside the declaration.
         let mut declared = Vec::new();
         declared_effect_kinds(&lowered, &mut declared);
-        let outcome = run_bounded_action("carrier", &action, BindingSources::default());
+        // A GESTURE, as a loop folds one: a confirm is addressed, so the
+        // question it asks is checked against what the lowering declares.
+        let outcome = run_gesture("carrier", &action, BindingSources::default());
         for effect in &outcome.effects {
             assert!(
                 declared.contains(&effect.capability()),

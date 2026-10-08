@@ -33,11 +33,37 @@
 use crate::render::BindingSources;
 use crate::wire::{Action, Node};
 
-use super::actions::{BoundedDiagnostic, run_bounded_action};
+use super::actions::{
+    BoundedDiagnostic, addressed_confirm, answer_branch, describe_action, run_answer, run_gesture,
+};
 use super::budget::{InteractionBudget, action_cascade_cost, tree_cost};
 use super::effect::{ClientEffect, Denial, EffectPolicy};
 use super::resolve::resolve_tree;
-use super::validate::{LiveEvent, RejectReason, validate};
+use super::validate::{LiveEvent, LiveValue, RejectReason, validate};
+
+/// The two payload members a confirm answer carries (Phase 2106). An event is an
+/// answer when it carries both, `confirmToken` a string and `confirmAccepted`
+/// a boolean; anything less is the gesture it otherwise is.
+pub const CONFIRM_TOKEN_KEY: &str = "confirmToken";
+/// See [`CONFIRM_TOKEN_KEY`].
+pub const CONFIRM_ACCEPTED_KEY: &str = "confirmAccepted";
+
+fn answer_of(event: &LiveEvent) -> Option<(&str, bool)> {
+    match (
+        event.payload.get(CONFIRM_TOKEN_KEY),
+        event.payload.get(CONFIRM_ACCEPTED_KEY),
+    ) {
+        (Some(LiveValue::Str(token)), Some(LiveValue::Bool(accepted))) => Some((token, *accepted)),
+        _ => None,
+    }
+}
+
+fn addresses_nothing(node_id: &str) -> RejectReason {
+    RejectReason::PayloadOutOfBounds {
+        node_id: node_id.to_string(),
+        detail: "the confirm answer addresses no Confirm in this node's action".to_string(),
+    }
+}
 
 /// Why a step produced no new tree. Either way the store is unchanged.
 #[derive(Debug, Clone, PartialEq)]
@@ -75,6 +101,10 @@ pub struct BoundedProgram {
     budget: InteractionBudget,
     effects: EffectPolicy,
     can_dispatch: Box<dyn Fn(&Action) -> bool>,
+    /// The questions asked and not yet answered or withdrawn (Phase 2106) — the
+    /// loop's own state, never in the store, so no binding can read one and no
+    /// tree can write one.
+    pending: Vec<String>,
 }
 
 impl BoundedProgram {
@@ -99,6 +129,7 @@ impl BoundedProgram {
             budget: InteractionBudget::default(),
             effects: EffectPolicy::default(),
             can_dispatch: Box::new(|_| false),
+            pending: Vec::new(),
         };
         program.reprice();
         program
@@ -176,6 +207,18 @@ impl BoundedProgram {
     /// happened to resolve could never be recovered. Specified — §10.5, pinned
     /// by the corpus's `fixed-base-reresolution` scenario.
     ///
+    /// **The confirm round trip (Phase 2106).** A gesture folds with every
+    /// confirm it reaches addressed, so each asks a question whose token names
+    /// the confirm's path in the node's action, and it WITHDRAWS every question
+    /// still pending. An answer — the originating event re-delivered with
+    /// `confirmToken` / `confirmAccepted` — is admitted only when its token is
+    /// pending and still addresses a confirm in the node's action; its
+    /// continuation meets the dispatch gate on its own; it then runs as a
+    /// selection over the answer and consumes its question. A stale, duplicate or
+    /// forged answer is refused as an event, and a refusal leaves the pending
+    /// questions as they were. A confirmation is a courtesy to the reader, never
+    /// an authorisation.
+    ///
     /// The refusal reported here is **event-level** and nothing else (§10.5): a
     /// step is refused when the trust boundary or a budget declined the event
     /// itself. An action that declines inside an admitted event — a reserved
@@ -189,6 +232,12 @@ impl BoundedProgram {
             // its surface was rejected when it was merely inert.
             Ok(validated) => match validated.action {
                 None => {
+                    // Not an answer — an answer here addresses nothing — so it
+                    // withdraws every pending question.
+                    if answer_of(event).is_some() {
+                        return self.refuse(ProgramReject::Gate(addresses_nothing(&event.node_id)));
+                    }
+                    self.pending.clear();
                     return StepOutput {
                         resolved: self.resolved.clone(),
                         effects: Vec::new(),
@@ -201,7 +250,39 @@ impl BoundedProgram {
             },
         };
 
-        let cost = action_cascade_cost(&action);
+        // Which fold this event is: a gesture, or the answer to a pending
+        // question — and, for an answer, the confirm it addresses.
+        let answer = match answer_of(event) {
+            None => None,
+            Some((token, accepted)) => {
+                if !self.pending.iter().any(|t| t == token) {
+                    return self.refuse(ProgramReject::Gate(RejectReason::PayloadOutOfBounds {
+                        node_id: event.node_id.clone(),
+                        detail: "the confirm answer answers no pending question".to_string(),
+                    }));
+                }
+                let Some((path, confirm)) = addressed_confirm(&event.node_id, token, &action)
+                else {
+                    return self.refuse(ProgramReject::Gate(addresses_nothing(&event.node_id)));
+                };
+                if let Some(branch) = answer_branch(confirm, accepted) {
+                    if !(self.can_dispatch)(branch) {
+                        return self.refuse(ProgramReject::Gate(RejectReason::DispatchDenied {
+                            node_id: event.node_id.clone(),
+                            action: describe_action(branch).to_string(),
+                        }));
+                    }
+                }
+                Some((token.to_string(), path, accepted, confirm.clone()))
+            }
+        };
+
+        let cost = match &answer {
+            None => action_cascade_cost(&action),
+            Some((_, _, accepted, confirm)) => answer_branch(confirm, *accepted)
+                .map(action_cascade_cost)
+                .unwrap_or(0),
+        };
         if cost > self.budget.max_actions {
             return self.refuse(ProgramReject::BudgetExceeded {
                 detail: format!(
@@ -219,7 +300,21 @@ impl BoundedProgram {
             });
         }
 
-        let outcome = run_bounded_action(&event.node_id, &action, self.store.clone());
+        let outcome = match &answer {
+            None => {
+                self.pending.clear();
+                run_gesture(&event.node_id, &action, self.store.clone())
+            }
+            Some((token, path, accepted, confirm)) => {
+                self.pending.retain(|t| t != token);
+                run_answer(&event.node_id, path, *accepted, confirm, self.store.clone())
+            }
+        };
+        self.pending
+            .extend(outcome.effects.iter().filter_map(|e| match e {
+                ClientEffect::Confirm { token, .. } => Some(token.clone()),
+                _ => None,
+            }));
         self.store = outcome.store;
         self.resolved = resolve_tree(&self.store, &self.base_tree);
 
@@ -304,5 +399,127 @@ mod tests {
             Some(ProgramReject::BudgetExceeded { .. })
         ));
         assert_eq!(encode_node(&step.resolved), before);
+    }
+
+    // ── Phase 2106: the confirm round trip ───────────────────────────────────
+
+    const CONFIRM_TREE: &str = r#"{"id":"root","kind":{"$type":"Box","children":[{"id":"delete","kind":{"$type":"Button","label":"delete","onClick":{"$type":"Chain","ops":[{"$type":"SetState","key":"msg","value":"asked"},{"$type":"Confirm","onCancel":{"$type":"SetState","key":"msg","value":"kept"},"onConfirm":{"$type":"Navigate","route":"/orders"},"prompt":"Delete?"}]},"variant":"Secondary"}},{"id":"blank","kind":{"$type":"Button","label":"blank","onClick":{"$type":"Confirm","onConfirm":{"$type":"Print"},"prompt":{"$type":"Bound","binding":{"$type":"State","key":"absent"}}},"variant":"Secondary"}},{"id":"readout","kind":{"$type":"Markdown","text":{"$type":"Bound","binding":{"$type":"State","defaultValue":"init","key":"msg"}}}}],"layout":{"$type":"Auto"},"role":"Dashboard"}}"#;
+
+    fn confirm_program(gate: impl Fn(&Action) -> bool + 'static) -> BoundedProgram {
+        BoundedProgram::new(decode_node(CONFIRM_TREE).expect("the fixture decodes"))
+            .with_dispatch_gate(gate)
+            .with_effect_policy(EffectPolicy::permissive())
+    }
+
+    fn answer(node_id: &str, token: &str, accepted: bool) -> LiveEvent {
+        let mut payload = BTreeMap::new();
+        payload.insert(CONFIRM_TOKEN_KEY.to_string(), LiveValue::Str(token.into()));
+        payload.insert(CONFIRM_ACCEPTED_KEY.to_string(), LiveValue::Bool(accepted));
+        LiveEvent {
+            node_id: node_id.into(),
+            event: "click".into(),
+            payload,
+        }
+    }
+
+    #[test]
+    fn a_gesture_asks_with_the_confirms_address_and_the_answer_runs_one_continuation() {
+        let mut program = confirm_program(|_| true);
+        let ask = program.handle_event(&click("delete"));
+        assert_eq!(
+            ask.effects,
+            vec![ClientEffect::Confirm {
+                prompt: "Delete?".into(),
+                token: "delete#1".into()
+            }],
+            "the question, addressed by its chain position"
+        );
+        assert!(encode_node(&ask.resolved).contains("\"text\":\"asked\""));
+
+        let no = program.handle_event(&answer("delete", "delete#1", false));
+        assert!(no.rejected.is_none());
+        assert!(no.effects.is_empty(), "onCancel reaches no effect");
+        assert!(encode_node(&no.resolved).contains("\"text\":\"kept\""));
+
+        let again = program.handle_event(&answer("delete", "delete#1", true));
+        assert!(again.rejected.is_some(), "the answer consumed its question");
+    }
+
+    #[test]
+    fn a_withdrawn_or_forged_answer_is_refused_and_a_refusal_leaves_the_question_pending() {
+        let mut program = confirm_program(|_| true);
+        assert!(
+            program
+                .handle_event(&answer("delete", "delete#1", true))
+                .rejected
+                .is_some(),
+            "never asked"
+        );
+
+        program.handle_event(&click("delete"));
+        assert!(
+            program
+                .handle_event(&answer("delete", "delete#0", true))
+                .rejected
+                .is_some(),
+            "a token addressing no confirm"
+        );
+        let yes = program.handle_event(&answer("delete", "delete#1", true));
+        assert!(
+            yes.rejected.is_none(),
+            "the refusal left the question standing"
+        );
+        assert_eq!(
+            yes.effects,
+            vec![ClientEffect::Navigate {
+                route: "/orders".into(),
+                target: crate::wire::NavigateTarget::Self_
+            }]
+        );
+
+        program.handle_event(&click("delete"));
+        assert!(
+            program.handle_event(&click("blank")).rejected.is_none(),
+            "an admitted gesture"
+        );
+        assert!(
+            program
+                .handle_event(&answer("delete", "delete#1", true))
+                .rejected
+                .is_some(),
+            "an event that is not the answer withdrew the question"
+        );
+    }
+
+    #[test]
+    fn the_continuation_meets_the_dispatch_gate_on_its_own() {
+        let mut program = confirm_program(|a| !matches!(a, Action::Navigate { .. }));
+        assert!(
+            program.handle_event(&click("delete")).rejected.is_none(),
+            "the dialogue is admitted"
+        );
+        let yes = program.handle_event(&answer("delete", "delete#1", true));
+        assert!(
+            matches!(
+                yes.rejected,
+                Some(ProgramReject::Gate(RejectReason::DispatchDenied { .. }))
+            ),
+            "the navigation behind it is not"
+        );
+    }
+
+    #[test]
+    fn a_prompt_that_resolves_to_nothing_asks_nothing() {
+        let mut program = confirm_program(|_| true);
+        let step = program.handle_event(&click("blank"));
+        assert!(step.effects.is_empty());
+        assert!(!step.diagnostics.is_empty(), "the refusal is observable");
+        assert!(
+            program
+                .handle_event(&answer("blank", "blank#", true))
+                .rejected
+                .is_some(),
+            "and nothing is pending"
+        );
     }
 }

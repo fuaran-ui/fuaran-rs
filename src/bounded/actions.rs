@@ -226,7 +226,131 @@ fn file_read_encoding(encoding: FileReadEncoding) -> &'static str {
 ///
 /// `node_id` is the originating event's node — the address a node-addressed
 /// client effect carries.
+///
+/// A `Confirm` reached here is **unaddressed** and declined: with no address
+/// there is no token, so its question could never be answered. A loop folds a
+/// gesture through [`run_gesture`] instead, which addresses every confirm it
+/// reaches.
 pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources) -> BoundedOutcome {
+    run_at(node_id, None, action, store)
+}
+
+/// Interpret a **gesture** — the action an admitted, non-answer event resolves
+/// to — with every confirm it reaches addressed, so each asks its question
+/// carrying the token its answer will name (Phase 2106).
+pub fn run_gesture(node_id: &str, action: &Action, store: BindingSources) -> BoundedOutcome {
+    run_at(node_id, Some(""), action, store)
+}
+
+/// The token a question carries: the originating node and the confirm's
+/// structural path inside that node's action — dot-joined chain positions and
+/// continuation names, the empty path naming the action itself. The node is in
+/// it so a token minted for one node cannot address another's action.
+pub fn confirm_token(node_id: &str, path: &str) -> String {
+    format!("{node_id}#{path}")
+}
+
+fn child_path(path: &str, index: usize) -> String {
+    if path.is_empty() {
+        index.to_string()
+    } else {
+        format!("{path}.{index}")
+    }
+}
+
+fn branch_path(path: &str, name: &str) -> String {
+    if path.is_empty() {
+        name.to_string()
+    } else {
+        format!("{path}.{name}")
+    }
+}
+
+/// The confirm a token addresses inside the node's **current** action, with its
+/// path. The token is untrusted payload: its node half must be this node, and a
+/// segment that names nothing is an ordinary miss — a tree that moved on, or a
+/// forged token — never a panic.
+pub fn addressed_confirm<'a>(
+    node_id: &str,
+    token: &str,
+    action: &'a Action,
+) -> Option<(String, &'a Action)> {
+    let path = token.strip_prefix(&format!("{node_id}#"))?;
+    let mut at = action;
+    if !path.is_empty() {
+        for segment in path.split('.') {
+            at = match (segment, at) {
+                ("onConfirm", Action::Confirm { on_confirm, .. }) => on_confirm,
+                (
+                    "onCancel",
+                    Action::Confirm {
+                        on_cancel: Some(on_cancel),
+                        ..
+                    },
+                ) => on_cancel,
+                (index, Action::Chain(inner)) => {
+                    let i: usize = index.parse().ok()?;
+                    if i.to_string() != index {
+                        return None;
+                    }
+                    inner.get(i)?
+                }
+                _ => return None,
+            };
+        }
+    }
+    match at {
+        Action::Confirm { .. } => Some((path.to_string(), at)),
+        _ => None,
+    }
+}
+
+/// The continuation an answer selects: `onConfirm` on yes, `onCancel` on no —
+/// `None` when the reader declined and the author declared no cancel branch,
+/// which is what "nothing happens" is.
+pub fn answer_branch(confirm: &Action, accepted: bool) -> Option<&Action> {
+    match confirm {
+        Action::Confirm {
+            on_confirm,
+            on_cancel,
+            ..
+        } => {
+            if accepted {
+                Some(on_confirm)
+            } else {
+                on_cancel.as_deref()
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Interpret an **answer**: the addressed confirm folded as a selection over the
+/// reader's answer — the core's `Choose` with the answer as its entry. Yes runs
+/// `onConfirm`, no runs `onCancel` or nothing, each addressed under its own
+/// continuation name.
+pub fn run_answer(
+    node_id: &str,
+    path: &str,
+    accepted: bool,
+    confirm: &Action,
+    store: BindingSources,
+) -> BoundedOutcome {
+    let name = if accepted { "onConfirm" } else { "onCancel" };
+    match answer_branch(confirm, accepted) {
+        Some(branch) => run_at(node_id, Some(&branch_path(path, name)), branch, store),
+        None => unchanged(store),
+    }
+}
+
+/// The one evaluating match. `path` is `Some` when the loop addressed this
+/// position — a confirm there asks — and `None` when it did not.
+fn run_at(
+    node_id: &str,
+    path: Option<&str>,
+    action: &Action,
+    store: BindingSources,
+) -> BoundedOutcome {
     match action {
         // ── The one store mutation ───────────────────────────────────────────
         Action::SetState {
@@ -390,14 +514,20 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
         // the write before it and be seen by the write after it — and it is why
         // a nested call behaves exactly as a top-level one, the chain being the
         // only structure that could have made them differ.
-        Action::Chain(inner) => inner.iter().fold(unchanged(store), |acc, next| {
-            let mut acc = acc;
-            let step = run_bounded_action(node_id, next, acc.store);
-            acc.store = step.store;
-            acc.effects.extend(step.effects);
-            acc.diagnostics.extend(step.diagnostics);
-            acc
-        }),
+        Action::Chain(inner) => {
+            inner
+                .iter()
+                .enumerate()
+                .fold(unchanged(store), |acc, (index, next)| {
+                    let mut acc = acc;
+                    let at = path.map(|p| child_path(p, index));
+                    let step = run_at(node_id, at.as_deref(), next, acc.store);
+                    acc.store = step.store;
+                    acc.effects.extend(step.effects);
+                    acc.diagnostics.extend(step.diagnostics);
+                    acc
+                })
+        }
 
         // ── Documented no-ops ────────────────────────────────────────────────
         //
@@ -406,31 +536,48 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
         // no update function to fold it through; a local-buffer commit is a host
         // concern whose flushed value arrives as the event payload instead.
         //
-        // Phase 1689 — `Confirm` is STILL a documented no-op, and `Print` is no
-        // longer one. The reason both used to sit here was that this
-        // placement's client-effect vocabulary was CLOSED at six arms and its
-        // wire specified elsewhere, so neither gesture had an effect to reach
-        // and inventing one would have minted vocabulary on a wire this crate
-        // does not own. Format version 2 declares both arms, so that half of
-        // the reason is simply gone, and leaving it written here would leave a
-        // false sentence standing.
-        //
-        // What is left is a real boundary and it applies to one of them. A
-        // `Confirm` is a ROUND TRIP: ask, answer, re-validate, then dispatch
-        // the chosen continuation through its own gate. The token addresses a
-        // structural path inside a resolved action, and the answer re-enters as
-        // the originating event re-delivered. This placement models none of
-        // that — no path minting, no answer re-delivery, no continuation
-        // resolution — so the arm being expressible on the wire does not make
-        // it performable here. That is a placement capability, and claiming it
-        // by emitting the instruction would tell an author a question was asked
-        // that nothing will ever answer.
         Action::Notify { .. }
         | Action::AiTool { .. }
         | Action::Invoke { .. }
         | Action::Dispatch
-        | Action::Confirm { .. }
         | Action::CommitLocal { .. } => no_op(node_id, action, store),
+
+        // Phase 2106 — `Confirm` is a ROUND TRIP on the bounded path: the
+        // gesture asks, and the answer — the originating event re-delivered with
+        // `confirmToken` / `confirmAccepted` — runs one continuation
+        // ([`run_answer`]). Here is the ask. The question carries the token
+        // its answer will name, and what a yes will DO does not go with it.
+        //
+        // A prompt that resolves to nothing, or to nothing but whitespace, is no
+        // question — a yes/no with no subject is worse than no dialogue — so it
+        // is refused rather than asked. And a confirm no loop ADDRESSED is
+        // declined as it always was: with no token, its question could never be
+        // answered, and asking it would tell an author something was pending that
+        // nothing will ever run.
+        Action::Confirm { prompt, .. } => match path {
+            None => no_op(node_id, action, store),
+            Some(p) => match resolve_text_source(&store, prompt) {
+                Some(text) if !text.trim().is_empty() => emitted(
+                    store,
+                    ClientEffect::Confirm {
+                        prompt: text,
+                        token: confirm_token(node_id, p),
+                    },
+                ),
+                Some(_) => refused(
+                    node_id,
+                    action,
+                    "the prompt resolved to no text — nothing was asked",
+                    store,
+                ),
+                None => refused(
+                    node_id,
+                    action,
+                    "the prompt did not resolve to a value — nothing was asked",
+                    store,
+                ),
+            },
+        },
 
         // `Print` has no round trip to model. It is payload-free, it returns
         // nothing, and format version 2 gives it a declared arm — so the whole
@@ -504,6 +651,14 @@ pub enum CoreArm {
         declares_target: bool,
     },
     Leaf(LeafDeclaration),
+    /// The round trip (Phase 2106): the gesture's leaf, which asks, and the
+    /// two arms the ANSWER's selection chooses between — the core's `Choose`
+    /// over the reader's answer.
+    Ask {
+        leaf: LeafDeclaration,
+        when_true: Box<CoreArm>,
+        when_false: Box<CoreArm>,
+    },
 }
 
 /// The effect kind a leaf declares, named THROUGH the effect's own
@@ -560,11 +715,34 @@ pub fn lowers_to(action: &Action) -> CoreArm {
         Action::Invoke { capability_id, .. } => host_call_leaf("Invoke", capability_id),
         Action::Notify { channel, .. } => host_call_leaf("Notify", channel),
         Action::AiTool { tool_name, .. } => host_call_leaf("AiTool", tool_name),
-        // `Confirm` demands nothing, its continuations included: this placement
-        // answers it with the documented no-op above, so neither can run here.
-        Action::Confirm { .. } | Action::Dispatch | Action::CommitLocal { .. } => {
-            CoreArm::Leaf(LeafDeclaration::default())
-        }
+        // Phase 2106 — the one round-trip arm. The gesture lowers to the leaf
+        // that asks; the ANSWER lowers to a selection over the reader's answer,
+        // `onConfirm` the true arm and `onCancel` — or the empty sequence,
+        // which is what "nothing happens" is — the false.
+        Action::Confirm {
+            on_confirm,
+            on_cancel,
+            ..
+        } => CoreArm::Ask {
+            leaf: LeafDeclaration {
+                effect_kinds: vec![
+                    ClientEffect::Confirm {
+                        prompt: String::new(),
+                        token: String::new(),
+                    }
+                    .capability(),
+                ],
+                host_calls: Vec::new(),
+            },
+            when_true: Box::new(lowers_to(on_confirm)),
+            when_false: Box::new(
+                on_cancel
+                    .as_deref()
+                    .map(lowers_to)
+                    .unwrap_or(CoreArm::Sequence(Vec::new())),
+            ),
+        },
+        Action::Dispatch | Action::CommitLocal { .. } => CoreArm::Leaf(LeafDeclaration::default()),
     }
 }
 
