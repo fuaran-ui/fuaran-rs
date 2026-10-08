@@ -486,3 +486,365 @@ fn a_host_that_performs_the_denied_effect_fails_exactly_the_scenario_that_record
         "and named as a denials divergence: {report}"
     );
 }
+
+// ─── The `lowers-to/` family: the action arms on the bounded core ────────────
+//
+// WIRE_FORMAT.md §30 (the TREE wire specification, not the program one) states,
+// for every action arm, the core arm it lowers to and the leaf declaration it
+// carries, and pins one reading per row in its `lowers-to/` vectors. This host
+// certifies them through `bounded::actions::lowers_to` — the table as this
+// placement states it, beside the interpreter it describes — after decoding each
+// action through this host's own node decoder. The expected readings are
+// hand-authored in the corpus and emitted by no host; the comparison is
+// structural (member order ignored, §30.2), so no encoder here derives them.
+//
+// The lowering and the interpreter are also held against each other: whatever
+// `run_bounded_action` EMITS for a vector must be within what `lowers_to`
+// DECLARES for it, because a declaration is the upper bound a capability check
+// is made against.
+//
+// The tree wire corpus is located the way `tests/conformance.rs` locates it:
+// `FUARAN_WIRE_FIXTURES` (a hard failure from there on), else the nearest
+// `wire-format-fixtures/` above this crate; nothing claimed and nothing found
+// reports NOT RUN and asserts nothing.
+
+use fuaran_rs::bounded::actions::{CoreArm, describe_action, lowers_to};
+use fuaran_rs::bounded::run_bounded_action;
+use fuaran_rs::canonical::{ordinal_cmp, render_canonical};
+use fuaran_rs::render::BindingSources;
+use fuaran_rs::wire::{Action, NodeKind, decode_node};
+
+const LOWERS_TO: &str = "lowers-to";
+
+fn wire_corpus_root() -> Option<PathBuf> {
+    if let Ok(declared) = std::env::var("FUARAN_WIRE_FIXTURES") {
+        if !declared.trim().is_empty() {
+            return Some(PathBuf::from(declared));
+        }
+    }
+    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
+    loop {
+        let root = dir.join("wire-format-fixtures");
+        if root.join("manifest.json").is_file() {
+            return Some(root);
+        }
+        if !dir.pop() {
+            eprintln!(
+                "{LOWERS_TO}: NOT RUN — no tree wire corpus is claimed (FUARAN_WIRE_FIXTURES) or found \
+                 above this crate; nothing was asserted"
+            );
+            return None;
+        }
+    }
+}
+
+/// The arm index of an action. Exhaustive with no wildcard, so an arm added to
+/// the vocabulary fails to compile HERE as well as in `lowers_to` — which is
+/// what keeps `ARMS` below the closed union rather than a list that rots.
+fn arm_index(action: &Action) -> usize {
+    match action {
+        Action::Dispatch => 0,
+        Action::Call { .. } => 1,
+        Action::Notify { .. } => 2,
+        Action::Navigate { .. } => 3,
+        Action::SetState { .. } => 4,
+        Action::AiTool { .. } => 5,
+        Action::Chain(_) => 6,
+        Action::CommitLocal { .. } => 7,
+        Action::WriteToClipboard { .. } => 8,
+        Action::ReadFileBody { .. } => 9,
+        Action::Invoke { .. } => 10,
+        Action::Print => 11,
+        Action::Focus { .. } => 12,
+        Action::Confirm { .. } => 13,
+    }
+}
+
+const ARMS: [&str; 14] = [
+    "Dispatch",
+    "Call",
+    "Notify",
+    "Navigate",
+    "SetState",
+    "AiTool",
+    "Chain",
+    "CommitLocal",
+    "WriteToClipboard",
+    "ReadFileBody",
+    "Invoke",
+    "Print",
+    "Focus",
+    "Confirm",
+];
+
+struct LowersToVector {
+    name: String,
+    arm: String,
+    action: JVal,
+    expected: JVal,
+}
+
+fn read_json(path: &Path) -> JVal {
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("the {LOWERS_TO} family names '{}': {e}", path.display()));
+    parse(&text).unwrap_or_else(|e| panic!("'{}' is not JSON: {e:?}", path.display()))
+}
+
+fn strings(value: Option<&JVal>, what: &str) -> Vec<String> {
+    match value {
+        Some(JVal::Arr(items)) => items
+            .iter()
+            .map(|item| match item {
+                JVal::Str(s) => s.clone(),
+                other => panic!("{what}: expected a string, found {other:?}"),
+            })
+            .collect(),
+        other => panic!("{what}: expected an array, found {other:?}"),
+    }
+}
+
+fn load_lowers_to(root: &Path) -> (Vec<String>, Vec<LowersToVector>) {
+    let family = root.join(LOWERS_TO);
+    let manifest = read_json(&family.join("manifest.json"));
+    let arms = strings(manifest.field("arms"), "the manifest's arms");
+    let Some(JVal::Arr(entries)) = manifest.field("vectors") else {
+        panic!("the {LOWERS_TO} manifest carries no 'vectors' array");
+    };
+    let vectors = entries
+        .iter()
+        .map(|entry| {
+            let file = read_json(&family.join(string_at(entry, "file")));
+            LowersToVector {
+                name: string_at(entry, "name"),
+                arm: string_at(entry, "arm"),
+                action: file
+                    .field("action")
+                    .cloned()
+                    .expect("a vector carries 'action'"),
+                expected: file
+                    .field("lowersTo")
+                    .cloned()
+                    .expect("a vector carries 'lowersTo'"),
+            }
+        })
+        .collect();
+    (arms, vectors)
+}
+
+/// Decode an action through the one public entry point that reaches this host's
+/// action reader: a one-button carrier node.
+fn decode_action(vector: &LowersToVector) -> Action {
+    let carrier = JVal::Obj(vec![
+        ("id".to_string(), JVal::Str("carrier".to_string())),
+        (
+            "kind".to_string(),
+            JVal::Obj(vec![
+                ("$type".to_string(), JVal::Str("Button".to_string())),
+                ("label".to_string(), JVal::Str("carrier".to_string())),
+                ("onClick".to_string(), vector.action.clone()),
+                ("variant".to_string(), JVal::Str("Primary".to_string())),
+            ]),
+        ),
+    ]);
+    let node = decode_node(&render_canonical(&carrier))
+        .unwrap_or_else(|e| panic!("{}: the action does not decode: {e:?}", vector.name));
+    match node.kind {
+        NodeKind::Button(spec) => spec.on_click,
+        _ => panic!("{}: the carrier did not decode as a button", vector.name),
+    }
+}
+
+/// This host's reading of a lowering (§30.2).
+fn reading(arm: &CoreArm) -> JVal {
+    let s = |v: &str| JVal::Str(v.to_string());
+    let obj = |members: Vec<(&str, JVal)>| {
+        JVal::Obj(
+            members
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
+        )
+    };
+    match arm {
+        CoreArm::Sequence(members) => obj(vec![
+            ("arm", s("Sequence")),
+            ("members", JVal::Arr(members.iter().map(reading).collect())),
+        ]),
+        CoreArm::Assign { key, from } => obj(vec![
+            ("arm", s("Assign")),
+            ("from", JVal::Bool(*from)),
+            ("key", s(key)),
+        ]),
+        CoreArm::Call {
+            endpoint,
+            declares_target,
+        } => obj(vec![
+            ("arm", s("Call")),
+            ("declaresTarget", JVal::Bool(*declares_target)),
+            ("endpoint", s(endpoint)),
+        ]),
+        CoreArm::Leaf(declaration) => obj(vec![
+            ("arm", s("Leaf")),
+            (
+                "effectKinds",
+                JVal::Arr(declaration.effect_kinds.iter().map(|k| s(k)).collect()),
+            ),
+            (
+                "hostCalls",
+                JVal::Arr(
+                    declaration
+                        .host_calls
+                        .iter()
+                        .map(|call| {
+                            obj(vec![("channel", s(call.channel)), ("name", s(&call.name))])
+                        })
+                        .collect(),
+                ),
+            ),
+        ]),
+    }
+}
+
+/// §30.2's equality: JSON values with object members compared order-free.
+fn normalise(value: &JVal) -> JVal {
+    match value {
+        JVal::Obj(members) => {
+            let mut sorted: Vec<(String, JVal)> = members
+                .iter()
+                .map(|(k, v)| (k.clone(), normalise(v)))
+                .collect();
+            sorted.sort_by(|(a, _), (b, _)| ordinal_cmp(a, b));
+            JVal::Obj(sorted)
+        }
+        JVal::Arr(items) => JVal::Arr(items.iter().map(normalise).collect()),
+        other => other.clone(),
+    }
+}
+
+fn declared_effect_kinds(arm: &CoreArm, into: &mut Vec<&'static str>) {
+    match arm {
+        CoreArm::Sequence(members) => members.iter().for_each(|m| declared_effect_kinds(m, into)),
+        CoreArm::Leaf(declaration) => into.extend(declaration.effect_kinds.iter().copied()),
+        CoreArm::Assign { .. } | CoreArm::Call { .. } => {}
+    }
+}
+
+#[test]
+fn the_lowers_to_manifest_is_this_hosts_closed_action_union() {
+    let Some(root) = wire_corpus_root() else {
+        return;
+    };
+    let (arms, vectors) = load_lowers_to(&root);
+    let mut listed = arms.clone();
+    listed.sort();
+    let mut known: Vec<String> = ARMS.iter().map(|a| a.to_string()).collect();
+    known.sort();
+    assert_eq!(
+        listed, known,
+        "§30.1 is exhaustive over the union: no arm missing, none extra"
+    );
+    for arm in &arms {
+        assert!(
+            vectors.iter().any(|v| &v.arm == arm),
+            "the arm '{arm}' has at least one {LOWERS_TO} vector"
+        );
+    }
+}
+
+#[test]
+fn every_lowers_to_vector_lowers_to_the_reading_the_table_states() {
+    let Some(root) = wire_corpus_root() else {
+        return;
+    };
+    let (_, vectors) = load_lowers_to(&root);
+    assert!(
+        !vectors.is_empty(),
+        "the {LOWERS_TO} family enumerates no vector"
+    );
+    let mut failures = Vec::new();
+    for vector in &vectors {
+        let action = decode_action(vector);
+        assert_eq!(
+            ARMS[arm_index(&action)],
+            describe_action(&action),
+            "the arm index and the discriminator agree"
+        );
+        assert_eq!(
+            describe_action(&action),
+            vector.arm,
+            "{}: the decoded arm is the one it is filed under",
+            vector.name
+        );
+        let lowered = lowers_to(&action);
+        if normalise(&reading(&lowered)) != normalise(&vector.expected) {
+            failures.push(format!(
+                "{}: lowered to {} but the table states {}",
+                vector.name,
+                render_canonical(&reading(&lowered)),
+                render_canonical(&vector.expected)
+            ));
+        }
+        // The interpreter stays inside the declaration.
+        let mut declared = Vec::new();
+        declared_effect_kinds(&lowered, &mut declared);
+        let outcome = run_bounded_action("carrier", &action, BindingSources::default());
+        for effect in &outcome.effects {
+            assert!(
+                declared.contains(&effect.capability()),
+                "{}: the loop emitted {} but the lowering declares {declared:?}",
+                vector.name,
+                effect.capability()
+            );
+        }
+    }
+    eprintln!(
+        "{LOWERS_TO}: {} vector(s) from '{}'",
+        vectors.len(),
+        root.display()
+    );
+    assert!(
+        failures.is_empty(),
+        "{} vector(s) diverged:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn a_perturbed_lowers_to_reading_makes_this_harness_go_red() {
+    let Some(root) = wire_corpus_root() else {
+        return;
+    };
+    let (_, vectors) = load_lowers_to(&root);
+    let vector = vectors
+        .iter()
+        .find(|v| v.name == "chain")
+        .expect("the family pins a 'chain' vector");
+    let actual = normalise(&reading(&lowers_to(&decode_action(vector))));
+    let JVal::Obj(members) = &vector.expected else {
+        panic!("the chain vector's reading is not an object");
+    };
+    let perturbed = JVal::Obj(
+        members
+            .iter()
+            .map(|(k, v)| {
+                if k == "arm" {
+                    (k.clone(), JVal::Str("Leaf".to_string()))
+                } else {
+                    (k.clone(), v.clone())
+                }
+            })
+            .collect(),
+    );
+    assert_ne!(
+        actual,
+        normalise(&perturbed),
+        "a reading naming the wrong core arm is refused"
+    );
+    let reordered = JVal::Obj(members.iter().rev().cloned().collect());
+    assert_eq!(
+        actual,
+        normalise(&reordered),
+        "member order alone never decides a comparison"
+    );
+}

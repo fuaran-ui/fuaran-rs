@@ -46,7 +46,7 @@ use crate::canonical::JVal;
 use crate::render::BindingSources;
 use crate::render::bindings::{Resolution, Value, resolve, try_string};
 use crate::render::sanitize::sanitize_url;
-use crate::wire::{Action, FileReadEncoding, StaticValue, TextSource};
+use crate::wire::{Action, FileReadEncoding, NavigateTarget, StaticValue, TextSource};
 
 use super::effect::ClientEffect;
 
@@ -457,6 +457,114 @@ pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources)
             store,
         ),
         Action::Call { into: None, .. } => no_op(node_id, action, store),
+    }
+}
+
+// ── The lowering onto the bounded core (WIRE_FORMAT §30) ─────────────────────
+//
+// The tree wire specification states, for every action arm, the core arm it
+// lowers to and the leaf declaration it carries. `run_bounded_action` above is
+// this placement's interpreter of exactly that table — a `Chain` folds as a
+// sequence, a `SetState` is the one store write, a `Call` is recognised at
+// every depth, and every other arm is one leaf — and `lowers_to` states the
+// table as data, so the specification's `lowers-to/` vectors can certify it.
+// The two are kept honest against each other by the conformance leg, which
+// also checks that what the interpreter EMITS for an arm is within what this
+// lowering DECLARES for it.
+
+/// A host call a leaf names: the channel it reaches, and the name on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostCall {
+    pub channel: &'static str,
+    pub name: String,
+}
+
+/// What a leaf may demand — an upper bound, not a promise to emit.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LeafDeclaration {
+    /// Client-effect kinds, spelled as the effect registry keys them.
+    pub effect_kinds: Vec<&'static str>,
+    pub host_calls: Vec<HostCall>,
+}
+
+/// The core arm an action lowers to (WIRE_FORMAT §30.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoreArm {
+    /// The composition arm: the members, each lowered, in order.
+    Sequence(Vec<CoreArm>),
+    /// The one store write; `from` is whether the value is an expression
+    /// resolved at dispatch rather than a literal.
+    Assign {
+        key: String,
+        from: bool,
+    },
+    /// A call; one declaring its own result target is refused.
+    Call {
+        endpoint: String,
+        declares_target: bool,
+    },
+    Leaf(LeafDeclaration),
+}
+
+/// The effect kind a leaf declares, named THROUGH the effect's own
+/// discriminator rather than as a literal, so a declared kind and a
+/// registered one cannot drift apart.
+fn effect_leaf(sample: ClientEffect) -> CoreArm {
+    CoreArm::Leaf(LeafDeclaration {
+        effect_kinds: vec![sample.capability()],
+        host_calls: Vec::new(),
+    })
+}
+
+fn host_call_leaf(channel: &'static str, name: &str) -> CoreArm {
+    CoreArm::Leaf(LeafDeclaration {
+        effect_kinds: Vec::new(),
+        host_calls: vec![HostCall {
+            channel,
+            name: name.to_string(),
+        }],
+    })
+}
+
+/// Lower one action onto the bounded core — the WIRE_FORMAT §30.1 table. No
+/// wildcard: an arm added to the vocabulary fails to compile here until the
+/// table has its row.
+pub fn lowers_to(action: &Action) -> CoreArm {
+    match action {
+        Action::Chain(inner) => CoreArm::Sequence(inner.iter().map(lowers_to).collect()),
+        Action::SetState {
+            key, value_from, ..
+        } => CoreArm::Assign {
+            key: key.clone(),
+            from: value_from.is_some(),
+        },
+        Action::Call { endpoint, into, .. } => CoreArm::Call {
+            endpoint: endpoint.clone(),
+            declares_target: into.is_some(),
+        },
+        Action::Navigate { .. } => effect_leaf(ClientEffect::Navigate {
+            route: String::new(),
+            target: NavigateTarget::Self_,
+        }),
+        Action::Focus { .. } => effect_leaf(ClientEffect::Focus {
+            node_id: String::new(),
+        }),
+        Action::WriteToClipboard { .. } => effect_leaf(ClientEffect::WriteToClipboard {
+            text: String::new(),
+        }),
+        Action::ReadFileBody { .. } => effect_leaf(ClientEffect::ReadFileBody {
+            node_id: String::new(),
+            encoding: String::new(),
+        }),
+        Action::Print => effect_leaf(ClientEffect::Print),
+        Action::Invoke { capability_id, .. } => host_call_leaf("Invoke", capability_id),
+        Action::Notify { channel, .. } => host_call_leaf("Notify", channel),
+        Action::AiTool { tool_name, .. } => host_call_leaf("AiTool", tool_name),
+        // `Confirm` demands nothing, its continuations included: this placement
+        // answers it with the documented no-op above, so neither can run here.
+        Action::Confirm { .. } | Action::Dispatch | Action::CommitLocal { .. } => {
+            CoreArm::Leaf(LeafDeclaration::default())
+        }
     }
 }
 
