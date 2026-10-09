@@ -682,25 +682,36 @@ fn reading(arm: &CoreArm) -> JVal {
             ("declaresTarget", JVal::Bool(*declares_target)),
             ("endpoint", s(endpoint)),
         ]),
-        CoreArm::Leaf(declaration) => obj(vec![
-            ("arm", s("Leaf")),
-            (
-                "effectKinds",
-                JVal::Arr(declaration.effect_kinds.iter().map(|k| s(k)).collect()),
-            ),
-            (
-                "hostCalls",
-                JVal::Arr(
-                    declaration
-                        .host_calls
-                        .iter()
-                        .map(|call| {
-                            obj(vec![("channel", s(call.channel)), ("name", s(&call.name))])
-                        })
-                        .collect(),
+        CoreArm::Leaf(declaration) => {
+            let mut members = vec![
+                ("arm", s("Leaf")),
+                (
+                    "effectKinds",
+                    JVal::Arr(declaration.effect_kinds.iter().map(|k| s(k)).collect()),
                 ),
-            ),
-        ]),
+                (
+                    "hostCalls",
+                    JVal::Arr(
+                        declaration
+                            .host_calls
+                            .iter()
+                            .map(|call| {
+                                obj(vec![("channel", s(call.channel)), ("name", s(&call.name))])
+                            })
+                            .collect(),
+                    ),
+                ),
+            ];
+            // Phase 2194 — present exactly when the leaf declares itself an
+            // escape (§30.2).
+            if let Some(opaque) = &declaration.opaque {
+                members.push((
+                    "opaque",
+                    obj(vec![("name", s(opaque.name)), ("reason", s(opaque.reason))]),
+                ));
+            }
+            obj(members)
+        }
         // Phase 2106 — the round-trip arm: the gesture's leaf, carrying
         // `answer`, the reading of the answer's selection.
         CoreArm::Ask {
@@ -876,5 +887,36 @@ fn a_perturbed_lowers_to_reading_makes_this_harness_go_red() {
         actual,
         normalise(&reordered),
         "member order alone never decides a comparison"
+    );
+}
+
+/// Phase 2194 — the go-red half of the `Dispatch` row: the same leaf without
+/// its opaque mark — the lowering before this phase — fails the vector, so the
+/// row cannot be met by a lowering that hides the escape.
+#[test]
+fn a_dispatch_lowered_to_a_plain_leaf_fails_its_vector() {
+    let Some(root) = wire_corpus_root() else {
+        return;
+    };
+    let (_, vectors) = load_lowers_to(&root);
+    let vector = vectors
+        .iter()
+        .find(|v| v.arm == "Dispatch")
+        .expect("the family pins a Dispatch vector");
+    let lowered = lowers_to(&decode_action(vector));
+    assert_eq!(
+        normalise(&reading(&lowered)),
+        normalise(&vector.expected),
+        "the lowering meets the row"
+    );
+    let CoreArm::Leaf(mut declaration) = lowered else {
+        panic!("a Dispatch lowers to a leaf");
+    };
+    assert!(declaration.opaque.is_some(), "the leaf is marked opaque");
+    declaration.opaque = None;
+    assert_ne!(
+        normalise(&reading(&CoreArm::Leaf(declaration))),
+        normalise(&vector.expected),
+        "the same leaf without its mark does not"
     );
 }

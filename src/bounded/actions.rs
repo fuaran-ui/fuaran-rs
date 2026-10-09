@@ -626,12 +626,24 @@ pub struct HostCall {
     pub name: String,
 }
 
+/// A leaf that is an escape no walk can see into (Phase 2194): the reason
+/// class that makes it so, and the act's name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpaqueLeaf {
+    pub reason: &'static str,
+    pub name: &'static str,
+}
+
 /// What a leaf may demand — an upper bound, not a promise to emit.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LeafDeclaration {
     /// Client-effect kinds, spelled as the effect registry keys them.
     pub effect_kinds: Vec<&'static str>,
     pub host_calls: Vec<HostCall>,
+    /// Set when the leaf is an escape. `None` claims the two lists above are
+    /// the whole of what the leaf can do; `Some` says they are not, so "does
+    /// nothing" and "cannot be analysed" never read alike.
+    pub opaque: Option<OpaqueLeaf>,
 }
 
 /// The core arm an action lowers to (WIRE_FORMAT §30.1).
@@ -667,17 +679,17 @@ pub enum CoreArm {
 fn effect_leaf(sample: ClientEffect) -> CoreArm {
     CoreArm::Leaf(LeafDeclaration {
         effect_kinds: vec![sample.capability()],
-        host_calls: Vec::new(),
+        ..LeafDeclaration::default()
     })
 }
 
 fn host_call_leaf(channel: &'static str, name: &str) -> CoreArm {
     CoreArm::Leaf(LeafDeclaration {
-        effect_kinds: Vec::new(),
         host_calls: vec![HostCall {
             channel,
             name: name.to_string(),
         }],
+        ..LeafDeclaration::default()
     })
 }
 
@@ -732,7 +744,7 @@ pub fn lowers_to(action: &Action) -> CoreArm {
                     }
                     .capability(),
                 ],
-                host_calls: Vec::new(),
+                ..LeafDeclaration::default()
             },
             when_true: Box::new(lowers_to(on_confirm)),
             when_false: Box::new(
@@ -742,7 +754,17 @@ pub fn lowers_to(action: &Action) -> CoreArm {
                     .unwrap_or(CoreArm::Sequence(Vec::new())),
             ),
         },
-        Action::Dispatch | Action::CommitLocal { .. } => CoreArm::Leaf(LeafDeclaration::default()),
+        // Phase 2194 — a message for the host's own update, which no walk can
+        // see into: an OPAQUE leaf, reason class `in-process`. A commit stays a
+        // leaf that demands nothing (Phase 2130).
+        Action::Dispatch => CoreArm::Leaf(LeafDeclaration {
+            opaque: Some(OpaqueLeaf {
+                reason: "in-process",
+                name: "Dispatch",
+            }),
+            ..LeafDeclaration::default()
+        }),
+        Action::CommitLocal { .. } => CoreArm::Leaf(LeafDeclaration::default()),
     }
 }
 
