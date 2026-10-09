@@ -986,16 +986,18 @@ pub enum FormFieldKind {
         value: Binding,
         on_change: Option<Closure>,
     },
+    /// Phase 2177 — the change handler is `onChange`, as on every form-field
+    /// kind (it was `onToggle` on this case and `Toggle`).
     Checkbox {
         value: Binding,
-        on_toggle: Option<Closure>,
+        on_change: Option<Closure>,
     },
     /// Phase 766 — the switch affordance: `Checkbox`'s exact wire mechanics
-    /// (bool value slot, optional `onToggle`, the write-back default) under a
+    /// (bool value slot, optional `onChange`, the write-back default) under a
     /// distinct tag, so the renderer can announce `role="switch"` semantics.
     Toggle {
         value: Binding,
-        on_toggle: Option<Closure>,
+        on_change: Option<Closure>,
     },
     Choice {
         options: Binding,

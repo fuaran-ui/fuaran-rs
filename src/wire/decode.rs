@@ -3659,8 +3659,9 @@ fn decode_form_field_kind(
     j: &JVal,
 ) -> DResult<FormFieldKind> {
     let fields = as_obj(path, j)?;
+    // Phase 2177 — every form-field kind carries its change handler as
+    // `onChange`, Checkbox and Toggle included.
     let on_change = opt_closure(fields, "onChange");
-    let on_toggle = opt_closure(fields, "onToggle");
     // Value slot: present ⇒ typed decode; absent ⇒ the context's auto-binding
     // — Filter(name) on a chip, State(field id, typed placeholder) on a form
     // field (Phase 596).
@@ -3682,13 +3683,13 @@ fn decode_form_field_kind(
         }),
         "Checkbox" => Ok(FormFieldKind::Checkbox {
             value: value_or(StaticSlot::Bool, control_value_defaults::checkbox())?,
-            on_toggle,
+            on_change,
         }),
         // Phase 766 — the switch affordance: Checkbox's mechanics under a
         // distinct tag.
         "Toggle" => Ok(FormFieldKind::Toggle {
             value: value_or(StaticSlot::Bool, control_value_defaults::checkbox())?,
-            on_toggle,
+            on_change,
         }),
         "Choice" => Ok(FormFieldKind::Choice {
             options: req_binding_slot(

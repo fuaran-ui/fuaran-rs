@@ -1621,8 +1621,8 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
             ));
             case_obj("Number", fields)
         }
-        FormFieldKind::Checkbox { value, on_toggle } => {
-            let mut fields = handler_field("onToggle", on_toggle);
+        FormFieldKind::Checkbox { value, on_change } => {
+            let mut fields = handler_field("onChange", on_change);
             fields.extend(control_value_field(
                 auto_bind,
                 control_value_defaults::checkbox(),
@@ -1632,8 +1632,8 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
         }
         // Phase 766 — the switch affordance: Checkbox's mechanics under a
         // distinct tag.
-        FormFieldKind::Toggle { value, on_toggle } => {
-            let mut fields = handler_field("onToggle", on_toggle);
+        FormFieldKind::Toggle { value, on_change } => {
+            let mut fields = handler_field("onChange", on_change);
             fields.extend(control_value_field(
                 auto_bind,
                 control_value_defaults::checkbox(),

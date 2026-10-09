@@ -474,9 +474,9 @@ impl Walker {
                 }
                 self.check_binding(id, value);
             }
-            FormFieldKind::Checkbox { value, on_toggle }
-            | FormFieldKind::Toggle { value, on_toggle } => {
-                if on_toggle.is_none() {
+            FormFieldKind::Checkbox { value, on_change }
+            | FormFieldKind::Toggle { value, on_change } => {
+                if on_change.is_none() {
                     self.check_writable(id, "value", value);
                 }
                 self.check_binding(id, value);
