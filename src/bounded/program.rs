@@ -34,7 +34,8 @@ use crate::render::BindingSources;
 use crate::wire::{Action, Node};
 
 use super::actions::{
-    BoundedDiagnostic, addressed_confirm, answer_branch, describe_action, run_answer, run_gesture,
+    BoundedDiagnostic, Flush, addressed_confirm, answer_branch, commit_writes, describe_action,
+    run_answer, run_gesture,
 };
 use super::budget::{InteractionBudget, action_cascade_cost, tree_cost};
 use super::effect::{ClientEffect, Denial, EffectPolicy};
@@ -277,6 +278,28 @@ impl BoundedProgram {
             }
         };
 
+        // Phase 2198 — the bounded flush. A commit this event folds writes its
+        // field's `commit_to` key with the value the event carried, and each such
+        // write meets the dispatch gate on its own, as the `SetState` it is: a
+        // host admitting the commit but not a write to that key would otherwise
+        // be bypassed by `commit_to`. A denied write refuses the event.
+        let flush = Flush {
+            tree: &self.base_tree,
+            payload: &event.payload,
+        };
+        let writes = match &answer {
+            None => commit_writes(&action, flush),
+            Some((_, _, accepted, confirm)) => answer_branch(confirm, *accepted)
+                .map(|branch| commit_writes(branch, flush))
+                .unwrap_or_default(),
+        };
+        if let Some(denied) = writes.iter().find(|w| !(self.can_dispatch)(w)) {
+            return self.refuse(ProgramReject::Gate(RejectReason::DispatchDenied {
+                node_id: event.node_id.clone(),
+                action: describe_action(denied).to_string(),
+            }));
+        }
+
         let cost = match &answer {
             None => action_cascade_cost(&action),
             Some((_, _, accepted, confirm)) => answer_branch(confirm, *accepted)
@@ -303,11 +326,18 @@ impl BoundedProgram {
         let outcome = match &answer {
             None => {
                 self.pending.clear();
-                run_gesture(&event.node_id, &action, self.store.clone())
+                run_gesture(&event.node_id, &action, self.store.clone(), Some(flush))
             }
             Some((token, path, accepted, confirm)) => {
                 self.pending.retain(|t| t != token);
-                run_answer(&event.node_id, path, *accepted, confirm, self.store.clone())
+                run_answer(
+                    &event.node_id,
+                    path,
+                    *accepted,
+                    confirm,
+                    self.store.clone(),
+                    Some(flush),
+                )
             }
         };
         self.pending
@@ -337,6 +367,7 @@ impl BoundedProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::canonical::JVal;
     use crate::wire::{decode_node, encode_node};
     use std::collections::BTreeMap;
 
@@ -520,6 +551,202 @@ mod tests {
                 .rejected
                 .is_some(),
             "and nothing is pending"
+        );
+    }
+
+    // ── Phase 2198: the bounded flush ────────────────────────────────────────
+
+    const FLUSH_TREE: &str = r#"{"id":"root","kind":{"$type":"Box","children":[{"id":"profile","kind":{"$type":"Form","fields":[{"id":"salary-input","kind":{"$type":"Number","value":{"$type":"Local","codec":{"$type":"Number","decimals":2},"commitTo":"profile.salary","flushOn":{"$type":"OnCommitAction"},"format":"<closure>","initialFrom":{"$type":"State","defaultValue":0,"key":"profile.salary"},"parse":"<closure>"}},"label":"Salary","required":false},{"id":"name-input","kind":{"$type":"Text","value":{"$type":"Local","commitTo":"profile.name","flushOn":{"$type":"OnCommitAction"},"format":"<closure>","initialFrom":{"$type":"State","defaultValue":"","key":"profile.name"},"parse":"<closure>"}},"label":"Name","required":false},{"id":"note-input","kind":{"$type":"Text","value":{"$type":"Local","flushOn":{"$type":"OnCommitAction"},"format":"<closure>","initialFrom":{"$type":"State","defaultValue":"","key":"profile.note"},"parse":"<closure>"}},"label":"Note","required":false},{"id":"secret-input","kind":{"$type":"Text","value":{"$type":"Local","commitTo":"host.secret","flushOn":{"$type":"OnCommitAction"},"format":"<closure>","initialFrom":{"$type":"State","defaultValue":"","key":"profile.secret"},"parse":"<closure>"}},"label":"Secret","required":false}],"onSubmit":{"$type":"Chain","ops":[]},"submitLabel":"Save"}},{"id":"apply-name","kind":{"$type":"Button","label":"apply","onClick":{"$type":"CommitLocal","nodeId":"name-input"},"variant":"Secondary"}},{"id":"apply-salary","kind":{"$type":"Button","label":"apply","onClick":{"$type":"CommitLocal","nodeId":"salary-input"},"variant":"Secondary"}},{"id":"apply-note","kind":{"$type":"Button","label":"apply","onClick":{"$type":"CommitLocal","nodeId":"note-input"},"variant":"Secondary"}},{"id":"apply-secret","kind":{"$type":"Button","label":"apply","onClick":{"$type":"CommitLocal","nodeId":"secret-input"},"variant":"Secondary"}},{"id":"apply-chain","kind":{"$type":"Button","label":"apply","onClick":{"$type":"Chain","ops":[{"$type":"SetState","key":"profile.name","value":"before"},{"$type":"CommitLocal","nodeId":"name-input"},{"$type":"SetState","key":"msg","value":"after"}]},"variant":"Secondary"}},{"id":"apply-asked","kind":{"$type":"Button","label":"apply","onClick":{"$type":"Confirm","onConfirm":{"$type":"CommitLocal","nodeId":"name-input"},"prompt":"Save the name?"},"variant":"Secondary"}}],"layout":{"$type":"Auto"},"role":"Dashboard"}}"#;
+
+    fn flush_program(gate: impl Fn(&Action) -> bool + 'static) -> BoundedProgram {
+        BoundedProgram::new(decode_node(FLUSH_TREE).expect("the flush fixture decodes"))
+            .with_dispatch_gate(gate)
+            .with_effect_policy(EffectPolicy::permissive())
+    }
+
+    fn apply(node_id: &str, members: &[(&str, LiveValue)]) -> LiveEvent {
+        LiveEvent {
+            node_id: node_id.into(),
+            event: "click".into(),
+            payload: members
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+        }
+    }
+
+    fn state<'a>(program: &'a BoundedProgram, key: &str) -> Option<&'a JVal> {
+        program.store().state.get(key)
+    }
+
+    #[test]
+    fn a_commit_writes_the_buffered_value_into_its_fields_commit_to_key() {
+        let mut program = flush_program(|_| true);
+        let step = program.handle_event(&apply(
+            "apply-name",
+            &[("name-input", LiveValue::Str("Ada".into()))],
+        ));
+        assert!(step.rejected.is_none());
+        assert!(
+            step.diagnostics.is_empty(),
+            "nothing refused, nothing inert"
+        );
+        assert_eq!(
+            state(&program, "profile.name"),
+            Some(&JVal::Str("Ada".into()))
+        );
+    }
+
+    #[test]
+    fn a_numeric_codec_writes_a_number_as_sent_or_read_from_its_text_and_refuses_anything_else() {
+        let mut as_number = flush_program(|_| true);
+        as_number.handle_event(&apply(
+            "apply-salary",
+            &[("salary-input", LiveValue::Num(52000.0))],
+        ));
+        assert_eq!(
+            state(&as_number, "profile.salary"),
+            Some(&JVal::Num(52000.0))
+        );
+
+        let mut as_text = flush_program(|_| true);
+        as_text.handle_event(&apply(
+            "apply-salary",
+            &[("salary-input", LiveValue::Str(" 52000.5 ".into()))],
+        ));
+        assert_eq!(state(&as_text, "profile.salary"), Some(&JVal::Num(52000.5)));
+
+        let mut refused = flush_program(|_| true);
+        let step = refused.handle_event(&apply(
+            "apply-salary",
+            &[("salary-input", LiveValue::Str("52k".into()))],
+        ));
+        assert!(state(&refused, "profile.salary").is_none());
+        assert!(
+            step.rejected.is_none(),
+            "a refused write is not a refused event"
+        );
+        assert!(!step.diagnostics.is_empty(), "and it says so");
+    }
+
+    #[test]
+    fn an_event_carrying_no_value_for_the_field_writes_nothing_and_says_so() {
+        let mut program = flush_program(|_| true);
+        let step = program.handle_event(&apply("apply-name", &[]));
+        assert!(state(&program, "profile.name").is_none());
+        assert!(step.rejected.is_none());
+        assert!(matches!(
+            step.diagnostics.as_slice(),
+            [BoundedDiagnostic::Refused { .. }]
+        ));
+    }
+
+    #[test]
+    fn a_commit_in_a_chain_folds_in_order_with_the_writes_around_it() {
+        let mut program = flush_program(|_| true);
+        program.handle_event(&apply(
+            "apply-chain",
+            &[("name-input", LiveValue::Str("Ada".into()))],
+        ));
+        assert_eq!(
+            state(&program, "profile.name"),
+            Some(&JVal::Str("Ada".into()))
+        );
+        assert_eq!(state(&program, "msg"), Some(&JVal::Str("after".into())));
+    }
+
+    #[test]
+    fn the_flushed_write_meets_the_dispatch_gate_on_its_own_as_the_set_state_it_is() {
+        let mut program = flush_program(|a| !matches!(a, Action::SetState { .. }));
+        let step = program.handle_event(&apply(
+            "apply-name",
+            &[("name-input", LiveValue::Str("Ada".into()))],
+        ));
+        assert!(matches!(
+            step.rejected,
+            Some(ProgramReject::Gate(RejectReason::DispatchDenied { .. }))
+        ));
+        assert!(state(&program, "profile.name").is_none());
+    }
+
+    #[test]
+    fn a_commit_whose_key_is_under_the_host_reserved_namespace_is_refused() {
+        let mut program = flush_program(|_| true);
+        let step = program.handle_event(&apply(
+            "apply-secret",
+            &[("secret-input", LiveValue::Str("forged".into()))],
+        ));
+        assert!(state(&program, "host.secret").is_none());
+        assert!(matches!(
+            step.diagnostics.as_slice(),
+            [BoundedDiagnostic::Refused { .. }]
+        ));
+    }
+
+    #[test]
+    fn a_commit_whose_field_declares_no_destination_writes_nothing() {
+        let mut program = flush_program(|_| true);
+        let step = program.handle_event(&apply(
+            "apply-note",
+            &[("note-input", LiveValue::Str("kept local".into()))],
+        ));
+        assert!(state(&program, "profile.note").is_none());
+        assert!(step.rejected.is_none());
+        assert!(matches!(
+            step.diagnostics.as_slice(),
+            [BoundedDiagnostic::UnsupportedOnBoundedPath { .. }]
+        ));
+    }
+
+    #[test]
+    fn a_commit_in_a_confirms_continuation_is_flushed_by_the_answer_not_the_ask() {
+        let mut program = flush_program(|_| true);
+        let name = ("name-input", LiveValue::Str("Ada".into()));
+        program.handle_event(&apply("apply-asked", std::slice::from_ref(&name)));
+        assert!(
+            state(&program, "profile.name").is_none(),
+            "the ask writes nothing"
+        );
+        let yes = program.handle_event(&apply(
+            "apply-asked",
+            &[
+                name.clone(),
+                (CONFIRM_TOKEN_KEY, LiveValue::Str("apply-asked#".into())),
+                (CONFIRM_ACCEPTED_KEY, LiveValue::Bool(true)),
+            ],
+        ));
+        assert!(yes.rejected.is_none());
+        assert_eq!(
+            state(&program, "profile.name"),
+            Some(&JVal::Str("Ada".into()))
+        );
+    }
+
+    #[test]
+    fn the_lowering_names_the_key_a_commit_writes_in_its_tree() {
+        use super::super::actions::{CoreArm, lowers_to, lowers_to_in};
+        let tree = decode_node(FLUSH_TREE).expect("the flush fixture decodes");
+        let commit = |field: &str| Action::CommitLocal {
+            node_id: field.into(),
+        };
+        assert_eq!(
+            lowers_to_in(&tree, &commit("name-input")),
+            CoreArm::Assign {
+                key: "profile.name".into(),
+                from: false
+            }
+        );
+        assert!(matches!(
+            lowers_to_in(&tree, &commit("note-input")),
+            CoreArm::Leaf(_)
+        ));
+        assert!(matches!(
+            lowers_to_in(&tree, &commit("absent")),
+            CoreArm::Leaf(_)
+        ));
+        assert!(
+            matches!(lowers_to(&commit("name-input")), CoreArm::Leaf(_)),
+            "with no tree in view, a commit names no key"
         );
     }
 }

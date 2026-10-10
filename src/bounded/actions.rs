@@ -42,13 +42,20 @@
 //! fold, and inventing that shape before there is a second placement to fit it
 //! would bake this one's assumptions into the contract.
 
-use crate::canonical::JVal;
+use std::collections::BTreeMap;
+
+use crate::canonical::{JVal, parse};
 use crate::render::BindingSources;
 use crate::render::bindings::{Resolution, Value, resolve, try_string};
 use crate::render::sanitize::sanitize_url;
-use crate::wire::{Action, FileReadEncoding, NavigateTarget, StaticValue, TextSource};
+use crate::wire::{
+    Action, Binding, FileReadEncoding, FormField, FormFieldKind, Format, NavigateTarget, Node,
+    NodeKind, StaticValue, TextSource,
+};
 
 use super::effect::ClientEffect;
+use super::resolve::structural_children;
+use super::validate::LiveValue;
 
 /// The state namespace a host reserves for itself. A program is untrusted by
 /// construction, so a program writing under it is exactly the case the namespace
@@ -230,16 +237,173 @@ fn file_read_encoding(encoding: FileReadEncoding) -> &'static str {
 /// A `Confirm` reached here is **unaddressed** and declined: with no address
 /// there is no token, so its question could never be answered. A loop folds a
 /// gesture through [`run_gesture`] instead, which addresses every confirm it
-/// reaches.
+/// reaches. A `CommitLocal` reached here has no tree to find its field in, so it
+/// writes nothing; a loop flushes it through [`Flush`].
 pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources) -> BoundedOutcome {
-    run_at(node_id, None, action, store)
+    run_at(node_id, None, None, action, store)
 }
 
 /// Interpret a **gesture** — the action an admitted, non-answer event resolves
 /// to — with every confirm it reaches addressed, so each asks its question
-/// carrying the token its answer will name (Phase 2106).
-pub fn run_gesture(node_id: &str, action: &Action, store: BindingSources) -> BoundedOutcome {
-    run_at(node_id, Some(""), action, store)
+/// carrying the token its answer will name (Phase 2106), and every commit it
+/// reaches flushed from `flush` when a loop supplies one (Phase 2198).
+pub fn run_gesture(
+    node_id: &str,
+    action: &Action,
+    store: BindingSources,
+    flush: Option<Flush<'_>>,
+) -> BoundedOutcome {
+    run_at(node_id, Some(""), flush, action, store)
+}
+
+// ── The bounded flush (WIRE_FORMAT §30.1, Phase 2198) ────────────────────────
+//
+// `CommitLocal` names a FORM FIELD, and the key it writes is that field's
+// `Local` binding's `commit_to`: a fact of the TREE, which the action alone
+// does not carry. So a loop flushes a commit where the tree is in view. The key
+// is found in the fixed base tree, and the value is the event's flush payload
+// member named by the field's id. The commit then writes exactly as a
+// `SetState` with a literal value does, reserved namespace included. A commit
+// the tree cannot resolve writes nothing: no form field has its id, or the
+// field's value is not a `Local` declaring `commit_to`.
+
+/// What a loop hands the fold so a commit can flush: the fixed tree its field
+/// is found in, and the admitted event's payload its value is read from.
+#[derive(Debug, Clone, Copy)]
+pub struct Flush<'a> {
+    pub tree: &'a Node,
+    pub payload: &'a BTreeMap<String, LiveValue>,
+}
+
+/// Where a commit writes. The key is the `commit_to` of the `Local` binding on
+/// the form field it names, the first in document order (a `Form`'s own fields
+/// before its children). The flag says whether that buffer declares the
+/// `Number` codec, which admits only a number. `None` when the commit writes
+/// nothing.
+pub fn commit_destination<'a>(tree: &'a Node, field_id: &str) -> Option<(&'a str, bool)> {
+    match field_value(&form_field(tree, field_id)?.kind) {
+        Binding::Local {
+            commit_to: Some(key),
+            codec,
+            ..
+        } => Some((key.as_str(), matches!(codec, Some(Format::Number { .. })))),
+        _ => None,
+    }
+}
+
+/// The value binding every form-field kind carries. Exhaustive with no
+/// wildcard, so a kind added to the vocabulary is a build error here until it
+/// says where its value is.
+fn field_value(kind: &FormFieldKind) -> &Binding {
+    match kind {
+        FormFieldKind::Text { value, .. }
+        | FormFieldKind::Number { value, .. }
+        | FormFieldKind::Checkbox { value, .. }
+        | FormFieldKind::Toggle { value, .. }
+        | FormFieldKind::Choice { value, .. }
+        | FormFieldKind::Combobox { value, .. }
+        | FormFieldKind::RangedNumber { value, .. }
+        | FormFieldKind::Range { value, .. }
+        | FormFieldKind::SegmentedChoice { value, .. }
+        | FormFieldKind::TextArea { value, .. }
+        | FormFieldKind::DateTime { value, .. }
+        | FormFieldKind::DateTimeRange { value, .. }
+        | FormFieldKind::Tokens { value, .. }
+        | FormFieldKind::Rating { value, .. }
+        | FormFieldKind::Color { value, .. } => value,
+    }
+}
+
+fn form_field<'a>(node: &'a Node, field_id: &str) -> Option<&'a FormField> {
+    if let NodeKind::Form(spec) = &node.kind {
+        if let Some(field) = spec.fields.iter().find(|f| f.id == field_id) {
+            return Some(field);
+        }
+    }
+    structural_children(&node.kind)
+        .into_iter()
+        .find_map(|child| form_field(child, field_id))
+}
+
+/// The value a commit writes, read from the event's flush payload: written as
+/// it arrives, except that a buffer with the `Number` codec writes only a
+/// number, and reads a string under the JSON number grammar. An absent or
+/// `null` member writes nothing. Every refusal text is this host's own; no
+/// payload string is echoed.
+fn flushed_value(numeric: bool, value: Option<&LiveValue>) -> Result<JVal, String> {
+    let not_a_number = || {
+        "the committed value is not a number, and the field's codec takes only numbers — no write performed"
+            .to_string()
+    };
+    match value {
+        None | Some(LiveValue::Null) => Err(
+            "the event carried no value for the committed field — no write performed".to_string(),
+        ),
+        Some(LiveValue::Num(n)) => Ok(JVal::Num(*n)),
+        Some(LiveValue::Str(text)) if numeric => {
+            match parse(text.trim_matches([' ', '\t', '\n', '\r'])) {
+                Ok(JVal::Num(n)) => Ok(JVal::Num(n)),
+                _ => Err(not_a_number()),
+            }
+        }
+        Some(LiveValue::Bool(_)) if numeric => Err(not_a_number()),
+        Some(LiveValue::Str(text)) => Ok(JVal::Str(text.clone())),
+        Some(LiveValue::Bool(b)) => Ok(JVal::Bool(*b)),
+    }
+}
+
+/// The writes a fold of `action` flushes, each as the `SetState` it is, so a
+/// loop can put each one to its dispatch gate on its own before anything
+/// folds. Walks what a fold reaches: a chain's members, and nothing beneath a
+/// question, whose continuations an answer reaches on its own branch. A walk
+/// over the closed vocabulary that performs nothing, as the budget's is.
+pub fn commit_writes(action: &Action, flush: Flush<'_>) -> Vec<Action> {
+    match action {
+        Action::Chain(inner) => inner.iter().flat_map(|a| commit_writes(a, flush)).collect(),
+        Action::CommitLocal { node_id: field_id } => commit_destination(flush.tree, field_id)
+            .and_then(|(key, numeric)| {
+                flushed_value(numeric, flush.payload.get(field_id))
+                    .ok()
+                    .map(|value| Action::SetState {
+                        key: key.to_string(),
+                        value: Some(value),
+                        value_from: None,
+                    })
+            })
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The one store write, shared by `SetState` and a flushed commit: refused
+/// under the host-reserved namespace, and refused with its reason when there is
+/// no value to write.
+fn write(
+    node_id: &str,
+    action: &Action,
+    key: &str,
+    payload: Result<JVal, String>,
+    store: BindingSources,
+) -> BoundedOutcome {
+    if key.starts_with(HOST_RESERVED_STATE_PREFIX) {
+        return refused(
+            node_id,
+            action,
+            format!(
+                "the state key is under the host-reserved '{HOST_RESERVED_STATE_PREFIX}' namespace"
+            ),
+            store,
+        );
+    }
+    match payload {
+        Ok(json) => {
+            let mut store = store;
+            store.state.insert(key.to_string(), json);
+            unchanged(store)
+        }
+        Err(reason) => refused(node_id, action, reason, store),
+    }
 }
 
 /// The token a question carries: the originating node and the confirm's
@@ -335,39 +499,42 @@ pub fn run_answer(
     accepted: bool,
     confirm: &Action,
     store: BindingSources,
+    flush: Option<Flush<'_>>,
 ) -> BoundedOutcome {
     let name = if accepted { "onConfirm" } else { "onCancel" };
     match answer_branch(confirm, accepted) {
-        Some(branch) => run_at(node_id, Some(&branch_path(path, name)), branch, store),
+        Some(branch) => run_at(
+            node_id,
+            Some(&branch_path(path, name)),
+            flush,
+            branch,
+            store,
+        ),
         None => unchanged(store),
     }
 }
 
 /// The one evaluating match. `path` is `Some` when the loop addressed this
-/// position — a confirm there asks — and `None` when it did not.
+/// position — a confirm there asks — and `None` when it did not. `flush` is
+/// `Some` when the loop handed the fold the tree and the event a commit flushes
+/// from (Phase 2198), and `None` when it did not.
 fn run_at(
     node_id: &str,
     path: Option<&str>,
+    flush: Option<Flush<'_>>,
     action: &Action,
     store: BindingSources,
 ) -> BoundedOutcome {
     match action {
         // ── The one store mutation ───────────────────────────────────────────
+        //
+        // The reserved namespace is closed to it, checked in `write` before
+        // anything is written.
         Action::SetState {
             key,
             value,
             value_from,
         } => {
-            if key.starts_with(HOST_RESERVED_STATE_PREFIX) {
-                return refused(
-                    node_id,
-                    action,
-                    format!(
-                        "the state key is under the host-reserved '{HOST_RESERVED_STATE_PREFIX}' namespace"
-                    ),
-                    store,
-                );
-            }
             // `value` XOR `value_from`, which the decoder enforces. A bound
             // source evaluates AT DISPATCH TIME against the store itself, and a
             // source that does not resolve performs NO write and is diagnosed —
@@ -401,13 +568,25 @@ fn run_at(
                         .to_string(),
                 ),
             };
-            match payload {
-                Ok(json) => {
-                    let mut store = store;
-                    store.state.insert(key.clone(), json);
-                    unchanged(store)
-                }
-                Err(reason) => refused(node_id, action, reason, store),
+            write(node_id, action, key, payload, store)
+        }
+
+        // ── The bounded flush (Phase 2198) ───────────────────────────────────
+        //
+        // A commit the loop can resolve writes exactly as a literal `SetState`
+        // does: the key its field declares, the value its event carried. One
+        // the loop cannot resolve, or one folded with no loop at all, has no key
+        // to write and is the documented no-op it always was.
+        Action::CommitLocal { node_id: field_id } => {
+            match flush.and_then(|f| commit_destination(f.tree, field_id).map(|d| (f, d))) {
+                Some((f, (key, numeric))) => write(
+                    node_id,
+                    action,
+                    key,
+                    flushed_value(numeric, f.payload.get(field_id)),
+                    store,
+                ),
+                None => no_op(node_id, action, store),
             }
         }
 
@@ -521,7 +700,7 @@ fn run_at(
                 .fold(unchanged(store), |acc, (index, next)| {
                     let mut acc = acc;
                     let at = path.map(|p| child_path(p, index));
-                    let step = run_at(node_id, at.as_deref(), next, acc.store);
+                    let step = run_at(node_id, at.as_deref(), flush, next, acc.store);
                     acc.store = step.store;
                     acc.effects.extend(step.effects);
                     acc.diagnostics.extend(step.diagnostics);
@@ -533,14 +712,13 @@ fn run_at(
         //
         // Host-channel and capability arms fan out to machinery this placement
         // does not have; a dispatch carries only an erased payload and there is
-        // no update function to fold it through; a local-buffer commit is a host
-        // concern whose flushed value arrives as the event payload instead.
+        // no update function to fold it through. (A commit is not here: it writes
+        // when a loop flushes it, above, and is that arm's no-op otherwise.)
         //
         Action::Notify { .. }
         | Action::AiTool { .. }
         | Action::Invoke { .. }
-        | Action::Dispatch
-        | Action::CommitLocal { .. } => no_op(node_id, action, store),
+        | Action::Dispatch => no_op(node_id, action, store),
 
         // Phase 2106 — `Confirm` is a ROUND TRIP on the bounded path: the
         // gesture asks, and the answer — the originating event re-delivered with
@@ -693,12 +871,24 @@ fn host_call_leaf(channel: &'static str, name: &str) -> CoreArm {
     })
 }
 
-/// Lower one action onto the bounded core — the WIRE_FORMAT §30.1 table. No
+/// Lower one action onto the bounded core — the WIRE_FORMAT §30.1 table — with
+/// no tree in view: a `CommitLocal` has no field to find, so it is the leaf that
+/// writes nothing. A loop lowers in its tree through [`lowers_to_in`]. No
 /// wildcard: an arm added to the vocabulary fails to compile here until the
 /// table has its row.
 pub fn lowers_to(action: &Action) -> CoreArm {
+    lower(action, None)
+}
+
+/// Lower one action in the tree it sits in (Phase 2198): a `CommitLocal` names
+/// the form field whose `commit_to` it writes, which only the tree holds.
+pub fn lowers_to_in(tree: &Node, action: &Action) -> CoreArm {
+    lower(action, Some(tree))
+}
+
+fn lower(action: &Action, tree: Option<&Node>) -> CoreArm {
     match action {
-        Action::Chain(inner) => CoreArm::Sequence(inner.iter().map(lowers_to).collect()),
+        Action::Chain(inner) => CoreArm::Sequence(inner.iter().map(|a| lower(a, tree)).collect()),
         Action::SetState {
             key, value_from, ..
         } => CoreArm::Assign {
@@ -746,17 +936,16 @@ pub fn lowers_to(action: &Action) -> CoreArm {
                 ],
                 ..LeafDeclaration::default()
             },
-            when_true: Box::new(lowers_to(on_confirm)),
+            when_true: Box::new(lower(on_confirm, tree)),
             when_false: Box::new(
                 on_cancel
                     .as_deref()
-                    .map(lowers_to)
+                    .map(|a| lower(a, tree))
                     .unwrap_or(CoreArm::Sequence(Vec::new())),
             ),
         },
         // Phase 2194 — a message for the host's own update, which no walk can
-        // see into: an OPAQUE leaf, reason class `in-process`. A commit stays a
-        // leaf that demands nothing (Phase 2130).
+        // see into: an OPAQUE leaf, reason class `in-process`.
         Action::Dispatch => CoreArm::Leaf(LeafDeclaration {
             opaque: Some(OpaqueLeaf {
                 reason: "in-process",
@@ -764,7 +953,19 @@ pub fn lowers_to(action: &Action) -> CoreArm {
             }),
             ..LeafDeclaration::default()
         }),
-        Action::CommitLocal { .. } => CoreArm::Leaf(LeafDeclaration::default()),
+        // Phase 2198 — the one arm whose lowering reads the tree: the store
+        // write keyed by its field's `commit_to`, its value a literal the loop
+        // reads from the event. With no tree, or no destination, it writes
+        // nothing, and is the leaf that says so.
+        Action::CommitLocal { node_id: field_id } => {
+            match tree.and_then(|t| commit_destination(t, field_id)) {
+                Some((key, _)) => CoreArm::Assign {
+                    key: key.to_string(),
+                    from: false,
+                },
+                None => CoreArm::Leaf(LeafDeclaration::default()),
+            }
+        }
     }
 }
 

@@ -508,7 +508,7 @@ fn a_host_that_performs_the_denied_effect_fails_exactly_the_scenario_that_record
 // `wire-format-fixtures/` above this crate; nothing claimed and nothing found
 // reports NOT RUN and asserts nothing.
 
-use fuaran_rs::bounded::actions::{CoreArm, describe_action, lowers_to, run_gesture};
+use fuaran_rs::bounded::actions::{CoreArm, describe_action, lowers_to, lowers_to_in, run_gesture};
 use fuaran_rs::canonical::{ordinal_cmp, render_canonical};
 use fuaran_rs::render::BindingSources;
 use fuaran_rs::wire::{Action, NodeKind, decode_node};
@@ -580,6 +580,9 @@ struct LowersToVector {
     name: String,
     arm: String,
     action: JVal,
+    /// Phase 2198 — the tree the action sits in, for the one arm whose
+    /// lowering reads one (`CommitLocal`, §30.1): its key is found there.
+    tree: Option<JVal>,
     expected: JVal,
 }
 
@@ -620,6 +623,7 @@ fn load_lowers_to(root: &Path) -> (Vec<String>, Vec<LowersToVector>) {
                     .field("action")
                     .cloned()
                     .expect("a vector carries 'action'"),
+                tree: file.field("tree").cloned(),
                 expected: file
                     .field("lowersTo")
                     .cloned()
@@ -650,6 +654,19 @@ fn decode_action(vector: &LowersToVector) -> Action {
     match node.kind {
         NodeKind::Button(spec) => spec.on_click,
         _ => panic!("{}: the carrier did not decode as a button", vector.name),
+    }
+}
+
+/// The lowering as the bounded path computes it (Phase 2198): in the vector's
+/// tree, decoded by this host's own node decoder, when it carries one.
+fn lowered(vector: &LowersToVector, action: &Action) -> CoreArm {
+    match &vector.tree {
+        None => lowers_to(action),
+        Some(tree) => {
+            let root = decode_node(&render_canonical(tree))
+                .unwrap_or_else(|e| panic!("{}: the tree does not decode: {e:?}", vector.name));
+            lowers_to_in(&root, action)
+        }
     }
 }
 
@@ -814,7 +831,7 @@ fn every_lowers_to_vector_lowers_to_the_reading_the_table_states() {
             "{}: the decoded arm is the one it is filed under",
             vector.name
         );
-        let lowered = lowers_to(&action);
+        let lowered = lowered(vector, &action);
         if normalise(&reading(&lowered)) != normalise(&vector.expected) {
             failures.push(format!(
                 "{}: lowered to {} but the table states {}",
@@ -828,7 +845,7 @@ fn every_lowers_to_vector_lowers_to_the_reading_the_table_states() {
         declared_effect_kinds(&lowered, &mut declared);
         // A GESTURE, as a loop folds one: a confirm is addressed, so the
         // question it asks is checked against what the lowering declares.
-        let outcome = run_gesture("carrier", &action, BindingSources::default());
+        let outcome = run_gesture("carrier", &action, BindingSources::default(), None);
         for effect in &outcome.effects {
             assert!(
                 declared.contains(&effect.capability()),
@@ -918,5 +935,36 @@ fn a_dispatch_lowered_to_a_plain_leaf_fails_its_vector() {
         normalise(&reading(&CoreArm::Leaf(declaration))),
         normalise(&vector.expected),
         "the same leaf without its mark does not"
+    );
+}
+
+/// Phase 2198 — the go-red half of the `CommitLocal` row: the same commit
+/// lowered WITHOUT its tree (the lowering before this phase, a leaf that
+/// declares nothing) fails the vector, so the row cannot be met by a lowering
+/// that leaves the key unnamed.
+#[test]
+fn a_commit_lowered_without_its_tree_fails_its_vector() {
+    let Some(root) = wire_corpus_root() else {
+        return;
+    };
+    let (_, vectors) = load_lowers_to(&root);
+    let vector = vectors
+        .iter()
+        .find(|v| v.name == "commit-local")
+        .expect("the family pins a 'commit-local' vector");
+    assert!(
+        vector.tree.is_some(),
+        "the commit vector carries the tree its key is found in"
+    );
+    let action = decode_action(vector);
+    assert_eq!(
+        normalise(&reading(&lowered(vector, &action))),
+        normalise(&vector.expected),
+        "the lowering meets the row"
+    );
+    assert_ne!(
+        normalise(&reading(&lowers_to(&action))),
+        normalise(&vector.expected),
+        "the tree-blind leaf does not"
     );
 }
