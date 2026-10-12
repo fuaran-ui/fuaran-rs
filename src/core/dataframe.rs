@@ -8,7 +8,74 @@ use super::bare_enum;
 
 // ─── Compute layer (Phases 282/284/424) ──────────────────────────────────────
 
-bare_enum!(ColumnType { Int => "int", Float => "float", Bool => "bool", Str => "string", Date => "date", Timestamp => "timestamp" });
+// The three sub-second timestamp units are appended after `timestamp` (Phase
+// 2206, fuaran-core#422), so the spelling list keeps its earlier prefix.
+bare_enum!(ColumnType { Int => "int", Float => "float", Bool => "bool", Str => "string", Date => "date", Timestamp => "timestamp", TimestampMs => "timestamp_ms", TimestampUs => "timestamp_us", TimestampNs => "timestamp_ns" });
+
+impl ColumnType {
+    /// The timestamp family (WIRE_FORMAT §3.6.25): the fraction digits a
+    /// timestamp unit holds — 0, 3, 6 or 9 — or `None` for a type that is not a
+    /// timestamp. Every unit carries one canonical instant text per instant, so
+    /// a timestamp cell is `Cell::Timestamp` whichever unit its column declares;
+    /// a coarser unit widens into a finer one.
+    pub fn timestamp_digits(self) -> Option<u32> {
+        match self {
+            ColumnType::Timestamp => Some(0),
+            ColumnType::TimestampMs => Some(3),
+            ColumnType::TimestampUs => Some(6),
+            ColumnType::TimestampNs => Some(9),
+            _ => None,
+        }
+    }
+
+    /// The coarsest timestamp unit holding `digits` fraction digits exactly.
+    pub fn timestamp_of_digits(digits: u32) -> ColumnType {
+        match digits {
+            0 => ColumnType::Timestamp,
+            1..=3 => ColumnType::TimestampMs,
+            4..=6 => ColumnType::TimestampUs,
+            _ => ColumnType::TimestampNs,
+        }
+    }
+}
+
+/// The fraction digits of a CANONICAL instant text (`YYYY-MM-DDThh:mm:ssZ`, or
+/// `YYYY-MM-DDThh:mm:ss.FZ` with one to nine digits and no trailing zero,
+/// naming a moment that exists), or `None` for any other text.
+pub fn instant_fraction_digits(s: &str) -> Option<u32> {
+    let b = s.as_bytes();
+    let n = b.len();
+    if n < 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
+        return None;
+    }
+    let num = |at: usize, len: usize| -> Option<u32> {
+        b[at..at + len].iter().try_fold(0u32, |acc, &c| {
+            c.is_ascii_digit().then(|| acc * 10 + u32::from(c - b'0'))
+        })
+    };
+    let (y, mo, d) = (num(0, 4)?, num(5, 2)?, num(8, 2)?);
+    let (h, mi, se) = (num(11, 2)?, num(14, 2)?, num(17, 2)?);
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let days_in = match mo {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if !(1..=12).contains(&mo) || d < 1 || d > days_in || h > 23 || mi > 59 || se > 59 {
+        return None;
+    }
+    if n == 20 {
+        return (b[19] == b'Z').then_some(0);
+    }
+    if n > 30 || b[19] != b'.' || b[n - 1] != b'Z' || b[n - 2] == b'0' {
+        return None;
+    }
+    b[20..n - 1]
+        .iter()
+        .all(u8::is_ascii_digit)
+        .then(|| (n - 21) as u32)
+}
 bare_enum!(BinOp { Add => "add", Sub => "sub", Mul => "mul", Div => "div", Mod => "mod", Eq => "eq", Ne => "ne", Lt => "lt", Le => "le", Gt => "gt", Ge => "ge", And => "and", Or => "or", Contains => "contains", StartsWith => "startsWith", EndsWith => "endsWith" });
 bare_enum!(ScalarFn { Abs => "abs", Round => "round", Floor => "floor", Ceil => "ceil", Length => "length", Lower => "lower", Upper => "upper", Substr => "substr", DatePart => "datePart", Concat => "concat", Trim => "trim", Replace => "replace", DateDiffDays => "dateDiffDays" });
 bare_enum!(AggFn { Sum => "sum", Mean => "mean", Min => "min", Max => "max", Count => "count", Median => "median", Stddev => "stddev", First => "first", Last => "last" });

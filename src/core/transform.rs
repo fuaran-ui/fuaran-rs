@@ -391,11 +391,16 @@ fn cast_cell(ty: ColumnType, c: &Cell) -> Result<Cell, EvalError> {
                 detail: "cannot cast to date".to_string(),
             }),
         },
-        ColumnType::Timestamp => match c {
+        // Phase 2206 — a cast to any unit keeps the instant's one canonical
+        // text; the unit is a statement about the column, not the cell.
+        ColumnType::Timestamp
+        | ColumnType::TimestampMs
+        | ColumnType::TimestampUs
+        | ColumnType::TimestampNs => match c {
             Cell::Timestamp(_) => Ok(c.clone()),
             Cell::Str(s) => Ok(Cell::Timestamp(s.clone())),
             _ => Err(EvalError::TypeError {
-                detail: "cannot cast to timestamp".to_string(),
+                detail: format!("cannot cast to {}", ty.as_str()),
             }),
         },
     }

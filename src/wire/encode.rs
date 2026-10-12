@@ -153,7 +153,12 @@ fn cell_column_wire(ty: ColumnType, c: &Cell) -> String {
         Cell::Null => match ty {
             ColumnType::Bool => boolean(false),
             ColumnType::Int | ColumnType::Float => "0".to_string(),
-            ColumnType::Str | ColumnType::Date | ColumnType::Timestamp => s(""),
+            ColumnType::Str
+            | ColumnType::Date
+            | ColumnType::Timestamp
+            | ColumnType::TimestampMs
+            | ColumnType::TimestampUs
+            | ColumnType::TimestampNs => s(""),
         },
         Cell::Int(v) => {
             if ty == ColumnType::Float {
