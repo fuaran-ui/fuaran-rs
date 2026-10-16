@@ -293,7 +293,8 @@ const REGENERATE_ENV: &str = "FUARAN_IDL_REGENERATE";
 fn corpus_idl(corpus: &Path) -> String {
     std::fs::read_to_string(corpus.join("idl.json")).unwrap_or_else(|e| {
         panic!(
-            "the corpus at '{}' holds no readable idl.json ({e}); this host's structural              layer is generated from it, so its absence is a failure rather than a skip",
+            "the corpus at '{}' holds no readable idl.json ({e}); this host's structural \
+             layer is generated from it, so its absence is a failure rather than a skip",
             corpus.display()
         )
     })
@@ -338,7 +339,10 @@ fn generated_module_matches_the_corpus_idl() {
                 |i| i + 1,
             );
         panic!(
-            "src/wire/generated.rs is not what the generator writes from {}/idl.json              (first difference at line {line}). The IDL has moved: regenerate with              {REGENERATE_ENV}=1 cargo test --test conformance generated_module, then build —              the compiler names every hand-written site the change reaches.",
+            "src/wire/generated.rs is not what the generator writes from {}/idl.json \
+             (first difference at line {line}). The IDL has moved: regenerate with \
+             {REGENERATE_ENV}=1 cargo test --test conformance generated_module, then build — \
+             the compiler names every hand-written site the change reaches.",
             corpus.display()
         );
     }
@@ -360,7 +364,9 @@ fn generated_module_records_the_corpus_idl_hash() {
     assert_eq!(
         fuaran_rs::wire::IDL_SHA256,
         actual,
-        "the generated module was produced from a different idl.json than the corpus at '{}'          publishes; regenerate with {REGENERATE_ENV}=1 cargo test --test conformance          generated_module",
+        "the generated module was produced from a different idl.json than the corpus at '{}' \
+         publishes; regenerate with {REGENERATE_ENV}=1 cargo test --test conformance \
+         generated_module",
         corpus.display()
     );
 }

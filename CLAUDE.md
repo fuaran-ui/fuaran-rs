@@ -36,6 +36,20 @@ co-equal conformant host. Cross-repo development conventions (port allocation, f
   conformance corpus (`../wire-format-fixtures/`), not generated from any other tier.
   There is no Rust transpile path and none is wanted — the hard part (the canonical
   number form) is hand-written for every host regardless.
+- **The structural layer is generated from the corpus's `idl.json`, by this host's
+  own generator** (ruling of 2026-10-16, Phase 2298). `src/wire/idl_codegen.rs` reads
+  the language-neutral IDL the corpus publishes and writes `src/wire/generated.rs`:
+  the bare-string enums, the kind set and its categories, every union's
+  discriminator set, a field pin per modelled spec / record / op, the
+  omit-at-default constants and the node-bearing slots. Reading a data artefact with
+  a host-owned generator is not a transpile, and no codec code is shared with any
+  other host. **Behaviour stays hand-written** — the spec structs, decode policy and
+  refusal wording, leniency, limit checks, encoding paths that carry behaviour,
+  rendering and the C ABI. No `build.rs`: the module is committed, the generator
+  compiles only under the off-by-default `idl-codegen` feature the suite turns on,
+  and `tests/conformance.rs` is both the drift check (red when `idl.json` moves and
+  the module does not) and the regeneration
+  (`FUARAN_IDL_REGENERATE=1 cargo test --test conformance generated_module`).
 - **Wire-format conformance is the stability contract.** The codec must
   encode / decode byte-identically against the shared corpus and surface the
   canonical reject code + `$`-rooted path for every malformed fixture — certified the
@@ -64,6 +78,7 @@ fuaran-rs/
 ├── src/lib.rs           # crate doc + VERSION
 ├── src/canonical/       # canonical-JSON layer — float.rs (number form) + json.rs (parser + canonical renderer)
 ├── src/wire/            # model.rs (typed tree, native enums) + decode.rs / encode.rs + the DecodeError envelope
+│                        #   + generated.rs (structural layer, from the corpus idl.json) + idl_codegen.rs (its generator)
 ├── src/ops/             # tree-op apply engine — total reducer + ApplyError envelope + can_apply dry-run
 │                        #   + placement.rs (the placement algebra: placed insert / move / nudge + clone verbs)
 ├── src/validator/       # pre-emit structural validator — canonical FUARAN### defect codes

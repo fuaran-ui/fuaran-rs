@@ -29,6 +29,14 @@ name = "fuaran-ui"
 # once (a ReplaceRoot payload repeating an id, an EditNode / UpdateState whose new
 # nodes collide with the tree, an InsertChild subtree repeating one within
 # itself). No signature moves, and the draft already carries a breaking class.
+#
+# Phase 2298 rides it, ADDITIVE: the structural layer (the bare-string enums,
+# NodeKind::type_name / category, the kind and control sets) is now generated
+# from the corpus's idl.json into src/wire/generated.rs. Every public name is
+# kept and no type's field set moved. New public items: IDL_SHA256, IDL_VERSION,
+# NODE_SLOTS and NODE_RECORD_SLOTS. Two orders now follow the IDL rather than
+# the old hand lists: CANONICAL_NODE_KINDS / CANONICAL_FORM_FIELD_KINDS, and
+# BoxRole's case order (visible only in WIRE_NAMES and Debug).
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"
