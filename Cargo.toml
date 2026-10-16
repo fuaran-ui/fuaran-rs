@@ -113,6 +113,13 @@ driver-semantics-abi = []
 # helper converts when called directly. The self dev-dependency below is what
 # turns it on for `cargo test` and nothing else.
 abi-panic-probe = []
+# OFF by default, and never part of the published surface. Compiles the host's
+# generator over the wire corpus's `idl.json` (`src/wire/idl_codegen.rs`), which
+# writes `src/wire/generated.rs`. The crate never needs the corpus to BUILD — the
+# generated module is committed — so the generator rides a feature the self
+# dev-dependency below turns on for the crate's own suite, where the drift test
+# and the regeneration entry point live (`tests/conformance.rs`).
+idl-codegen = []
 
 [dependencies]
 # The runtime host uses the Rust standard library only — no third-party crates.
@@ -123,5 +130,6 @@ abi-panic-probe = []
 [dev-dependencies]
 # The crate as its own dev-dependency, feature-unified: this is the one sanctioned
 # way to compile a test-only `extern "C"` entry point into the library the
-# integration tests link, without shipping it. See `abi-panic-probe` above.
-fuaran-ui = { path = ".", features = ["abi-panic-probe"] }
+# integration tests link, without shipping it. See `abi-panic-probe` above. The
+# same route compiles the `idl-codegen` generator for the suite only.
+fuaran-ui = { path = ".", features = ["abi-panic-probe", "idl-codegen"] }

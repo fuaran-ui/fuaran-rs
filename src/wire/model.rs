@@ -13,9 +13,10 @@
 use std::collections::BTreeMap;
 
 use crate::canonical::JVal;
-// The bare-string enum shape is shared with the Core dataframe model, so the
-// macro that writes it lives behind the Core boundary.
-use crate::core::bare_enum;
+
+// The structural layer generated from the corpus's `idl.json` — the bare-string
+// enums, the kind and discriminator sets and the field pins. Re-exported from here so every path that named a model item still does.
+pub use super::generated::*;
 
 /// A node identity string (non-empty by decode invariant, §8).
 pub type NodeId = String;
@@ -28,26 +29,21 @@ pub type NodeId = String;
 pub struct Closure;
 
 // ─── Bare-string enums (§3.5) ────────────────────────────────────────────────
-
-bare_enum!(Orientation { Vertical => "Vertical", Horizontal => "Horizontal" });
-bare_enum!(ScrollOrientation { Vertical => "Vertical", Horizontal => "Horizontal", Both => "Both" });
-bare_enum!(BadgeVariant { Neutral => "Neutral", Brand => "Brand", Success => "Success", Warning => "Warning", Critical => "Critical", Info => "Info" });
-bare_enum!(ButtonVariant { Primary => "Primary", Secondary => "Secondary", Tertiary => "Tertiary", Destructive => "Destructive" });
-bare_enum!(HeadingVariant { Standard => "Standard", Eyebrow => "Eyebrow", Caption => "Caption", Lead => "Lead" });
-bare_enum!(ToneVariant { Default => "Default", Subdued => "Subdued", Brand => "Brand", Success => "Success", Warning => "Warning", Critical => "Critical", Info => "Info" });
-bare_enum!(StyleWeight { Compact => "Compact", Standard => "Standard", Spacious => "Spacious" });
-bare_enum!(Emphasis { Quiet => "Quiet", Normal => "Normal", Loud => "Loud" });
-bare_enum!(TextAnchor { Start => "Start", Middle => "Middle", End => "End" });
-bare_enum!(StyleRole { None => "None", Eyebrow => "Eyebrow", Data => "Data", Lede => "Lede", Caption => "Caption" });
-bare_enum!(FontVoice { Default => "Default", Display => "Display", Structural => "Structural" });
-bare_enum!(ChartKind { Line => "Line", Bar => "Bar", Area => "Area", Pie => "Pie", Scatter => "Scatter", Heatmap => "Heatmap" });
+//
+// The enums themselves are GENERATED (`generated.rs`, from the corpus's
+// `idl.json`): the case set, the host case names and the wire spellings are the
+// IDL's, never this file's. What the IDL does not carry is WHY a vocabulary has
+// the shape it has, and that stays here, beside the model it explains.
+//
+// `ChartLegendPosition` —
 // Phase 880 — which edge the chart's legend occupies, or `None`, which suppresses
 // it entirely. A WIRE vocabulary on the same side of the D8 line as `title`: WHERE
 // an author wants the legend is their meaning, where the geometry that puts it
 // there (column widths, pitches, how the plot shrinks) stays the host's, in the
 // lowering's `ChartLowerStyle`. Absent means "the host default" (`Right`), NOT "no
 // legend" — suppression is the explicit `None`.
-bare_enum!(ChartLegendPosition { Top => "Top", Right => "Right", Bottom => "Bottom", None => "None" });
+//
+// `ChartDataLabels` —
 // Phase 881 — whether a chart writes its values onto the picture, and where. A
 // WIRE vocabulary on the semantic side of the D8 line: whether the reader is
 // meant to READ THE NUMBERS or read the shape is the author's meaning; the type
@@ -55,7 +51,8 @@ bare_enum!(ChartLegendPosition { Top => "Top", Right => "Right", Bottom => "Bott
 // lowering. THE CASE SET IS TWO, AND THAT IS THE POINT — there is deliberately
 // no all-points case, so no shape of this enum can request a number on every
 // interior point. Absent means `Off`, which is also the default.
-bare_enum!(ChartDataLabels { Off => "Off", Ends => "Ends" });
+//
+// `ChartXScale` —
 // Phase 882 — what a chart's x column MEANS: discrete `Category` bands or
 // `Temporal` dates read on a continuous day-scale. A WIRE vocabulary on the
 // semantic side of the D8 line: whether a column is a set of categories or a run
@@ -69,8 +66,8 @@ bare_enum!(ChartDataLabels { Off => "Off", Ends => "Ends" });
 // temporal axis over a non-date column). Absent means `Category`, which is also
 // the default, so every pre-882 chart is byte-identical on the wire and in the
 // picture.
-bare_enum!(ChartXScale { Category => "Category", Temporal => "Temporal" });
-bare_enum!(ImageVariant { Default => "Default", Avatar => "Avatar", Rounded => "Rounded" });
+//
+// `ImageFit` —
 // Phase 1077 — the three `Image` presentation slots (WIRE_FORMAT.md §3.6.2).
 // TOKENS, never CSS values: `aspectRatio` names one of four ratios and cannot
 // carry `"16 / 9"`, a pair, or a number, which is the free-form escape this
@@ -82,94 +79,91 @@ bare_enum!(ImageVariant { Default => "Default", Avatar => "Avatar", Rounded => "
 // is RESERVED before the bytes land. Neither is derived from the other — a host
 // stylesheet may size the element some other way — which is why they are two
 // independently-declarable slots rather than one.
-bare_enum!(ImageFit { Natural => "Natural", Cover => "Cover", Contain => "Contain" });
-bare_enum!(ImageAspect {
-    Natural => "Natural", Square => "Square", FourThree => "FourThree",
-    ThreeTwo => "ThreeTwo", SixteenNine => "SixteenNine"
-});
+//
+// `ImageLoading` —
 // `Eager` is the default DELIBERATELY, and it is not the "unoptimised" value:
 // deferring an above-the-fold image delays the largest contentful paint rather
 // than helping it, and only the author knows where the image sits. So `Eager`
 // emits no attribute at all and leaves the browser's own default in place,
 // while `Lazy` is a positive declaration. A host MUST NOT infer laziness from
 // position, viewport, or anything else the tree does not say.
-bare_enum!(ImageLoading { Eager => "Eager", Lazy => "Lazy" });
+//
+// `TrackKind` —
 // Phase 1110 - the closed timed-text track vocabulary (WIRE_FORMAT.md 3.6.6).
 // `metadata` is deliberately NOT a case: its cues are rendered by no user agent
 // and read only by script, so a declarative document naming it would state an
 // intent no conformant host could honour. The set is closed at four; a fifth is
 // an addition, not a spelling a decoder may guess at.
-bare_enum!(TrackKind {
-    Subtitles => "Subtitles", Captions => "Captions",
-    Descriptions => "Descriptions", Chapters => "Chapters"
-});
+//
+// `EmbedPermission` —
 // Phase 1111 - the closed sandbox-relaxation vocabulary (WIRE_FORMAT.md 3.6.8).
 // A BARE enum, so an unrecognised token reports at the ELEMENT's own path with
 // no `$type` suffix. A decoder MUST NOT silently drop an unrecognised
 // permission: that would turn a document asking for something this vocabulary
 // has no name for into a document asking for LESS, which reads as success.
-bare_enum!(EmbedPermission {
-    AllowScripts => "AllowScripts", AllowSameOrigin => "AllowSameOrigin",
-    AllowForms => "AllowForms", AllowFullscreen => "AllowFullscreen"
-});
+//
+// `ModalityKind` —
 // WIRE_FORMAT.md 3.6.11 - the modality a `Modal` declares. Omitted at `Modal`,
 // which is the blocking modality every pre-modality document meant.
-bare_enum!(ModalityKind { Modal => "Modal", Popover => "Popover" });
+//
+// `TextDirection` —
 // Phase 1472 - the node-level declared text direction (WIRE_FORMAT.md 3.1).
 // Lower-case on the wire, like `LiveRegionKind` and `SortDirection`, because
 // these are the HTML `dir` tokens themselves. Omitted at `Auto`, which leaves
 // the inherited direction in place - the pre-1472 rendering.
-bare_enum!(TextDirection { Auto => "auto", Ltr => "ltr", Rtl => "rtl" });
+//
+// `LinkProtection` —
 // Anti-scraper render strategy for a `Link` — `email` marks a `mailto:` link
 // whose address must not appear in plaintext in emitted markup (the renderers
 // own the emission strategy). Lower-case on the wire, like `SortDirection`.
-bare_enum!(LinkProtection { Email => "email" });
-bare_enum!(MathDisplay { Inline => "Inline", Block => "Block" });
+//
+// `DateTimeVariant` —
 // Phase 1811 — `DateTimeVariant` (was `DateVariant`): the temporal breadth of a
 // `DateTime` / `DateTimeRange` field. The three cases did not move.
-bare_enum!(DateTimeVariant { Date => "Date", Time => "Time", DateTime => "DateTime" });
-bare_enum!(FileReadEncoding { Text => "Text", Base64 => "Base64", DataUrl => "DataUrl" });
+//
+// `NavigateTarget` —
 // Phase 1536 — `Action::Navigate`'s destination window. A CLOSED enum of two,
 // deliberately not HTML's `target` attribute: that vocabulary also carries
 // `_parent` and `_top`, which are frame-busting gestures a hosted tree must not
 // be able to ask for, so `_blank` is refused rather than aliased — accepting
 // any of it would teach an emitter the wrong vocabulary. Omitted at `Self_`,
 // which is the pre-1536 behaviour.
-bare_enum!(NavigateTarget { Self_ => "Self", Blank => "Blank" });
+//
+// `CaptureSource` —
 // Phase 1116 — the recording device a `FileUpload` asks the platform for
 // (WIRE_FORMAT.md §3.6.18). A BARE enum, so an unrecognised spelling reports at
 // `$.kind.capture` with no `.$type` suffix. There is deliberately no
 // display-capture case and there will not be one by widening this member: a
 // screen capture reaches every window the reader has open rather than one
 // device behind the picker, so it is a different class of thing.
-bare_enum!(CaptureSource { Camera => "Camera", Microphone => "Microphone" });
+//
+// `TextFormat` —
 // `FormFieldKind` names the CONTROL; `FormField.rule` names the ACCEPTED SET.
-bare_enum!(TextFormat { Email => "email", Url => "url", Tel => "tel" });
-bare_enum!(CompareOp {
-    Eq => "eq", Neq => "neq", Lt => "lt", Lte => "lte", Gt => "gt", Gte => "gte"
-});
-bare_enum!(LiveRegionKind { Polite => "polite", Assertive => "assertive", Off => "off" });
+//
+// `SortDirection` —
 // Phase 801 — the closed sort direction on `staticRows.defaultSort`. Lower-case on
 // the wire, like `LiveRegionKind` and unlike most enums here.
-bare_enum!(SortDirection { Asc => "asc", Desc => "desc" });
-bare_enum!(DateStyle { Short => "Short", Medium => "Medium", Long => "Long", Full => "Full" });
+//
+// `TimeStyle` —
 // Phase 1810 — the time-of-day half of `Format::DateTime`'s `dateStyle` /
 // `timeStyle` pair. The same four cases as `DateStyle`, deliberately a SEPARATE
 // enum: the two name breadths of different things.
-bare_enum!(TimeStyle { Short => "Short", Medium => "Medium", Long => "Long", Full => "Full" });
-bare_enum!(RelativeTimeUnit { Second => "Second", Minute => "Minute", Hour => "Hour", Day => "Day", Week => "Week", Month => "Month", Year => "Year" });
+//
+// `TimeGrain` —
 // Phase 1533 — the resolution a `Binding::Now` declares for the host-furnished
 // instant. FOUR members and not `RelativeTimeUnit`'s seven, deliberately: this
 // is a TRUNCATION of a calendar instant, and a week, a month or a year has no
 // truncation every host agrees on (which weekday starts a week; which
 // calendar). The four here truncate the canonical ISO-8601 form by prefix.
-bare_enum!(TimeGrain { Second => "Second", Minute => "Minute", Hour => "Hour", Day => "Day" });
+//
+// `DurationUnit` —
 // Phase 819 — the Duration format enums (`Format.Duration` / `CellFormat.Duration`):
 // the numeric source counts `unit`s, rendered per the bounded `style`.
-bare_enum!(DurationUnit { Seconds => "Seconds", Minutes => "Minutes", Hours => "Hours" });
-bare_enum!(DurationStyle { Compact => "Compact", Clock => "Clock", Long => "Long" });
+//
+// `IconSize` —
 // Phase 821 — the standalone `Icon` display kind's size modifier.
-bare_enum!(IconSize { Small => "Small", Medium => "Medium", Large => "Large" });
+//
+// `TrendPolarity` —
 // Phase 867 — which way a `Metric`'s quantity IMPROVES (WIRE_FORMAT.md §3.6.1).
 // Distinct from `tone`, which says how the reading STANDS: a host derives neither
 // from the other, and nothing here ever writes back to `tone`. A renderer
@@ -190,12 +184,6 @@ bare_enum!(IconSize { Small => "Small", Medium => "Medium", Large => "Large" });
 // exactly the exhaustiveness property this host exists to demonstrate.
 // NO alias arm is registered for it: an alias would ACCEPT the reserved spelling
 // under a canonical case, silently deciding the question the reservation holds open.
-bare_enum!(TrendPolarity { HigherIsBetter => "HigherIsBetter", LowerIsBetter => "LowerIsBetter" });
-bare_enum!(HashStrictness { StrictReplay => "StrictReplay", AdvisoryWarning => "AdvisoryWarning", Enforced => "Enforced" });
-bare_enum!(BoxRole { Group => "Group", Card => "Card", Dashboard => "Dashboard", Separator => "Separator" });
-bare_enum!(HostEffect { Pure => "Pure", ReadsHost => "ReadsHost", WritesHost => "WritesHost" });
-bare_enum!(DeterminismSource { Deterministic => "Deterministic", Clock => "Clock", Random => "Random", Network => "Network" });
-bare_enum!(ChannelDirection { OutOnly => "OutOnly", TwoWay => "TwoWay" });
 
 // ─── Text / bindings / actions ───────────────────────────────────────────────
 
@@ -2011,8 +1999,14 @@ pub struct DrawingSpec {
 // ─── NodeKind — the flat wire vocabulary (§3.2) ──────────────────────────────
 
 /// The node's primitive kind: the closed, flat `kind.$type` vocabulary. The
-/// four behavioural categories (Layout / Display / Input / Visualisation) are a
-/// host-side classification (see [`NodeKind::category`]), not a wire level.
+/// behavioural categories (Layout / Display / Input / Visualisation /
+/// Structural) are a host-side classification (see [`NodeKind::category`]), not
+/// a wire level.
+///
+/// The variants are written here because each carries a hand-modelled spec; the
+/// SET is the IDL's. `NodeKind::type_name` and `NodeKind::category` are
+/// generated from the IDL's kind rows as matches with no catch-all arm, so a
+/// kind on one side and not the other does not compile.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeKind {
     // Layout
@@ -2066,7 +2060,7 @@ pub enum NodeKind {
 }
 
 /// The behavioural category a primitive belongs to — recovered on decode, never
-/// a wire level.
+/// a wire level. The IDL spells `Structural` as `Meta`; the public name is kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeCategory {
     Layout,
@@ -2075,200 +2069,6 @@ pub enum NodeCategory {
     Visualisation,
     Structural,
 }
-
-impl NodeKind {
-    /// The wire `$type` discriminator name of this kind (e.g. `"Metric"`,
-    /// `"DataGrid"`, `"Box"`) — the stable structural name introspection and
-    /// structural search key off.
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            NodeKind::Box(_) => "Box",
-            NodeKind::SplitPanel(_) => "SplitPanel",
-            NodeKind::Tabs(_) => "Tabs",
-            NodeKind::Stepper(_) => "Stepper",
-            NodeKind::SummaryList(_) => "SummaryList",
-            NodeKind::Disclosure(_) => "Disclosure",
-            NodeKind::Modal(_) => "Modal",
-            NodeKind::ScrollArea(_) => "ScrollArea",
-            NodeKind::Heading(_) => "Heading",
-            NodeKind::Markdown(_) => "Markdown",
-            NodeKind::Metric(_) => "Metric",
-            NodeKind::Badge(_) => "Badge",
-            NodeKind::Sparkline(_) => "Sparkline",
-            NodeKind::Callout(_) => "Callout",
-            NodeKind::Progress(_) => "Progress",
-            NodeKind::Skeleton(_) => "Skeleton",
-            NodeKind::Icon(_) => "Icon",
-            NodeKind::LabelValueRow(_) => "LabelValueRow",
-            NodeKind::Fact(_) => "Fact",
-            NodeKind::Link(_) => "Link",
-            NodeKind::Image(_) => "Image",
-            NodeKind::Media(_) => "Media",
-            NodeKind::Embed(_) => "Embed",
-            NodeKind::Tree(_) => "Tree",
-            NodeKind::List(_) => "List",
-            NodeKind::Toast(_) => "Toast",
-            NodeKind::CodeBlock(_) => "CodeBlock",
-            NodeKind::Math(_) => "Math",
-            NodeKind::Drawing(_) => "Drawing",
-            NodeKind::Form(_) => "Form",
-            NodeKind::Filters(_) => "Filters",
-            NodeKind::Button(_) => "Button",
-            NodeKind::FileUpload(_) => "FileUpload",
-            NodeKind::Select(_) => "Select",
-            NodeKind::DataGrid(_) => "DataGrid",
-            NodeKind::Chart(_) => "Chart",
-            NodeKind::Map(_) => "Map",
-            NodeKind::Custom(_) => "Custom",
-            NodeKind::ErrorBoundary(_) => "ErrorBoundary",
-            NodeKind::Switch(_) => "Switch",
-            NodeKind::FragmentDecl(_) => "FragmentDecl",
-            NodeKind::FragmentRef(_) => "FragmentRef",
-            NodeKind::Mount(_) => "Mount",
-        }
-    }
-
-    /// The host-side behavioural classification of this primitive (§3.2).
-    pub fn category(&self) -> NodeCategory {
-        match self {
-            NodeKind::Box(_)
-            | NodeKind::SplitPanel(_)
-            | NodeKind::Tabs(_)
-            | NodeKind::Stepper(_)
-            | NodeKind::SummaryList(_)
-            | NodeKind::Disclosure(_)
-            | NodeKind::Modal(_)
-            | NodeKind::ScrollArea(_) => NodeCategory::Layout,
-            NodeKind::Heading(_)
-            | NodeKind::Markdown(_)
-            | NodeKind::Metric(_)
-            | NodeKind::Badge(_)
-            | NodeKind::Sparkline(_)
-            | NodeKind::Callout(_)
-            | NodeKind::Progress(_)
-            | NodeKind::Skeleton(_)
-            | NodeKind::Icon(_)
-            | NodeKind::LabelValueRow(_)
-            | NodeKind::Fact(_)
-            | NodeKind::Link(_)
-            | NodeKind::Image(_)
-            | NodeKind::Media(_)
-            | NodeKind::Embed(_)
-            | NodeKind::Tree(_)
-            | NodeKind::List(_)
-            | NodeKind::Toast(_)
-            | NodeKind::CodeBlock(_)
-            | NodeKind::Math(_)
-            | NodeKind::Drawing(_) => NodeCategory::Display,
-            NodeKind::Form(_)
-            | NodeKind::Filters(_)
-            | NodeKind::Button(_)
-            | NodeKind::FileUpload(_)
-            | NodeKind::Select(_) => NodeCategory::Input,
-            NodeKind::DataGrid(_) | NodeKind::Chart(_) | NodeKind::Map(_) => {
-                NodeCategory::Visualisation
-            }
-            NodeKind::Custom(_)
-            | NodeKind::ErrorBoundary(_)
-            | NodeKind::Switch(_)
-            | NodeKind::FragmentDecl(_)
-            | NodeKind::FragmentRef(_)
-            | NodeKind::Mount(_) => NodeCategory::Structural,
-        }
-    }
-}
-
-/// The emittable NodeKind vocabulary — one entry per [`NodeKind`] variant's wire
-/// `$type` name (the values [`NodeKind::type_name`] returns). Pinned against the
-/// generated `wire-format-fixtures` manifest `kinds` enumeration by
-/// `tests/conformance.rs` (Phase 548 cross-host kind-set attestation): a new
-/// variant added without an entry here fails that pin with the kind named. Rust
-/// has no enum-variant reflection, so this list is maintained in lockstep with the
-/// `type_name` match under the §11 forward-coupling discipline (adding a NodeKind
-/// already touches `type_name` + `category` + every exhaustive `match`; this is
-/// one more).
-pub const CANONICAL_NODE_KINDS: &[&str] = &[
-    // Layout
-    "Box",
-    "SplitPanel",
-    "Tabs",
-    "Stepper",
-    "SummaryList",
-    "Disclosure",
-    "Modal",
-    "ScrollArea",
-    // Display
-    "Heading",
-    "Markdown",
-    "Metric",
-    "Badge",
-    "Sparkline",
-    "Callout",
-    "Progress",
-    "Skeleton",
-    "Icon",
-    "LabelValueRow",
-    "Fact",
-    "Link",
-    "Image",
-    "Media",
-    "Embed",
-    "Tree",
-    "List",
-    "Toast",
-    "CodeBlock",
-    "Math",
-    "Drawing",
-    // Input
-    "Form",
-    "Filters",
-    "Button",
-    "FileUpload",
-    "Select",
-    // Visualisation
-    "DataGrid",
-    "Chart",
-    "Map",
-    // Structural
-    "Custom",
-    "ErrorBoundary",
-    "Switch",
-    "FragmentDecl",
-    "FragmentRef",
-    "Mount",
-];
-
-/// The emittable FormFieldKind control vocabulary — one entry per
-/// [`FormFieldKind`] variant's wire `$type` name. Pinned against the generated
-/// `wire-format-fixtures` manifest `formFieldKinds` enumeration by
-/// `tests/conformance.rs` (Phase 746 control-vocabulary attestation), the
-/// [`CANONICAL_NODE_KINDS`] twin: the kind-set pin only ever covered NodeKind, so
-/// a control-vocabulary commit that skipped this host stayed silent until a
-/// fixture happened to exercise it. Rust has no enum-variant reflection, so this
-/// list is maintained in lockstep with the `decode_form_field_kind` dispatch under
-/// the §11 forward-coupling discipline — and that decoder's unknown-case hint is
-/// DERIVED from this list, so hint and dispatch cannot diverge (they had: the
-/// hand-typed hint was already missing `DateRange`'s predecessor state).
-///
-/// Since the filters/forms unification there is ONE control vocabulary, so this
-/// covers both the `Form.fields` and `Filters.items` carriers.
-pub const CANONICAL_FORM_FIELD_KINDS: &[&str] = &[
-    "Text",
-    "Number",
-    "Checkbox",
-    "Toggle",
-    "Choice",
-    "Range",
-    "RangedNumber",
-    "SegmentedChoice",
-    "TextArea",
-    "DateTime",
-    "DateTimeRange",
-    "Combobox",
-    "Tokens",
-    "Rating",
-    "Color",
-];
 
 // ─── Node envelope (§3.1) ────────────────────────────────────────────────────
 

@@ -58,12 +58,14 @@ fn wrong_type(path: &str, expected: &str) -> DecodeError {
 /// literal `"$type"` member and its value is not a known case. WIRE_FORMAT.md §6 —
 /// "`$type` appears literally in the path when the discriminator is at fault" — so the
 /// reported path names that member.
-fn unknown_du_case(path: &str, got: &str, expected: &str) -> DecodeError {
+/// The hint lists the union's cases, read from the generated discriminator set,
+/// so it cannot name fewer cases than the decoder accepts.
+fn unknown_du_case(path: &str, got: &str, cases: &[&str]) -> DecodeError {
     make_error(
         DecodeErrorCode::UnknownDuCase,
         format!("{path}.$type"),
         format!("unknown discriminator '{got}'"),
-        Some(expected.to_string()),
+        Some(cases.join(" | ")),
     )
 }
 
@@ -1854,11 +1856,7 @@ fn decode_local_flush_trigger(path: &str, j: &JVal) -> DResult<LocalFlushTrigger
                 "debounce milliseconds integer",
             )?,
         }),
-        other => Err(unknown_du_case(
-            path,
-            other,
-            "OnBlur | OnSubmit | OnDebounce | OnCommitAction",
-        )),
+        other => Err(unknown_du_case(path, other, LOCAL_FLUSH_TRIGGER_TAGS)),
     }
 }
 
@@ -1916,11 +1914,7 @@ fn decode_format(path: &str, j: &JVal) -> DResult<Format> {
             };
             Ok(Format::Since { unit })
         }
-        other => Err(unknown_du_case(
-            path,
-            other,
-            "Number | Currency | Percent | Date | RelativeTime | Duration | Since",
-        )),
+        other => Err(unknown_du_case(path, other, FORMAT_TAGS)),
     }
 }
 
@@ -1931,7 +1925,7 @@ fn decode_locale_source(path: &str, j: &JVal) -> DResult<LocaleSource> {
         "Explicit" => Ok(LocaleSource::Explicit {
             tag: req_string(path, fields, "tag", "BCP-47 locale tag string")?,
         }),
-        other => Err(unknown_du_case(path, other, "Ambient | Explicit")),
+        other => Err(unknown_du_case(path, other, LOCALE_SOURCE_TAGS)),
     }
 }
 
@@ -1973,11 +1967,7 @@ fn decode_cell_format(path: &str, j: &JVal) -> DResult<CellFormat> {
             })
         }
         "Custom" => Ok(CellFormat::Custom),
-        other => Err(unknown_du_case(
-            path,
-            other,
-            "None | Number | Currency | Percent | SignificantDigits | Date | Duration | RelativeTime | Custom",
-        )),
+        other => Err(unknown_du_case(path, other, CELL_FORMAT_TAGS)),
     }
 }
 
@@ -1991,7 +1981,7 @@ fn decode_column_width(path: &str, j: &JVal) -> DResult<ColumnWidth> {
         "Flex" => Ok(ColumnWidth::Flex {
             weight: req_float(path, fields, "weight", "float weight")?,
         }),
-        other => Err(unknown_du_case(path, other, "Auto | Fixed | Flex")),
+        other => Err(unknown_du_case(path, other, COLUMN_WIDTH_TAGS)),
     }
 }
 
@@ -2571,11 +2561,7 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
             let inner = req(path, fields, "binding", "the wrapped Binding object")?;
             decode_binding_slot(&format!("{path}.binding"), inner, slot)
         }
-        other => Err(unknown_du_case(
-            path,
-            other,
-            "Static | Query | Filter | Selection | State | Computed | I18n | Local | Format | Transform | Invoke",
-        )),
+        other => Err(unknown_du_case(path, other, BINDING_TAGS)),
     }
 }
 
@@ -2640,7 +2626,7 @@ fn decode_text_source(path: &str, j: &JVal) -> DResult<TextSource> {
             };
             Ok(TextSource::I18n { key, args })
         }
-        other => Err(unknown_du_case(path, other, "Literal | Bound | I18n")),
+        other => Err(unknown_du_case(path, other, TEXT_SOURCE_TAGS)),
     }
 }
 
@@ -2679,7 +2665,11 @@ fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
                             name: req_string(&into_path, io, "name", "query name string")?,
                         }),
                         other => {
-                            return Err(unknown_du_case(&into_path, other, "State | Query"));
+                            return Err(unknown_du_case(
+                                &into_path,
+                                other,
+                                CALL_RESULT_TARGET_TAGS,
+                            ));
                         }
                     }
                 }
@@ -2859,11 +2849,7 @@ fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
                 args,
             })
         }
-        other => Err(unknown_du_case(
-            path,
-            other,
-            "Dispatch | Call | Notify | Navigate | SetState | AiTool | Chain | CommitLocal | WriteToClipboard | Print | Confirm | Focus | ReadFileBody | Invoke",
-        )),
+        other => Err(unknown_du_case(path, other, ACTION_TAGS)),
     }
 }
 
@@ -3177,7 +3163,7 @@ fn decode_media_kind(path: &str, j: &JVal) -> DResult<MediaKind> {
             Ok(MediaKind::Video { autoplay, poster })
         }
         "Audio" => Ok(MediaKind::Audio),
-        other => Err(unknown_du_case(path, other, "Video | Audio")),
+        other => Err(unknown_du_case(path, other, MEDIA_KIND_TAGS)),
     }
 }
 
@@ -3900,11 +3886,7 @@ fn decode_form_field_kind(
         }
         // The hint is DERIVED from the canonical vocabulary, never hand-typed —
         // the hand-typed form had already drifted (Phase 746).
-        other => Err(unknown_du_case(
-            path,
-            other,
-            &CANONICAL_FORM_FIELD_KINDS.join(" | "),
-        )),
+        other => Err(unknown_du_case(path, other, CANONICAL_FORM_FIELD_KINDS)),
     }
 }
 
@@ -4329,11 +4311,7 @@ fn decode_cell_kind_erased(path: &str, j: &JVal) -> DResult<CellKindErased> {
         "Pill" => Ok(CellKindErased::Pill),
         "Progress" => Ok(CellKindErased::Progress),
         "Custom" => Ok(CellKindErased::Custom),
-        other => Err(unknown_du_case(
-            path,
-            other,
-            "Text | Numeric | Date | Editable | Checkbox | Button | ButtonGroup | Link | Pill | TonedPill | Progress | Custom",
-        )),
+        other => Err(unknown_du_case(path, other, CELL_KIND_ERASED_TAGS)),
     }
 }
 
@@ -4790,7 +4768,7 @@ fn decode_chart_annotation_x(path: &str, j: &JVal) -> DResult<ChartAnnotationX> 
             }
             Ok(ChartAnnotationX::Date(iso))
         }
-        other => Err(unknown_du_case(path, other, "Category, Date")),
+        other => Err(unknown_du_case(path, other, CHART_ANNOTATION_X_TAGS)),
     }
 }
 
@@ -4868,7 +4846,7 @@ fn decode_chart_annotation_range(path: &str, j: &JVal) -> DResult<ChartAnnotatio
             }
             Ok(ChartAnnotationRange::XRange { from, to })
         }
-        other => Err(unknown_du_case(path, other, "ValueRange, XRange")),
+        other => Err(unknown_du_case(path, other, CHART_ANNOTATION_RANGE_TAGS)),
     }
 }
 
@@ -4921,11 +4899,7 @@ fn decode_chart_annotation(path: &str, j: &JVal) -> DResult<ChartAnnotation> {
             let range = decode_chart_annotation_range(&format!("{path}.range"), range_j)?;
             Ok(ChartAnnotation::RangeBand { range, label })
         }
-        other => Err(unknown_du_case(
-            path,
-            other,
-            "ReferenceLine, EventMarker, RangeBand",
-        )),
+        other => Err(unknown_du_case(path, other, CHART_ANNOTATION_TAGS)),
     }
 }
 
@@ -5148,11 +5122,7 @@ fn decode_curve_command(path: &str, j: &JVal) -> DResult<CurveCommand> {
             to: decode_req_point(path, fields, "to")?,
         }),
         "Close" => Ok(CurveCommand::Close),
-        other => Err(unknown_du_case(
-            path,
-            other,
-            "MoveTo | LineTo | CubicTo | QuadraticTo | Close",
-        )),
+        other => Err(unknown_du_case(path, other, CURVE_COMMAND_TAGS)),
     }
 }
 
@@ -5224,11 +5194,7 @@ fn decode_shape(path: &str, j: &JVal) -> DResult<Shape> {
             text: req_text_source(path, fields, "text", "TextSource")?,
             style,
         }),
-        other => Err(unknown_du_case(
-            path,
-            other,
-            "Group | Rectangle | Line | Polyline | Polygon | Curve | Circle | Ellipse | Label",
-        )),
+        other => Err(unknown_du_case(path, other, SHAPE_TAGS)),
     }
 }
 
@@ -5328,7 +5294,7 @@ fn decode_box_layout(path: &str, j: &JVal) -> DResult<BoxLayout> {
             })
         }
         "Auto" => Ok(BoxLayout::Auto),
-        other => Err(unknown_du_case(path, other, "Flex | Grid | Masonry | Auto")),
+        other => Err(unknown_du_case(path, other, BOX_LAYOUT_TAGS)),
     }
 }
 
@@ -5573,11 +5539,7 @@ fn decode_hole_value_space(path: &str, j: &JVal) -> DResult<HoleValueSpace> {
             Ok(HoleValueSpace::Enum { choices })
         }
         "AnyString" => Ok(HoleValueSpace::AnyString),
-        other => Err(unknown_du_case(
-            path,
-            other,
-            "IntRange | FloatRange | StringLen | Enum | AnyString",
-        )),
+        other => Err(unknown_du_case(path, other, HOLE_VALUE_SPACE_TAGS)),
     }
 }
 
@@ -5608,7 +5570,7 @@ fn decode_fragment_scalar(path: &str, j: &JVal) -> DResult<FragmentScalar> {
             "value",
             "Str value",
         )?)),
-        other => Err(unknown_du_case(path, other, "Int | Float | Bool | Str")),
+        other => Err(unknown_du_case(path, other, SCALAR_TAGS)),
     }
 }
 
@@ -5639,7 +5601,7 @@ fn decode_hole_decl(path: &str, j: &JVal) -> DResult<HoleDecl> {
             let count_space = decode_hole_value_space(&format!("{path}.countSpace"), space_j)?;
             Ok(HoleDecl::Repeat { name, count_space })
         }
-        other => Err(unknown_du_case(path, other, "Value | Slot | Repeat")),
+        other => Err(unknown_du_case(path, other, HOLE_DECL_TAGS)),
     }
 }
 
@@ -5671,14 +5633,17 @@ fn decode_effect_class(path: &str, j: &JVal) -> DResult<EffectClass> {
 /// discriminator reads as a value scalar (Int | Float | Bool | Str).
 fn decode_fragment_arg(path: &str, j: &JVal) -> DResult<FragmentArg> {
     let fields = as_obj(path, j)?;
-    if disc(path, fields)? == "SlotArg" {
+    let tag = disc(path, fields)?;
+    if tag == "SlotArg" {
         let tree_j = req(path, fields, "tree", "SlotArg tree Node")?;
         let tree = decode_node_ast(&format!("{path}.tree"), tree_j)?;
         Ok(FragmentArg::Slot {
             tree: Box::new(tree),
         })
-    } else {
+    } else if SCALAR_TAGS.contains(&tag) {
         Ok(FragmentArg::Value(decode_fragment_scalar(path, j)?))
+    } else {
+        Err(unknown_du_case(path, tag, FRAGMENT_ARG_TAGS))
     }
 }
 
@@ -5695,8 +5660,6 @@ fn decode_fragment_args(path: &str, j: &JVal) -> DResult<Vec<(String, FragmentAr
 }
 
 // ─── NodeKind ────────────────────────────────────────────────────────────────
-
-const WRONG_NODE_KIND_HINT: &str = "a Layout primitive (Box | SplitPanel | Tabs | Stepper | SummaryList | Disclosure | Modal | ScrollArea), a Display primitive (Heading | Markdown | Metric | Badge | Sparkline | Callout | Progress | Skeleton | Icon | LabelValueRow | Fact | Link | Image | List | Toast | CodeBlock | Math | Drawing), an Input primitive (Form | Filters | Button | FileUpload | Select), a Visualisation primitive (DataGrid | Chart | Map), or Custom | ErrorBoundary | Switch | FragmentDecl | FragmentRef | Mount";
 
 /// Decode a `NodeKind` from its `$type`-discriminated object.
 ///
@@ -6346,11 +6309,7 @@ fn decode_tree_op_ast(path: &str, j: &JVal) -> DResult<TreeOp> {
         return r;
     }
     let other = tag;
-    Err(unknown_du_case(
-        path,
-        other,
-        "EditNode | UpdateProp | ReplaceBinding | UpdateStyle | PatchStyle | UpdateState | InsertChild | RemoveNode | MoveNode | ReorderChildren | ReplaceRoot | Batch",
-    ))
+    Err(unknown_du_case(path, other, TREE_OP_TAGS))
 }
 
 /// One group of the `TreeOp` dispatch — see `decode_tree_op_ast`.

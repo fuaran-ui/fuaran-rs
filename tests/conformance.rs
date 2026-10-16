@@ -283,97 +283,141 @@ fn read_fixture(corpus: &Path, rel: &str) -> String {
         .unwrap_or_else(|e| panic!("reading fixture file '{rel}': {e}"))
 }
 
-/// Phase 548 kind-set attestation: the emittable NodeKind vocabulary
-/// (`CANONICAL_NODE_KINDS`) must equal the generated manifest `kinds` enumeration.
-/// A vocabulary commit that skips this host fails here with a *named* missing kind
-/// ("rust decoder lacks Drawing"), so the drift class dies at the host's next test
-/// run rather than at a later audit.
+/// The environment variable that turns [`generated_module_matches_the_corpus_idl`]
+/// from the drift check into the regeneration: set, the test WRITES the module
+/// rather than comparing it.
+const REGENERATE_ENV: &str = "FUARAN_IDL_REGENERATE";
+
+/// The corpus's `idl.json` bytes, read exactly as published — the generator's
+/// one input and the recorded hash's subject.
+fn corpus_idl(corpus: &Path) -> String {
+    std::fs::read_to_string(corpus.join("idl.json")).unwrap_or_else(|e| {
+        panic!(
+            "the corpus at '{}' holds no readable idl.json ({e}); this host's structural              layer is generated from it, so its absence is a failure rather than a skip",
+            corpus.display()
+        )
+    })
+}
+
+/// Phase 2298: the structural layer in `src/wire/generated.rs` is exactly what
+/// the host's own generator writes from the corpus's `idl.json`. Red when the IDL
+/// has moved and the module has not; with `FUARAN_IDL_REGENERATE=1` it is the
+/// regeneration itself, which is the one step a vocabulary change asks of this
+/// host's structure.
+///
+/// This replaces the two set pins that compared hand-kept kind and control lists
+/// with the corpus manifest: those lists are now generated from the IDL the
+/// manifest is emitted beside, and every `NodeKind` / `FormFieldKind` variant is
+/// held to them by an exhaustive generated `match`, so the drift those pins
+/// caught cannot be written any more.
 #[test]
-fn node_kind_set_matches_manifest() {
+fn generated_module_matches_the_corpus_idl() {
     let Some(corpus) = find_corpus() else {
         // `find_corpus` PANICS on every absence but the standalone one, and
         // prints that one's account itself — so this arm is reached only where
         // asserting nothing is the honest answer.
         return;
     };
-    let raw = std::fs::read_to_string(corpus.join("manifest.json")).expect("reading manifest");
-    let manifest = parse(&raw).expect("manifest.json parses with the host's own JSON layer");
-    let Some(JVal::Arr(entries)) = manifest.field("kinds") else {
+    let expected = fuaran_rs::wire::idl_codegen::generate(&corpus_idl(&corpus))
+        .unwrap_or_else(|e| panic!("the generator refused the corpus idl.json: {e}"));
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(fuaran_rs::wire::idl_codegen::GENERATED_PATH);
+    if std::env::var(REGENERATE_ENV).is_ok_and(|v| !v.trim().is_empty()) {
+        std::fs::write(&path, &expected).expect("writing the generated module");
+        eprintln!("regenerated {} from {}", path.display(), corpus.display());
+        return;
+    }
+    let committed = std::fs::read_to_string(&path).expect("reading the generated module");
+    if committed != expected {
+        let line = committed
+            .lines()
+            .zip(expected.lines())
+            .position(|(a, b)| a != b)
+            .map_or_else(
+                || committed.lines().count().min(expected.lines().count()) + 1,
+                |i| i + 1,
+            );
         panic!(
-            "manifest.json declares no 'kinds' array — regenerate the corpus with --emit-corpus"
+            "src/wire/generated.rs is not what the generator writes from {}/idl.json              (first difference at line {line}). The IDL has moved: regenerate with              {REGENERATE_ENV}=1 cargo test --test conformance generated_module, then build —              the compiler names every hand-written site the change reaches.",
+            corpus.display()
         );
+    }
+}
+
+/// Phase 2298: the IDL hash the generated module records is the hash of the
+/// corpus's `idl.json` as it stands. The regeneration check above already
+/// implies it; this leg says WHICH input moved in one line, and it reads the
+/// recorded constant the library compiled with rather than the file on disk.
+#[test]
+fn generated_module_records_the_corpus_idl_hash() {
+    let Some(corpus) = find_corpus() else {
+        // `find_corpus` PANICS on every absence but the standalone one, and
+        // prints that one's account itself — so this arm is reached only where
+        // asserting nothing is the honest answer.
+        return;
     };
-
-    let manifest_kinds: std::collections::BTreeSet<String> = entries
-        .iter()
-        .filter_map(|e| match e {
-            JVal::Str(s) => Some(s.clone()),
-            _ => None,
-        })
-        .collect();
-    let decoder_kinds: std::collections::BTreeSet<String> = fuaran_rs::wire::CANONICAL_NODE_KINDS
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-
-    let missing: Vec<&String> = manifest_kinds.difference(&decoder_kinds).collect();
-    let extra: Vec<&String> = decoder_kinds.difference(&manifest_kinds).collect();
-
-    assert!(
-        missing.is_empty(),
-        "manifest kinds the rust decoder lacks (add the NodeKind variant + CANONICAL_NODE_KINDS entry): {missing:?}"
-    );
-    assert!(
-        extra.is_empty(),
-        "rust decoder kinds the manifest omits (regenerate the corpus with --emit-corpus): {extra:?}"
+    let actual = fuaran_rs::opstream::sha256_hex(&corpus_idl(&corpus));
+    assert_eq!(
+        fuaran_rs::wire::IDL_SHA256,
+        actual,
+        "the generated module was produced from a different idl.json than the corpus at '{}'          publishes; regenerate with {REGENERATE_ENV}=1 cargo test --test conformance          generated_module",
+        corpus.display()
     );
 }
 
-/// Phase 746 control-vocabulary attestation — the `node_kind_set_matches_manifest`
-/// twin over `FormFieldKind`. The kind-set pin only ever covered NodeKind, so a
-/// control-vocabulary commit that skipped this host stayed silent until a fixture
-/// happened to exercise it; this leg names the missing case ("rust decoder lacks
-/// DateRange") at the host's next test run instead.
+/// The go-red for the drift check: a generator that ignored its input, or a
+/// comparison that could not fail, would leave the check above green on a moved
+/// IDL. So the IDL is perturbed the three ways a vocabulary change perturbs it —
+/// a kind, a field, an enum case — and each must change the generated module.
 #[test]
-fn form_field_kind_set_matches_manifest() {
+fn the_generator_reacts_to_each_vocabulary_move() {
     let Some(corpus) = find_corpus() else {
         // `find_corpus` PANICS on every absence but the standalone one, and
         // prints that one's account itself — so this arm is reached only where
         // asserting nothing is the honest answer.
         return;
     };
-    let raw = std::fs::read_to_string(corpus.join("manifest.json")).expect("reading manifest");
-    let manifest = parse(&raw).expect("manifest.json parses with the host's own JSON layer");
-    let Some(JVal::Arr(entries)) = manifest.field("formFieldKinds") else {
-        panic!(
-            "manifest.json declares no 'formFieldKinds' array — regenerate the corpus with --emit-corpus"
-        );
+    let idl = corpus_idl(&corpus);
+    let generate = |text: &str| {
+        fuaran_rs::wire::idl_codegen::generate(text)
+            .unwrap_or_else(|e| panic!("the generator refused a perturbed idl.json: {e}"))
     };
-
-    let manifest_kinds: std::collections::BTreeSet<String> = entries
-        .iter()
-        .filter_map(|e| match e {
-            JVal::Str(s) => Some(s.clone()),
-            _ => None,
-        })
-        .collect();
-    let decoder_kinds: std::collections::BTreeSet<String> =
-        fuaran_rs::wire::CANONICAL_FORM_FIELD_KINDS
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-
-    let missing: Vec<&String> = manifest_kinds.difference(&decoder_kinds).collect();
-    let extra: Vec<&String> = decoder_kinds.difference(&manifest_kinds).collect();
-
-    assert!(
-        missing.is_empty(),
-        "manifest form-field kinds the rust decoder lacks (add the FormFieldKind variant + CANONICAL_FORM_FIELD_KINDS entry): {missing:?}"
-    );
-    assert!(
-        extra.is_empty(),
-        "rust decoder form-field kinds the manifest omits (regenerate the corpus with --emit-corpus): {extra:?}"
-    );
+    let base = generate(&idl);
+    let moves = [
+        (
+            "a new kind",
+            "\"tag\": \"Badge\"",
+            "\"tag\": \"Badge\"}, {\"category\": \"Display\", \"fields\": [], \"tag\": \"Probe\"",
+            "NodeKind::Probe(_)",
+        ),
+        (
+            "a new enum case",
+            "\"Neutral\",",
+            "\"Neutral\", \"Probe\",",
+            "Probe => \"Probe\"",
+        ),
+        (
+            "a new field",
+            "\"name\": \"label\",",
+            "\"name\": \"probeField\", \"optionality\": {\"$type\": \"optional\"}, \"type\": {\"$type\": \"str\"}}, {\"name\": \"label\",",
+            "probe_field: _",
+        ),
+    ];
+    for (what, from, to, witness) in moves {
+        assert!(
+            idl.contains(from),
+            "the probe for {what} no longer finds its anchor in idl.json: {from}"
+        );
+        let moved = generate(&idl.replacen(from, to, 1));
+        assert_ne!(
+            moved, base,
+            "{what} in idl.json left the generated module unchanged"
+        );
+        assert!(
+            moved.contains(witness) && !base.contains(witness),
+            "{what} did not surface as `{witness}` in the generated module"
+        );
+    }
 }
 
 /// The FormFieldKind carrier rule (WIRE_FORMAT §11.2): a control discriminator is

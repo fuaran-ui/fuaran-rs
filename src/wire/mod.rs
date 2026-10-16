@@ -6,6 +6,13 @@
 
 mod decode;
 mod encode;
+// The structural layer, generated from the corpus's `idl.json` (see
+// `idl_codegen`). Written by the generator, not by rustfmt.
+#[rustfmt::skip]
+mod generated;
+#[cfg(feature = "idl-codegen")]
+#[doc(hidden)]
+pub mod idl_codegen;
 mod model;
 mod result;
 
