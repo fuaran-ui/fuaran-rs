@@ -16,7 +16,8 @@
 //! - a field pin per modelled kind spec, record and op: an exhaustive
 //!   destructuring pattern naming exactly the IDL's wire fields;
 //! - the omit-at-default table as typed constants (`defaults`), which the decoder
-//!   fills absent fields from and the encoder omits by.
+//!   fills absent fields from and the encoder omits by;
+//! - the node-bearing slot enumeration a walk over a wire tree descends through.
 //!
 //! **Why the pins are code and not tests.** Rust has no reflection over a type's
 //! variants or fields, so a hand-kept list beside an enum can only be checked by a
@@ -507,6 +508,44 @@ fn default_expr(idl: &Idl, ty: &JVal, default: &JVal) -> Result<Option<(String, 
     }
 }
 
+/// The type a list element or a bare position holds: `list<T>` is `T`.
+fn element(ty: &JVal) -> &JVal {
+    if ty_tag(ty) == "list" {
+        ty.field("of").unwrap_or(ty)
+    } else {
+        ty
+    }
+}
+
+fn is_node_slot(ty: &JVal) -> bool {
+    ty_tag(element(ty)) == "node"
+}
+
+/// The records that carry a node somewhere inside them, transitively: a record
+/// with a node slot, or a record slot holding one of these.
+fn node_bearing_records(idl: &Idl) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    loop {
+        let before = out.len();
+        for r in &idl.records {
+            let bears = r.fields.iter().any(|f| {
+                f.optionality != "hostOnly" && (is_node_slot(&f.ty) || is_record_slot(&f.ty, &out))
+            });
+            if bears {
+                out.insert(r.name.clone());
+            }
+        }
+        if out.len() == before {
+            return out;
+        }
+    }
+}
+
+fn is_record_slot(ty: &JVal, bearing: &std::collections::BTreeSet<String>) -> bool {
+    let el = element(ty);
+    ty_tag(el) == "record" && matches!(el.field("name"), Some(JVal::Str(n)) if bearing.contains(n))
+}
+
 fn str_list(items: &[String]) -> String {
     let mut out = String::from("&[\n");
     for i in items {
@@ -815,5 +854,47 @@ pub(crate) mod defaults {{
     }
     let _ = writeln!(w, "}}");
 
+    // ── Slots ───────────────────────────────────────────────────────────────
+    let bearing = node_bearing_records(&idl);
+    let mut node_slots: Vec<String> = Vec::new();
+    let mut record_slots: Vec<String> = Vec::new();
+    let slot_owners = idl
+        .kinds
+        .iter()
+        .map(|k| &k.owner)
+        .chain(idl.records.iter())
+        .chain(idl.unions.iter().flat_map(|u| u.cases.iter()))
+        .flat_map(|o| o.fields.iter())
+        .chain(idl.node_fields.iter());
+    for f in slot_owners.filter(|f| f.optionality != "hostOnly") {
+        let list = if is_node_slot(&f.ty) {
+            &mut node_slots
+        } else if is_record_slot(&f.ty, &bearing) {
+            &mut record_slots
+        } else {
+            continue;
+        };
+        if !list.contains(&f.name) {
+            list.push(f.name.clone());
+        }
+    }
+    node_slots.sort();
+    record_slots.sort();
+    let _ = writeln!(
+        w,
+        "
+// ─── Node-bearing slots ─────────────────────────────────────────────────────
+
+/// Every wire field name, on the node envelope, a kind, a record or a union
+/// case, whose value is a node or a list of nodes.
+pub const NODE_SLOTS: &[&str] = {};
+
+/// Every wire field name whose value is a record, or a list of records, that
+/// carries a node somewhere inside it. With [`NODE_SLOTS`] these are the
+/// positions a walk over a wire tree descends through.
+pub const NODE_RECORD_SLOTS: &[&str] = {};",
+        str_list(&node_slots),
+        str_list(&record_slots)
+    );
     Ok(out)
 }

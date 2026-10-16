@@ -427,42 +427,54 @@ fn the_generator_reacts_to_each_vocabulary_move() {
 /// control vocabulary, so a property-name heuristic would attest the wrong family
 /// and report green.
 fn collect_control_kinds(raw: &JVal, controls: &mut std::collections::BTreeSet<String>) {
-    let Some(kind) = raw.field("kind") else {
-        return;
-    };
-    if let Some(JVal::Str(tag)) = kind.field("$type") {
-        let carrier = match tag.as_str() {
-            "Form" => Some("fields"),
-            "Filters" => Some("items"),
-            _ => None,
-        };
-        if let Some(carrier) = carrier
-            && let Some(JVal::Arr(items)) = kind.field(carrier)
-        {
-            for item in items {
-                if let Some(control) = item.field("kind")
-                    && let Some(JVal::Str(control_tag)) = control.field("$type")
-                {
-                    controls.insert(control_tag.clone());
+    if let Some(kind) = raw.field("kind") {
+        if let Some(JVal::Str(tag)) = kind.field("$type") {
+            let carrier = match tag.as_str() {
+                "Form" => Some("fields"),
+                "Filters" => Some("items"),
+                _ => None,
+            };
+            if let Some(carrier) = carrier
+                && let Some(JVal::Arr(items)) = kind.field(carrier)
+            {
+                for item in items {
+                    if let Some(control) = item.field("kind")
+                        && let Some(JVal::Str(control_tag)) = control.field("$type")
+                    {
+                        controls.insert(control_tag.clone());
+                    }
                 }
             }
         }
+        descend_slots(kind, controls);
     }
-    // Recurse the node-bearing positions a control carrier can nest under.
-    for slot in ["child", "fallback", "default", "body"] {
-        if let Some(inner) = kind.field(slot) {
-            collect_control_kinds(inner, controls);
+    descend_slots(raw, controls);
+}
+
+/// Descend every node-bearing position of one wire object — the node envelope,
+/// a kind, or a record — through the generated slot enumeration, so a slot the
+/// vocabulary gains is walked without an edit here. A name the vocabulary uses
+/// for a node in one owner and for a scalar in another (`default`) is harmless:
+/// a scalar has no `kind` and no fields to descend.
+fn descend_slots(obj: &JVal, controls: &mut std::collections::BTreeSet<String>) {
+    let JVal::Obj(fields) = obj else {
+        return;
+    };
+    for (key, value) in fields {
+        let nodes = fuaran_rs::wire::NODE_SLOTS.contains(&key.as_str());
+        let records = fuaran_rs::wire::NODE_RECORD_SLOTS.contains(&key.as_str());
+        if !nodes && !records {
+            continue;
         }
-    }
-    if let Some(JVal::Arr(children)) = kind.field("children") {
-        for c in children {
-            collect_control_kinds(c, controls);
-        }
-    }
-    if let Some(JVal::Arr(cases)) = kind.field("cases") {
-        for c in cases {
-            if let Some(inner) = c.field("child") {
-                collect_control_kinds(inner, controls);
+        let items = match value {
+            JVal::Arr(items) => items.as_slice(),
+            other => std::slice::from_ref(other),
+        };
+        for item in items {
+            if nodes {
+                collect_control_kinds(item, controls);
+            } else {
+                descend_slots(item, controls);
             }
         }
     }

@@ -1086,3 +1086,26 @@ pub(crate) mod defaults {
     pub(crate) const FORM_FIELD_KIND_TOKENS_ALLOW_FREE_TEXT: bool = true;
     pub(crate) const MEDIA_KIND_VIDEO_AUTOPLAY: bool = false;
 }
+
+// ─── Node-bearing slots ─────────────────────────────────────────────────────
+
+/// Every wire field name, on the node envelope, a kind, a record or a union
+/// case, whose value is a node or a list of nodes.
+pub const NODE_SLOTS: &[&str] = &[
+    "body",
+    "child",
+    "children",
+    "default",
+    "fallback",
+    "onEmpty",
+    "onLoading",
+    "tree",
+];
+
+/// Every wire field name whose value is a record, or a list of records, that
+/// carries a node somewhere inside it. With [`NODE_SLOTS`] these are the
+/// positions a walk over a wire tree descends through.
+pub const NODE_RECORD_SLOTS: &[&str] = &[
+    "cases",
+    "state",
+];
