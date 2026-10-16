@@ -6184,6 +6184,42 @@ fn decode_semantic_style(path: &str, j: &JVal) -> DResult<SemanticStyle> {
     })
 }
 
+/// Phase 2291 — the `PatchStyle` payload. The same six members and the same
+/// per-field token decoders as `SemanticStyle`, but each member is OPTIONAL and
+/// absence means "leave this field as it is" — so a present default token is a
+/// real edit, not an omission. Members are read in their wire (alphabetical)
+/// order. A delta naming no field is not an edit: `WRONG_TYPE` at the delta.
+/// Unknown keys are tolerated, exactly as inside an `UpdateStyle` style.
+fn decode_style_delta(path: &str, j: &JVal) -> DResult<StyleDelta> {
+    let fields = as_obj(path, j)?;
+    fn optional<T>(
+        path: &str,
+        fields: &Fields,
+        key: &str,
+        decode: fn(&str, &JVal) -> DResult<T>,
+    ) -> DResult<Option<T>> {
+        match get(fields, key) {
+            None => Ok(None),
+            Some(v) => decode(&format!("{path}.{key}"), v).map(Some),
+        }
+    }
+    let delta = StyleDelta {
+        direction: optional(path, fields, "direction", decode_text_direction)?,
+        emphasis: optional(path, fields, "emphasis", decode_emphasis)?,
+        role: optional(path, fields, "role", decode_style_role)?,
+        tone: optional(path, fields, "tone", decode_tone)?,
+        voice: optional(path, fields, "voice", decode_font_voice)?,
+        weight: optional(path, fields, "weight", decode_weight)?,
+    };
+    if delta.is_empty() {
+        return Err(wrong_type(
+            path,
+            "StyleDelta naming at least one field (direction | emphasis | role | tone | voice | weight)",
+        ));
+    }
+    Ok(delta)
+}
+
 fn decode_accessibility(path: &str, j: &JVal) -> DResult<Accessibility> {
     let fields = as_obj(path, j)?;
     // Phase 959 — the near-miss check runs BEFORE the slot reads, matching the
@@ -6313,7 +6349,7 @@ fn decode_tree_op_ast(path: &str, j: &JVal) -> DResult<TreeOp> {
     Err(unknown_du_case(
         path,
         other,
-        "EditNode | UpdateProp | ReplaceBinding | UpdateStyle | UpdateState | InsertChild | RemoveNode | MoveNode | ReorderChildren | ReplaceRoot | Batch",
+        "EditNode | UpdateProp | ReplaceBinding | UpdateStyle | PatchStyle | UpdateState | InsertChild | RemoveNode | MoveNode | ReorderChildren | ReplaceRoot | Batch",
     ))
 }
 
@@ -6365,6 +6401,14 @@ fn decode_tree_op_ast_g0(
                 let style_j = req(path, fields, "style", "SemanticStyle object")?;
                 let style = decode_semantic_style(&format!("{path}.style"), style_j)?;
                 Ok(TreeOp::UpdateStyle { target, style })
+            }
+        })(),
+        "PatchStyle" => (|| -> DResult<TreeOp> {
+            {
+                let target = req_string(path, fields, "target", "target NodeId")?;
+                let style_j = req(path, fields, "style", "StyleDelta object")?;
+                let style = decode_style_delta(&format!("{path}.style"), style_j)?;
+                Ok(TreeOp::PatchStyle { target, style })
             }
         })(),
         _ => return None,

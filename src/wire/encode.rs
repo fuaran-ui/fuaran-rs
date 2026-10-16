@@ -2952,6 +2952,32 @@ fn semantic_style(style: &SemanticStyle) -> String {
     obj(fields)
 }
 
+/// Phase 2291 — the `PatchStyle` payload: EVERY member the delta sets is
+/// emitted, a default token included (§3.6's omit-when-default rule does not
+/// apply inside a delta — absence there means "leave as it is").
+fn style_delta(delta: &StyleDelta) -> String {
+    let mut fields = vec![];
+    if let Some(v) = delta.direction {
+        fields.push(field("direction", s(v.as_str())));
+    }
+    if let Some(v) = delta.emphasis {
+        fields.push(field("emphasis", s(v.as_str())));
+    }
+    if let Some(v) = delta.role {
+        fields.push(field("role", s(v.as_str())));
+    }
+    if let Some(v) = delta.tone {
+        fields.push(field("tone", s(v.as_str())));
+    }
+    if let Some(v) = delta.voice {
+        fields.push(field("voice", s(v.as_str())));
+    }
+    if let Some(v) = delta.weight {
+        fields.push(field("weight", s(v.as_str())));
+    }
+    obj(fields)
+}
+
 fn accessibility(a: &Accessibility) -> String {
     let mut fields = vec![];
     if let Some(label) = &a.label {
@@ -3048,6 +3074,13 @@ fn tree_op(op: &TreeOp) -> String {
             "UpdateStyle",
             vec![
                 field("style", semantic_style(style)),
+                field("target", s(target)),
+            ],
+        ),
+        TreeOp::PatchStyle { target, style } => case_obj(
+            "PatchStyle",
+            vec![
+                field("style", style_delta(style)),
                 field("target", s(target)),
             ],
         ),

@@ -1166,6 +1166,7 @@ pub fn validate_op(op: &TreeOp) -> Vec<Finding> {
         | TreeOp::UpdateProp { .. }
         | TreeOp::ReplaceBinding { .. }
         | TreeOp::UpdateStyle { .. }
+        | TreeOp::PatchStyle { .. }
         | TreeOp::UpdateState { .. }
         | TreeOp::RemoveNode { .. }
         | TreeOp::MoveNode { .. }

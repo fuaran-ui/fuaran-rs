@@ -2321,6 +2321,41 @@ impl SemanticStyle {
     }
 }
 
+/// Phase 2291 — the payload of `PatchStyle`, the field-level style edit: the six
+/// `SemanticStyle` fields, each optional. `Some` SETS the field (a default value
+/// included — it is spelled explicitly on the wire); `None` leaves the field as
+/// it is. This is the difference from `UpdateStyle`, whose whole-record write
+/// reads an absent member as the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StyleDelta {
+    pub direction: Option<TextDirection>,
+    pub emphasis: Option<Emphasis>,
+    pub role: Option<StyleRole>,
+    pub tone: Option<ToneVariant>,
+    pub voice: Option<FontVoice>,
+    pub weight: Option<StyleWeight>,
+}
+
+impl StyleDelta {
+    /// A delta naming no field — not an edit, and refused on decode.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The delta patched over `style`: every field the delta sets replaces the
+    /// style's value, every other field is carried through unchanged.
+    pub fn apply_to(&self, style: SemanticStyle) -> SemanticStyle {
+        SemanticStyle {
+            direction: self.direction.unwrap_or(style.direction),
+            emphasis: self.emphasis.unwrap_or(style.emphasis),
+            role: self.role.unwrap_or(style.role),
+            tone: self.tone.unwrap_or(style.tone),
+            voice: self.voice.unwrap_or(style.voice),
+            weight: self.weight.unwrap_or(style.weight),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Accessibility {
     pub label: Option<Binding>,
@@ -2400,6 +2435,12 @@ pub enum TreeOp {
     UpdateStyle {
         target: NodeId,
         style: SemanticStyle,
+    },
+    /// Phase 2291 — the field-level style edit: a patch over the target's
+    /// current style, setting exactly the fields `style` names.
+    PatchStyle {
+        target: NodeId,
+        style: StyleDelta,
     },
     UpdateState {
         target: NodeId,
