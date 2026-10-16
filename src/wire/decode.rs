@@ -361,50 +361,81 @@ fn opt_text_source_aliased(
 
 // ─── Phase 460 — stylistic fields omitted-when-default on decode (§3.6) ───────
 //
-// These stylistic slots restore an identity default when ABSENT; a present
-// explicit-default value keeps decoding (read-compat). The canonical encoder
-// still emits them (fixtures byte-unchanged), so a re-encode is always full.
+// These stylistic slots restore their default when ABSENT; a present
+// explicit-default value keeps decoding (read-compat). The default each caller
+// passes is the IDL's, from the generated `defaults` table, which is also the
+// value the encoder omits at.
 
-fn opt_cell_format_default(path: &str, fields: &Fields, key: &str) -> DResult<CellFormat> {
+fn opt_cell_format_default(
+    path: &str,
+    fields: &Fields,
+    key: &str,
+    default: CellFormat,
+) -> DResult<CellFormat> {
     match get(fields, key) {
-        None => Ok(CellFormat::None),
+        None => Ok(default),
         Some(v) => decode_cell_format(&format!("{path}.{key}"), v),
     }
 }
 
-fn opt_tone_default(path: &str, fields: &Fields, key: &str) -> DResult<ToneVariant> {
+fn opt_tone_default(
+    path: &str,
+    fields: &Fields,
+    key: &str,
+    default: ToneVariant,
+) -> DResult<ToneVariant> {
     match get(fields, key) {
-        None => Ok(ToneVariant::Default),
+        None => Ok(default),
         Some(v) => decode_tone(&format!("{path}.{key}"), v),
     }
 }
 
-fn opt_weight_default(path: &str, fields: &Fields, key: &str) -> DResult<StyleWeight> {
+fn opt_weight_default(
+    path: &str,
+    fields: &Fields,
+    key: &str,
+    default: StyleWeight,
+) -> DResult<StyleWeight> {
     match get(fields, key) {
-        None => Ok(StyleWeight::Standard),
+        None => Ok(default),
         Some(v) => decode_weight(&format!("{path}.{key}"), v),
     }
 }
 
-fn opt_emphasis_default(path: &str, fields: &Fields, key: &str) -> DResult<Emphasis> {
+fn opt_emphasis_default(
+    path: &str,
+    fields: &Fields,
+    key: &str,
+    default: Emphasis,
+) -> DResult<Emphasis> {
     match get(fields, key) {
-        None => Ok(Emphasis::Normal),
+        None => Ok(default),
         Some(v) => decode_emphasis(&format!("{path}.{key}"), v),
     }
 }
 
 /// Phase 867 — `Metric.trendPolarity`, omitted-when-`HigherIsBetter` (§3.6.1
 /// clause 4: an absent declaration means the ordinary reading, up is good).
-fn opt_trend_polarity_default(path: &str, fields: &Fields, key: &str) -> DResult<TrendPolarity> {
+fn opt_trend_polarity_default(
+    path: &str,
+    fields: &Fields,
+    key: &str,
+    default: TrendPolarity,
+) -> DResult<TrendPolarity> {
     match get(fields, key) {
-        None => Ok(TrendPolarity::HigherIsBetter),
+        None => Ok(default),
         Some(v) => decode_trend_polarity(&format!("{path}.{key}"), v),
     }
 }
 
-fn opt_column_width_default(path: &str, fields: &Fields, key: &str) -> DResult<ColumnWidth> {
+fn opt_column_width_default(
+    path: &str,
+    fields: &Fields,
+    key: &str,
+    default: ColumnWidth,
+) -> DResult<ColumnWidth> {
     match get(fields, key) {
-        None => Ok(ColumnWidth::Auto),
+        None => Ok(default),
         Some(v) => decode_column_width(&format!("{path}.{key}"), v),
     }
 }
@@ -2703,7 +2734,7 @@ fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
             )?,
             // Omitted at `Self`, so absence is the pre-1536 behaviour.
             target: match get(fields, "target") {
-                None => NavigateTarget::Self_,
+                None => defaults::ACTION_NAVIGATE_TARGET,
                 Some(v) => decode_navigate_target(&format!("{path}.target"), v)?,
             },
         }),
@@ -2900,10 +2931,10 @@ fn decode_metric_spec(path: &str, j: &JVal) -> DResult<MetricSpec> {
         StaticSlot::Float,
     )?;
     // Phase 460 — the stylistic fields are omitted-when-default on the wire.
-    let format = opt_cell_format_default(path, fields, "format")?;
-    let tone = opt_tone_default(path, fields, "tone")?;
-    let weight = opt_weight_default(path, fields, "weight")?;
-    let emphasis = opt_emphasis_default(path, fields, "emphasis")?;
+    let format = opt_cell_format_default(path, fields, "format", defaults::METRIC_FORMAT)?;
+    let tone = opt_tone_default(path, fields, "tone", defaults::METRIC_TONE)?;
+    let weight = opt_weight_default(path, fields, "weight", defaults::METRIC_WEIGHT)?;
+    let emphasis = opt_emphasis_default(path, fields, "emphasis", defaults::METRIC_EMPHASIS)?;
     let trend = opt_binding_slot(path, fields, "trend", StaticSlot::Float)?;
     let trend_format = match get(fields, "trendFormat") {
         None => None,
@@ -2912,7 +2943,12 @@ fn decode_metric_spec(path: &str, j: &JVal) -> DResult<MetricSpec> {
     // Phase 867 — the polarity declaration (§3.6.1). Decoded UNCONDITIONALLY,
     // not gated on `trend` being present: the slot is inert without a trend but
     // it is legal, and refusing it would reject a document the format admits.
-    let trend_polarity = opt_trend_polarity_default(path, fields, "trendPolarity")?;
+    let trend_polarity = opt_trend_polarity_default(
+        path,
+        fields,
+        "trendPolarity",
+        defaults::METRIC_TREND_POLARITY,
+    )?;
     let icon = opt_string(path, fields, "icon")?;
     let subtext = opt_text_source(path, fields, "subtext")?;
     Ok(MetricSpec {
@@ -2958,9 +2994,9 @@ fn decode_label_value_row_spec(path: &str, j: &JVal) -> DResult<LabelValueRowSpe
     // Phase 460 — `format` omitted-when-default. The `emphasis` here is the
     // behavioural bool (not the `Emphasis` style DU): 0.2.2 omitted-when-false,
     // cross-vocab coerced when a model writes the enum spelling.
-    let format = opt_cell_format_default(path, fields, "format")?;
+    let format = opt_cell_format_default(path, fields, "format", defaults::LABEL_VALUE_ROW_FORMAT)?;
     let emphasis = match get(fields, "emphasis") {
-        None => false,
+        None => defaults::LABEL_VALUE_ROW_EMPHASIS,
         Some(v) => decode_emphasis_flag(&format!("{path}.emphasis"), v)?,
     };
     let help = opt_text_source(path, fields, "help")?;
@@ -2978,10 +3014,10 @@ fn decode_fact_spec(path: &str, j: &JVal) -> DResult<FactSpec> {
     let label = req_text_source(path, fields, "label", "Fact label TextSource")?;
     let value = req_text_source(path, fields, "value", "Fact value TextSource")?;
     let emphasis = match get(fields, "emphasis") {
-        None => false,
+        None => defaults::FACT_EMPHASIS,
         Some(v) => decode_emphasis_flag(&format!("{path}.emphasis"), v)?,
     };
-    let tone = opt_tone_default(path, fields, "tone")?;
+    let tone = opt_tone_default(path, fields, "tone", defaults::FACT_TONE)?;
     let help = opt_text_source(path, fields, "help")?;
     let icon = opt_string(path, fields, "icon")?;
     Ok(FactSpec {
@@ -3083,15 +3119,15 @@ fn decode_image_spec(path: &str, j: &JVal) -> DResult<ImageSpec> {
     // restores today's behaviour, which is what keeps every pre-phase document
     // decoding unchanged and re-encoding to the bytes it already had.
     let fit = match get(fields, "fit") {
-        None => ImageFit::Natural,
+        None => defaults::IMAGE_FIT,
         Some(v) => decode_image_fit(&format!("{path}.fit"), v)?,
     };
     let aspect_ratio = match get(fields, "aspectRatio") {
-        None => ImageAspect::Natural,
+        None => defaults::IMAGE_ASPECT_RATIO,
         Some(v) => decode_image_aspect(&format!("{path}.aspectRatio"), v)?,
     };
     let loading = match get(fields, "loading") {
-        None => ImageLoading::Eager,
+        None => defaults::IMAGE_LOADING,
         Some(v) => decode_image_loading(&format!("{path}.loading"), v)?,
     };
     // Phase 1078 — `caption` is optional CONTENT, so absent means ABSENT
@@ -3126,7 +3162,7 @@ fn decode_image_spec(path: &str, j: &JVal) -> DResult<ImageSpec> {
     // back would have to rule on `"false"` and `""` as well — at which point
     // two conformant hosts can disagree about whether the document declares an
     // affordance at all.
-    let expandable = opt_bool(path, fields, "expandable")?.unwrap_or(false);
+    let expandable = opt_bool(path, fields, "expandable")?.unwrap_or(defaults::IMAGE_EXPANDABLE);
     Ok(ImageSpec {
         alt,
         src,
@@ -3158,7 +3194,8 @@ fn decode_media_kind(path: &str, j: &JVal) -> DResult<MediaKind> {
             // and non-boolean — the `Image.expandable` ruling, on the slot
             // where getting it wrong starts playing a video the document says
             // not to.
-            let autoplay = opt_bool(path, fields, "autoplay")?.unwrap_or(false);
+            let autoplay =
+                opt_bool(path, fields, "autoplay")?.unwrap_or(defaults::MEDIA_KIND_VIDEO_AUTOPLAY);
             let poster = opt_binding_slot(path, fields, "poster", StaticSlot::Str)?;
             Ok(MediaKind::Video { autoplay, poster })
         }
@@ -3185,8 +3222,8 @@ fn decode_media_spec(path: &str, j: &JVal) -> DResult<MediaSpec> {
     let label = req_text_source(path, fields, "label", "Media accessible label TextSource")?;
     let kind_j = req(path, fields, "kind", "MediaKind (Video | Audio)")?;
     let kind = decode_media_kind(&format!("{path}.kind"), kind_j)?;
-    let controls = opt_bool(path, fields, "controls")?.unwrap_or(true);
-    let r#loop = opt_bool(path, fields, "loop")?.unwrap_or(false);
+    let controls = opt_bool(path, fields, "controls")?.unwrap_or(defaults::MEDIA_CONTROLS);
+    let r#loop = opt_bool(path, fields, "loop")?.unwrap_or(defaults::MEDIA_LOOP);
     // Phase 1110 - the MISSING-LIST-FIELD class again (`srcSet`'s rule, one kind
     // over): an ABSENT `tracks` IS the empty list, never `None` and never null.
     // A PRESENT `null` goes through `as_arr` and is refused, because absence
@@ -3245,7 +3282,7 @@ fn decode_track_entry(path: &str, j: &JVal) -> DResult<TrackEntry> {
     )?;
     let src_lang = req_string(path, fields, "srcLang", "TrackEntry srcLang string")?;
     let label = req_text_source(path, fields, "label", "TrackEntry label TextSource")?;
-    let default = opt_bool(path, fields, "default")?.unwrap_or(false);
+    let default = opt_bool(path, fields, "default")?.unwrap_or(defaults::TRACK_ENTRY_DEFAULT);
     Ok(TrackEntry {
         kind,
         src,
@@ -3272,7 +3309,7 @@ fn decode_embed_spec(path: &str, j: &JVal) -> DResult<EmbedSpec> {
     )?;
     let title = req_text_source(path, fields, "title", "Embed accessible title TextSource")?;
     let aspect_ratio = match get(fields, "aspectRatio") {
-        None => ImageAspect::Natural,
+        None => defaults::EMBED_ASPECT_RATIO,
         Some(v) => decode_image_aspect(&format!("{path}.aspectRatio"), v)?,
     };
     // An unrecognised permission is REFUSED, never dropped: dropping would turn
@@ -3370,11 +3407,11 @@ fn decode_list_spec(path: &str, j: &JVal) -> DResult<ListSpec> {
 fn decode_toast_spec(path: &str, j: &JVal) -> DResult<ToastSpec> {
     let fields = as_obj(path, j)?;
     let message = req_text_source(path, fields, "message", "Toast message TextSource")?;
-    let tone = opt_tone_default(path, fields, "tone")?;
+    let tone = opt_tone_default(path, fields, "tone", defaults::TOAST_TONE)?;
     let open = req_binding_slot(path, fields, "open", "Toast open binding", StaticSlot::Bool)?;
     // 0.2.0 — omitted-when-TRUE (a toast is dismissable unless said otherwise;
     // the one inverted default in §3.6's table).
-    let dismissable = opt_bool(path, fields, "dismissable")?.unwrap_or(true);
+    let dismissable = opt_bool(path, fields, "dismissable")?.unwrap_or(defaults::TOAST_DISMISSABLE);
     Ok(ToastSpec {
         message,
         tone,
@@ -3464,10 +3501,10 @@ fn decode_icon_spec(path: &str, j: &JVal) -> DResult<IconSpec> {
     // `size` omitted-when-`Medium`; `tone` omitted-when-default (the
     // Phase 460 discipline); `label` omitted-when-decorative.
     let size = match get(fields, "size") {
-        None => IconSize::Medium,
+        None => defaults::ICON_SIZE,
         Some(v) => decode_icon_size(&format!("{path}.size"), v)?,
     };
-    let tone = opt_tone_default(path, fields, "tone")?;
+    let tone = opt_tone_default(path, fields, "tone", defaults::ICON_TONE)?;
     let label = match get(fields, "label") {
         None => None,
         Some(v) => Some(as_str(&format!("{path}.label"), v)?.to_string()),
@@ -3484,8 +3521,9 @@ fn decode_callout_spec(path: &str, j: &JVal) -> DResult<CalloutSpec> {
     let fields = as_obj(path, j)?;
     let body = req_text_source(path, fields, "body", "Callout body TextSource")?;
     // 0.2.0 — omitted-when-default (false).
-    let dismissable = opt_bool(path, fields, "dismissable")?.unwrap_or(false);
-    let tone = opt_tone_default(path, fields, "tone")?;
+    let dismissable =
+        opt_bool(path, fields, "dismissable")?.unwrap_or(defaults::CALLOUT_DISMISSABLE);
+    let tone = opt_tone_default(path, fields, "tone", defaults::CALLOUT_TONE)?;
     // Field alias: title → heading (Callout is in the scoped title→heading set).
     let heading = opt_text_source_aliased(path, fields, "heading", &["title"])?;
     let icon = opt_string(path, fields, "icon")?;
@@ -3508,8 +3546,9 @@ fn decode_progress_spec(path: &str, j: &JVal) -> DResult<ProgressSpec> {
         StaticSlot::Float,
     )?;
     // 0.2.0 — omitted-when-default (false).
-    let indeterminate = opt_bool(path, fields, "indeterminate")?.unwrap_or(false);
-    let tone = opt_tone_default(path, fields, "tone")?;
+    let indeterminate =
+        opt_bool(path, fields, "indeterminate")?.unwrap_or(defaults::PROGRESS_INDETERMINATE);
+    let tone = opt_tone_default(path, fields, "tone", defaults::PROGRESS_TONE)?;
     let label = opt_text_source(path, fields, "label")?;
     let caveat = opt_text_source(path, fields, "caveat")?;
     Ok(ProgressSpec {
@@ -3702,7 +3741,8 @@ fn decode_form_field_kind(
                 StaticSlot::Options,
             )?,
             value: value_or(StaticSlot::StringOpt, control_value_defaults::choice())?,
-            allow_free_text: opt_bool(path, fields, "allowFreeText")?.unwrap_or(false),
+            allow_free_text: opt_bool(path, fields, "allowFreeText")?
+                .unwrap_or(defaults::FORM_FIELD_KIND_COMBOBOX_ALLOW_FREE_TEXT),
             on_change,
         }),
         // 0.2.0 — the dual-thumb numeric range (absorbed FilterKind.RangeFilter).
@@ -3825,7 +3865,8 @@ fn decode_form_field_kind(
         // `suggestions` is the ordinary open token box.
         "Tokens" => {
             let suggestions = opt_binding_slot(path, fields, "suggestions", StaticSlot::Options)?;
-            let allow_free_text = opt_bool(path, fields, "allowFreeText")?.unwrap_or(true);
+            let allow_free_text = opt_bool(path, fields, "allowFreeText")?
+                .unwrap_or(defaults::FORM_FIELD_KIND_TOKENS_ALLOW_FREE_TEXT);
             if !allow_free_text && suggestions.is_none() {
                 return Err(wrong_type(
                     &format!("{path}.allowFreeText"),
@@ -3860,7 +3901,8 @@ fn decode_form_field_kind(
                 max,
                 // Governs ENTRY granularity, never display: a host must not
                 // quantise a resolved value to it.
-                allow_half: opt_bool(path, fields, "allowHalf")?.unwrap_or(false),
+                allow_half: opt_bool(path, fields, "allowHalf")?
+                    .unwrap_or(defaults::FORM_FIELD_KIND_RATING_ALLOW_HALF),
                 on_change,
             })
         }
@@ -4142,8 +4184,10 @@ fn decode_file_upload_spec(path: &str, j: &JVal) -> DResult<FileUploadSpec> {
     // because the slot decides whether a whole ingress route exists and a
     // lenient truthiness read would open a drop target on `"no"` and `"false"`
     // alike.
-    let drop_target = opt_bool(path, fields, "dropTarget")?.unwrap_or(false);
-    let accept_paste = opt_bool(path, fields, "acceptPaste")?.unwrap_or(false);
+    let drop_target =
+        opt_bool(path, fields, "dropTarget")?.unwrap_or(defaults::FILE_UPLOAD_DROP_TARGET);
+    let accept_paste =
+        opt_bool(path, fields, "acceptPaste")?.unwrap_or(defaults::FILE_UPLOAD_ACCEPT_PASTE);
     // Phase 1116 — OPTIONAL, not omit-at-default: an absent member asks for the
     // ordinary picker, which is not one of the two devices wearing a default.
     let capture = match get(fields, "capture") {
@@ -4267,7 +4311,12 @@ fn decode_toned_pill(path: &str, fields: &Fields) -> DResult<CellKindErased> {
     // `default` is omitted-when-`Default` (Phase 460); an absent key restores the
     // identity, and an aliased `Neutral` normalises to `Default` and then omits —
     // two rules composing, in that order.
-    let default_tone = opt_tone_default(path, fields, "default")?;
+    let default_tone = opt_tone_default(
+        path,
+        fields,
+        "default",
+        defaults::CELL_KIND_ERASED_TONED_PILL_DEFAULT,
+    )?;
     Ok(CellKindErased::TonedPill {
         field,
         map,
@@ -4523,7 +4572,7 @@ fn decode_column_erased(path: &str, j: &JVal) -> DResult<ColumnErased> {
     check_near_misses(path, fields, COLUMN_NEAR_MISSES)?;
     // Phase 460 — format/width omitted-when-default. Field aliases: type → kind,
     // header/title → label.
-    let format = opt_cell_format_default(path, fields, "format")?;
+    let format = opt_cell_format_default(path, fields, "format", defaults::COLUMN_ERASED_FORMAT)?;
     let kind_j = req_aliased(path, fields, "kind", &["type"], "CellKindErased")?;
     let kind = decode_cell_kind_erased(&format!("{path}.kind"), kind_j)?;
     let label = req_string_aliased(
@@ -4533,7 +4582,7 @@ fn decode_column_erased(path: &str, j: &JVal) -> DResult<ColumnErased> {
         &["header", "title"],
         "column label string",
     )?;
-    let width = opt_column_width_default(path, fields, "width")?;
+    let width = opt_column_width_default(path, fields, "width", defaults::COLUMN_ERASED_WIDTH)?;
     let field = opt_string(path, fields, "field")?;
     // Phase 861 / 863 — per-column sort and editability NARROWING; absent
     // inherits the grid-level flag, so an explicit `false` is carried rather
@@ -4613,7 +4662,7 @@ fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
         columns.push(decode_column_erased(&format!("{path}.columns[{i}]"), item)?);
     }
     // 0.2.0 — omitted-when-default (false).
-    let editable = opt_bool(path, fields, "editable")?.unwrap_or(false);
+    let editable = opt_bool(path, fields, "editable")?.unwrap_or(defaults::DATA_GRID_EDITABLE);
     // Field aliases: data / rows → source.
     let source = req_binding_slot_aliased(
         path,
@@ -4656,7 +4705,8 @@ fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
     let page_state_key = opt_string(path, fields, "pageStateKey")?;
     // Phase 934 — omitted-when-default (false), the same convention as
     // `editable`.
-    let reorderable = opt_bool(path, fields, "reorderable")?.unwrap_or(false);
+    let reorderable =
+        opt_bool(path, fields, "reorderable")?.unwrap_or(defaults::DATA_GRID_REORDERABLE);
     let static_rows = match get(fields, "staticRows") {
         None => None,
         Some(v) => Some(decode_static_rows(&format!("{path}.staticRows"), v)?),
@@ -4676,11 +4726,13 @@ fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
         reorderable,
         static_rows,
         // Phase 1473 — the DataGrid arm of the same refusal.
-        keep_rows_together: opt_bool(path, fields, "keepRowsTogether")?.unwrap_or(false),
-        repeat_header: opt_bool(path, fields, "repeatHeader")?.unwrap_or(false),
+        keep_rows_together: opt_bool(path, fields, "keepRowsTogether")?
+            .unwrap_or(defaults::DATA_GRID_KEEP_ROWS_TOGETHER),
+        repeat_header: opt_bool(path, fields, "repeatHeader")?
+            .unwrap_or(defaults::DATA_GRID_REPEAT_HEADER),
         // Phase 1123 — a bool, omitted at `false`, never truthiness-coerced:
         // the slot decides whether a whole affordance exists.
-        exportable: opt_bool(path, fields, "exportable")?.unwrap_or(false),
+        exportable: opt_bool(path, fields, "exportable")?.unwrap_or(defaults::DATA_GRID_EXPORTABLE),
         // Phase 1125 — separate decoder arms, so a wrong type on either is
         // reported at its own path.
         transfer_in_key: opt_string(path, fields, "transferInKey")?,
@@ -4928,7 +4980,7 @@ fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
     // Absent restores `false` BY CONTRACT since Phase 1585 made the member
     // omit-at-default — not, as this note read until then, as tolerance of the
     // legacy wire that predated the field.
-    let stacked = opt_bool(path, fields, "stacked")?.unwrap_or(false);
+    let stacked = opt_bool(path, fields, "stacked")?.unwrap_or(defaults::CHART_STACKED);
     // Phase 876 — `valueFormat`: the value axis's number format, reusing the
     // existing `Format` vocabulary. Absent is the ordinary shape.
     let value_format = match get(fields, "valueFormat") {
@@ -5324,8 +5376,9 @@ fn decode_box_spec(path: &str, j: &JVal) -> DResult<BoxSpec> {
         // prevent. Pinned on BOTH decoder arms the vocabulary reaches, because
         // they are separate branches and a vector on one proves nothing about
         // the other.
-        keep_together: opt_bool(path, fields, "keepTogether")?.unwrap_or(false),
-        break_before: opt_bool(path, fields, "breakBefore")?.unwrap_or(false),
+        keep_together: opt_bool(path, fields, "keepTogether")?
+            .unwrap_or(defaults::BOX_KEEP_TOGETHER),
+        break_before: opt_bool(path, fields, "breakBefore")?.unwrap_or(defaults::BOX_BREAK_BEFORE),
     })
 }
 
@@ -5353,7 +5406,7 @@ fn decode_tabs_spec(path: &str, j: &JVal) -> DResult<TabsSpec> {
     let children = decode_children(path, fields)?;
     // 0.2.0 — omitted-when-default (Horizontal), encoder-symmetric.
     let orientation = match get(fields, "orientation") {
-        None => Orientation::Horizontal,
+        None => defaults::TABS_ORIENTATION,
         Some(v) => decode_orientation(&format!("{path}.orientation"), v)?,
     };
     let tab_headers = match get(fields, "tabHeaders") {
@@ -5461,7 +5514,7 @@ fn decode_modal_spec(path: &str, j: &JVal) -> DResult<ModalSpec> {
     // and an unrecognised spelling `UNKNOWN_DU_CASE`, both at `$.kind.modality`
     // with no `.$type` suffix: this is a BARE enum.
     let modality = match get(fields, "modality") {
-        None => ModalityKind::Modal,
+        None => defaults::MODAL_MODALITY,
         Some(v) => decode_modality_kind(&format!("{path}.modality"), v)?,
     };
     Ok(ModalSpec {
@@ -6118,23 +6171,24 @@ fn decode_state_behaviour(path: &str, j: &JVal) -> DResult<StateBehaviour> {
 fn decode_semantic_style(path: &str, j: &JVal) -> DResult<SemanticStyle> {
     let fields = as_obj(path, j)?;
     // Phase 460 — tone/weight/emphasis omitted-when-default (as role/voice below).
-    let tone = opt_tone_default(path, fields, "tone")?;
-    let weight = opt_weight_default(path, fields, "weight")?;
-    let emphasis = opt_emphasis_default(path, fields, "emphasis")?;
+    let tone = opt_tone_default(path, fields, "tone", defaults::SEMANTIC_STYLE_TONE)?;
+    let weight = opt_weight_default(path, fields, "weight", defaults::SEMANTIC_STYLE_WEIGHT)?;
+    let emphasis =
+        opt_emphasis_default(path, fields, "emphasis", defaults::SEMANTIC_STYLE_EMPHASIS)?;
     // `role` / `voice` are optional on the wire — omitted at their defaults.
     let role = match get(fields, "role") {
-        None => StyleRole::None,
+        None => defaults::SEMANTIC_STYLE_ROLE,
         Some(v) => decode_style_role(&format!("{path}.role"), v)?,
     };
     let voice = match get(fields, "voice") {
-        None => FontVoice::Default,
+        None => defaults::SEMANTIC_STYLE_VOICE,
         Some(v) => decode_font_voice(&format!("{path}.voice"), v)?,
     };
     // Phase 1472 - omitted at `Auto`. Lower-case tokens, so the upper-case
     // spelling an author reaches for (`"LTR"`) is UNKNOWN_DU_CASE rather than
     // being case-folded into acceptance.
     let direction = match get(fields, "direction") {
-        None => TextDirection::Auto,
+        None => defaults::SEMANTIC_STYLE_DIRECTION,
         Some(v) => decode_text_direction(&format!("{path}.direction"), v)?,
     };
     Ok(SemanticStyle {

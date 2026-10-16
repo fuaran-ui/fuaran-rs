@@ -1025,3 +1025,64 @@ fn _fields_op_update_style(v: &TreeOp) {
     if let TreeOp::UpdateStyle { style: _, target: _ } = v {}
 }
 
+// ─── Omit-at-default (§3.6) ─────────────────────────────────────────────────
+
+/// The IDL's omit-at-default values, one typed constant per field whose default
+/// is a scalar, an enum case or a field-less union case. The decoder fills an
+/// absent field from these and the encoder omits a field equal to them, so a
+/// default moved in the IDL moves both boundaries in one regeneration. Defaults
+/// that are an empty list or a record stay as the codec's structural checks.
+pub(crate) mod defaults {
+    use super::*;
+    pub(crate) const BOX_KEEP_TOGETHER: bool = false;
+    pub(crate) const BOX_BREAK_BEFORE: bool = false;
+    pub(crate) const CALLOUT_DISMISSABLE: bool = false;
+    pub(crate) const CALLOUT_TONE: ToneVariant = ToneVariant::Default;
+    pub(crate) const CHART_STACKED: bool = false;
+    pub(crate) const DATA_GRID_EDITABLE: bool = false;
+    pub(crate) const DATA_GRID_REORDERABLE: bool = false;
+    pub(crate) const DATA_GRID_KEEP_ROWS_TOGETHER: bool = false;
+    pub(crate) const DATA_GRID_REPEAT_HEADER: bool = false;
+    pub(crate) const DATA_GRID_EXPORTABLE: bool = false;
+    pub(crate) const EMBED_ASPECT_RATIO: ImageAspect = ImageAspect::Natural;
+    pub(crate) const FACT_EMPHASIS: bool = false;
+    pub(crate) const FACT_TONE: ToneVariant = ToneVariant::Default;
+    pub(crate) const FILE_UPLOAD_ACCEPT_PASTE: bool = false;
+    pub(crate) const FILE_UPLOAD_DROP_TARGET: bool = false;
+    pub(crate) const ICON_SIZE: IconSize = IconSize::Medium;
+    pub(crate) const ICON_TONE: ToneVariant = ToneVariant::Default;
+    pub(crate) const IMAGE_FIT: ImageFit = ImageFit::Natural;
+    pub(crate) const IMAGE_ASPECT_RATIO: ImageAspect = ImageAspect::Natural;
+    pub(crate) const IMAGE_LOADING: ImageLoading = ImageLoading::Eager;
+    pub(crate) const IMAGE_EXPANDABLE: bool = false;
+    pub(crate) const LABEL_VALUE_ROW_EMPHASIS: bool = false;
+    pub(crate) const LABEL_VALUE_ROW_FORMAT: CellFormat = CellFormat::None;
+    pub(crate) const MEDIA_CONTROLS: bool = true;
+    pub(crate) const MEDIA_LOOP: bool = false;
+    pub(crate) const METRIC_FORMAT: CellFormat = CellFormat::None;
+    pub(crate) const METRIC_TONE: ToneVariant = ToneVariant::Default;
+    pub(crate) const METRIC_WEIGHT: StyleWeight = StyleWeight::Standard;
+    pub(crate) const METRIC_EMPHASIS: Emphasis = Emphasis::Normal;
+    pub(crate) const METRIC_TREND_POLARITY: TrendPolarity = TrendPolarity::HigherIsBetter;
+    pub(crate) const MODAL_MODALITY: ModalityKind = ModalityKind::Modal;
+    pub(crate) const PROGRESS_INDETERMINATE: bool = false;
+    pub(crate) const PROGRESS_TONE: ToneVariant = ToneVariant::Default;
+    pub(crate) const TABS_ORIENTATION: Orientation = Orientation::Horizontal;
+    pub(crate) const TOAST_DISMISSABLE: bool = true;
+    pub(crate) const TOAST_TONE: ToneVariant = ToneVariant::Default;
+    pub(crate) const COLUMN_ERASED_FORMAT: CellFormat = CellFormat::None;
+    pub(crate) const COLUMN_ERASED_WIDTH: ColumnWidth = ColumnWidth::Auto;
+    pub(crate) const SEMANTIC_STYLE_DIRECTION: TextDirection = TextDirection::Auto;
+    pub(crate) const SEMANTIC_STYLE_EMPHASIS: Emphasis = Emphasis::Normal;
+    pub(crate) const SEMANTIC_STYLE_ROLE: StyleRole = StyleRole::None;
+    pub(crate) const SEMANTIC_STYLE_TONE: ToneVariant = ToneVariant::Default;
+    pub(crate) const SEMANTIC_STYLE_VOICE: FontVoice = FontVoice::Default;
+    pub(crate) const SEMANTIC_STYLE_WEIGHT: StyleWeight = StyleWeight::Standard;
+    pub(crate) const TRACK_ENTRY_DEFAULT: bool = false;
+    pub(crate) const ACTION_NAVIGATE_TARGET: NavigateTarget = NavigateTarget::Self_;
+    pub(crate) const CELL_KIND_ERASED_TONED_PILL_DEFAULT: ToneVariant = ToneVariant::Default;
+    pub(crate) const FORM_FIELD_KIND_COMBOBOX_ALLOW_FREE_TEXT: bool = false;
+    pub(crate) const FORM_FIELD_KIND_RATING_ALLOW_HALF: bool = false;
+    pub(crate) const FORM_FIELD_KIND_TOKENS_ALLOW_FREE_TEXT: bool = true;
+    pub(crate) const MEDIA_KIND_VIDEO_AUTOPLAY: bool = false;
+}

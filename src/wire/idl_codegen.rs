@@ -14,7 +14,9 @@
 //!   the decoder's refusal hints read, each beside an exhaustive `match` over the
 //!   Rust enum that names every IDL case;
 //! - a field pin per modelled kind spec, record and op: an exhaustive
-//!   destructuring pattern naming exactly the IDL's wire fields.
+//!   destructuring pattern naming exactly the IDL's wire fields;
+//! - the omit-at-default table as typed constants (`defaults`), which the decoder
+//!   fills absent fields from and the encoder omits by.
 //!
 //! **Why the pins are code and not tests.** Rust has no reflection over a type's
 //! variants or fields, so a hand-kept list beside an enum can only be checked by a
@@ -165,6 +167,7 @@ struct Field {
     name: String,
     optionality: String,
     ty: JVal,
+    default: Option<JVal>,
 }
 
 #[derive(Debug)]
@@ -231,6 +234,7 @@ fn read_fields(j: &JVal, at: &str) -> Result<Vec<Field>, String> {
                 .ok_or_else(|| format!("{at}.{name}: no optionality"))?;
             Ok(Field {
                 optionality: str_of(opt, "$type", &format!("{at}.{name}"))?.to_string(),
+                default: opt.field("default").cloned(),
                 ty: f
                     .field("type")
                     .cloned()
@@ -458,6 +462,49 @@ fn rust_fields(owner: &str, fields: &[Field]) -> Vec<String> {
         }
     }
     out
+}
+
+fn enum_by_name<'a>(idl: &'a Idl, name: &str) -> Option<&'a Enum> {
+    idl.enums.iter().find(|e| e.name == name)
+}
+
+/// The typed Rust expression for an omit-at-default value, or `None` for a
+/// default the generator does not render as a constant (an empty list, a record,
+/// a union case that carries fields) — those stay as the codec's emptiness or
+/// structural checks.
+fn default_expr(idl: &Idl, ty: &JVal, default: &JVal) -> Result<Option<(String, String)>, String> {
+    match ty_tag(default) {
+        "bool" => match default.field("value") {
+            Some(JVal::Bool(b)) => Ok(Some(("bool".into(), b.to_string()))),
+            _ => Err("a bool default without a boolean value".into()),
+        },
+        "enum" => {
+            let name = str_of(ty, "name", "enum default type")?;
+            let case = str_of(default, "case", name)?;
+            let e = enum_by_name(idl, name).ok_or_else(|| format!("unknown enum {name}"))?;
+            let i = e
+                .cases
+                .iter()
+                .position(|c| c == case)
+                .ok_or_else(|| format!("{name}: default case {case} is not a case"))?;
+            let rust = rust_type_name(name);
+            Ok(Some((
+                rust.clone(),
+                format!("{rust}::{}", case_ident(&e.host_cases[i])),
+            )))
+        }
+        "union" => {
+            let fields = arr_of(default, "fields", "union default")?;
+            if !fields.is_empty() {
+                return Ok(None);
+            }
+            let name = str_of(ty, "name", "union default type")?;
+            let tag = str_of(default, "tag", name)?;
+            let rust = rust_type_name(name);
+            Ok(Some((rust.clone(), format!("{rust}::{tag}"))))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn str_list(items: &[String]) -> String {
@@ -723,6 +770,50 @@ fn _cases_tree_op(v: &TreeOp) -> &'static str {{
             pattern.join(", ")
         );
     }
+
+    // ── Defaults ────────────────────────────────────────────────────────────
+    let _ = writeln!(
+        w,
+        "// ─── Omit-at-default (§3.6) ─────────────────────────────────────────────────
+
+/// The IDL's omit-at-default values, one typed constant per field whose default
+/// is a scalar, an enum case or a field-less union case. The decoder fills an
+/// absent field from these and the encoder omits a field equal to them, so a
+/// default moved in the IDL moves both boundaries in one regeneration. Defaults
+/// that are an empty list or a record stay as the codec's structural checks.
+pub(crate) mod defaults {{
+    use super::*;"
+    );
+    let default_owners = idl
+        .kinds
+        .iter()
+        .map(|k| (k.owner.name.clone(), &k.owner))
+        .chain(idl.records.iter().map(|r| (r.name.clone(), r)))
+        .chain(idl.unions.iter().flat_map(|u| {
+            u.cases
+                .iter()
+                .map(move |c| (format!("{}{}", u.name, c.name), c))
+        }));
+    for (prefix, owner) in default_owners {
+        for f in &owner.fields {
+            if f.optionality != "omitDefault" {
+                continue;
+            }
+            let default = f
+                .default
+                .as_ref()
+                .ok_or_else(|| format!("{prefix}.{}: omitDefault with no default", f.name))?;
+            if let Some((ty, expr)) = default_expr(&idl, &f.ty, default)? {
+                let _ = writeln!(
+                    w,
+                    "    pub(crate) const {}_{}: {ty} = {expr};",
+                    screaming(&prefix),
+                    screaming(&f.name)
+                );
+            }
+        }
+    }
+    let _ = writeln!(w, "}}");
 
     Ok(out)
 }
