@@ -789,6 +789,36 @@ fn cell_type_of(c: &Cell) -> Option<ColumnType> {
     }
 }
 
+/// The column type an expression is typed at from the schema alone, where that
+/// is decidable. A derive whose every cell is null has no value to read a type
+/// off, and the reference evaluator types it from the expression
+/// (`laws/dataframeParity`'s `derive-div-by-zero`: an int quotient of all-null
+/// cells is a `float` column). `None` leaves the value-inferred default.
+fn static_type(cols: &[SchemaEntry], e: &ColExpr) -> Option<ColumnType> {
+    match e {
+        ColExpr::Col { name } => col_type(cols, name),
+        ColExpr::Lit { cell } => cell_type_of(cell),
+        ColExpr::Cast { column_type, .. } => Some(*column_type),
+        ColExpr::Not { .. } | ColExpr::IsNull { .. } | ColExpr::InList { .. } => {
+            Some(ColumnType::Bool)
+        }
+        ColExpr::Binary { op, left, right } => match op {
+            BinOp::Div => Some(ColumnType::Float),
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod => {
+                match (static_type(cols, left)?, static_type(cols, right)?) {
+                    (ColumnType::Int, ColumnType::Int) => Some(ColumnType::Int),
+                    (ColumnType::Int | ColumnType::Float, ColumnType::Int | ColumnType::Float) => {
+                        Some(ColumnType::Float)
+                    }
+                    _ => None,
+                }
+            }
+            _ => Some(ColumnType::Bool),
+        },
+        _ => None,
+    }
+}
+
 fn infer_type(cells: &[Cell]) -> ColumnType {
     cells
         .iter()
@@ -973,7 +1003,11 @@ fn eval_derive(f: &Frame, name: &str, expr: &ColExpr, env: &EvalEnv) -> Result<F
     for row in &f.rows {
         new_cells.push(eval_expr(&f.cols, row, expr, env)?);
     }
-    let ty = infer_type(&new_cells);
+    let ty = if new_cells.iter().all(|c| matches!(c, Cell::Null)) {
+        static_type(&f.cols, expr).unwrap_or_else(|| infer_type(&new_cells))
+    } else {
+        infer_type(&new_cells)
+    };
     if let Some(i) = col_index(&f.cols, name) {
         let cols = f
             .cols

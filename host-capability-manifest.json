@@ -1,0 +1,94 @@
+{
+  "$manifest": "fuaran.host-capability/1",
+  "host": "fuaran-rs",
+  "hostVersion": "0.0.6-alpha.1",
+  "corpusAuthority": null,
+  "generator": "tests/conformance.rs (FUARAN_MANIFEST_REGENERATE=1 cargo test --test conformance host_capability_manifest_is_current)",
+  "families": {
+    "caseFields": {
+      "covered": false,
+      "reason": "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)"
+    },
+    "hostedCases": {
+      "covered": false,
+      "reason": "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)"
+    },
+    "kindFields": {
+      "covered": false,
+      "reason": "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)"
+    },
+    "kinds": {
+      "covered": false,
+      "reason": "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)"
+    },
+    "recordFields": {
+      "covered": false,
+      "reason": "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)"
+    },
+    "unionCases": {
+      "covered": false,
+      "reason": "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)"
+    }
+  },
+  "corpusFamilies": {
+    "apply/duplicateIdsApply": "covered",
+    "apply/limitsApply": "covered",
+    "apply/skeletonApply": {
+      "pending": "the apply engine's suite does not yet run the skeleton-apply vectors"
+    },
+    "apply/styleNormaliseApply": "covered",
+    "contract-card-reject": {
+      "pending": "this host has no contract-card codec (§25) for the card fixtures to run against yet"
+    },
+    "contract-card-round-trip": {
+      "pending": "this host has no contract-card codec (§25) for the card fixtures to run against yet"
+    },
+    "dag": "covered",
+    "decode-policy": {
+      "notApplicable": "this host's decoder offers no §23 kind admission policy"
+    },
+    "devtools-relay": {
+      "notApplicable": "this host ships no devtools relay endpoint"
+    },
+    "elicitation-answer-accept": "covered",
+    "elicitation-answer-reject": "covered",
+    "elicitation-reject": "covered",
+    "elicitation-round-trip": "covered",
+    "envelope-reject": "covered",
+    "envelope-round-trip": "covered",
+    "laws/capabilityLaws": {
+      "pending": "this host's suite does not yet run this law family's vectors"
+    },
+    "laws/dataframeParity": "covered",
+    "laws/decimal": {
+      "pending": "this host's suite does not yet run this law family's vectors"
+    },
+    "laws/fieldLaws": {
+      "pending": "this host's suite does not yet run this law family's vectors"
+    },
+    "laws/transformLaws": {
+      "pending": "the evaluator certifies against the authored dataframeParity cases; the drawn transform sample is not run yet"
+    },
+    "lenient-accept": "covered",
+    "lowers-to": "covered",
+    "merge-conformance": "covered",
+    "node-round-trip": "covered",
+    "op-round-trip": "covered",
+    "reject": "covered",
+    "repair": {
+      "pending": "this host has no §28 repair function yet"
+    },
+    "sanitization": "covered",
+    "stored-emissions": {
+      "pending": "this host's suite does not yet run the stored-emission fixtures"
+    },
+    "style-observer": "covered",
+    "teleport-decode": {
+      "pending": "the teleport module is unit-tested by hand; this suite does not yet run the corpus teleport/ fixtures"
+    },
+    "teleport-reject": {
+      "pending": "the teleport module is unit-tested by hand; this suite does not yet run the corpus teleport/ fixtures"
+    }
+  },
+  "tokens": []
+}

@@ -662,8 +662,8 @@ output, not source).
 ## Cross-repo dependencies
 
 No upstream dependency on any other sibling. At test time it reads the
-workspace-relative corpus at `../wire-format-fixtures/` (skipped when absent, so the
-repo is standalone-testable). It produces a Cargo crate, not a NuGet pack — the
+workspace-relative corpus at `../wire-format-fixtures/` (or `FUARAN_WIRE_FIXTURES`);
+`tests/conformance.rs` fails without it rather than skipping (Phase 1938). It produces a Cargo crate, not a NuGet pack — the
 consumer-side package build treats it as a no-op.
 
 ## Public vocabulary discipline

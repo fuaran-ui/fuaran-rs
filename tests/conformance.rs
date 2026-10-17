@@ -17,32 +17,23 @@
 //! certified via `lenient-accept` decode-then-canonical-re-encode. Every
 //! declared family is now covered.
 //!
-//! # Absence is two different facts, and only one of them is a skip
+//! # An absent corpus is a failure, never a skip
 //!
 //! Until Phase 1664 an absent corpus made every leg here return, so "the oracle
 //! is not here" and "the oracle is here and every family conforms" reported the
-//! same `ok`. That is defensible in a standalone clone of this repository, which
-//! genuinely cannot run the suite — and indefensible in the cross-host
-//! workspace, where an absent corpus means the whole conformance claim has been
-//! switched off and nobody was told. **A conformance check that passes without
-//! its oracle is worse than no check**, because it reports the same green as one
-//! that ran.
+//! same `ok`. Phase 1664 split the absence in two — a hard failure in the
+//! cross-host workspace, an honest NOT RUN in a standalone clone. Phase 1938
+//! retires the second half: **a conformance check that passes without its
+//! oracle is worse than no check**, and the remedy for a clone without the
+//! corpus is to provide it (clone `wire-format-fixtures` beside this repository,
+//! or name it in `FUARAN_WIRE_FIXTURES` — the public workflow does the former),
+//! not to report a leg that asserted nothing. A corpus that is CLAIMED and
+//! unreadable is a failure too: an operator who named a path has said the
+//! oracle exists, so a path that is wrong is a mistake to report.
 //!
-//! So the two are separated, by the same discriminator `tests/render.rs` uses
-//! for the reference host and `tests/program_wire_canonical.rs` uses for the
-//! program corpus: **any sibling host present ⇒ hard failure** naming what
-//! proved the shape; **nothing else present ⇒ the honest standalone NOT RUN**,
-//! which is what the public workflow reports (it checks out this repository and
-//! the wire corpus, and no sibling host). And a corpus that is CLAIMED —
-//! `FUARAN_WIRE_FIXTURES` names one — is a hard failure from there on whatever
-//! else is around it: an operator who named a path has said the oracle exists,
-//! so a path that is wrong is a mistake to report rather than a state to
-//! tolerate.
-//!
-//! [`classify_corpus`] is that decision as a pure function of a starting
+//! [`classify_corpus`] is the lookup as a pure function of a starting
 //! directory, which is what makes it testable — see
-//! `the_two_absences_are_told_apart`. It has to be, because this is the kind of
-//! check that passes by doing nothing.
+//! `the_corpus_lookup_tells_claimed_found_and_absent_apart`.
 
 use std::path::{Path, PathBuf};
 
@@ -57,38 +48,14 @@ use fuaran_rs::wire::{decode_node, decode_op, encode_node, encode_op};
 /// estate's own spelling. A named path is CLAIMED: see [`Corpus::Declared`].
 const CORPUS_ENV: &str = "FUARAN_WIRE_FIXTURES";
 
-/// Sibling hosts whose presence proves this is a cross-host workspace checkout
-/// rather than a standalone clone. Deliberately excludes this host.
-///
-/// The same list, for the same purpose, as `tests/render.rs`'s
-/// `OTHER_HOST_NAMES` plus the reference host it names separately: each
-/// integration test is its own crate, so the constant cannot be shared without
-/// publishing it from the library, and publishing a list of sibling repository
-/// names out of a crate is not a thing this host should do to spare a
-/// duplication of seven strings.
-const WORKSPACE_SIBLING_HOSTS: &[&str] = &[
-    "fuaran-dotnet",
-    "fuaran",
-    "fuaran-ts",
-    "fuaran-py",
-    "fuaran-go",
-    "fuaran-kt",
-    "fuaran-swift",
-];
-
-/// What a corpus lookup found, with the two absences told apart.
+/// What a corpus lookup found.
 #[derive(Debug, PartialEq, Eq)]
 enum Corpus {
     /// An operator named it. Anything wrong with it from here is a hard failure.
     Declared(PathBuf),
     /// Found beside this repository.
     Discovered(PathBuf),
-    /// Nothing claimed and nothing found, in a checkout that is plainly the
-    /// cross-host workspace — so the oracle has been silently disabled rather
-    /// than legitimately absent. Carries the sibling that proves the shape.
-    MissingInWorkspace(String),
-    /// Nothing claimed, nothing found, and nothing else here either — a genuine
-    /// standalone clone of this repository.
+    /// Nothing claimed and nothing found.
     Absent,
 }
 
@@ -111,28 +78,6 @@ fn classify_corpus(start: &Path, declared: Option<&str>) -> Corpus {
             break;
         }
     }
-    // Not found anywhere up the tree. Is this a standalone clone, or a workspace
-    // checkout whose corpus is missing? The two look identical from inside this
-    // function and are opposite facts: one is a repository that legitimately
-    // cannot run these legs, the other is an oracle that has been silently
-    // switched off. The discriminator is chosen so the PUBLIC workflow — which
-    // checks out this repository and the wire corpus and no sibling host —
-    // stays honestly NOT RUN.
-    let mut dir = start.to_path_buf();
-    loop {
-        for sibling in WORKSPACE_SIBLING_HOSTS {
-            if dir.join(sibling).is_dir() {
-                return Corpus::MissingInWorkspace(format!(
-                    "{}/ is present under {}",
-                    sibling,
-                    dir.display()
-                ));
-            }
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
     Corpus::Absent
 }
 
@@ -143,8 +88,8 @@ fn locate_corpus() -> Corpus {
     )
 }
 
-/// The shared corpus root, or `None` for the one absence that is honestly a
-/// skip. Every other absence PANICS here rather than returning.
+/// The shared corpus root. Every absence PANICS here rather than returning: the
+/// corpus is the oracle, so a leg without it fails (Phase 1938).
 ///
 /// A located corpus must also be READABLE as one: a `manifest.json` that is not
 /// there separates "this is the wrong corpus" from "this corpus is missing a
@@ -152,26 +97,15 @@ fn locate_corpus() -> Corpus {
 /// `FUARAN_WIRE_FIXTURES` points one directory sideways gets acceptance followed
 /// by a confident complaint about absent fixtures — loud, and wrong about the
 /// cause.
-fn find_corpus() -> Option<PathBuf> {
+fn find_corpus() -> PathBuf {
     let (root, claimed) = match locate_corpus() {
         Corpus::Declared(p) => (p, true),
         Corpus::Discovered(p) => (p, false),
-        Corpus::MissingInWorkspace(evidence) => panic!(
-            "the wire-format corpus is neither claimed nor present, but this is a cross-host \
-             workspace checkout ({evidence}) — so this conformance leg has been silently \
-             disabled rather than legitimately skipped, and a missing oracle reports the same \
-             green as a run. Clone `wire-format-fixtures` beside this repository, or name it \
-             with {CORPUS_ENV}. (A standalone clone of this repository alone still reports NOT \
-             RUN and asserts nothing.)"
+        Corpus::Absent => panic!(
+            "the wire-format corpus is neither claimed nor present beside this repository. It is \
+             the conformance oracle, so this leg FAILS rather than skips (Phase 1938): clone \
+             `wire-format-fixtures` beside this repository, or name it with {CORPUS_ENV}."
         ),
-        Corpus::Absent => {
-            eprintln!(
-                "the wire-format corpus is neither claimed nor present beside this repository, \
-                 and no sibling host is present either; this leg asserted nothing. Set \
-                 {CORPUS_ENV} to run it."
-            );
-            return None;
-        }
     };
     assert!(
         root.join("manifest.json").is_file(),
@@ -181,41 +115,25 @@ fn find_corpus() -> Option<PathBuf> {
         if claimed { "claimed" } else { "present" },
         root.display()
     );
-    Some(root)
+    root
 }
 
-/// The go-red for everything above. A guard whose whole job is to fail is
-/// exactly the kind of code that quietly stops working, so each verdict is
-/// produced here from a directory built to produce it — including the two that
-/// cannot be produced on a machine holding a real corpus.
+/// The go-red for the lookup above. A guard whose whole job is to fail is exactly
+/// the kind of code that quietly stops working, so each verdict is produced here
+/// from a directory built to produce it — including the absence, which cannot be
+/// produced on a machine holding a real corpus.
 #[test]
-fn the_two_absences_are_told_apart() {
+fn the_corpus_lookup_tells_claimed_found_and_absent_apart() {
     let scratch = std::env::temp_dir().join(format!(
         "fuaran-rs-corpus-classify-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
     ));
     let standalone = scratch.join("standalone").join("fuaran-rs");
-    let workspace = scratch.join("workspace").join("fuaran-rs");
     std::fs::create_dir_all(&standalone).expect("scratch standalone tree");
-    std::fs::create_dir_all(workspace.parent().unwrap().join("fuaran-ts"))
-        .expect("scratch sibling host");
-    std::fs::create_dir_all(&workspace).expect("scratch workspace tree");
 
-    // Nothing named, nothing found, nothing else there: the honest NOT RUN.
+    // Nothing named, nothing found: absent, which `find_corpus` turns into a failure.
     assert_eq!(classify_corpus(&standalone, None), Corpus::Absent);
-
-    // Nothing named, nothing found, but a sibling host proves the shape.
-    let missing = classify_corpus(&workspace, None);
-    match &missing {
-        Corpus::MissingInWorkspace(evidence) => {
-            assert!(
-                evidence.contains("fuaran-ts"),
-                "the evidence names what proved the shape: {evidence}"
-            );
-        }
-        other => panic!("a workspace checkout with no corpus must not read as a skip: {other:?}"),
-    }
 
     // A claimed path is claimed whatever surrounds it — including a claim that
     // is wrong, which is the case an operator most needs told.
@@ -226,8 +144,7 @@ fn the_two_absences_are_told_apart() {
     // An empty or whitespace claim is not a claim.
     assert_eq!(classify_corpus(&standalone, Some("   ")), Corpus::Absent);
 
-    // The discovery arm still discovers, so the change did not disable the
-    // ordinary path in the act of hardening the absences.
+    // The discovery arm discovers.
     let discoverable = scratch.join("found").join("fuaran-rs");
     let corpus = scratch.join("found").join("wire-format-fixtures");
     std::fs::create_dir_all(&discoverable).expect("scratch discoverable tree");
@@ -313,12 +230,7 @@ fn corpus_idl(corpus: &Path) -> String {
 /// caught cannot be written any more.
 #[test]
 fn generated_module_matches_the_corpus_idl() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = find_corpus();
     let expected = fuaran_rs::wire::idl_codegen::generate(&corpus_idl(&corpus))
         .unwrap_or_else(|e| panic!("the generator refused the corpus idl.json: {e}"));
     let path =
@@ -354,12 +266,7 @@ fn generated_module_matches_the_corpus_idl() {
 /// recorded constant the library compiled with rather than the file on disk.
 #[test]
 fn generated_module_records_the_corpus_idl_hash() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = find_corpus();
     let actual = fuaran_rs::opstream::sha256_hex(&corpus_idl(&corpus));
     assert_eq!(
         fuaran_rs::wire::IDL_SHA256,
@@ -377,12 +284,7 @@ fn generated_module_records_the_corpus_idl_hash() {
 /// a kind, a field, an enum case — and each must change the generated module.
 #[test]
 fn the_generator_reacts_to_each_vocabulary_move() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = find_corpus();
     let idl = corpus_idl(&corpus);
     let generate = |text: &str| {
         fuaran_rs::wire::idl_codegen::generate(text)
@@ -493,12 +395,7 @@ fn descend_slots(obj: &JVal, controls: &mut std::collections::BTreeSet<String>) 
 /// `other =>` fallback — this leg is what covers that gap.
 #[test]
 fn corpus_control_kinds_are_all_recognised() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = find_corpus();
     let known: std::collections::BTreeSet<String> = fuaran_rs::wire::CANONICAL_FORM_FIELD_KINDS
         .iter()
         .map(|s| (*s).to_string())
@@ -532,12 +429,7 @@ fn corpus_control_kinds_are_all_recognised() {
 /// The round-trip legs: every node + op fixture must re-encode byte-identically.
 #[test]
 fn corpus_round_trips_byte_identical() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = find_corpus();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -599,12 +491,7 @@ fn corpus_round_trips_byte_identical() {
 /// code + a `$`-rooted path carrying the expected prefix.
 #[test]
 fn corpus_rejects_surface_canonical_code_and_path() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = find_corpus();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -681,12 +568,7 @@ fn corpus_rejects_surface_canonical_code_and_path() {
 /// fully; Behind preserves an unknown kind verbatim).
 #[test]
 fn corpus_envelope_round_trips_byte_identical() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = find_corpus();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -736,12 +618,7 @@ fn corpus_envelope_round_trips_byte_identical() {
 /// `FOREIGN_PROFILE` at `$.$profile`.
 #[test]
 fn corpus_envelope_rejects_surface_canonical_code_and_path() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = find_corpus();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -808,12 +685,7 @@ fn elicitation_round_trip(decoder: &str, input: &str) -> Result<String, (String,
 /// (envelope + outcome decoders) re-encodes byte-identically.
 #[test]
 fn corpus_elicitation_round_trips_byte_identical() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = find_corpus();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -877,12 +749,7 @@ fn elicitation_reject(decoder: &str, input: &str) -> Option<(String, String)> {
 /// validate clean.
 #[test]
 fn corpus_elicitation_rejects_and_answers_conform() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = find_corpus();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -951,12 +818,7 @@ fn corpus_elicitation_rejects_and_answers_conform() {
 /// the canonical normalisation (aliases never survive a re-encode).
 #[test]
 fn corpus_lenient_accept_round_trips_byte_identical() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = find_corpus();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -1013,40 +875,6 @@ fn corpus_lenient_accept_round_trips_byte_identical() {
         failures.join("\n")
     );
     eprintln!("lenient-accept leg: {ran} fixtures normalise byte-identical");
-}
-
-/// Names the corpus families this host does not yet run, so the skip is
-/// explicit rather than silent (§15/§18 covered as of Phase 553;
-/// lenient-accept covered above).
-#[test]
-fn corpus_families_beyond_the_floor_are_explicitly_skipped() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
-    let covered = [
-        "node-round-trip",
-        "op-round-trip",
-        "reject",
-        "envelope-round-trip",
-        "envelope-reject",
-        "elicitation-round-trip",
-        "elicitation-reject",
-        "elicitation-answer-accept",
-        "elicitation-answer-reject",
-        "lenient-accept",
-    ];
-    let mut skipped: std::collections::BTreeMap<String, usize> = Default::default();
-    for fixture in load_manifest(&corpus) {
-        if !covered.contains(&fixture.kind.as_str()) {
-            *skipped.entry(fixture.kind.clone()).or_insert(0) += 1;
-        }
-    }
-    for (kind, count) in &skipped {
-        eprintln!("skipped family (beyond the codec floor): {kind} × {count}");
-    }
 }
 
 // ── Rule-marked twins — the validator declaration, checked against behaviour ──
@@ -1124,9 +952,7 @@ fn every_rule_marked_code_is_declared_exactly_once() {
 
 #[test]
 fn corpus_rule_marked_twins_decide_as_declared() {
-    let Some(corpus) = find_corpus() else {
-        return;
-    };
+    let corpus = find_corpus();
     let manifest = load_manifest(&corpus);
     let findings_on = |id: &str| {
         let fixture = manifest
@@ -1183,4 +1009,407 @@ fn corpus_rule_marked_twins_decide_as_declared() {
             }
         }
     }
+}
+
+// ── The corpus families this host runs (WIRE_FORMAT §27.7, Phase 1938) ───────
+//
+// `HOST_CORPUS_FAMILIES` replaced a printer that logged the uncovered root
+// fixture kinds and asserted nothing: it could not see a self-enumerated
+// family. The declaration is a host STATEMENT — no introspection can see which
+// families a test suite runs — so the gate below is what keeps it true: a
+// family the corpus has and the table does not name, or one the table names
+// and the corpus no longer has, fails. `host-capability-manifest.json` at the
+// repository root publishes it, generated here; regenerate it with
+// `FUARAN_MANIFEST_REGENERATE=1 cargo test --test conformance host_capability_manifest_is_current`.
+
+const NO_CARD_CODEC: &str =
+    "this host has no contract-card codec (§25) for the card fixtures to run against yet";
+const TELEPORT_UNRUN: &str = "the teleport module is unit-tested by hand; this suite does not yet run the corpus teleport/ fixtures";
+const LAW_UNRUN: &str = "this host's suite does not yet run this law family's vectors";
+const NO_TOKEN_DERIVER: &str = "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)";
+
+/// One host answer for a corpus family (§27.7).
+#[derive(Clone, Copy)]
+enum FamilyAnswer {
+    Covered,
+    Pending(&'static str),
+    NotApplicable(&'static str),
+}
+
+/// Every corpus family and this host's answer, sorted by family name.
+const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
+    ("apply/duplicateIdsApply", FamilyAnswer::Covered),
+    ("apply/limitsApply", FamilyAnswer::Covered),
+    (
+        "apply/skeletonApply",
+        FamilyAnswer::Pending(
+            "the apply engine's suite does not yet run the skeleton-apply vectors",
+        ),
+    ),
+    ("apply/styleNormaliseApply", FamilyAnswer::Covered),
+    ("contract-card-reject", FamilyAnswer::Pending(NO_CARD_CODEC)),
+    (
+        "contract-card-round-trip",
+        FamilyAnswer::Pending(NO_CARD_CODEC),
+    ),
+    ("dag", FamilyAnswer::Covered),
+    (
+        "decode-policy",
+        FamilyAnswer::NotApplicable("this host's decoder offers no §23 kind admission policy"),
+    ),
+    (
+        "devtools-relay",
+        FamilyAnswer::NotApplicable("this host ships no devtools relay endpoint"),
+    ),
+    ("elicitation-answer-accept", FamilyAnswer::Covered),
+    ("elicitation-answer-reject", FamilyAnswer::Covered),
+    ("elicitation-reject", FamilyAnswer::Covered),
+    ("elicitation-round-trip", FamilyAnswer::Covered),
+    ("envelope-reject", FamilyAnswer::Covered),
+    ("envelope-round-trip", FamilyAnswer::Covered),
+    ("laws/capabilityLaws", FamilyAnswer::Pending(LAW_UNRUN)),
+    ("laws/dataframeParity", FamilyAnswer::Covered),
+    ("laws/decimal", FamilyAnswer::Pending(LAW_UNRUN)),
+    ("laws/fieldLaws", FamilyAnswer::Pending(LAW_UNRUN)),
+    (
+        "laws/transformLaws",
+        FamilyAnswer::Pending(
+            "the evaluator certifies against the authored dataframeParity cases; the drawn transform sample is not run yet",
+        ),
+    ),
+    ("lenient-accept", FamilyAnswer::Covered),
+    ("lowers-to", FamilyAnswer::Covered),
+    ("merge-conformance", FamilyAnswer::Covered),
+    ("node-round-trip", FamilyAnswer::Covered),
+    ("op-round-trip", FamilyAnswer::Covered),
+    ("reject", FamilyAnswer::Covered),
+    (
+        "repair",
+        FamilyAnswer::Pending("this host has no §28 repair function yet"),
+    ),
+    ("sanitization", FamilyAnswer::Covered),
+    (
+        "stored-emissions",
+        FamilyAnswer::Pending("this host's suite does not yet run the stored-emission fixtures"),
+    ),
+    ("style-observer", FamilyAnswer::Covered),
+    ("teleport-decode", FamilyAnswer::Pending(TELEPORT_UNRUN)),
+    ("teleport-reject", FamilyAnswer::Pending(TELEPORT_UNRUN)),
+];
+
+/// The corpus family set, derived from the corpus tree (§27.7): each root
+/// manifest fixture kind, and each top-level directory carrying its own
+/// `manifest.json` — one family named by the directory, or one family
+/// `<directory>/<id>` per entry of that manifest's `families` array of objects.
+fn corpus_families(root: &Path) -> std::collections::BTreeSet<String> {
+    let mut found: std::collections::BTreeSet<String> =
+        load_manifest(root).into_iter().map(|f| f.kind).collect();
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(root)
+        .expect("listing the corpus")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+    for dir in dirs {
+        let Ok(raw) = std::fs::read_to_string(dir.join("manifest.json")) else {
+            continue;
+        };
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        let own = parse(&raw).unwrap_or_else(|e| panic!("{name}/manifest.json: {e:?}"));
+        match own.field("families") {
+            Some(JVal::Arr(members))
+                if !members.is_empty() && members.iter().all(|m| matches!(m, JVal::Obj(_))) =>
+            {
+                for member in members {
+                    let id = str_field(member, "id").unwrap_or_else(|| {
+                        panic!("{name}/manifest.json: a families entry carries no id")
+                    });
+                    found.insert(format!("{name}/{id}"));
+                }
+            }
+            _ => {
+                found.insert(name);
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn the_manifest_names_every_corpus_family_and_no_other() {
+    let corpus = find_corpus();
+    let families = corpus_families(&corpus);
+    let declared: std::collections::BTreeSet<String> = HOST_CORPUS_FAMILIES
+        .iter()
+        .map(|(f, _)| (*f).to_string())
+        .collect();
+    let missing: Vec<&String> = families.difference(&declared).collect();
+    let stale: Vec<&String> = declared.difference(&families).collect();
+    assert!(
+        missing.is_empty(),
+        "corpus families this host's manifest does not name: {missing:?}"
+    );
+    assert!(
+        stale.is_empty(),
+        "families the manifest names that the corpus no longer has: {stale:?}"
+    );
+}
+
+/// The falsifier: a family that exists only as a directory with its own
+/// manifest — the shape the printer could not see — joins the derived set, and
+/// so does each `families` entry.
+#[test]
+fn the_family_derivation_sees_a_self_enumerated_family() {
+    let dir = std::env::temp_dir().join(format!(
+        "fuaran-rs-corpus-families-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let write = |rel: &str, body: &str| {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).expect("scratch dir");
+        std::fs::write(p, body).expect("scratch file");
+    };
+    write(
+        "manifest.json",
+        r#"{"fixtures":[{"id":"a","kind":"node-round-trip","inputFile":"nodes/a.json"}]}"#,
+    );
+    write("newfamily/manifest.json", r#"{"cases":[]}"#);
+    write(
+        "split/manifest.json",
+        r#"{"families":[{"id":"a"},{"id":"b"}]}"#,
+    );
+    write("goldens/goldens.json", "{}");
+    let got = corpus_families(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    let want: std::collections::BTreeSet<String> =
+        ["node-round-trip", "newfamily", "split/a", "split/b"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+    assert_eq!(got, want);
+}
+
+fn json_string(s: &str) -> String {
+    fuaran_rs::canonical::render_canonical(&JVal::Str(s.to_string()))
+}
+
+/// The published artefact: the members in the §27.3 order, maps sorted by
+/// key, two-space indent, trailing newline.
+fn host_capability_manifest() -> String {
+    let token_families = [
+        "caseFields",
+        "hostedCases",
+        "kindFields",
+        "kinds",
+        "recordFields",
+        "unionCases",
+    ];
+    let mut out = String::from("{\n");
+    out.push_str("  \"$manifest\": \"fuaran.host-capability/1\",\n");
+    out.push_str("  \"host\": \"fuaran-rs\",\n");
+    out.push_str(&format!(
+        "  \"hostVersion\": {},\n",
+        json_string(env!("CARGO_PKG_VERSION"))
+    ));
+    out.push_str("  \"corpusAuthority\": null,\n");
+    out.push_str(&format!(
+        "  \"generator\": {},\n",
+        json_string(
+            "tests/conformance.rs (FUARAN_MANIFEST_REGENERATE=1 cargo test --test conformance host_capability_manifest_is_current)"
+        )
+    ));
+    out.push_str("  \"families\": {\n");
+    for (i, f) in token_families.iter().enumerate() {
+        out.push_str(&format!(
+            "    \"{f}\": {{\n      \"covered\": false,\n      \"reason\": {}\n    }}{}\n",
+            json_string(NO_TOKEN_DERIVER),
+            if i + 1 == token_families.len() {
+                ""
+            } else {
+                ","
+            }
+        ));
+    }
+    out.push_str("  },\n");
+    out.push_str("  \"corpusFamilies\": {\n");
+    for (i, (family, answer)) in HOST_CORPUS_FAMILIES.iter().enumerate() {
+        let value = match answer {
+            FamilyAnswer::Covered => "\"covered\"".to_string(),
+            FamilyAnswer::Pending(why) => {
+                format!("{{\n      \"pending\": {}\n    }}", json_string(why))
+            }
+            FamilyAnswer::NotApplicable(why) => {
+                format!("{{\n      \"notApplicable\": {}\n    }}", json_string(why))
+            }
+        };
+        out.push_str(&format!(
+            "    {}: {value}{}\n",
+            json_string(family),
+            if i + 1 == HOST_CORPUS_FAMILIES.len() {
+                ""
+            } else {
+                ","
+            }
+        ));
+    }
+    out.push_str("  },\n");
+    out.push_str("  \"tokens\": []\n}\n");
+    out
+}
+
+#[test]
+fn host_capability_manifest_is_current() {
+    let sorted = HOST_CORPUS_FAMILIES.windows(2).all(|w| w[0].0 < w[1].0);
+    assert!(
+        sorted,
+        "HOST_CORPUS_FAMILIES must stay sorted by family name"
+    );
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("host-capability-manifest.json");
+    let want = host_capability_manifest();
+    parse(&want).expect("the rendered manifest is JSON");
+    if std::env::var_os("FUARAN_MANIFEST_REGENERATE").is_some() {
+        std::fs::write(&path, &want).expect("writing host-capability-manifest.json");
+        return;
+    }
+    let got = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading the published manifest: {e}"));
+    assert!(
+        got == want,
+        "host-capability-manifest.json is not what this host's declaration renders — regenerate it \
+         with FUARAN_MANIFEST_REGENERATE=1 cargo test --test conformance host_capability_manifest_is_current"
+    );
+}
+
+// ── laws/dataframeParity — the evaluator against the reference's answers ────
+//
+// Phase 1938 closes this evaluator's "no oracle" (1712): the corpus law family
+// `dataframeParity` carries the reference evaluator's answers over authored
+// (source, pipeline) pairs, with a recorded producer commit. This host has no
+// public table codec, so each vector is carried on a DataGrid node whose source
+// is a `Transform` binding — the wire position the pair lives in — and read back
+// through the node codec.
+
+fn grid_json(source: &str, pipeline: &str) -> String {
+    format!(
+        r#"{{"id":"parity","kind":{{"$type":"DataGrid","columns":[],"editable":false,"rowKey":"<closure>","source":{{"$type":"Transform","pipeline":{pipeline},"source":{source}}}}}}}"#
+    )
+}
+
+/// The canonical bytes at `kind.source.<member>` of an encoded parity grid.
+fn grid_member(encoded: &str, member: &str) -> String {
+    let doc = parse(encoded).expect("the encoded grid parses");
+    let value = doc
+        .field("kind")
+        .and_then(|k| k.field("source"))
+        .and_then(|s| s.field(member))
+        .unwrap_or_else(|| panic!("the encoded grid carries no kind.source.{member}"));
+    fuaran_rs::canonical::render_canonical(value)
+}
+
+#[test]
+fn the_evaluator_matches_the_reference_on_every_dataframe_parity_vector() {
+    use fuaran_rs::transform::{Table, eval_pipeline};
+    use fuaran_rs::wire::{Binding, DataSource, NodeKind, TransformSource};
+
+    let laws = find_corpus().join("laws");
+    let manifest = parse(&read_fixture(&laws, "manifest.json")).expect("laws/manifest.json parses");
+    let Some(JVal::Arr(families)) = manifest.field("families") else {
+        panic!("laws/manifest.json declares no families");
+    };
+    let file = families
+        .iter()
+        .find(|f| str_field(f, "id").as_deref() == Some("dataframeParity"))
+        .and_then(|f| str_field(f, "file"))
+        .expect("laws/manifest.json declares the dataframeParity family");
+    let doc = parse(&read_fixture(&laws, &file)).expect("the parity vectors parse");
+    let Some(JVal::Arr(vectors)) = doc.field("vectors") else {
+        panic!("laws/{file} carries no vectors");
+    };
+    assert!(!vectors.is_empty(), "laws/{file} carries no vectors");
+
+    let mut failures: Vec<String> = vec![];
+    for v in vectors {
+        let id = str_field(v, "id").expect("vector id");
+        let input = v.field("input").expect("vector input");
+        let expected = v.field("expected").expect("vector expected");
+        let (source, pipeline) = (
+            str_field(input, "source").expect("input.source"),
+            str_field(input, "pipeline").expect("input.pipeline"),
+        );
+        let node = match decode_node(&grid_json(&source, &pipeline)) {
+            Ok(n) => n,
+            Err(e) => {
+                failures.push(format!("{id}: the parity grid did not decode: {e:?}"));
+                continue;
+            }
+        };
+        // Legs 1 and 2 — both inputs round-trip byte-exact through this host's codec.
+        let encoded = encode_node(&node);
+        for (member, input) in [("source", &source), ("pipeline", &pipeline)] {
+            let got = grid_member(&encoded, member);
+            if &got != input {
+                failures.push(format!(
+                    "{id}: {member} round-trip\n  got  {got}\n  want {input}"
+                ));
+            }
+        }
+        // Leg 3 — evaluation agrees with the reference's answer.
+        let NodeKind::DataGrid(spec) = &node.kind else {
+            panic!("{id}: the parity grid decoded to another kind");
+        };
+        let Binding::Transform {
+            pipeline: steps,
+            source: TransformSource::Data(DataSource::Embedded { schema, columns }),
+            ..
+        } = &spec.source
+        else {
+            panic!("{id}: the parity grid's source is not an embedded Transform");
+        };
+        let table = Table {
+            schema: schema.clone(),
+            columns: columns.clone(),
+        };
+        let verdict = str_field(expected, "verdict").expect("expected.verdict");
+        match (eval_pipeline(steps, &table), verdict.as_str()) {
+            (Err(_), "ok") => {
+                failures.push(format!("{id}: the reference evaluated; this host refused"))
+            }
+            (Ok(_), "error") => {
+                failures.push(format!("{id}: the reference refused; this host evaluated"))
+            }
+            (Err(_), _) => {}
+            (Ok(out), _) => {
+                let mut carrier = node.clone();
+                if let NodeKind::DataGrid(spec) = &mut carrier.kind {
+                    spec.source = Binding::Transform {
+                        params: None,
+                        pipeline: vec![],
+                        source: TransformSource::Data(DataSource::Embedded {
+                            schema: out.schema,
+                            columns: out.columns,
+                        }),
+                    };
+                }
+                let got = grid_member(&encode_node(&carrier), "source");
+                let want = str_field(expected, "table").expect("expected.table");
+                if got != want {
+                    failures.push(format!(
+                        "{id}: evaluator ≠ reference\n  got  {got}\n  want {want}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} dataframeParity vectors failed:\n{}",
+        failures.len(),
+        vectors.len(),
+        failures.join("\n")
+    );
+    eprintln!(
+        "dataframeParity leg: {} vectors agree with the reference",
+        vectors.len()
+    );
 }

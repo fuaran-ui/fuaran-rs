@@ -13,10 +13,10 @@
 # The corpus repository is PUBLIC, so the checkout is anonymous — no token.
 #
 # ── Why the corpus assertion below is not optional ───────────────────────────
-# find_corpus() returns None when the corpus is absent and each conformance test
-# then returns early with a "skipping (standalone checkout)" note — it does not
-# fail. A layout drift would therefore silently retire the entire conformance
-# leg and report green. The assertion turns that into a hard stop.
+# tests/conformance.rs FAILS when the corpus is absent (Phase 1938), but several
+# other integration tests still carry their own corpus lookup and return early
+# with a "skipping" note. A layout drift would retire those legs and report
+# green, so the assertion below is a hard stop for the whole job.
 #
 # ── Toolchain ────────────────────────────────────────────────────────────────
 # rustup is preinstalled on the runner, so the toolchain is installed directly
