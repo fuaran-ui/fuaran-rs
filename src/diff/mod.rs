@@ -10,8 +10,17 @@
 //! `RemoveNode` + `InsertChild` at the node's own position (which captures every
 //! field: kind, style, state, accessibility). It favours a localised edit over
 //! replacing the whole tree, but never at the cost of correctness.
+//!
+//! A style change is the one granular facet (Phase 2314, the reference engine's
+//! rule since Phase 2291): when a matched node differs from its counterpart in
+//! its style and nothing else of its own, the diff emits the style edit —
+//! `PatchStyle` naming exactly the fields that moved, the whole-record
+//! `UpdateStyle` only when all six did — instead of the replace, and a layout
+//! node's children are then recursed as usual. Every host's diff records a
+//! restyle as the same op, so two restyles of different fields of one node
+//! carry disjoint field sets wherever they were recorded.
 
-use crate::wire::{Node, NodeKind, TreeOp, encode_node};
+use crate::wire::{Node, NodeKind, SemanticStyle, StyleDelta, TreeOp, encode_node};
 
 // The structural (positional, layout) children of a node — the set a recursion
 // or an `InsertChild`/`RemoveNode` addresses. `None` for kinds whose children
@@ -58,6 +67,43 @@ fn own_content_same(a: &Node, b: &Node) -> bool {
     encode_node(&strip_structural_children(a)) == encode_node(&strip_structural_children(b))
 }
 
+// The op taking `before` to `after`: none when the records are equal;
+// `PatchStyle` naming exactly the fields that moved (a field returning to its
+// default is set explicitly — in a delta that is an edit, not an omission); and
+// the whole-record `UpdateStyle` only when every field moved.
+fn style_edit(target: &str, before: &SemanticStyle, after: &SemanticStyle) -> Option<TreeOp> {
+    fn moved<T: PartialEq + Copy>(before: T, after: T) -> Option<T> {
+        (before != after).then_some(after)
+    }
+    let delta = StyleDelta {
+        direction: moved(before.direction, after.direction),
+        emphasis: moved(before.emphasis, after.emphasis),
+        role: moved(before.role, after.role),
+        tone: moved(before.tone, after.tone),
+        voice: moved(before.voice, after.voice),
+        weight: moved(before.weight, after.weight),
+    };
+    let total = delta.direction.is_some()
+        && delta.emphasis.is_some()
+        && delta.role.is_some()
+        && delta.tone.is_some()
+        && delta.voice.is_some()
+        && delta.weight.is_some();
+    if delta.is_empty() {
+        None
+    } else if total {
+        Some(TreeOp::UpdateStyle {
+            target: target.to_string(),
+            style: *after,
+        })
+    } else {
+        Some(TreeOp::PatchStyle {
+            target: target.to_string(),
+            style: delta,
+        })
+    }
+}
+
 // Recurse a matched-id pair. `parent`, when present, is `(parent_id, position)`
 // — the seat for a `RemoveNode`+`InsertChild` whole-node replace; `None` marks
 // the root (a `ReplaceRoot`).
@@ -69,11 +115,22 @@ fn diff_node(a: &Node, b: &Node, parent: Option<(&str, usize, &[String])>, ops: 
     if encode_node(a) == encode_node(b) {
         return; // identical subtree — nothing to do
     }
+    // `a` restyled to `b`'s style: what still differs from `b` is everything else.
+    let restyled = Node {
+        style: b.style,
+        ..a.clone()
+    };
+    let style = style_edit(&a.id, &a.style, &b.style);
+    if encode_node(&restyled) == encode_node(b) {
+        ops.extend(style); // the style is the only difference
+        return;
+    }
     let recurse = match (structural_children(a), structural_children(b)) {
-        (Some(ak), Some(bk)) => own_content_same(a, b) && child_ids(ak) == child_ids(bk),
+        (Some(ak), Some(bk)) => own_content_same(&restyled, b) && child_ids(ak) == child_ids(bk),
         _ => false,
     };
     if recurse {
+        ops.extend(style);
         let ak = structural_children(a).unwrap();
         let bk = structural_children(b).unwrap();
         let sibling_ids: Vec<String> = bk.iter().map(|n| n.id.clone()).collect();

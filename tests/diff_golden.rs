@@ -17,7 +17,23 @@ use fuaran_rs::diff::diff;
 use fuaran_rs::ops::apply;
 use fuaran_rs::wire::{Node, decode_node, decode_op, encode_node, encode_op};
 
+/// The corpus `FUARAN_WIRE_FIXTURES` names (a hard failure when it names no
+/// corpus), else the nearest `wire-format-fixtures/` walking up from the crate
+/// dir (mirrors conformance.rs). Without the declaration a worktree's walk finds
+/// whichever corpus sits above it, not the one under test.
 fn find_goldens() -> Option<PathBuf> {
+    if let Ok(declared) = std::env::var("FUARAN_WIRE_FIXTURES") {
+        if !declared.is_empty() {
+            let root = PathBuf::from(declared);
+            assert!(
+                root.join("manifest.json").is_file(),
+                "FUARAN_WIRE_FIXTURES names '{}', which holds no manifest.json. It is refused rather \
+                 than ignored: falling back to the walk would certify against a corpus nobody named.",
+                root.display()
+            );
+            return Some(root.join("diff").join("goldens.json"));
+        }
+    }
     let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
     loop {
         let g = dir
