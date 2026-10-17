@@ -89,3 +89,94 @@ fn an_added_child_replays_exactly() {
     let ops = diff(&a, &b);
     assert_eq!(encode_node(&apply_all(&a, &ops)), encode_node(&b));
 }
+
+// ── the style facet (Phase 2314) ─────────────────────────────────────────────
+
+// `card("Sales", "Revenue")` with a style on the root and on the metric; an empty
+// style leaves that slot absent.
+fn styled_card(root_style: &str, metric_style: &str) -> Node {
+    let with = |style: &str| {
+        if style.is_empty() {
+            String::new()
+        } else {
+            format!(r#","style":{style}"#)
+        }
+    };
+    let (root, metric) = (with(root_style), with(metric_style));
+    n(&format!(
+        r#"{{"id":"card","kind":{{"$type":"Box","children":[
+            {{"id":"h","kind":{{"$type":"Heading","level":1,"text":"Sales","variant":"Standard"}}}},
+            {{"id":"m","kind":{{"$type":"Metric","label":"Revenue","value":{{"$type":"Static","value":1}}}}{metric}}}
+        ],"layout":{{"$type":"Flex","direction":"Vertical","wrap":false}},"role":"Card"}}{root}}}"#
+    ))
+}
+
+fn op_bytes(ops: &[TreeOp]) -> Vec<String> {
+    ops.iter().map(fuaran_rs::wire::encode_op).collect()
+}
+
+#[test]
+fn a_style_only_change_is_one_style_edit() {
+    let cases = [
+        (
+            styled_card("", r#"{"tone":"Success","weight":"Spacious"}"#),
+            styled_card("", r#"{"tone":"Critical","weight":"Spacious"}"#),
+            r#"{"$type":"PatchStyle","style":{"tone":"Critical"},"target":"m"}"#,
+        ),
+        (
+            styled_card(r#"{"tone":"Brand","weight":"Spacious"}"#, ""),
+            styled_card(r#"{"emphasis":"Loud","tone":"Brand"}"#, ""),
+            r#"{"$type":"PatchStyle","style":{"emphasis":"Loud","weight":"Standard"},"target":"card"}"#,
+        ),
+        (
+            styled_card(
+                "",
+                r#"{"direction":"ltr","emphasis":"Loud","role":"Data","tone":"Success","voice":"Display","weight":"Spacious"}"#,
+            ),
+            styled_card(
+                "",
+                r#"{"direction":"rtl","emphasis":"Quiet","role":"Caption","tone":"Info","voice":"Structural","weight":"Compact"}"#,
+            ),
+            r#"{"$type":"UpdateStyle","style":{"direction":"rtl","emphasis":"Quiet","role":"Caption","tone":"Info","voice":"Structural","weight":"Compact"},"target":"m"}"#,
+        ),
+        (
+            styled_card("", r#"{"emphasis":"Loud","tone":"Warning"}"#),
+            styled_card("", ""),
+            r#"{"$type":"PatchStyle","style":{"emphasis":"Normal","tone":"Default"},"target":"m"}"#,
+        ),
+    ];
+    for (a, b, want) in cases {
+        let ops = diff(&a, &b);
+        assert_eq!(op_bytes(&ops), vec![want.to_string()]);
+        assert_eq!(encode_node(&apply_all(&a, &ops)), encode_node(&b));
+    }
+}
+
+#[test]
+fn a_style_change_beside_a_content_change_keeps_the_seat_replace() {
+    let a = styled_card("", r#"{"tone":"Success"}"#);
+    let mut b = styled_card("", r#"{"tone":"Critical"}"#);
+    b = n(&encode_node(&b).replace("Revenue", "Profit"));
+    let ops = diff(&a, &b);
+    assert!(matches!(
+        ops.as_slice(),
+        [TreeOp::RemoveNode { .. }, TreeOp::InsertChild { .. }]
+    ));
+    assert_eq!(encode_node(&apply_all(&a, &ops)), encode_node(&b));
+}
+
+#[test]
+fn a_root_restyle_beside_a_child_change_recurses() {
+    let a = styled_card(r#"{"tone":"Brand"}"#, "");
+    let b = n(&encode_node(&styled_card(r#"{"tone":"Info"}"#, "")).replace("Revenue", "Profit"));
+    let ops = diff(&a, &b);
+    assert!(matches!(
+        ops.as_slice(),
+        [
+            TreeOp::PatchStyle { .. },
+            TreeOp::RemoveNode { .. },
+            TreeOp::InsertChild { .. }
+        ]
+    ));
+    assert_eq!(encode_node(&apply_all(&a, &ops)), encode_node(&b));
+}
