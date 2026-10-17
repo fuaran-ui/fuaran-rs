@@ -48,6 +48,8 @@
 //!   declines correctly and fails to *record* it. Only the first is what a
 //!   security claim is about; only the second is what a regression looks like.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 
 use fuaran_rs::bounded::{
@@ -503,10 +505,9 @@ fn a_host_that_performs_the_denied_effect_fails_exactly_the_scenario_that_record
 // DECLARES for it, because a declaration is the upper bound a capability check
 // is made against.
 //
-// The tree wire corpus is located the way `tests/conformance.rs` locates it:
-// `FUARAN_WIRE_FIXTURES` (a hard failure from there on), else the nearest
-// `wire-format-fixtures/` above this crate; nothing claimed and nothing found
-// reports NOT RUN and asserts nothing.
+// The tree wire corpus is located by the crate's one corpus locator,
+// `common::corpus_root` (Phase 2301): nothing claimed and nothing found is a
+// failure, never a skip.
 
 use fuaran_rs::bounded::actions::{CoreArm, describe_action, lowers_to, lowers_to_in, run_gesture};
 use fuaran_rs::canonical::{ordinal_cmp, render_canonical};
@@ -514,28 +515,6 @@ use fuaran_rs::render::BindingSources;
 use fuaran_rs::wire::{Action, NodeKind, decode_node};
 
 const LOWERS_TO: &str = "lowers-to";
-
-fn wire_corpus_root() -> Option<PathBuf> {
-    if let Ok(declared) = std::env::var("FUARAN_WIRE_FIXTURES") {
-        if !declared.trim().is_empty() {
-            return Some(PathBuf::from(declared));
-        }
-    }
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Some(root);
-        }
-        if !dir.pop() {
-            eprintln!(
-                "{LOWERS_TO}: NOT RUN — no tree wire corpus is claimed (FUARAN_WIRE_FIXTURES) or found \
-                 above this crate; nothing was asserted"
-            );
-            return None;
-        }
-    }
-}
 
 /// The arm index of an action. Exhaustive with no wildcard, so an arm added to
 /// the vocabulary fails to compile HERE as well as in `lowers_to` — which is
@@ -787,9 +766,7 @@ fn declared_effect_kinds(arm: &CoreArm, into: &mut Vec<&'static str>) {
 
 #[test]
 fn the_lowers_to_manifest_is_this_hosts_closed_action_union() {
-    let Some(root) = wire_corpus_root() else {
-        return;
-    };
+    let root = common::corpus_root();
     let (arms, vectors) = load_lowers_to(&root);
     let mut listed = arms.clone();
     listed.sort();
@@ -809,9 +786,7 @@ fn the_lowers_to_manifest_is_this_hosts_closed_action_union() {
 
 #[test]
 fn every_lowers_to_vector_lowers_to_the_reading_the_table_states() {
-    let Some(root) = wire_corpus_root() else {
-        return;
-    };
+    let root = common::corpus_root();
     let (_, vectors) = load_lowers_to(&root);
     assert!(
         !vectors.is_empty(),
@@ -870,9 +845,7 @@ fn every_lowers_to_vector_lowers_to_the_reading_the_table_states() {
 
 #[test]
 fn a_perturbed_lowers_to_reading_makes_this_harness_go_red() {
-    let Some(root) = wire_corpus_root() else {
-        return;
-    };
+    let root = common::corpus_root();
     let (_, vectors) = load_lowers_to(&root);
     let vector = vectors
         .iter()
@@ -912,9 +885,7 @@ fn a_perturbed_lowers_to_reading_makes_this_harness_go_red() {
 /// row cannot be met by a lowering that hides the escape.
 #[test]
 fn a_dispatch_lowered_to_a_plain_leaf_fails_its_vector() {
-    let Some(root) = wire_corpus_root() else {
-        return;
-    };
+    let root = common::corpus_root();
     let (_, vectors) = load_lowers_to(&root);
     let vector = vectors
         .iter()
@@ -944,9 +915,7 @@ fn a_dispatch_lowered_to_a_plain_leaf_fails_its_vector() {
 /// that leaves the key unnamed.
 #[test]
 fn a_commit_lowered_without_its_tree_fails_its_vector() {
-    let Some(root) = wire_corpus_root() else {
-        return;
-    };
+    let root = common::corpus_root();
     let (_, vectors) = load_lowers_to(&root);
     let vector = vectors
         .iter()

@@ -10,7 +10,7 @@
 //! `apply/limits-apply.json`, `apply/duplicate-ids-apply.json` and
 //! `apply/style-normalise-apply.json` corpus families.
 
-use std::path::PathBuf;
+mod common;
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::limits::{MAX_NODE_DEPTH, MAX_NODES};
@@ -228,29 +228,6 @@ fn an_edit_to_a_childless_kind_on_an_over_limit_tree_applies() {
 
 // ── The shared corpus family ────────────────────────────────────────────────
 
-const CORPUS_ENV: &str = "FUARAN_WIRE_FIXTURES";
-
-fn find_corpus() -> Option<PathBuf> {
-    if let Ok(declared) = std::env::var(CORPUS_ENV) {
-        let root = PathBuf::from(&declared);
-        assert!(
-            root.join("manifest.json").is_file(),
-            "{CORPUS_ENV} names '{declared}', which holds no manifest.json"
-        );
-        return Some(root);
-    }
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Some(root);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
 fn field<'a>(v: &'a JVal, key: &str) -> &'a JVal {
     match v {
         JVal::Obj(members) => members
@@ -294,10 +271,7 @@ fn style_normalise_apply_corpus_holds_on_this_host() {
 /// that pins `expected.tree` also requires the applied tree to re-encode to
 /// exactly those bytes.
 fn certify_apply_family(family_id: &str) {
-    let Some(root) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let root = common::corpus_root();
     let read = |rel: &str| {
         let raw = std::fs::read_to_string(root.join(rel)).expect("corpus file reads");
         parse(&raw).expect("corpus file parses")

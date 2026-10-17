@@ -20,7 +20,7 @@
 //! refuses a run in which the family turned out to be empty — "every vector
 //! matched" and "no vector was loaded" are the same green.
 
-use std::path::PathBuf;
+mod common;
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::theme::{
@@ -28,32 +28,6 @@ use fuaran_rs::theme::{
     decode, derive_style_flags, encode_style_flag, encode_style_observation, per_node_flags,
     to_style_observation, verify_usage_budgets,
 };
-
-/// Walk up from the crate dir to the shared corpus (mirrors conformance.rs).
-fn find_corpus() -> Option<PathBuf> {
-    if let Ok(declared) = std::env::var("FUARAN_WIRE_FIXTURES") {
-        if !declared.is_empty() {
-            let root = PathBuf::from(declared);
-            assert!(
-                root.join("manifest.json").is_file(),
-                "FUARAN_WIRE_FIXTURES names '{}', which holds no manifest.json. It is refused rather \
-                 than ignored: falling back to the walk would certify against a corpus nobody named.",
-                root.display()
-            );
-            return Some(root);
-        }
-    }
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Some(root);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
 
 fn field<'a>(v: &'a JVal, key: &str) -> &'a JVal {
     v.field(key)
@@ -160,8 +134,8 @@ fn expected(v: &JVal, key: &str) -> Vec<String> {
 }
 
 /// Every `style-observer` vector the corpus manifest lists, parsed.
-fn vectors() -> Option<Vec<(String, JVal)>> {
-    let corpus = find_corpus()?;
+fn vectors() -> Vec<(String, JVal)> {
+    let corpus = common::corpus_root();
     let manifest = parse(
         &std::fs::read_to_string(corpus.join("manifest.json")).expect("reading manifest.json"),
     )
@@ -190,15 +164,12 @@ fn vectors() -> Option<Vec<(String, JVal)>> {
          nothing while reporting success",
         corpus.display()
     );
-    Some(out)
+    out
 }
 
 #[test]
 fn every_style_observer_vector_matches_this_host_byte_for_byte() {
-    let Some(cases) = vectors() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let cases = vectors();
 
     for (id, case) in &cases {
         match as_str(field(case, "tier")) {
@@ -259,10 +230,7 @@ fn every_style_observer_vector_matches_this_host_byte_for_byte() {
 /// skipped list — and every one of those looks exactly like a pass.
 #[test]
 fn a_single_flipped_expected_byte_is_caught() {
-    let Some(cases) = vectors() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let cases = vectors();
 
     let (id, case) = cases
         .iter()

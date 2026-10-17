@@ -10,10 +10,10 @@
 //! reproduces each F# golden byte-for-byte (the same R2-determinism discipline
 //! the F#, TypeScript, and Python hosts certify against).
 //!
-//! The corpus is a sibling checkout; the suite skips (never fails) when it is
-//! absent, keeping the crate standalone-testable.
+//! The corpus is located by `common::corpus_root`; an absent corpus fails the
+//! suite rather than skipping it (Phase 2301).
 
-use std::path::PathBuf;
+mod common;
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::render::chart_lowering::{
@@ -24,20 +24,6 @@ use fuaran_rs::wire::{
     ChartLegendPosition, ChartXScale, Format, I18nArg, Node, NodeKind, SemanticStyle,
     StateBehaviour, StaticValue, TextSource,
 };
-
-/// Walk up from the crate dir to the shared corpus (mirrors conformance.rs).
-fn find_corpus() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Some(root);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
 
 fn chart_kind(wire: &str) -> ChartKind {
     match wire {
@@ -394,10 +380,7 @@ fn lowered_json(name: &str, input: &str) -> String {
 
 #[test]
 fn every_case_lowers_byte_identically_to_its_committed_golden() {
-    let Some(corpus) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let corpus = common::corpus_root();
     let dir = corpus.join("chart-lowering");
     for name in discover_cases(&dir) {
         let input = std::fs::read_to_string(dir.join(format!("{name}.input.json")))
@@ -415,9 +398,7 @@ fn every_case_lowers_byte_identically_to_its_committed_golden() {
 
 #[test]
 fn lowering_is_deterministic() {
-    let Some(corpus) = find_corpus() else {
-        return;
-    };
+    let corpus = common::corpus_root();
     let dir = corpus.join("chart-lowering");
     for name in discover_cases(&dir) {
         let Ok(input) = std::fs::read_to_string(dir.join(format!("{name}.input.json"))) else {

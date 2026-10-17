@@ -45,6 +45,8 @@
 //! system — the obligations are claims about output, and the type system is
 //! precisely what does not reach them.
 
+mod common;
+
 use std::path::PathBuf;
 
 use fuaran_rs::canonical::{JVal, parse};
@@ -56,9 +58,9 @@ use fuaran_rs::wire::decode_node;
 
 /// Resolve the render-fidelity manifest.
 ///
-/// `FUARAN_RENDER_FIDELITY` names the artefact explicitly; otherwise the
-/// corpus is located by walking up for a `wire-format-fixtures/` checkout, the
-/// same way every other corpus-reading suite in this crate does.
+/// `FUARAN_RENDER_FIDELITY` names the artefact explicitly; otherwise it is
+/// read from the corpus `common::corpus_root` locates, the same way every other
+/// corpus-reading suite in this crate does.
 ///
 /// **The override exists so the go-red property can be PROVEN.** Perturbing the
 /// enumeration is the only way to demonstrate that a newly declared obligation
@@ -70,7 +72,7 @@ use fuaran_rs::wire::decode_node;
 /// A CLAIMED artefact that cannot be read FAILS rather than skipping, matching
 /// this crate's driver-semantics posture: a conformance gate that goes green
 /// without its oracle is worse than no gate at all.
-fn artefact_path() -> Option<PathBuf> {
+fn artefact_path() -> PathBuf {
     if let Ok(explicit) = std::env::var("FUARAN_RENDER_FIDELITY") {
         let claimed = PathBuf::from(&explicit);
         assert!(
@@ -78,20 +80,9 @@ fn artefact_path() -> Option<PathBuf> {
             "FUARAN_RENDER_FIDELITY names '{explicit}', which is not a readable file. \
              A claimed artefact that cannot be read fails rather than skipping."
         );
-        return Some(claimed);
+        return claimed;
     }
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let artefact = dir
-            .join("wire-format-fixtures")
-            .join("render-fidelity.json");
-        if artefact.is_file() {
-            return Some(artefact);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
+    common::corpus_root().join("render-fidelity.json")
 }
 
 /// One entry of the closed claim vocabulary the artefact enumerates.
@@ -226,22 +217,11 @@ fn parse_manifest(text: &str) -> RenderFidelityManifest {
     }
 }
 
-/// Load the manifest, or report its absence and leave the caller to return.
-///
-/// A standalone checkout has no corpus beside it, so this reports rather than
-/// certifying — but it REPORTS, on stderr, naming what it looked for. "Nothing
-/// to certify" must never read as "everything certified".
-fn load() -> Option<RenderFidelityManifest> {
-    let Some(path) = artefact_path() else {
-        eprintln!(
-            "render-obligation conformance NOT RUN: no wire-format-fixtures/render-fidelity.json \
-             found above {} (standalone checkout). Set FUARAN_RENDER_FIDELITY to name one.",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        return None;
-    };
+/// Load the manifest.
+fn load() -> RenderFidelityManifest {
+    let path = artefact_path();
     let text = std::fs::read_to_string(&path).expect("reading the render-fidelity artefact");
-    Some(parse_manifest(&text))
+    parse_manifest(&text)
 }
 
 // ─── The reporting surface (WIRE_FORMAT.md §13) ──────────────────────────────
@@ -1660,7 +1640,7 @@ fn is_exempt(line: &ObligationReport) -> bool {
 
 #[test]
 fn asserts_every_obligation_the_manifest_declares() {
-    let Some(manifest) = load() else { return };
+    let manifest = load();
     let report = report_obligations(&manifest, status_of);
 
     assert!(
@@ -1761,7 +1741,7 @@ fn resolves_every_declared_claim_id_against_the_closed_vocabulary() {
     // A row naming a claim the vocabulary omits is unresolvable: a host keying
     // its registry off the vocabulary could never report it, and a host must
     // never accept a claim it cannot name.
-    let Some(manifest) = load() else { return };
+    let manifest = load();
 
     assert!(
         !manifest.obligation_vocabulary.is_empty(),
@@ -1817,7 +1797,7 @@ fn resolves_every_declared_claim_id_against_the_closed_vocabulary() {
 /// as the opposite of what it says.
 #[test]
 fn every_declared_trait_scope_is_actionable() {
-    let Some(manifest) = load() else { return };
+    let manifest = load();
 
     for row in &manifest.traits {
         assert!(
@@ -1855,7 +1835,7 @@ fn registers_no_checker_for_an_obligation_the_manifest_does_not_declare() {
     // A checker for a claim no row declares is a stale assertion: it passes
     // forever and guards a contract that has moved, which is exactly the drift
     // the generated artefact exists to remove.
-    let Some(manifest) = load() else { return };
+    let manifest = load();
     let declared: Vec<String> = all_obligations(&manifest)
         .into_iter()
         .map(|(kind, o)| format!("{kind}/{}", o.id))

@@ -31,9 +31,10 @@
 //! unreadable is a failure too: an operator who named a path has said the
 //! oracle exists, so a path that is wrong is a mistake to report.
 //!
-//! [`classify_corpus`] is the lookup as a pure function of a starting
-//! directory, which is what makes it testable — see
-//! `the_corpus_lookup_tells_claimed_found_and_absent_apart`.
+//! The lookup itself is the crate's one corpus locator, `common::corpus_root`
+//! (Phase 2301); its verdicts are exercised in `tests/corpus_locator.rs`.
+
+mod common;
 
 use std::path::{Path, PathBuf};
 
@@ -43,120 +44,6 @@ use fuaran_rs::elicitation::{
 };
 use fuaran_rs::envelope::{decode_envelope, encode_envelope};
 use fuaran_rs::wire::{decode_node, decode_op, encode_node, encode_op};
-
-/// The environment variable an operator names the corpus root with, matching the
-/// estate's own spelling. A named path is CLAIMED: see [`Corpus::Declared`].
-const CORPUS_ENV: &str = "FUARAN_WIRE_FIXTURES";
-
-/// What a corpus lookup found.
-#[derive(Debug, PartialEq, Eq)]
-enum Corpus {
-    /// An operator named it. Anything wrong with it from here is a hard failure.
-    Declared(PathBuf),
-    /// Found beside this repository.
-    Discovered(PathBuf),
-    /// Nothing claimed and nothing found.
-    Absent,
-}
-
-/// The classification, as a pure function of where the walk starts. Split out
-/// from [`locate_corpus`] so it can be exercised against directories built for
-/// the purpose rather than only against whatever this machine happens to hold.
-fn classify_corpus(start: &Path, declared: Option<&str>) -> Corpus {
-    if let Some(declared) = declared
-        && !declared.trim().is_empty()
-    {
-        return Corpus::Declared(PathBuf::from(declared));
-    }
-    let mut dir = start.to_path_buf();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Corpus::Discovered(root);
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    Corpus::Absent
-}
-
-fn locate_corpus() -> Corpus {
-    classify_corpus(
-        Path::new(env!("CARGO_MANIFEST_DIR")),
-        std::env::var(CORPUS_ENV).ok().as_deref(),
-    )
-}
-
-/// The shared corpus root. Every absence PANICS here rather than returning: the
-/// corpus is the oracle, so a leg without it fails (Phase 1938).
-///
-/// A located corpus must also be READABLE as one: a `manifest.json` that is not
-/// there separates "this is the wrong corpus" from "this corpus is missing a
-/// fixture", and the two have different remedies. Without it, an operator whose
-/// `FUARAN_WIRE_FIXTURES` points one directory sideways gets acceptance followed
-/// by a confident complaint about absent fixtures — loud, and wrong about the
-/// cause.
-fn find_corpus() -> PathBuf {
-    let (root, claimed) = match locate_corpus() {
-        Corpus::Declared(p) => (p, true),
-        Corpus::Discovered(p) => (p, false),
-        Corpus::Absent => panic!(
-            "the wire-format corpus is neither claimed nor present beside this repository. It is \
-             the conformance oracle, so this leg FAILS rather than skips (Phase 1938): clone \
-             `wire-format-fixtures` beside this repository, or name it with {CORPUS_ENV}."
-        ),
-    };
-    assert!(
-        root.join("manifest.json").is_file(),
-        "the corpus is {} at '{}' but it holds no manifest.json, which is its authoritative \
-         fixture enumeration. A conformance check that passes without its oracle is worse than \
-         no check, so this is a failure rather than a skip.",
-        if claimed { "claimed" } else { "present" },
-        root.display()
-    );
-    root
-}
-
-/// The go-red for the lookup above. A guard whose whole job is to fail is exactly
-/// the kind of code that quietly stops working, so each verdict is produced here
-/// from a directory built to produce it — including the absence, which cannot be
-/// produced on a machine holding a real corpus.
-#[test]
-fn the_corpus_lookup_tells_claimed_found_and_absent_apart() {
-    let scratch = std::env::temp_dir().join(format!(
-        "fuaran-rs-corpus-classify-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let standalone = scratch.join("standalone").join("fuaran-rs");
-    std::fs::create_dir_all(&standalone).expect("scratch standalone tree");
-
-    // Nothing named, nothing found: absent, which `find_corpus` turns into a failure.
-    assert_eq!(classify_corpus(&standalone, None), Corpus::Absent);
-
-    // A claimed path is claimed whatever surrounds it — including a claim that
-    // is wrong, which is the case an operator most needs told.
-    assert_eq!(
-        classify_corpus(&standalone, Some("/no/such/corpus")),
-        Corpus::Declared(PathBuf::from("/no/such/corpus"))
-    );
-    // An empty or whitespace claim is not a claim.
-    assert_eq!(classify_corpus(&standalone, Some("   ")), Corpus::Absent);
-
-    // The discovery arm discovers.
-    let discoverable = scratch.join("found").join("fuaran-rs");
-    let corpus = scratch.join("found").join("wire-format-fixtures");
-    std::fs::create_dir_all(&discoverable).expect("scratch discoverable tree");
-    std::fs::create_dir_all(&corpus).expect("scratch corpus dir");
-    std::fs::write(corpus.join("manifest.json"), b"{}").expect("scratch manifest");
-    assert_eq!(
-        classify_corpus(&discoverable, None),
-        Corpus::Discovered(corpus)
-    );
-
-    let _ = std::fs::remove_dir_all(&scratch);
-}
 
 struct Fixture {
     id: String,
@@ -230,7 +117,7 @@ fn corpus_idl(corpus: &Path) -> String {
 /// caught cannot be written any more.
 #[test]
 fn generated_module_matches_the_corpus_idl() {
-    let corpus = find_corpus();
+    let corpus = common::corpus_root();
     let expected = fuaran_rs::wire::idl_codegen::generate(&corpus_idl(&corpus))
         .unwrap_or_else(|e| panic!("the generator refused the corpus idl.json: {e}"));
     let path =
@@ -266,7 +153,7 @@ fn generated_module_matches_the_corpus_idl() {
 /// recorded constant the library compiled with rather than the file on disk.
 #[test]
 fn generated_module_records_the_corpus_idl_hash() {
-    let corpus = find_corpus();
+    let corpus = common::corpus_root();
     let actual = fuaran_rs::opstream::sha256_hex(&corpus_idl(&corpus));
     assert_eq!(
         fuaran_rs::wire::IDL_SHA256,
@@ -284,7 +171,7 @@ fn generated_module_records_the_corpus_idl_hash() {
 /// a kind, a field, an enum case — and each must change the generated module.
 #[test]
 fn the_generator_reacts_to_each_vocabulary_move() {
-    let corpus = find_corpus();
+    let corpus = common::corpus_root();
     let idl = corpus_idl(&corpus);
     let generate = |text: &str| {
         fuaran_rs::wire::idl_codegen::generate(text)
@@ -395,7 +282,7 @@ fn descend_slots(obj: &JVal, controls: &mut std::collections::BTreeSet<String>) 
 /// `other =>` fallback — this leg is what covers that gap.
 #[test]
 fn corpus_control_kinds_are_all_recognised() {
-    let corpus = find_corpus();
+    let corpus = common::corpus_root();
     let known: std::collections::BTreeSet<String> = fuaran_rs::wire::CANONICAL_FORM_FIELD_KINDS
         .iter()
         .map(|s| (*s).to_string())
@@ -429,7 +316,7 @@ fn corpus_control_kinds_are_all_recognised() {
 /// The round-trip legs: every node + op fixture must re-encode byte-identically.
 #[test]
 fn corpus_round_trips_byte_identical() {
-    let corpus = find_corpus();
+    let corpus = common::corpus_root();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -491,7 +378,7 @@ fn corpus_round_trips_byte_identical() {
 /// code + a `$`-rooted path carrying the expected prefix.
 #[test]
 fn corpus_rejects_surface_canonical_code_and_path() {
-    let corpus = find_corpus();
+    let corpus = common::corpus_root();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -568,7 +455,7 @@ fn corpus_rejects_surface_canonical_code_and_path() {
 /// fully; Behind preserves an unknown kind verbatim).
 #[test]
 fn corpus_envelope_round_trips_byte_identical() {
-    let corpus = find_corpus();
+    let corpus = common::corpus_root();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -618,7 +505,7 @@ fn corpus_envelope_round_trips_byte_identical() {
 /// `FOREIGN_PROFILE` at `$.$profile`.
 #[test]
 fn corpus_envelope_rejects_surface_canonical_code_and_path() {
-    let corpus = find_corpus();
+    let corpus = common::corpus_root();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -685,7 +572,7 @@ fn elicitation_round_trip(decoder: &str, input: &str) -> Result<String, (String,
 /// (envelope + outcome decoders) re-encodes byte-identically.
 #[test]
 fn corpus_elicitation_round_trips_byte_identical() {
-    let corpus = find_corpus();
+    let corpus = common::corpus_root();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -749,7 +636,7 @@ fn elicitation_reject(decoder: &str, input: &str) -> Option<(String, String)> {
 /// validate clean.
 #[test]
 fn corpus_elicitation_rejects_and_answers_conform() {
-    let corpus = find_corpus();
+    let corpus = common::corpus_root();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -818,7 +705,7 @@ fn corpus_elicitation_rejects_and_answers_conform() {
 /// the canonical normalisation (aliases never survive a re-encode).
 #[test]
 fn corpus_lenient_accept_round_trips_byte_identical() {
-    let corpus = find_corpus();
+    let corpus = common::corpus_root();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -952,7 +839,7 @@ fn every_rule_marked_code_is_declared_exactly_once() {
 
 #[test]
 fn corpus_rule_marked_twins_decide_as_declared() {
-    let corpus = find_corpus();
+    let corpus = common::corpus_root();
     let manifest = load_manifest(&corpus);
     let findings_on = |id: &str| {
         let fixture = manifest
@@ -1137,7 +1024,7 @@ fn corpus_families(root: &Path) -> std::collections::BTreeSet<String> {
 
 #[test]
 fn the_manifest_names_every_corpus_family_and_no_other() {
-    let corpus = find_corpus();
+    let corpus = common::corpus_root();
     let families = corpus_families(&corpus);
     let declared: std::collections::BTreeSet<String> = HOST_CORPUS_FAMILIES
         .iter()
@@ -1312,7 +1199,7 @@ fn the_evaluator_matches_the_reference_on_every_dataframe_parity_vector() {
     use fuaran_rs::transform::{Table, eval_pipeline};
     use fuaran_rs::wire::{Binding, DataSource, NodeKind, TransformSource};
 
-    let laws = find_corpus().join("laws");
+    let laws = common::corpus_root().join("laws");
     let manifest = parse(&read_fixture(&laws, "manifest.json")).expect("laws/manifest.json parses");
     let Some(JVal::Arr(families)) = manifest.field("families") else {
         panic!("laws/manifest.json declares no families");

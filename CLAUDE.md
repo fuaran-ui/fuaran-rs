@@ -148,7 +148,7 @@ certifies against the shared corpus: every **node-round-trip** and **op-round-tr
 fixture re-encodes byte-identically, and every **reject** fixture surfaces the
 canonical error code + `$`-rooted path prefix (the harness locates
 `../wire-format-fixtures/` via `manifest.json` — the authoritative enumeration — and
-skips when absent). The **lenient-accept**, **envelope**, and **elicitation**
+fails when absent). The **lenient-accept**, **envelope**, and **elicitation**
 families certify the same way — the full corpus enumeration runs, none skipped.
 
 ### Decoder robustness fuzz (`tests/decoder_fuzz.rs`)
@@ -662,8 +662,10 @@ output, not source).
 ## Cross-repo dependencies
 
 No upstream dependency on any other sibling. At test time it reads the
-workspace-relative corpus at `../wire-format-fixtures/` (or `FUARAN_WIRE_FIXTURES`);
-`tests/conformance.rs` fails without it rather than skipping (Phase 1938). It produces a Cargo crate, not a NuGet pack — the
+workspace-relative corpus at `../wire-format-fixtures/` (or `FUARAN_WIRE_FIXTURES`),
+located for every suite by the one locator `tests/common/mod.rs` (Phase 2301); a suite
+fails without it rather than skipping (Phase 1938), and `tests/corpus_locator.rs`
+refuses a second lookup. It produces a Cargo crate, not a NuGet pack — the
 consumer-side package build treats it as a no-op.
 
 ## Public vocabulary discipline

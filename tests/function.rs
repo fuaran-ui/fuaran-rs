@@ -5,32 +5,16 @@
 //! queries with expected results, derived from the SHIPPED Python reference (the
 //! twin of the F# `Fuaran.Core.FunctionRegistry` engine). This Rust host must
 //! resolve every golden identically. The registry-shape pin is the 548-style
-//! attestation guard: a shape drift fails here with the entry named. Skips
-//! cleanly on a standalone checkout where the corpus is absent.
+//! attestation guard: a shape drift fails here with the entry named. The corpus
+//! is required: it is located by `common::corpus_root` and its absence fails.
 
-use std::path::PathBuf;
+mod common;
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::function::{
     ComposeResult, ComposeStep, FunctionEntry, FunctionRegistry, HoleKind, MatchMode, SigEntry,
     SignatureQuery, Space,
 };
-
-fn find_goldens() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let g = dir
-            .join("wire-format-fixtures")
-            .join("function-registry")
-            .join("goldens.json");
-        if g.is_file() {
-            return Some(g);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
 
 fn str_field(j: &JVal, key: &str) -> String {
     match j.field(key) {
@@ -145,8 +129,10 @@ fn parse_expected(j: &JVal) -> ComposeResult {
     }
 }
 
-fn load() -> Option<(JVal, FunctionRegistry)> {
-    let path = find_goldens()?;
+fn load() -> (JVal, FunctionRegistry) {
+    let path = common::corpus_root()
+        .join("function-registry")
+        .join("goldens.json");
     let raw = std::fs::read_to_string(&path).expect("reading goldens.json");
     let goldens = parse(&raw).expect("goldens.json parses with the host's own JSON layer");
     let mut reg = FunctionRegistry::new();
@@ -154,15 +140,12 @@ fn load() -> Option<(JVal, FunctionRegistry)> {
         reg.register(parse_entry(e))
             .expect("registering golden entry");
     }
-    Some((goldens, reg))
+    (goldens, reg)
 }
 
 #[test]
 fn registry_shape_matches_goldens() {
-    let Some((goldens, reg)) = load() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let (goldens, reg) = load();
     let got = reg.registry_signature_shape();
     let want: Vec<String> = arr_field(&goldens, "registryShape")
         .iter()
@@ -173,10 +156,7 @@ fn registry_shape_matches_goldens() {
 
 #[test]
 fn find_by_signature_matches_goldens() {
-    let Some((goldens, reg)) = load() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let (goldens, reg) = load();
     for f in arr_field(&goldens, "findBySignature") {
         let name = str_field(f, "name");
         let mode = if str_field(f, "mode") == "Subsumes" {
@@ -205,10 +185,7 @@ fn find_by_signature_matches_goldens() {
 
 #[test]
 fn compose_matches_goldens() {
-    let Some((goldens, reg)) = load() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let (goldens, reg) = load();
     for c in arr_field(&goldens, "compose") {
         let name = str_field(c, "name");
         let output = str_field(c, "output");

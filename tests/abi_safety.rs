@@ -53,6 +53,8 @@
 //! FUARAN_ABI_FUZZ_SEED=12345 cargo test --test abi_safety -- --nocapture
 //! ```
 
+mod common;
+
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
@@ -383,31 +385,11 @@ fn mutate(rng: &mut Rng, seed: &str) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-/// Walks up from the crate directory looking for the shared corpus, exactly as
-/// `tests/decoder_fuzz.rs` does. `None` keeps the repo standalone-testable: a
-/// corpus-less checkout gets the built-in seeds and a narrower pool, never a
-/// failure — and the evidence line says which it was.
-fn find_corpus() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Some(root);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
 /// Every `*.json` under one corpus directory, as raw text, in name order — so
 /// the seed pool, and therefore every replay line, is identical on every
 /// machine. READ-ONLY: the fuzz never writes into the corpus.
-fn corpus_dir(corpus: Option<&Path>, sub: &str) -> Vec<String> {
-    let Some(dir) = corpus.map(|c| c.join(sub)) else {
-        return Vec::new();
-    };
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+fn corpus_dir(corpus: &Path, sub: &str) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(corpus.join(sub)) else {
         return Vec::new();
     };
     let mut paths: Vec<PathBuf> = entries
@@ -579,14 +561,14 @@ fn no_input_escapes_apply_render_merge_or_teleport_as_a_panic() {
         .unwrap_or(600);
 
     // Seed pools. Trees seed the session; payloads are what a binding sends
-    // into it. The corpus, when present, widens both far past what a hand-
+    // into it. The corpus widens both far past what a hand-
     // written seed reaches — bindings, Transforms, grids, charts, media — and
     // that reach is what makes the resolver and the row source part of the run
     // at all. Only trees the core ACCEPTS enter the pool: the corpus runs ahead
     // of every host, and a refused seed would spend its iterations on nothing.
-    let corpus = find_corpus();
-    let corpus_trees = corpus_dir(corpus.as_deref(), "nodes");
-    let corpus_ops = corpus_dir(corpus.as_deref(), "ops");
+    let corpus = common::corpus_root();
+    let corpus_trees = corpus_dir(&corpus, "nodes");
+    let corpus_ops = corpus_dir(&corpus, "ops");
     let mut trees: Vec<String> = vec![SEED_TREE.to_string()];
     trees.extend(corpus_trees.iter().filter(|t| accepts(t)).cloned());
     let mut payloads: Vec<String> = SEED_OPS
@@ -639,9 +621,6 @@ fn no_input_escapes_apply_render_merge_or_teleport_as_a_panic() {
         corpus_trees.len() - (trees.len() - 1),
         payloads.len(),
         corpus_ops.len(),
-        match &corpus {
-            Some(c) => c.display().to_string(),
-            None => "absent (built-in seeds only)".to_string(),
-        }
+        corpus.display()
     );
 }

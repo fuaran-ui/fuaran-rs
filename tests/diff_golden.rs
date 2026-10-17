@@ -7,52 +7,20 @@
 //! produce the IDENTICAL script — this Rust host asserts `diff == ops` AND
 //! `apply(ops, before) == after`. `divergent` pairs carry a per-host expected
 //! script under `hosts` (the producers differ in granularity, never correctness);
-//! the Rust host asserts against `hosts["rs"]`. Skips cleanly on a standalone
-//! checkout where the corpus is absent.
+//! the Rust host asserts against `hosts["rs"]`. The corpus is required: it is
+//! located by `common::corpus_root` and its absence fails the suite.
 
-use std::path::PathBuf;
+mod common;
 
 use fuaran_rs::canonical::{JVal, parse, render_canonical};
 use fuaran_rs::diff::diff;
 use fuaran_rs::ops::apply;
 use fuaran_rs::wire::{Node, decode_node, decode_op, encode_node, encode_op};
 
-/// The corpus `FUARAN_WIRE_FIXTURES` names (a hard failure when it names no
-/// corpus), else the nearest `wire-format-fixtures/` walking up from the crate
-/// dir (mirrors conformance.rs). Without the declaration a worktree's walk finds
-/// whichever corpus sits above it, not the one under test.
-fn find_goldens() -> Option<PathBuf> {
-    if let Ok(declared) = std::env::var("FUARAN_WIRE_FIXTURES") {
-        if !declared.is_empty() {
-            let root = PathBuf::from(declared);
-            assert!(
-                root.join("manifest.json").is_file(),
-                "FUARAN_WIRE_FIXTURES names '{}', which holds no manifest.json. It is refused rather \
-                 than ignored: falling back to the walk would certify against a corpus nobody named.",
-                root.display()
-            );
-            return Some(root.join("diff").join("goldens.json"));
-        }
-    }
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let g = dir
-            .join("wire-format-fixtures")
-            .join("diff")
-            .join("goldens.json");
-        if g.is_file() {
-            return Some(g);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
-fn load() -> Option<JVal> {
-    let path = find_goldens()?;
+fn load() -> JVal {
+    let path = common::corpus_root().join("diff").join("goldens.json");
     let raw = std::fs::read_to_string(&path).expect("reading diff/goldens.json");
-    Some(parse(&raw).expect("diff/goldens.json parses with the host's own JSON layer"))
+    parse(&raw).expect("diff/goldens.json parses with the host's own JSON layer")
 }
 
 fn arr<'a>(j: &'a JVal, key: &str) -> &'a Vec<JVal> {
@@ -108,10 +76,7 @@ fn apply_all(before: &Node, after: &Node) -> String {
 
 #[test]
 fn cross_host_goldens() {
-    let Some(goldens) = load() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let goldens = load();
     let entries = arr(&goldens, "goldens");
     assert!(!entries.is_empty(), "diff/goldens.json has no 'goldens'");
     for e in entries {
@@ -130,10 +95,7 @@ fn cross_host_goldens() {
 
 #[test]
 fn cross_host_divergent() {
-    let Some(goldens) = load() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let goldens = load();
     let Some(JVal::Arr(entries)) = goldens.field("divergent") else {
         eprintln!("diff/goldens.json has no 'divergent' section; skipping");
         return;
