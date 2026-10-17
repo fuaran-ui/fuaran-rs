@@ -50,6 +50,7 @@
     "devtools-relay": {
       "notApplicable": "this host ships no devtools relay endpoint"
     },
+    "diff/treeDiff": "covered",
     "elicitation-answer-accept": "covered",
     "elicitation-answer-reject": "covered",
     "elicitation-reject": "covered",

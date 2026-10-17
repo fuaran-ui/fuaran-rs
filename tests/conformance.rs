@@ -948,6 +948,7 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
         "devtools-relay",
         FamilyAnswer::NotApplicable("this host ships no devtools relay endpoint"),
     ),
+    ("diff/treeDiff", FamilyAnswer::Covered),
     ("elicitation-answer-accept", FamilyAnswer::Covered),
     ("elicitation-answer-reject", FamilyAnswer::Covered),
     ("elicitation-reject", FamilyAnswer::Covered),
