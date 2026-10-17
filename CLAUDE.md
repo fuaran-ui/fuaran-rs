@@ -40,11 +40,15 @@ co-equal conformant host. Cross-repo development conventions (port allocation, f
   own generator** (ruling of 2026-10-16, Phase 2298). `src/wire/idl_codegen.rs` reads
   the language-neutral IDL the corpus publishes and writes `src/wire/generated.rs`:
   the bare-string enums, the kind set and its categories, every union's
-  discriminator set, a field pin per modelled spec / record / op, the
-  omit-at-default constants and the node-bearing slots. Reading a data artefact with
-  a host-owned generator is not a transpile, and no codec code is shared with any
-  other host. **Behaviour stays hand-written** — the spec structs, decode policy and
-  refusal wording, leniency, limit checks, encoding paths that carry behaviour,
+  discriminator set, the omit-at-default constants, the node-bearing slots and —
+  since Phase 2315 — every wire type (the spec structs, records, unions,
+  `NodeKind`, `Node`, `TreeOp`). The types come from uniform mapping rules plus
+  this host's **dialect** (`src/wire/dialect.rs`): one entry, with its reason, per
+  position this host's public types map differently from the rules, checked against
+  the IDL at generation, so a stale entry is refused rather than kept. Reading a data
+  artefact with a host-owned generator is not a transpile, and no codec code is
+  shared with any other host. **Behaviour stays hand-written** — the impls over the
+  types, decode policy and refusal wording, leniency, limit checks, the encoder,
   rendering and the C ABI. No `build.rs`: the module is committed, the generator
   compiles only under the off-by-default `idl-codegen` feature the suite turns on,
   and `tests/conformance.rs` is both the drift check (red when `idl.json` moves and
@@ -77,8 +81,9 @@ its arm lands.
 fuaran-rs/
 ├── src/lib.rs           # crate doc + VERSION
 ├── src/canonical/       # canonical-JSON layer — float.rs (number form) + json.rs (parser + canonical renderer)
-├── src/wire/            # model.rs (typed tree, native enums) + decode.rs / encode.rs + the DecodeError envelope
-│                        #   + generated.rs (structural layer, from the corpus idl.json) + idl_codegen.rs (its generator)
+├── src/wire/            # model.rs (host-modelled types + behaviour impls) + decode.rs / encode.rs + the DecodeError envelope
+│                        #   + generated.rs (structural layer and wire types, from the corpus idl.json)
+│                        #   + idl_codegen.rs (its generator) + dialect.rs (this host's declared departures)
 ├── src/ops/             # tree-op apply engine — total reducer + ApplyError envelope + can_apply dry-run
 │                        #   + placement.rs (the placement algebra: placed insert / move / nudge + clone verbs)
 ├── src/validator/       # pre-emit structural validator — canonical FUARAN### defect codes

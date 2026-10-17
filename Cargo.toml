@@ -37,6 +37,13 @@ name = "fuaran-ui"
 # NODE_SLOTS and NODE_RECORD_SLOTS. Two orders now follow the IDL rather than
 # the old hand lists: CANONICAL_NODE_KINDS / CANONICAL_FORM_FIELD_KINDS, and
 # BoxRole's case order (visible only in WIRE_NAMES and Debug).
+#
+# Phase 2315 rides it, ADDITIVE: every wire type (the spec structs, records,
+# unions, NodeKind, Node, TreeOp) is now generated from idl.json through this
+# host's dialect, with the same names, field and variant types, derives and docs
+# (checked by a rustdoc-JSON surface diff). One observable change: a generated
+# struct declares its fields in IDL order, so Debug output and rustdoc list
+# fields in that order. No field set moved.
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"
