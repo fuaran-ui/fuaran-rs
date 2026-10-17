@@ -4,11 +4,14 @@
 //
 //     FUARAN_IDL_REGENERATE=1 cargo test --test conformance generated_module
 //
-// Everything structural about the wire vocabulary that this host does not choose
-// for itself lives here; behaviour stays in model.rs, decode.rs and encode.rs.
+// Everything structural about the wire vocabulary lives here: the IDL through the
+// uniform rules in idl_codegen.rs and the departures declared in dialect.rs.
+// Behaviour stays in model.rs, decode.rs and encode.rs.
 
 use super::model::*;
 use crate::core::bare_enum;
+use crate::canonical::JVal;
+use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
 pub const IDL_SHA256: &str = "c0ca90a68de458ae90cc369c5afe6e75cf0a1b36d8383579a0f48073ef8157d8";
@@ -242,26 +245,6 @@ pub(crate) const ACTION_TAGS: &[&str] = &[
     "Focus",
 ];
 
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_action(v: &Action) -> &'static str {
-    match v {
-        Action::Chain { .. } => "Chain",
-        Action::WriteToClipboard { .. } => "WriteToClipboard",
-        Action::Dispatch { .. } => "Dispatch",
-        Action::Invoke { .. } => "Invoke",
-        Action::ReadFileBody { .. } => "ReadFileBody",
-        Action::Call { .. } => "Call",
-        Action::Navigate { .. } => "Navigate",
-        Action::CommitLocal { .. } => "CommitLocal",
-        Action::Notify { .. } => "Notify",
-        Action::SetState { .. } => "SetState",
-        Action::AiTool { .. } => "AiTool",
-        Action::Print { .. } => "Print",
-        Action::Confirm { .. } => "Confirm",
-        Action::Focus { .. } => "Focus",
-    }
-}
-
 pub(crate) const BINDING_TAGS: &[&str] = &[
     "Static",
     "Query",
@@ -278,25 +261,6 @@ pub(crate) const BINDING_TAGS: &[&str] = &[
     "Invoke",
 ];
 
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_binding(v: &Binding) -> &'static str {
-    match v {
-        Binding::Static { .. } => "Static",
-        Binding::Query { .. } => "Query",
-        Binding::Filter { .. } => "Filter",
-        Binding::Selection { .. } => "Selection",
-        Binding::State { .. } => "State",
-        Binding::Now { .. } => "Now",
-        Binding::Computed { .. } => "Computed",
-        Binding::Local { .. } => "Local",
-        Binding::Format { .. } => "Format",
-        Binding::I18n { .. } => "I18n",
-        Binding::Transform { .. } => "Transform",
-        Binding::Expr { .. } => "Expr",
-        Binding::Invoke { .. } => "Invoke",
-    }
-}
-
 pub(crate) const BOX_LAYOUT_TAGS: &[&str] = &[
     "Auto",
     "Flex",
@@ -304,28 +268,10 @@ pub(crate) const BOX_LAYOUT_TAGS: &[&str] = &[
     "Masonry",
 ];
 
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_box_layout(v: &BoxLayout) -> &'static str {
-    match v {
-        BoxLayout::Auto { .. } => "Auto",
-        BoxLayout::Flex { .. } => "Flex",
-        BoxLayout::Grid { .. } => "Grid",
-        BoxLayout::Masonry { .. } => "Masonry",
-    }
-}
-
 pub(crate) const CALL_RESULT_TARGET_TAGS: &[&str] = &[
     "State",
     "Query",
 ];
-
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_call_result_target(v: &CallResultTarget) -> &'static str {
-    match v {
-        CallResultTarget::State { .. } => "State",
-        CallResultTarget::Query { .. } => "Query",
-    }
-}
 
 pub(crate) const CELL_FORMAT_TAGS: &[&str] = &[
     "None",
@@ -338,21 +284,6 @@ pub(crate) const CELL_FORMAT_TAGS: &[&str] = &[
     "RelativeTime",
     "Custom",
 ];
-
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_cell_format(v: &CellFormat) -> &'static str {
-    match v {
-        CellFormat::None { .. } => "None",
-        CellFormat::Number { .. } => "Number",
-        CellFormat::Currency { .. } => "Currency",
-        CellFormat::Percent { .. } => "Percent",
-        CellFormat::SignificantDigits { .. } => "SignificantDigits",
-        CellFormat::DateTime { .. } => "DateTime",
-        CellFormat::Duration { .. } => "Duration",
-        CellFormat::RelativeTime { .. } => "RelativeTime",
-        CellFormat::Custom { .. } => "Custom",
-    }
-}
 
 pub(crate) const CELL_KIND_ERASED_TAGS: &[&str] = &[
     "Text",
@@ -369,79 +300,27 @@ pub(crate) const CELL_KIND_ERASED_TAGS: &[&str] = &[
     "Custom",
 ];
 
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_cell_kind_erased(v: &CellKindErased) -> &'static str {
-    match v {
-        CellKindErased::Text { .. } => "Text",
-        CellKindErased::Numeric { .. } => "Numeric",
-        CellKindErased::Date { .. } => "Date",
-        CellKindErased::Editable { .. } => "Editable",
-        CellKindErased::Checkbox { .. } => "Checkbox",
-        CellKindErased::Button { .. } => "Button",
-        CellKindErased::ButtonGroup { .. } => "ButtonGroup",
-        CellKindErased::Link { .. } => "Link",
-        CellKindErased::Pill { .. } => "Pill",
-        CellKindErased::TonedPill { .. } => "TonedPill",
-        CellKindErased::Progress { .. } => "Progress",
-        CellKindErased::Custom { .. } => "Custom",
-    }
-}
-
 pub(crate) const CHART_ANNOTATION_TAGS: &[&str] = &[
     "ReferenceLine",
     "EventMarker",
     "RangeBand",
 ];
 
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_chart_annotation(v: &ChartAnnotation) -> &'static str {
-    match v {
-        ChartAnnotation::ReferenceLine { .. } => "ReferenceLine",
-        ChartAnnotation::EventMarker { .. } => "EventMarker",
-        ChartAnnotation::RangeBand { .. } => "RangeBand",
-    }
-}
-
 pub(crate) const CHART_ANNOTATION_RANGE_TAGS: &[&str] = &[
     "ValueRange",
     "XRange",
 ];
-
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_chart_annotation_range(v: &ChartAnnotationRange) -> &'static str {
-    match v {
-        ChartAnnotationRange::ValueRange { .. } => "ValueRange",
-        ChartAnnotationRange::XRange { .. } => "XRange",
-    }
-}
 
 pub(crate) const CHART_ANNOTATION_X_TAGS: &[&str] = &[
     "Category",
     "Date",
 ];
 
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_chart_annotation_x(v: &ChartAnnotationX) -> &'static str {
-    match v {
-        ChartAnnotationX::Category { .. } => "Category",
-        ChartAnnotationX::Date { .. } => "Date",
-    }
-}
-
 pub(crate) const COLUMN_WIDTH_TAGS: &[&str] = &[
     "Auto",
     "Fixed",
     "Flex",
 ];
-
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_column_width(v: &ColumnWidth) -> &'static str {
-    match v {
-        ColumnWidth::Auto { .. } => "Auto",
-        ColumnWidth::Fixed { .. } => "Fixed",
-        ColumnWidth::Flex { .. } => "Flex",
-    }
-}
 
 pub(crate) const CURVE_COMMAND_TAGS: &[&str] = &[
     "MoveTo",
@@ -450,17 +329,6 @@ pub(crate) const CURVE_COMMAND_TAGS: &[&str] = &[
     "QuadraticTo",
     "Close",
 ];
-
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_curve_command(v: &CurveCommand) -> &'static str {
-    match v {
-        CurveCommand::MoveTo { .. } => "MoveTo",
-        CurveCommand::LineTo { .. } => "LineTo",
-        CurveCommand::CubicTo { .. } => "CubicTo",
-        CurveCommand::QuadraticTo { .. } => "QuadraticTo",
-        CurveCommand::Close { .. } => "Close",
-    }
-}
 
 /// The emittable FormFieldKind control vocabulary, in IDL order. One control
 /// vocabulary covers both the `Form.fields` and `Filters.items` carriers.
@@ -482,27 +350,6 @@ pub const CANONICAL_FORM_FIELD_KINDS: &[&str] = &[
     "Tokens",
 ];
 
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_form_field_kind(v: &FormFieldKind) -> &'static str {
-    match v {
-        FormFieldKind::Text { .. } => "Text",
-        FormFieldKind::Number { .. } => "Number",
-        FormFieldKind::Checkbox { .. } => "Checkbox",
-        FormFieldKind::Toggle { .. } => "Toggle",
-        FormFieldKind::Choice { .. } => "Choice",
-        FormFieldKind::TextArea { .. } => "TextArea",
-        FormFieldKind::RangedNumber { .. } => "RangedNumber",
-        FormFieldKind::Range { .. } => "Range",
-        FormFieldKind::SegmentedChoice { .. } => "SegmentedChoice",
-        FormFieldKind::DateTime { .. } => "DateTime",
-        FormFieldKind::DateTimeRange { .. } => "DateTimeRange",
-        FormFieldKind::Combobox { .. } => "Combobox",
-        FormFieldKind::Rating { .. } => "Rating",
-        FormFieldKind::Color { .. } => "Color",
-        FormFieldKind::Tokens { .. } => "Tokens",
-    }
-}
-
 pub(crate) const FORMAT_TAGS: &[&str] = &[
     "Number",
     "Currency",
@@ -512,19 +359,6 @@ pub(crate) const FORMAT_TAGS: &[&str] = &[
     "Duration",
     "Since",
 ];
-
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_format(v: &Format) -> &'static str {
-    match v {
-        Format::Number { .. } => "Number",
-        Format::Currency { .. } => "Currency",
-        Format::Percent { .. } => "Percent",
-        Format::DateTime { .. } => "DateTime",
-        Format::RelativeTime { .. } => "RelativeTime",
-        Format::Duration { .. } => "Duration",
-        Format::Since { .. } => "Since",
-    }
-}
 
 pub(crate) const FRAGMENT_ARG_TAGS: &[&str] = &[
     "Int",
@@ -540,15 +374,6 @@ pub(crate) const HOLE_DECL_TAGS: &[&str] = &[
     "Repeat",
 ];
 
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_hole_decl(v: &HoleDecl) -> &'static str {
-    match v {
-        HoleDecl::Value { .. } => "Value",
-        HoleDecl::Slot { .. } => "Slot",
-        HoleDecl::Repeat { .. } => "Repeat",
-    }
-}
-
 pub(crate) const HOLE_VALUE_SPACE_TAGS: &[&str] = &[
     "IntRange",
     "FloatRange",
@@ -557,17 +382,6 @@ pub(crate) const HOLE_VALUE_SPACE_TAGS: &[&str] = &[
     "AnyString",
 ];
 
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_hole_value_space(v: &HoleValueSpace) -> &'static str {
-    match v {
-        HoleValueSpace::IntRange { .. } => "IntRange",
-        HoleValueSpace::FloatRange { .. } => "FloatRange",
-        HoleValueSpace::StringLen { .. } => "StringLen",
-        HoleValueSpace::Enum { .. } => "Enum",
-        HoleValueSpace::AnyString { .. } => "AnyString",
-    }
-}
-
 pub(crate) const LOCAL_FLUSH_TRIGGER_TAGS: &[&str] = &[
     "OnBlur",
     "OnSubmit",
@@ -575,41 +389,15 @@ pub(crate) const LOCAL_FLUSH_TRIGGER_TAGS: &[&str] = &[
     "OnCommitAction",
 ];
 
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_local_flush_trigger(v: &LocalFlushTrigger) -> &'static str {
-    match v {
-        LocalFlushTrigger::OnBlur { .. } => "OnBlur",
-        LocalFlushTrigger::OnSubmit { .. } => "OnSubmit",
-        LocalFlushTrigger::OnDebounce { .. } => "OnDebounce",
-        LocalFlushTrigger::OnCommitAction { .. } => "OnCommitAction",
-    }
-}
-
 pub(crate) const LOCALE_SOURCE_TAGS: &[&str] = &[
     "Ambient",
     "Explicit",
 ];
 
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_locale_source(v: &LocaleSource) -> &'static str {
-    match v {
-        LocaleSource::Ambient { .. } => "Ambient",
-        LocaleSource::Explicit { .. } => "Explicit",
-    }
-}
-
 pub(crate) const MEDIA_KIND_TAGS: &[&str] = &[
     "Video",
     "Audio",
 ];
-
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_media_kind(v: &MediaKind) -> &'static str {
-    match v {
-        MediaKind::Video { .. } => "Video",
-        MediaKind::Audio { .. } => "Audio",
-    }
-}
 
 pub(crate) const SCALAR_TAGS: &[&str] = &[
     "Int",
@@ -617,16 +405,6 @@ pub(crate) const SCALAR_TAGS: &[&str] = &[
     "Bool",
     "Str",
 ];
-
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_scalar(v: &FragmentScalar) -> &'static str {
-    match v {
-        FragmentScalar::Int { .. } => "Int",
-        FragmentScalar::Float { .. } => "Float",
-        FragmentScalar::Bool { .. } => "Bool",
-        FragmentScalar::Str { .. } => "Str",
-    }
-}
 
 pub(crate) const SHAPE_TAGS: &[&str] = &[
     "Group",
@@ -640,35 +418,11 @@ pub(crate) const SHAPE_TAGS: &[&str] = &[
     "Label",
 ];
 
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_shape(v: &Shape) -> &'static str {
-    match v {
-        Shape::Group { .. } => "Group",
-        Shape::Rectangle { .. } => "Rectangle",
-        Shape::Line { .. } => "Line",
-        Shape::Polyline { .. } => "Polyline",
-        Shape::Polygon { .. } => "Polygon",
-        Shape::Curve { .. } => "Curve",
-        Shape::Circle { .. } => "Circle",
-        Shape::Ellipse { .. } => "Ellipse",
-        Shape::Label { .. } => "Label",
-    }
-}
-
 pub(crate) const TEXT_SOURCE_TAGS: &[&str] = &[
     "Literal",
     "Bound",
     "I18n",
 ];
-
-#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_text_source(v: &TextSource) -> &'static str {
-    match v {
-        TextSource::Literal { .. } => "Literal",
-        TextSource::Bound { .. } => "Bound",
-        TextSource::I18n { .. } => "I18n",
-    }
-}
 
 pub(crate) const TREE_OP_TAGS: &[&str] = &[
     "Batch",
@@ -685,344 +439,1899 @@ pub(crate) const TREE_OP_TAGS: &[&str] = &[
     "UpdateStyle",
 ];
 
-fn _cases_tree_op(v: &TreeOp) -> &'static str {
-    match v {
-        TreeOp::Batch { .. } => "Batch",
-        TreeOp::EditNode { .. } => "EditNode",
-        TreeOp::InsertChild { .. } => "InsertChild",
-        TreeOp::MoveNode { .. } => "MoveNode",
-        TreeOp::PatchStyle { .. } => "PatchStyle",
-        TreeOp::RemoveNode { .. } => "RemoveNode",
-        TreeOp::ReorderChildren { .. } => "ReorderChildren",
-        TreeOp::ReplaceBinding { .. } => "ReplaceBinding",
-        TreeOp::ReplaceRoot { .. } => "ReplaceRoot",
-        TreeOp::UpdateProp { .. } => "UpdateProp",
-        TreeOp::UpdateState { .. } => "UpdateState",
-        TreeOp::UpdateStyle { .. } => "UpdateStyle",
-    }
-}
-
-// ─── Field pins ─────────────────────────────────────────────────────────────
+// ─── Wire types ─────────────────────────────────────────────────────────────
 //
-// An exhaustive pattern per modelled spec, record and op, naming the IDL's wire
-// fields as this host spells them: a field on either side and not the other is
-// a build error. Representation choices are declared in idl_codegen.rs's
-// FIELD_OVERLAY, never here.
-
-fn _fields_badge_spec(v: &BadgeSpec) {
-    let BadgeSpec { label: _, variant: _ } = v;
-}
-
-fn _fields_box_spec(v: &BoxSpec) {
-    let BoxSpec { children: _, heading: _, layout: _, role: _, keep_together: _, break_before: _ } = v;
-}
-
-fn _fields_button_spec(v: &ButtonSpec) {
-    let ButtonSpec { label: _, on_click: _, variant: _, icon: _, disabled: _ } = v;
-}
-
-fn _fields_callout_spec(v: &CalloutSpec) {
-    let CalloutSpec { body: _, dismissable: _, tone: _, heading: _, icon: _ } = v;
-}
-
-fn _fields_chart_spec(v: &ChartSpec) {
-    let ChartSpec { kind: _, source: _, stacked: _, x_field: _, y_fields: _, title: _, value_format: _, x_title: _, y_title: _, subtitle: _, legend_position: _, data_labels: _, x_scale: _, annotations: _, on_point_click: _ } = v;
-}
-
-fn _fields_code_block_spec(v: &CodeBlockSpec) {
-    let CodeBlockSpec { code: _, copyable: _, highlight_lines: _, language: _, line_numbers: _ } = v;
-}
-
-fn _fields_custom_spec(v: &CustomSpec) {
-    let CustomSpec { module_id: _, component_id: _, props: _, content_hash: _, exposed_node_ids: _ } = v;
-}
-
-fn _fields_grid_spec(v: &GridSpec) {
-    let GridSpec { columns: _, editable: _, row_key: _, row_key_field: _, sort_state_key: _, page_size: _, page_state_key: _, default_sort: _, edit_state_key: _, reorderable: _, transfer_in_key: _, transfer_out_key: _, keep_rows_together: _, repeat_header: _, exportable: _, window_state_key: _, row_total: _, source: _, static_rows: _, on_row_click: _ } = v;
-}
-
-fn _fields_disclosure_spec(v: &DisclosureSpec) {
-    let DisclosureSpec { children: _, default_open: _, heading: _, on_toggle: _, open: _ } = v;
-}
-
-fn _fields_drawing_spec(v: &DrawingSpec) {
-    let DrawingSpec { description: _, shapes: _, style: _, title: _, view_box: _ } = v;
-}
-
-fn _fields_embed_spec(v: &EmbedSpec) {
-    let EmbedSpec { aspect_ratio: _, permissions: _, src: _, title: _ } = v;
-}
-
-fn _fields_error_boundary_spec(v: &ErrorBoundarySpec) {
-    let ErrorBoundarySpec { child: _, fallback: _ } = v;
-}
-
-fn _fields_fact_spec(v: &FactSpec) {
-    let FactSpec { emphasis: _, help: _, icon: _, label: _, tone: _, value: _ } = v;
-}
-
-fn _fields_file_upload_spec(v: &FileUploadSpec) {
-    let FileUploadSpec { accept: _, label: _, multiple: _, disabled: _, accept_paste: _, drop_target: _, capture: _, destination: _, max_bytes: _, max_files: _ } = v;
-}
-
-fn _fields_form_spec(v: &FormSpec) {
-    let FormSpec { fields: _, on_submit: _, submit_label: _, disabled: _ } = v;
-}
-
-fn _fields_fragment_decl_spec(v: &FragmentDeclSpec) {
-    let FragmentDeclSpec { body: _, name: _, holes: _, effect: _ } = v;
-}
-
-fn _fields_fragment_ref_spec(v: &FragmentRefSpec) {
-    let FragmentRefSpec { name: _, args: _ } = v;
-}
-
-fn _fields_heading_spec(v: &HeadingSpec) {
-    let HeadingSpec { level: _, text: _, variant: _ } = v;
-}
-
-fn _fields_icon_spec(v: &IconSpec) {
-    let IconSpec { icon: _, size: _, tone: _, label: _ } = v;
-}
-
-fn _fields_image_spec(v: &ImageSpec) {
-    let ImageSpec { alt: _, src: _, variant: _, fit: _, aspect_ratio: _, loading: _, src_set: _, expandable: _, caption: _ } = v;
-}
-
-fn _fields_label_value_row_spec(v: &LabelValueRowSpec) {
-    let LabelValueRowSpec { emphasis: _, format: _, label: _, value: _, help: _ } = v;
-}
-
-fn _fields_link_spec(v: &LinkSpec) {
-    let LinkSpec { href: _, label: _, download: _, rel: _, target: _, protection: _ } = v;
-}
-
-fn _fields_list_spec(v: &ListSpec) {
-    let ListSpec { items: _, ordered: _ } = v;
-}
-
-fn _fields_map_spec(v: &MapSpec) {
-    let MapSpec { centre_latitude: _, centre_longitude: _, source: _, zoom: _, on_marker_click: _ } = v;
-}
-
-fn _fields_markdown_spec(v: &MarkdownSpec) {
-    let MarkdownSpec { text: _ } = v;
-}
-
-fn _fields_math_spec(v: &MathSpec) {
-    let MathSpec { source: _, display: _ } = v;
-}
-
-fn _fields_media_spec(v: &MediaSpec) {
-    let MediaSpec { controls: _, kind: _, label: _, r#loop: _, src: _, tracks: _, transcript: _ } = v;
-}
-
-fn _fields_metric_spec(v: &MetricSpec) {
-    let MetricSpec { label: _, value: _, format: _, tone: _, weight: _, emphasis: _, trend: _, trend_format: _, trend_polarity: _, icon: _, subtext: _ } = v;
-}
-
-fn _fields_modal_spec(v: &ModalSpec) {
-    let ModalSpec { children: _, dismissable: _, on_dismiss: _, open: _, heading: _, modality: _, anchor: _ } = v;
-}
-
-fn _fields_mount_spec(v: &MountSpec) {
-    let MountSpec { capabilities: _, channel: _, inputs: _, scope_id: _ } = v;
-}
-
-fn _fields_progress_spec(v: &ProgressSpec) {
-    let ProgressSpec { fraction: _, indeterminate: _, tone: _, label: _, caveat: _ } = v;
-}
-
-fn _fields_scroll_area_spec(v: &ScrollAreaSpec) {
-    let ScrollAreaSpec { children: _, orientation: _, max_height: _, max_width: _ } = v;
-}
-
-fn _fields_select_spec(v: &SelectSpec) {
-    let SelectSpec { label: _, on_change: _, on_change_multi: _, source: _, value: _, placeholder: _, disabled: _, multiple: _, values: _ } = v;
-}
-
-fn _fields_skeleton_spec(v: &SkeletonSpec) {
-    let SkeletonSpec { rows: _ } = v;
-}
-
-fn _fields_sparkline_spec(v: &SparklineSpec) {
-    let SparklineSpec { source: _ } = v;
-}
-
-fn _fields_split_panel_spec(v: &SplitPanelSpec) {
-    let SplitPanelSpec { children: _, weight: _ } = v;
-}
-
-fn _fields_stepper_spec(v: &StepperSpec) {
-    let StepperSpec { active_step: _, children: _ } = v;
-}
-
-fn _fields_summary_list_spec(v: &SummaryListSpec) {
-    let SummaryListSpec { children: _, heading: _ } = v;
-}
-
-fn _fields_switch_spec(v: &SwitchSpec) {
-    let SwitchSpec { auto_advance_ms: _, cases: _, default: _, on: _ } = v;
-}
-
-fn _fields_tabs_spec(v: &TabsSpec) {
-    let TabsSpec { active_index: _, children: _, orientation: _, on_select: _, on_select_tag: _, tab_headers: _, tab_tags: _, active_tag: _ } = v;
-}
-
-fn _fields_toast_spec(v: &ToastSpec) {
-    let ToastSpec { dismissable: _, message: _, open: _, tone: _ } = v;
-}
-
-fn _fields_tree_spec(v: &TreeSpec) {
-    let TreeSpec { expanded_state_key: _, items: _, on_select: _, selection_state_key: _ } = v;
-}
-
-fn _fields_accessibility(v: &Accessibility) {
-    let Accessibility { described_by: _, hidden: _, label: _, labelled_by: _, live_region: _, role: _, speak: _ } = v;
-}
-
-fn _fields_column_erased(v: &ColumnErased) {
-    let ColumnErased { field: _, sortable: _, editable: _, format: _, kind: _, label: _, value: _, width: _ } = v;
-}
-
-fn _fields_compare_rule(v: &CompareRule) {
-    let CompareRule { against: _, op: _ } = v;
-}
-
-fn _fields_content_hash(v: &ContentHash) {
-    let ContentHash { algorithm: _, hash: _, strictness: _ } = v;
-}
-
-fn _fields_default_sort(v: &DefaultSort) {
-    let DefaultSort { column: _, direction: _ } = v;
-}
-
-fn _fields_draw_point(v: &DrawPoint) {
-    let DrawPoint { x: _, y: _ } = v;
-}
-
-fn _fields_draw_style(v: &DrawStyle) {
-    let DrawStyle { emphasis: _, fill: _, font_family: _, font_size: _, mark_id: _, opacity: _, rotation: _, stroke: _, stroke_width: _, text_anchor: _, tip: _ } = v;
-}
-
-fn _fields_effect_class(v: &EffectClass) {
-    let EffectClass { determinism: _, host_effect: _ } = v;
-}
-
-fn _fields_field_rule(v: &FieldRule) {
-    let FieldRule { compare: _, format: _, max_length: _, message: _, min_length: _, pattern: _ } = v;
-}
-
-fn _fields_filter_spec(v: &FilterSpec) {
-    let FilterSpec { kind: _, label: _, name: _ } = v;
-}
-
-fn _fields_form_field(v: &FormField) {
-    let FormField { id: _, kind: _, label: _, required: _, help: _, rule: _ } = v;
-}
-
-fn _fields_mount_channel(v: &MountChannel) {
-    let MountChannel { direction: _, message_shape: _ } = v;
-}
-
-fn _fields_invoke_arg(v: &InvokeArg) {
-    let InvokeArg { addr: _, value: _ } = v;
-}
-
-fn _fields_map_marker(v: &MapMarker) {
-    let MapMarker { label: _, latitude: _, longitude: _ } = v;
-}
-
-fn _fields_select_option(v: &SelectOption) {
-    let SelectOption { label: _, value: _ } = v;
-}
-
-fn _fields_semantic_style(v: &SemanticStyle) {
-    let SemanticStyle { direction: _, emphasis: _, role: _, tone: _, voice: _, weight: _ } = v;
-}
-
-fn _fields_src_set_entry(v: &SrcSetEntry) {
-    let SrcSetEntry { src: _, width: _ } = v;
-}
-
-fn _fields_state_behaviour(v: &StateBehaviour) {
-    let StateBehaviour { on_empty: _, on_error: _, on_loading: _ } = v;
-}
-
-fn _fields_static_rows(v: &StaticRows) {
-    let StaticRows { default_sort: _, headers: _, rows: _, sortable: _ } = v;
-}
-
-fn _fields_style_delta(v: &StyleDelta) {
-    let StyleDelta { direction: _, emphasis: _, role: _, tone: _, voice: _, weight: _ } = v;
-}
-
-fn _fields_switch_case(v: &SwitchCase) {
-    let SwitchCase { child: _, condition: _ } = v;
-}
-
-fn _fields_tab_header(v: &TabHeader) {
-    let TabHeader { label: _, icon: _, disabled: _ } = v;
-}
-
-fn _fields_track_entry(v: &TrackEntry) {
-    let TrackEntry { default: _, kind: _, label: _, src: _, src_lang: _ } = v;
-}
-
-fn _fields_transform_param(v: &TransformParam) {
-    let TransformParam { from: _, name: _ } = v;
-}
-
-fn _fields_tree_item(v: &TreeItem) {
-    let TreeItem { children: _, icon: _, id: _, label: _ } = v;
-}
-
-fn _fields_view_box(v: &ViewBox) {
-    let ViewBox { height: _, min_x: _, min_y: _, width: _ } = v;
-}
-
-fn _fields_op_edit_node(v: &TreeOp) {
-    if let TreeOp::EditNode { new_kind: _, target: _ } = v {}
-}
-
-fn _fields_op_insert_child(v: &TreeOp) {
-    if let TreeOp::InsertChild { child: _, parent_id: _ } = v {}
-}
-
-fn _fields_op_move_node(v: &TreeOp) {
-    if let TreeOp::MoveNode { new_parent_id: _, target: _ } = v {}
-}
-
-fn _fields_op_patch_style(v: &TreeOp) {
-    if let TreeOp::PatchStyle { style: _, target: _ } = v {}
-}
-
-fn _fields_op_remove_node(v: &TreeOp) {
-    if let TreeOp::RemoveNode { target: _ } = v {}
-}
-
-fn _fields_op_reorder_children(v: &TreeOp) {
-    if let TreeOp::ReorderChildren { new_order: _, parent_id: _ } = v {}
-}
-
-fn _fields_op_replace_binding(v: &TreeOp) {
-    if let TreeOp::ReplaceBinding { binding: _, slot: _, target: _ } = v {}
-}
-
-fn _fields_op_replace_root(v: &TreeOp) {
-    if let TreeOp::ReplaceRoot { node: _ } = v {}
-}
-
-fn _fields_op_update_prop(v: &TreeOp) {
-    if let TreeOp::UpdateProp { path: _, target: _, value: _ } = v {}
-}
-
-fn _fields_op_update_state(v: &TreeOp) {
-    if let TreeOp::UpdateState { state: _, target: _ } = v {}
-}
-
-fn _fields_op_update_style(v: &TreeOp) {
-    if let TreeOp::UpdateStyle { style: _, target: _ } = v {}
+// Every type the IDL defines, through the uniform rules in idl_codegen.rs and the
+// departures declared in dialect.rs. Behaviour impls stay in model.rs.
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BadgeSpec {
+    pub label: TextSource,
+    pub variant: BadgeVariant,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoxSpec {
+    pub children: Vec<Node>,
+    pub heading: Option<TextSource>,
+    pub layout: BoxLayout,
+    pub role: BoxRole,
+    /// Phase 1473 — a PAGED-medium declaration, omitted at `false`. It names the
+    /// one fact a host cannot recover from a rendering: a formatter laying out
+    /// pages sees boxes, and nothing in the rendering carries back that the
+    /// three lines of a totals block are ONE THING that reads wrong when halved.
+    /// "Not stated" and "explicitly off" are the same state, so there is no
+    /// third value and a present member of the wrong JSON kind is REFUSED
+    /// rather than coerced.
+    /// This container and its whole subtree stay on one page.
+    pub keep_together: bool,
+    /// Phase 1473 — this container starts at the top of a fresh page. There is
+    /// deliberately no break-AFTER member anywhere: a break after this container
+    /// is a break before the next one.
+    pub break_before: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ButtonSpec {
+    pub label: TextSource,
+    pub on_click: Action,
+    pub variant: ButtonVariant,
+    pub icon: Option<String>,
+    pub disabled: Option<Binding>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CalloutSpec {
+    pub body: TextSource,
+    pub dismissable: bool,
+    pub tone: ToneVariant,
+    pub heading: Option<TextSource>,
+    pub icon: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChartSpec {
+    pub kind: ChartKind,
+    pub source: Binding,
+    pub stacked: bool,
+    pub x_field: String,
+    pub y_fields: Vec<String>,
+    pub title: Option<TextSource>,
+    /// Phase 876 — the VALUE axis's number format, reusing the existing
+    /// `Format` vocabulary. A semantic declaration ("these numbers are pounds /
+    /// a ratio"), which is why it is a wire field where the chart STYLE is not.
+    /// Absent means no declared meaning — the lowering still applies its
+    /// canonical default rendering.
+    pub value_format: Option<Format>,
+    /// Phase 878 — the x axis's NAME. On the same side of the semantic line as
+    /// `title`: what an axis is CALLED is the author's meaning, where and how it
+    /// is drawn stays the host's. Absent falls back to the capitalised field
+    /// name, so an axis is never nameless.
+    pub x_title: Option<TextSource>,
+    /// Phase 878 — the value axis's NAME. Absent falls back to the capitalised
+    /// FIRST y-field; with no y-fields at all there is no honest fallback and no
+    /// y title draws.
+    pub y_title: Option<TextSource>,
+    /// Phase 878 — a muted qualifier line under the visible `title`. Its
+    /// PRESENCE also suppresses the display-unit slot: the subtitle is the
+    /// author's own place to state a unit, and the machine restating it two
+    /// lines away is the clutter the rule exists to prevent.
+    pub subtitle: Option<TextSource>,
+    /// Phase 880 — WHERE the legend sits, and whether it sits anywhere at all.
+    /// Semantic for the same reason the titles above are (D8): the edge an author
+    /// wants the legend on is their meaning; the column widths and pitches that
+    /// realise it are the host's.
+    ///
+    /// Absent means "the host's default" (`Right`) — NOT "no legend"; suppression
+    /// is the explicit [`ChartLegendPosition::None`]. So absence stays the
+    /// ordinary shape and is omitted on the wire, and an author who wants no
+    /// legend says so.
+    pub legend_position: Option<ChartLegendPosition>,
+    /// Phase 881 — whether the values are written onto the picture. Semantic in
+    /// the same way (D8): whether a reader is meant to read the NUMBERS or the
+    /// shape is the author's meaning; the type size, the offsets and the fit rule
+    /// that decide whether a given label draws are the host's.
+    ///
+    /// Absent means [`ChartDataLabels::Off`], which is ALSO the default — the one
+    /// place this differs from `legend_position`, deliberately: a legend is chrome
+    /// an author opts OUT of, where a data label is ink an author opts IN to. So an
+    /// absent field is byte-identical to the pre-881 wire and to the pre-881
+    /// picture.
+    pub data_labels: Option<ChartDataLabels>,
+    /// Phase 882 — what the x column MEANS: discrete categories, or dates on a
+    /// continuous temporal scale. Semantic in the same way (D8): whether a column
+    /// is a set of categories or a run of dates is a fact about the data; the tick
+    /// ladder, the label format and the margins that realise it are the host's.
+    ///
+    /// Absent means [`ChartXScale::Category`], which is also the shipped default,
+    /// so an absent field is byte-identical to the pre-882 wire AND to the pre-882
+    /// picture. `Temporal` is a DECLARATION the pre-emit validator grounds against
+    /// the column type (FUARAN097) — never an inference from the data, which would
+    /// make the same tree draw differently depending on where its rows came from.
+    pub x_scale: Option<ChartXScale>,
+    /// Phase 1490 — the data-addressed annotations (§4l of
+    /// `docs/CHARTS-DRAWING-PRIMITIVE-DESIGN.md`): reference lines, event markers
+    /// and range bands, one closed union so a further member is a case rather
+    /// than a further widening of this record. Semantic in the same way the
+    /// fields above are (D8): WHERE in the data a threshold or an episode sits is
+    /// the author's meaning; the stroke weights, opacities and label offsets that
+    /// draw it are the host's.
+    ///
+    /// Absent OMITS on the wire, so every pre-1490 chart is byte-identical on the
+    /// wire AND in the picture. An EMPTY list is a DIFFERENT document from an
+    /// absent field and round-trips as `"annotations":[]`.
+    pub annotations: Option<Vec<ChartAnnotation>>,
+    pub on_point_click: Option<Closure>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CodeBlockSpec {
+    pub code: String,
+    pub copyable: bool,
+    pub highlight_lines: Vec<i64>,
+    pub language: String,
+    pub line_numbers: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CustomSpec {
+    pub module_id: String,
+    pub component_id: String,
+    /// A structured-JSON map (rule 12).
+    pub props: Vec<(String, JVal)>,
+    pub content_hash: Option<ContentHash>,
+    /// Emitted only when non-empty.
+    pub exposed_node_ids: Vec<NodeId>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GridSpec {
+    pub columns: Vec<ColumnErased>,
+    pub editable: bool,
+    pub row_key: Option<Closure>,
+    pub row_key_field: Option<String>,
+    /// Phase 818 — the grid-sort header affordance for a data-bound grid:
+    /// names the State key carrying the sort descriptor
+    /// `{"column": <index>, "direction": "asc"|"desc"}` the runtime sorts its
+    /// resolved rows by (and whose headers write it). Omitted on the wire when
+    /// absent; `static_rows`' own Phase-801 sort intent is untouched.
+    pub sort_state_key: Option<String>,
+    /// Phase 862 — how many rows a page holds. A page of zero or fewer rows
+    /// names no page at all, so a non-positive value is a decode error.
+    pub page_size: Option<i64>,
+    /// Phase 862 — names the State key carrying `{"page": N}` (1-based). The
+    /// page POSITION lives in State so a pager can move it; a literal page
+    /// number is deliberately not expressible.
+    pub page_state_key: Option<String>,
+    /// Phase 861 — the BOUND path's declared initial order, the same record the
+    /// `static_rows` spelling carries at its own path.
+    pub default_sort: Option<DefaultSort>,
+    /// Phase 863 — the declared edit DESTINATION: a State key on the grid, not
+    /// a per-cell host closure (which carries no destination across the wire).
+    pub edit_state_key: Option<String>,
+    /// Phase 934 — declarative row reorder; omitted-when-false, the same
+    /// convention as `editable`. Edits and reorders share one destination.
+    pub reorderable: bool,
+    /// Phase 1125 — the two sides of ONE shared State key. A grid declaring
+    /// `transfer_out_key` K may RELEASE rows onto K; one declaring
+    /// `transfer_in_key` K ACCEPTS rows arriving on it. They are separate
+    /// decoder arms, and the corpus vectors them separately for that reason.
+    pub transfer_in_key: Option<String>,
+    pub transfer_out_key: Option<String>,
+    /// Phase 1473 — a PAGED-medium declaration, omitted at `false`. It names the
+    /// one fact a host cannot recover from a rendering: a formatter laying out
+    /// pages sees boxes, and nothing in the rendering carries back that the
+    /// three lines of a totals block are ONE THING that reads wrong when halved.
+    /// "Not stated" and "explicitly off" are the same state, so there is no
+    /// third value and a present member of the wrong JSON kind is REFUSED
+    /// rather than coerced.
+    /// No row of this grid is split across a page boundary. Applied to the
+    /// grid's ROWS, never to the grid as a whole — which is why it is a separate
+    /// member from `BoxSpec.keep_together` rather than reachable by wrapping.
+    pub keep_rows_together: bool,
+    /// Phase 1473 — the column headers repeat at the top of every page the grid
+    /// continues onto. What survives on `DataGrid` is precisely what no
+    /// arrangement of existing kinds reaches.
+    pub repeat_header: bool,
+    /// Phase 1123 — this grid's rows may be taken out of the page as a file.
+    /// Omitted at `false`, so every pre-1123 document is byte-identical.
+    pub exportable: bool,
+    /// Phase 1892 — names the State key carrying the row-window descriptor
+    /// `{"offset": N, "count": M}`. Omitted on the wire when absent. The
+    /// server renderer applies the window (Phase 1912).
+    pub window_state_key: Option<String>,
+    /// Phase 1892 — the declared row total, an int `Binding` (the same slot
+    /// shape as `Tabs.activeIndex` / `Stepper.activeStep`). Omitted on the
+    /// wire when absent.
+    pub row_total: Option<Binding>,
+    pub source: Binding,
+    pub static_rows: Option<StaticRows>,
+    pub on_row_click: Option<Closure>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisclosureSpec {
+    pub children: Vec<Node>,
+    pub default_open: bool,
+    pub heading: TextSource,
+    pub on_toggle: Option<Closure>,
+    pub open: Binding,
+}
+
+/// A bounded, typed vector-graphics primitive (`DisplayKind.Drawing`). Geometry
+/// is static numbers — a resolved artefact; only `DrawStyle` carries `Binding`s.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrawingSpec {
+    pub description: Option<TextSource>,
+    pub shapes: Vec<Shape>,
+    pub style: DrawStyle,
+    pub title: Option<TextSource>,
+    pub view_box: ViewBox,
+}
+
+/// Phase 1111 - the sandboxed third-party embed (WIRE_FORMAT.md 3.6.8).
+///
+/// `title` is REQUIRED: a frame is a focus container a reader tabs INTO, so
+/// there is no decorative embed the way there is a decorative image, and an
+/// invented title is a claim about somebody else's document.
+///
+/// `permissions` is omitted at the EMPTY list, and empty means TOTAL DENIAL -
+/// the wire-cheapest document is also the most locked-down one. `aspect_ratio`
+/// REUSES [`ImageAspect`] rather than minting a parallel enum with identical
+/// cases, and omits at `Natural` for the reason every other omit-at-default slot
+/// does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbedSpec {
+    pub aspect_ratio: ImageAspect,
+    pub permissions: Vec<EmbedPermission>,
+    pub src: Binding,
+    pub title: TextSource,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ErrorBoundarySpec {
+    pub child: Box<Node>,
+    pub fallback: Box<Node>,
+}
+
+/// The labeled TEXT fact — `Metric`'s complementary type. `value` is a
+/// [`TextSource`] (the same vocabulary the labels use, so `Bound` / `I18n`
+/// values ride through); `emphasis` is the behavioural bool (omit-when-false),
+/// `tone` omit-when-default; `help` / `icon` optional.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FactSpec {
+    pub emphasis: bool,
+    pub help: Option<TextSource>,
+    pub icon: Option<String>,
+    pub label: TextSource,
+    pub tone: ToneVariant,
+    pub value: TextSource,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileUploadSpec {
+    pub accept: Vec<String>,
+    pub label: TextSource,
+    pub multiple: bool,
+    pub disabled: Option<Binding>,
+    /// Phase 1115 - the paste ingress route. Same polarity, same reason.
+    pub accept_paste: bool,
+    /// Phase 1115 - an ADDITIONAL ingress route, never a replacement for the
+    /// picker. Omits at `false`, and the polarity is load-bearing: the shortest
+    /// upload document is the plain picker, which is what every document written
+    /// before this revision says.
+    pub drop_target: bool,
+    /// Phase 1116 — WHICH of the reader's own recording devices the platform
+    /// should open in place of the file browser (WIRE_FORMAT.md §3.6.18). The
+    /// third ingress route, and the only one that PRODUCES a file rather than
+    /// moving one that already exists.
+    ///
+    /// OPTIONAL rather than omit-at-default, and the distinction is real: "say
+    /// nothing" is a state of its own, because an upload naming no device is
+    /// asking for the file browser, which is not one of the two devices wearing
+    /// a default.
+    pub capture: Option<CaptureSource>,
+    /// Phase 1117 — the host-registered destination an upload streams to
+    /// (§3.6.20). A NAME, and a name because it must never be an ADDRESS: a
+    /// wire document comes from an arbitrary emitter, and a URL here would let
+    /// that emitter choose where a reader's file goes.
+    ///
+    /// The empty string is REFUSED rather than read as absence — reading it as
+    /// absence silently turns an upload the author meant to stream into a
+    /// client-only one while every visible thing about the control still works.
+    /// An UNREGISTERED non-empty id is deliberately not a decode refusal:
+    /// whether an id is registered is a fact about the HOST, so a decoder that
+    /// judged it would make one document's validity depend on who read it.
+    pub destination: Option<String>,
+    /// Phase 1548 — the largest single file this control accepts, in bytes
+    /// (§3.6.23). PER FILE, not per selection: it bounds each file the reader
+    /// picks, which is what makes it the quantity the `file-read` route can be
+    /// measured against and what makes it meaningful on a single-file upload. A
+    /// control bounding a whole multiple selection states both members and
+    /// declares `max_bytes * max_files`.
+    ///
+    /// Absent declares NO ceiling — the pre-1548 control, bounded only by
+    /// whatever the host already enforces. A present value is POSITIVE, and the
+    /// floor is a decode rule rather than a type because this wire has no
+    /// refined-integer form; zero is refused as firmly as a negative, since a
+    /// ceiling of zero is a control that can accept nothing.
+    ///
+    /// `i64` here carries a slot the format declares as a signed 32-BIT integer
+    /// (§7.1), exactly as every other integer member of this model does — the
+    /// range is enforced at decode, not by the Rust type.
+    pub max_bytes: Option<i64>,
+    /// Phase 1548 — how many files this control accepts in one selection.
+    /// Absent declares no ceiling. Meaningful only alongside `multiple`: a
+    /// single-file upload admits one file by construction, so a ceiling there is
+    /// INERT rather than wrong, and is documented rather than refused. Positive
+    /// on the same terms as `max_bytes`.
+    pub max_files: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormSpec {
+    pub fields: Vec<FormField>,
+    pub on_submit: Action,
+    pub submit_label: TextSource,
+    pub disabled: Option<Binding>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FragmentDeclSpec {
+    pub body: Box<Node>,
+    pub name: String,
+    pub holes: Vec<HoleDecl>,
+    pub effect: EffectClass,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FragmentRefSpec {
+    pub name: String,
+    pub args: Vec<(String, FragmentArg)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeadingSpec {
+    pub level: i64,
+    pub text: TextSource,
+    pub variant: HeadingVariant,
+}
+
+/// Phase 821 — the standalone icon-only display kind. `size`
+/// omitted-when-`Medium`, `tone` omitted-when-`Default`, `label`
+/// omitted-when-decorative (`None` ⇒ `aria-hidden`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct IconSpec {
+    pub icon: String,
+    pub size: IconSize,
+    pub tone: ToneVariant,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageSpec {
+    pub alt: TextSource,
+    pub src: Binding,
+    pub variant: ImageVariant,
+    /// Phase 1077 (§3.6.2) — omitted at `Natural` on both boundaries.
+    pub fit: ImageFit,
+    /// Phase 1077 (§3.6.2) — omitted at `Natural` on both boundaries.
+    pub aspect_ratio: ImageAspect,
+    /// Phase 1077 (§3.6.2) — omitted at `Eager` on both boundaries.
+    pub loading: ImageLoading,
+    /// Phase 1080 (§3.6.4) — the missing-list-field decode class: an ABSENT
+    /// `srcSet` IS the empty list, never `None`, and a present `null` is
+    /// refused. Absence already has a spelling, and a second one would let two
+    /// conformant hosts emit different canonical bytes for one document. The
+    /// AUTHORED ORDER is preserved here and on encode; ascending-by-width is
+    /// the RENDERER's canonicalisation, not the codec's.
+    pub src_set: Vec<SrcSetEntry>,
+    /// Phase 1079 (§3.6.5) — omitted at `false`. Declares that the full-size
+    /// asset is REACHABLE from the rendered image (a real anchor), not that a
+    /// lightbox appears; nothing here crosses the dispatch gate.
+    pub expandable: bool,
+    /// Phase 1078 (§3.6.3) — optional CONTENT, not an identity default, so it
+    /// takes the ordinary optional-field posture: omitted when absent. It is a
+    /// full [`TextSource`] and not a string, which is the rule a second host is
+    /// most likely to break — narrowing the slot costs nothing until somebody
+    /// needs a locale.
+    pub caption: Option<TextSource>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LabelValueRowSpec {
+    /// The behavioural bool (not the `Emphasis` style DU). 0.2.2 — omitted on
+    /// the wire when `false`, aligning with `Fact`'s identical flag.
+    pub emphasis: bool,
+    pub format: CellFormat,
+    pub label: TextSource,
+    /// 0.2.0 rename law — scalar displayed value ⇒ `value` (see [`MetricSpec`]).
+    pub value: Binding,
+    pub help: Option<TextSource>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinkSpec {
+    pub href: Binding,
+    pub label: TextSource,
+    pub download: bool,
+    pub rel: Option<String>,
+    pub target: Option<String>,
+    /// Omitted on the wire when `None` (every pre-existing tree byte-identical).
+    pub protection: Option<LinkProtection>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListSpec {
+    pub items: Vec<TextSource>,
+    pub ordered: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MapSpec {
+    pub centre_latitude: f64,
+    pub centre_longitude: f64,
+    pub source: Binding,
+    pub zoom: i64,
+    pub on_marker_click: Option<Closure>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkdownSpec {
+    pub text: TextSource,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MathSpec {
+    pub source: String,
+    pub display: MathDisplay,
+}
+
+/// Phase 1076 — the playback surface (§3.6.6). ONE kind, two variants: every
+/// slot a video surface and an audio surface share is stated once here, and
+/// only the genuinely-differing slots live in the [`MediaKind`] variant.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaSpec {
+    /// Omitted at TRUE on the wire (the second such slot in the vocabulary,
+    /// after `Toast.dismissable`): a media element without a transport cannot
+    /// be paused, seeked or muted by a keyboard user at all, so the accessible
+    /// setting is what a document gets for free.
+    pub controls: bool,
+    pub kind: MediaKind,
+    /// REQUIRED, and the one place the media contract differs from `Image`'s.
+    /// An image can honestly be decorative and say so with an empty `alt`; a
+    /// media element is a TRANSPORT — a control a reader focuses, plays, pauses
+    /// and seeks — so it is never decorative, and a document omitting it is
+    /// refused rather than defaulted to a fabricated name.
+    pub label: TextSource,
+    /// Ordinary polarity — omitted at `false`. Named `r#loop` so the field and
+    /// the wire key are the same word.
+    pub r#loop: bool,
+    pub src: Binding,
+    /// Phase 1110 - the element's timed-text tracks, in the AUTHORED order the
+    /// wire carries. Omitted when EMPTY: an absent list and an empty one denote
+    /// the same document, so a decoder restores `[]` and never a null.
+    pub tracks: Vec<TrackEntry>,
+    /// Phase 1110 - the text alternative. An ordinary optional: absent means the
+    /// document offers no transcript, which is a different statement from
+    /// offering an empty one.
+    pub transcript: Option<TextSource>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetricSpec {
+    pub label: TextSource,
+    /// 0.2.0 rename law — a *scalar displayed value* is named `value` on the
+    /// wire (`source` is reserved for collection feeds). The retired
+    /// `Metric.source` spelling is a hard decode error, not an alias.
+    pub value: Binding,
+    pub format: CellFormat,
+    pub tone: ToneVariant,
+    pub weight: StyleWeight,
+    pub emphasis: Emphasis,
+    pub trend: Option<Binding>,
+    pub trend_format: Option<CellFormat>,
+    /// Phase 867 — which way this quantity IMPROVES (§3.6.1). Omitted-when-
+    /// `HigherIsBetter` on the wire, like the other stylistic slots above, so
+    /// the field is a total `TrendPolarity` rather than an `Option`: the wire's
+    /// "absent means `HigherIsBetter`" is a DEFAULT, not a third state, and
+    /// modelling it as `None` would put a decision back into every reader.
+    ///
+    /// The slot is inert without `trend` — a `Metric` that declares a polarity
+    /// and carries no trend is legal and says nothing (§3.6.1 clause 4).
+    pub trend_polarity: TrendPolarity,
+    pub icon: Option<String>,
+    pub subtext: Option<TextSource>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModalSpec {
+    pub children: Vec<Node>,
+    pub dismissable: bool,
+    /// A wire-survivable `Action` (not a closure sentinel); optional since Phase 426.
+    pub on_dismiss: Option<Action>,
+    pub open: Binding,
+    pub heading: Option<TextSource>,
+    /// WIRE_FORMAT.md 3.6.11 - omitted at `Modal`, the blocking modality every
+    /// pre-modality document meant. Only the blocking modality carries the
+    /// `aria-modal` inertness claim.
+    pub modality: ModalityKind,
+    /// WIRE_FORMAT.md 3.6.11 - the id of the element a `Popover` is positioned
+    /// against. An ordinary optional: a popover with no anchor is positioned by
+    /// the host's own default.
+    pub anchor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MountSpec {
+    pub capabilities: Vec<String>,
+    pub channel: MountChannel,
+    pub inputs: Vec<(String, FragmentArg)>,
+    pub scope_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProgressSpec {
+    pub fraction: Binding,
+    pub indeterminate: bool,
+    pub tone: ToneVariant,
+    pub label: Option<TextSource>,
+    pub caveat: Option<TextSource>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScrollAreaSpec {
+    pub children: Vec<Node>,
+    pub orientation: ScrollOrientation,
+    pub max_height: Option<i64>,
+    pub max_width: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectSpec {
+    pub label: TextSource,
+    pub on_change: Option<Closure>,
+    pub on_change_multi: Option<Closure>,
+    pub source: Binding,
+    pub value: Binding,
+    pub placeholder: Option<TextSource>,
+    pub disabled: Option<Binding>,
+    /// Emitted only when `true` (Phase 291), so single-select stays byte-identical.
+    pub multiple: bool,
+    pub values: Option<Binding>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkeletonSpec {
+    pub rows: i64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SparklineSpec {
+    pub source: Binding,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplitPanelSpec {
+    pub children: Vec<Node>,
+    pub weight: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepperSpec {
+    pub active_step: Binding,
+    pub children: Vec<Node>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SummaryListSpec {
+    pub children: Vec<Node>,
+    pub heading: Option<TextSource>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchSpec {
+    /// Phase 1122 — the timed carousel: advance to the next case every
+    /// this-many milliseconds, omitted at absence. It declares the one fact a
+    /// host cannot recover from the tree — every other half of a carousel was
+    /// already composable, and nothing in any arrangement of those says a timer
+    /// exists.
+    ///
+    /// A DURATION, never a flag: "advances" with no interval would make a host
+    /// invent a period. Non-positive and fractional values are REFUSED rather
+    /// than canonicalised — `0` is what an emitter reaches for to mean "off"
+    /// and the language already has a spelling for off, an absent key.
+    pub auto_advance_ms: Option<i64>,
+    pub cases: Vec<SwitchCase>,
+    pub default: Box<Node>,
+    /// The branch selector — any Binding (Phase 768): a `State` selector keeps
+    /// the Phase 392 behaviour; a `Selection` selector lets the branch follow
+    /// the clicked row with no writer. The no-default `State` form keeps its
+    /// compact `stateKey` spelling on the wire (the encoder collapses it
+    /// back); any other selector encodes under an `on` key holding the
+    /// canonical Binding wire form.
+    pub on: Binding,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TabsSpec {
+    pub active_index: Binding,
+    pub children: Vec<Node>,
+    pub orientation: Orientation,
+    pub on_select: Option<Closure>,
+    pub on_select_tag: Option<Closure>,
+    pub tab_headers: Option<Vec<TabHeader>>,
+    pub tab_tags: Option<Vec<String>>,
+    pub active_tag: Option<Binding>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToastSpec {
+    pub dismissable: bool,
+    pub message: TextSource,
+    pub open: Binding,
+    pub tone: ToneVariant,
+}
+
+/// Phase 1120 - recursive disclosure with tree semantics (WIRE_FORMAT.md
+/// 3.6.12).
+///
+/// The kind carries no `expandable` and no `selectable` boolean, and none is
+/// coming: a behaviour the reader drives is declared as a named State key the
+/// host both writes and reads. `expanded_state_key` names a State value holding
+/// a JSON ARRAY OF ROW IDS (absent => the tree renders FULLY EXPANDED and does
+/// not toggle); `selection_state_key` names one holding a BARE ROW-ID STRING
+/// (absent => the tree does not select and emits no `aria-selected`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TreeSpec {
+    pub expanded_state_key: Option<String>,
+    pub items: Vec<TreeItem>,
+    pub on_select: Option<Closure>,
+    pub selection_state_key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Accessibility {
+    pub described_by: Option<NodeId>,
+    pub hidden: Option<Binding>,
+    pub label: Option<Binding>,
+    pub labelled_by: Option<NodeId>,
+    pub live_region: Option<LiveRegionKind>,
+    /// The raw ARIA role string (named roles and the custom escape both encode
+    /// as the raw string, §10.2).
+    pub role: Option<String>,
+    /// Phase 1812 — the node's SPOKEN rendering for a voice surface: an ordinary
+    /// `TextSource` (bare-string canonical for a literal, as `tooltip`). Inert to
+    /// every visual renderer: it MUST reach no attribute and no visible text.
+    pub speak: Option<TextSource>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColumnErased {
+    pub field: Option<String>,
+    /// Phase 861 — per-column sort NARROWING on the bound path. Absent inherits
+    /// the grid-level intent, which is why an explicit `false` is carried on the
+    /// wire rather than omitted-when-default: omitting it would erase the
+    /// narrowing the author declared.
+    pub sortable: Option<bool>,
+    /// Phase 863 — per-column editability NARROWING; absent inherits the
+    /// grid-level `editable` flag. Deliberately not spelled `readOnly`: an
+    /// inverting alias that guesses wrong makes a read-only column editable.
+    pub editable: Option<bool>,
+    pub format: CellFormat,
+    pub kind: CellKindErased,
+    pub label: String,
+    /// Phase 425 — `value` (closure) + `field` (declarative) are sibling slots.
+    pub value: Option<Closure>,
+    pub width: ColumnWidth,
+}
+
+/// The cross-field operand. `against` is a `Binding`, and that IS the cross-field
+/// mechanism rather than an accident of typing: any read slot may take a Binding,
+/// and the auto-bind rule already puts every form field's value in State under the
+/// field's own id, so `{"$type":"State","key":"<sibling id>"}` reads the sibling
+/// with no coordination vocabulary at all.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompareRule {
+    pub against: Binding,
+    pub op: CompareOp,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContentHash {
+    pub algorithm: String,
+    pub hash: String,
+    pub strictness: HashStrictness,
+}
+
+/// Phase 801 — a static table's declared initial order. `column` is a
+/// non-negative index into `StaticRows::headers`; an index past the end is
+/// deliberately not a decode error (a sibling-value relation is not something a
+/// per-object codec judges).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DefaultSort {
+    pub column: i64,
+    pub direction: SortDirection,
+}
+
+/// A point in `Drawing` coordinate space.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrawPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Presentation style shared by every `Shape`; every field is optional (an
+/// all-`None` style emits `{}`). The text-only fields (`text_anchor` /
+/// `font_size` / `emphasis` / `font_family`, Phase 528.1) apply only to `Label`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DrawStyle {
+    pub emphasis: Option<Emphasis>,
+    pub fill: Option<Binding>,
+    pub font_family: Option<String>,
+    pub font_size: Option<f64>,
+    /// Phase 642 — keyed mark identity: a data-bearing shape's derivation-based
+    /// id (`series-field|category-key`), stable under row reorder and data
+    /// refresh (object constancy). Renderers emit it as `data-fuaran-mark`;
+    /// omitted-when-`None` (rule 4). Chrome (axes, gridlines, labels, legend)
+    /// deliberately stays unstamped.
+    pub mark_id: Option<String>,
+    pub opacity: Option<Binding>,
+    /// Phase 877 — clockwise `Label` text rotation in DEGREES about the label's
+    /// own anchor point (`Shape::Label`'s `x` / `y`). Renderers emit
+    /// `transform="rotate(θ x y)"` on the `<text>` element, so the anchor is the
+    /// pivot and `text_anchor` keeps its meaning in the rotated frame.
+    ///
+    /// Applies only to `Label`, like the other text-only fields — and here that
+    /// is load-bearing rather than cosmetic: an SVG `transform` on a `<rect>`
+    /// would MOVE GEOMETRY, so this is the one text field whose uniform
+    /// emission would silently distort a drawing.
+    ///
+    /// Omitted-when-`None` (rule 4). `Some(0.0)` is a legitimate PRESENT value
+    /// and a different wire shape from `None` — never collapse the two.
+    pub rotation: Option<f64>,
+    pub stroke: Option<Binding>,
+    pub stroke_width: Option<Binding>,
+    pub text_anchor: Option<TextAnchor>,
+    /// Phase 883 — the mark's hover-readable text. Renderers emit it as an SVG
+    /// `<title>` element that is the FIRST CHILD of that shape's own element:
+    /// the native browser tooltip and the element's accessible name, with no
+    /// script, so a statically-served page carries the readout too.
+    ///
+    /// Unlike the Phase 528.1 text cluster and `rotation`, this applies to
+    /// EVERY shape, not just `Label` — the marks a reader hovers are bars,
+    /// wedges and points, and a `<title>` child is inert geometry-wise
+    /// everywhere.
+    ///
+    /// The emission consequence to get right: a TIPPED shape cannot be emitted
+    /// self-closing — `<rect …/>` becomes `<rect …><title>…</title></rect>`.
+    /// An absent tip leaves the emitted bytes unchanged, self-closing tag
+    /// included.
+    ///
+    /// Omitted-when-`None` (rule 4). `Some(TextSource::Literal(""))` is a
+    /// legitimate PRESENT value and a different wire shape from `None` — never
+    /// collapse the two.
+    pub tip: Option<TextSource>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectClass {
+    pub determinism: DeterminismSource,
+    pub host_effect: HostEffect,
+}
+
+/// A field's declared constraint — the ACCEPTED SET, where `FormFieldKind` names
+/// the control. Every slot is optional structurally; the two well-formedness
+/// refusals are relations BETWEEN slots and so live in the decoder's policy layer
+/// rather than in this shape.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldRule {
+    pub compare: Option<CompareRule>,
+    pub format: Option<TextFormat>,
+    pub max_length: Option<i64>,
+    pub message: Option<TextSource>,
+    pub min_length: Option<i64>,
+    pub pattern: Option<String>,
+}
+
+/// 0.2.0 filters-unification: a filter chip's control is an ordinary
+/// [`FormFieldKind`] — the parallel `FilterKind` DU (`TextFilter` /
+/// `ChoiceFilter` / `RangeFilter` / `SegmentedFilter`) is retired, its
+/// discriminators a hard `UNKNOWN_DU_CASE`. A chip control with no `value`
+/// key decodes to the auto binding `Filter(<chip name>)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterSpec {
+    pub kind: FormFieldKind,
+    pub label: TextSource,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormField {
+    pub id: String,
+    pub kind: FormFieldKind,
+    pub label: TextSource,
+    pub required: bool,
+    pub help: Option<TextSource>,
+    pub rule: Option<FieldRule>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MountChannel {
+    pub direction: ChannelDirection,
+    pub message_shape: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InvokeArg {
+    pub addr: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MapMarker {
+    pub label: TextSource,
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectOption {
+    pub label: TextSource,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SemanticStyle {
+    /// Phase 1472 - the DECLARED text direction, omitted at `Auto`. A node
+    /// declaring one is a bidi ISOLATION boundary: the host emits `dir` on the
+    /// node's own element so a run of the opposite direction cannot reorder the
+    /// text around it.
+    pub direction: TextDirection,
+    pub emphasis: Emphasis,
+    /// Phase 147 — omitted on the wire at its default (`None`).
+    pub role: StyleRole,
+    pub tone: ToneVariant,
+    /// Phase 147 — omitted on the wire at its default (`Default`).
+    pub voice: FontVoice,
+    pub weight: StyleWeight,
+}
+
+/// Phase 1080 — one `srcSet` candidate (§3.6.4): an alternate rendition of the
+/// SAME picture at a declared intrinsic pixel width. Both members are required
+/// *within* the entry, and `width` is a POSITIVE integer — the `w` descriptor a
+/// client selects on, so `0` is refused as firmly as a negative: a `0w`
+/// candidate is not a small image, it is one a client can never select.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SrcSetEntry {
+    pub src: Binding,
+    pub width: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct StateBehaviour {
+    pub on_empty: Option<Box<Node>>,
+    /// The `ErrorPayload -> Node` callback is a closure (§4) — presence only.
+    pub on_error: Option<Closure>,
+    pub on_loading: Option<Box<Node>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StaticRows {
+    /// Phase 801 — the table's initial order. Configuration, distinct from the
+    /// transform pipeline's data `sort`.
+    pub default_sort: Option<DefaultSort>,
+    pub headers: Vec<TextSource>,
+    pub rows: Vec<Vec<TextSource>>,
+    /// Phase 801 — the table INVITES interactive column sorting. Intent, not a
+    /// behaviour guarantee: a host with no sorting affordance renders the
+    /// authored order and stays conformant.
+    pub sortable: Option<bool>,
+}
+
+/// Phase 2291 — the payload of `PatchStyle`, the field-level style edit: the six
+/// `SemanticStyle` fields, each optional. `Some` SETS the field (a default value
+/// included — it is spelled explicitly on the wire); `None` leaves the field as
+/// it is. This is the difference from `UpdateStyle`, whose whole-record write
+/// reads an absent member as the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StyleDelta {
+    pub direction: Option<TextDirection>,
+    pub emphasis: Option<Emphasis>,
+    pub role: Option<StyleRole>,
+    pub tone: Option<ToneVariant>,
+    pub voice: Option<FontVoice>,
+    pub weight: Option<StyleWeight>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchCase {
+    pub child: Node,
+    /// EXACTLY ONE of `match_value` and `when` is present (WIRE_FORMAT.md
+    /// §3.6) — both together and neither at all are decode errors, the same
+    /// shape and the same reasoning as `SetState`'s `value` / `valueFrom` pair.
+    ///
+    /// A case naming no condition is not a case that never matches; it is a
+    /// document whose author meant something the wire cannot say, and a host
+    /// that silently skipped it would render the `default` and report nothing.
+    /// A precedence rule for "both" would have to be specified, agreed on every
+    /// host and remembered by every author, for a document nobody meant to
+    /// write.
+    pub condition: SwitchCondition,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TabHeader {
+    pub label: TextSource,
+    pub icon: Option<String>,
+    pub disabled: Option<Binding>,
+}
+
+/// Phase 1110 - one timed-text track (WIRE_FORMAT.md 3.6.6). Four of the five
+/// members are REQUIRED, which makes it the strictest record on the wire;
+/// `default` is the one omitted-at-`false` slot.
+///
+/// `src_lang` is required on EVERY kind, where HTML makes `srclang` mandatory
+/// only on a subtitles track: a track with no language is one nothing downstream
+/// can route, and there is no value to default to that would not be an invented
+/// claim about someone else's recording.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackEntry {
+    pub default: bool,
+    pub kind: TrackKind,
+    pub label: TextSource,
+    pub src: Binding,
+    pub src_lang: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TransformParam {
+    pub from: Binding,
+    pub name: String,
+}
+
+/// Phase 1120 - one `Tree` row (WIRE_FORMAT.md 3.6.12).
+///
+/// `children` is a list of the SAME record, which makes this the format's first
+/// self-referential shape; it omits at the EMPTY LIST, so a leaf carries two
+/// keys and nothing else. `id` is required because it is what the two State
+/// slots NAME; `label` is a `TextSource` because it is content.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TreeItem {
+    pub children: Vec<TreeItem>,
+    pub icon: Option<String>,
+    pub id: String,
+    pub label: TextSource,
+}
+
+/// The SVG-style view box of a `Drawing`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewBox {
+    pub height: f64,
+    pub min_x: f64,
+    pub min_y: f64,
+    pub width: f64,
+}
+
+/// A user-interaction action (`§3.3`), one variant per wire `$type` case.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Action {
+    Chain(Vec<Action>),
+    /// Phase 1126 — the payload is a `TextSource`. A `text` that is neither a
+    /// string nor a `$type`-tagged `TextSource` is `WRONG_TYPE` and is never
+    /// coerced: a host that read the widening as "this member is now open"
+    /// would put a JSON literal on the reader's clipboard, and a clipboard is a
+    /// channel the reader later pastes somewhere with authority.
+    WriteToClipboard {
+        text: TextSource,
+    },
+    /// The whole message payload is a closure (§4) — presence only.
+    Dispatch,
+    Invoke {
+        capability_id: String,
+        args: Vec<InvokeArg>,
+    },
+    /// Only the file id + encoding cross the wire; the blob and `onRead` do not.
+    ReadFileBody {
+        file_ref: String,
+        encoding: FileReadEncoding,
+    },
+    Call {
+        endpoint: String,
+        on_result: Option<Closure>,
+        into: Option<CallResultTarget>,
+    },
+    /// Phase 1536 — `route` is a `TextSource`, not a bare string, so a tree can
+    /// name a destination it computes from what the reader is looking at. The
+    /// bare JSON string IS `Literal`'s canonical form, so every document
+    /// written before the widening decodes exactly as it did.
+    ///
+    /// `target` is the CLOSED enum `Self | Blank`, not HTML's `target`
+    /// attribute: that vocabulary also contains `_parent` and `_top`, which are
+    /// frame-busting gestures a hosted tree must not be able to ask for.
+    Navigate {
+        route: TextSource,
+        target: NavigateTarget,
+    },
+    CommitLocal {
+        node_id: NodeId,
+    },
+    /// `payload` is a structured-JSON position (rule 12).
+    Notify {
+        channel: String,
+        payload: JVal,
+    },
+    /// Phase 818 — `value` (a literal, written verbatim) XOR `value_from` (a
+    /// Binding evaluated at dispatch time inside the existing gate); decode
+    /// enforces exactly one present.
+    SetState {
+        key: String,
+        value: Option<JVal>,
+        value_from: Option<Box<Binding>>,
+    },
+    AiTool {
+        tool_name: String,
+        args: JVal,
+    },
+    /// Phase 1124 — the payload-free print. The ONE `Action` arm strict about
+    /// unrecognised members: page range, size, margins and copies are the
+    /// host's page setup and the reader's dialogue, so there is nothing here a
+    /// future host could learn, and accepting a member would leave the emitter
+    /// believing it had constrained a printing it had not.
+    Print,
+    /// Phase 1537 — ask, then act. `prompt` is a `TextSource` so the question
+    /// can name what the reader selected; an absent `on_cancel` means "nothing
+    /// happens", which an absent action already expresses.
+    ///
+    /// Confirmation is bounded at ONE question — a `Confirm` reachable from
+    /// either continuation is refused, and the check walks the DECODED
+    /// continuation so a `Chain` cannot hide the nesting.
+    Confirm {
+        prompt: TextSource,
+        on_confirm: Box<Action>,
+        on_cancel: Option<Box<Action>>,
+    },
+    /// Phase 1537 — a bare node id, the `CommitLocal` shape. It addresses a node
+    /// in THIS document, so there is nothing for a binding to compute and no
+    /// `TextSource` here.
+    Focus {
+        node_id: NodeId,
+    },
+}
+
+/// A value binding (`§3.3`), one variant per wire `$type` case.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Binding {
+    Static {
+        value: StaticValue,
+    },
+    Query {
+        name: String,
+        /// Phase 421 — the declared filter edge; omitted when empty.
+        depends_on: Option<Vec<String>>,
+    },
+    Filter {
+        name: String,
+        /// 0.2.0 — the value the resolver yields (and the renderer seeds the
+        /// store with) before the filter is first written. Typed via the
+        /// slot's static encoding; omitted when `None`.
+        default_value: Option<StaticValue>,
+    },
+    Selection {
+        node_id: NodeId,
+        /// 0.2.9 (Phase 629) — the `Filter.defaultValue` convention: yielded
+        /// until the user first selects a row on `nodeId`. Omitted when `None`.
+        default_value: Option<StaticValue>,
+        /// 0.2.10 (Phase 632) — the declarative row-field projection: present
+        /// ⇒ the accessor projects that field off the clicked row. Omitted
+        /// when `None`.
+        field: Option<String>,
+    },
+    /// `default_value` is the RESOLUTION default — the slot's typed
+    /// representation an unwritten key yields (§3.3), which at `bool` is
+    /// `false` and at a numeric slot is `0`. `default_declared` is the separate
+    /// WIRE fact: whether the document actually carried a `defaultValue`.
+    ///
+    /// They are two different facts and conflating them cost a byte-level
+    /// round trip: with only the value, an absent default at a typed slot
+    /// re-encoded as the fabricated placeholder, so
+    /// `{"$type":"State","key":k}` came back as
+    /// `{"$type":"State","defaultValue":0,"key":k}`. Carrying the placeholder
+    /// AND the declaration keeps resolution unchanged — `visible` on an
+    /// unwritten key still resolves `false` and removes the node, per §3.6 —
+    /// while the encoder emits only what the document wrote.
+    ///
+    /// Phase 1656 — §5 now states that posture normatively for every host, and
+    /// pins it with `nodes/state-absent-default`,
+    /// `lenient/lenient-1656-state-default-null` and
+    /// `reject/reject-state-default-without-key`. The pair above is what makes
+    /// this host's answer expressible: on the WIRE fact it is exactly an
+    /// `Option<StaticValue>`, and it additionally carries the resolution
+    /// default an `Option` would discard, which `resolve` cannot recompute
+    /// because it has no access to the slot. `default_declared` is false for
+    /// every spelling of absence — the member missing, the member or either
+    /// alias present as `null` — and for a declared value this slot's parser
+    /// cannot read, which is the reference host's answer.
+    State {
+        key: String,
+        default_value: StaticValue,
+        default_declared: bool,
+    },
+    /// Phase 765 — the host-furnished current INSTANT is never on the wire.
+    /// Resolved once per render pass from the host's pinned ISO-8601 string —
+    /// never a clock read in the renderer, so SSR output stays reproducible for
+    /// a pinned instant.
+    ///
+    /// Phase 1533 — `grain` is the one thing the wire DOES carry, and only when
+    /// it is not the `Second` default, so a grain-less `Now` is still the bare
+    /// `{"$type":"Now"}`. It declares the RESOLUTION the document wants: the
+    /// host truncates its instant before the value is read, so a `Day`-grain
+    /// `Now` is the `YYYY-MM-DD` a day-difference verb accepts.
+    Now {
+        grain: Option<TimeGrain>,
+    },
+    Computed,
+    /// The controlled input's edit buffer (WIRE_FORMAT.md §3.3.3). `format` /
+    /// `parse` / `on_commit` are closures and never arrive at a decoding host,
+    /// so a decoded `Local` uses the IDENTITY codec unless `codec` replaces it.
+    ///
+    /// `codec` is a `Format` restricted to the cases with a TOTAL,
+    /// LOCALE-INDEPENDENT inverse — `Number` alone today — because whatever the
+    /// buffer renders it must also parse back from what the reader typed. It
+    /// carries no `LocaleSource` for that reason: a buffer writing `1,234.5`
+    /// where the reader types `1.234,5` is the round-trip hole the slot exists
+    /// to close.
+    ///
+    /// `commit_to` is the State key the flush writes to, and is MUTUALLY
+    /// EXCLUSIVE with the `on_commit` closure — carrying both is a refusal
+    /// rather than a precedence rule, because the wire cannot carry the closure
+    /// and two hosts would write to different places from identical bytes.
+    Local {
+        flush_on: LocalFlushTrigger,
+        initial_from: Box<Binding>,
+        /// Presence only — the closure never crosses the wire (§4).
+        on_commit: Option<Closure>,
+        codec: Option<Format>,
+        commit_to: Option<String>,
+    },
+    Format {
+        source: Box<Binding>,
+        format: Format,
+        locale: LocaleSource,
+    },
+    I18n {
+        key: String,
+        /// Per-argument bindings; omitted when absent.
+        args: Option<Vec<(String, Binding)>>,
+    },
+    Transform {
+        source: TransformSource,
+        pipeline: Vec<TransformStep>,
+        /// Phase 424 — omitted when empty.
+        params: Option<Vec<TransformParam>>,
+    },
+    /// Phase 1534 — ONE scalar expression evaluated to ONE value
+    /// (WIRE_FORMAT.md §3.3.2). `expr` is the SAME `ColExpr` algebra a
+    /// `Transform` pipeline step carries, in the same encoding: this case
+    /// introduces no operator and no expression language of its own, so an
+    /// expression means here exactly what it means inside a `derive`.
+    ///
+    /// `params` is the same slot `Transform` carries, omitted when empty, and
+    /// it is the reactive edge — a write to any param's source re-evaluates.
+    ///
+    /// Two DECODE refusals, both because an `Expr` has no row: a `col`
+    /// reference anywhere in `expr`, and a `param` the binding's own list does
+    /// not bind. Left admitted, each would decode to an expression whose
+    /// evaluation could only ever fail, once per render, on every host.
+    Expr {
+        expr: ColExpr,
+        /// Omitted when empty, exactly as `Transform`'s is.
+        params: Option<Vec<TransformParam>>,
+    },
+    Invoke {
+        capability_id: String,
+        args: Vec<InvokeArg>,
+    },
+}
+
+/// How a `Box` arranges its children (Phase 390).
+#[derive(Debug, Clone, PartialEq)]
+pub enum BoxLayout {
+    Auto,
+    Flex {
+        direction: Orientation,
+        wrap: bool,
+        gap: Option<i64>,
+    },
+    Grid {
+        cols: i64,
+        template_columns: Option<String>,
+        gap: Option<i64>,
+    },
+    /// WIRE_FORMAT §3.6.7 (Phase 1082) — the column-fill mode. `cols` is
+    /// REQUIRED and POSITIVE; there is deliberately no `template_columns` twin,
+    /// because the multi-column model realising masonry has no track list for
+    /// one to name.
+    Masonry {
+        cols: i64,
+        gap: Option<i64>,
+    },
+}
+
+/// The declarative result target of an `Action.Call` (Phase 428).
+#[derive(Debug, Clone, PartialEq)]
+pub enum CallResultTarget {
+    State {
+        key: String,
+    },
+    Query {
+        name: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CellFormat {
+    None,
+    Number {
+        decimals: Option<i64>,
+    },
+    Currency {
+        code: String,
+    },
+    Percent {
+        decimals: Option<i64>,
+    },
+    SignificantDigits {
+        digits: i64,
+    },
+    /// Phase 1811 — `DateTime` (was `Date`): the host-formatter pattern it
+    /// carries renders a date, a time or both.
+    DateTime {
+        format: String,
+    },
+    /// Phase 819 — trendable duration cells: raw float counts `unit`s,
+    /// rendered per `style`.
+    Duration {
+        unit: DurationUnit,
+        style: DurationStyle,
+    },
+    /// Phase 819 — cell-vocabulary parity with `Format::RelativeTime`.
+    RelativeTime {
+        unit: RelativeTimeUnit,
+    },
+    /// The formatter is a closure (§4) — presence only.
+    Custom,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CellKindErased {
+    Text,
+    Numeric,
+    Date,
+    /// `onEdit` closure — always emitted.
+    Editable,
+    /// `get` + `onToggle` closures — always emitted.
+    Checkbox,
+    /// `onClick` closure — always emitted.
+    Button {
+        label: TextSource,
+    },
+    /// Each button's `onClick` closure — always emitted.
+    ButtonGroup {
+        labels: Vec<TextSource>,
+    },
+    Link,
+    Pill,
+    /// Phase 750 — the declarative twin of `Pill`, and the ONE cell kind holding no
+    /// closure, which is exactly why it survives the wire. `field` names the row
+    /// property that is both the pill's label and the map key; `map` carries value →
+    /// tone; `default_tone` covers a value the map does not mention and is omitted on
+    /// the wire at `ToneVariant::Default`.
+    ///
+    /// A `BTreeMap` rather than a `Vec` of pairs deliberately: the tone map is a
+    /// key-addressed set, so two spellings differing only in key order are the SAME
+    /// map, and a `Vec`'s derived `PartialEq` would call them different — a difference
+    /// the round-trip property tests would surface as a phantom divergence.
+    TonedPill {
+        field: String,
+        map: BTreeMap<String, ToneVariant>,
+        default_tone: ToneVariant,
+    },
+    Progress,
+    Custom,
+}
+
+/// Phase 1490 — a chart's data-addressed annotation (§4l). One closed union, so
+/// the lowering's three arms are an EXHAUSTIVE `match` and a fourth member is a
+/// compile error at every site rather than a silent omission at one.
+///
+/// An annotation names a place in the DATA's coordinates and, optionally, a
+/// label; it carries no geometry and no style at all. That is what makes it
+/// survive a data change, a theme flip, a restyle and a resize.
+///
+/// `ReferenceLine` is a horizontal line at `value` in the VALUE axis's own units;
+/// `EventMarker` is a VERTICAL line at an x address, the mirror of the reference
+/// line across the axes; `RangeBand` is a shaded interval on either axis and is
+/// the one member that draws BEHIND every series. Every label rides the Phase
+/// 1143 text contract — carried, never resolved.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChartAnnotation {
+    ReferenceLine {
+        value: f64,
+        label: Option<TextSource>,
+    },
+    EventMarker {
+        at: ChartAnnotationX,
+        label: Option<TextSource>,
+    },
+    RangeBand {
+        range: ChartAnnotationRange,
+        label: Option<TextSource>,
+    },
+}
+
+/// Phase 1492 — a `RangeBand`'s PAIR (§4l "The three addressing forms", third
+/// row): two of the same address form, on one axis.
+///
+/// THE AXIS IS THE CASE. §4l requires a band to declare which axis it sits on;
+/// carrying that as a separate flag beside an untyped pair would admit a document
+/// declaring the value axis and addressing it with two category keys. The union
+/// tag declares the axis AND types the pair with it, so that document cannot be
+/// written by any conformant emitter.
+///
+/// Both ends enter the domain before the axis is nice-d (§4l rule 3), and an
+/// UNORDERED pair is refused rather than silently normalised — a band written
+/// backwards is an author's mistake about their own data, and swapping the ends
+/// would draw a picture they did not describe.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChartAnnotationRange {
+    ValueRange {
+        from: f64,
+        to: f64,
+    },
+    XRange {
+        from: ChartAnnotationX,
+        to: ChartAnnotationX,
+    },
+}
+
+/// Phase 1491 — an annotation's X ADDRESS (§4l "The three addressing forms"), in
+/// the two forms the x axis already distinguishes: a `Category` key naming a
+/// band, and an ISO-8601 `Date` read under `ChartXScale::Temporal`.
+///
+/// Its own type rather than two inline fields, because Phase 1492's range band
+/// addresses an x-axis interval with a PAIR of these.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChartAnnotationX {
+    Category(String),
+    Date(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ColumnWidth {
+    Auto,
+    Fixed {
+        pixels: i64,
+    },
+    Flex {
+        weight: f64,
+    },
+}
+
+/// A single SVG path command inside a `Shape::Curve`. Closed + typed — an
+/// unrecognised `$type` is `UNKNOWN_DU_CASE` at decode.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CurveCommand {
+    MoveTo(DrawPoint),
+    LineTo(DrawPoint),
+    CubicTo {
+        control1: DrawPoint,
+        control2: DrawPoint,
+        to: DrawPoint,
+    },
+    QuadraticTo {
+        control: DrawPoint,
+        to: DrawPoint,
+    },
+    Close,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FormFieldKind {
+    Text {
+        value: Binding,
+        on_change: Option<Closure>,
+    },
+    Number {
+        value: Binding,
+        on_change: Option<Closure>,
+    },
+    /// Phase 2177 — the change handler is `onChange`, as on every form-field
+    /// kind (it was `onToggle` on this case and `Toggle`).
+    Checkbox {
+        value: Binding,
+        on_change: Option<Closure>,
+    },
+    /// Phase 766 — the switch affordance: `Checkbox`'s exact wire mechanics
+    /// (bool value slot, optional `onChange`, the write-back default) under a
+    /// distinct tag, so the renderer can announce `role="switch"` semantics.
+    Toggle {
+        value: Binding,
+        on_change: Option<Closure>,
+    },
+    Choice {
+        options: Binding,
+        value: Binding,
+        on_change: Option<Closure>,
+    },
+    TextArea {
+        value: Binding,
+        on_change: Option<Closure>,
+        rows: i64,
+    },
+    RangedNumber {
+        value: Binding,
+        on_change: Option<Closure>,
+        min: Option<f64>,
+        max: Option<f64>,
+        step: Option<f64>,
+    },
+    /// 0.2.0 — the dual-thumb numeric range control (absorbed the retired
+    /// `FilterKind.RangeFilter`). A `Static` pair rides as the bare
+    /// `{"max":…,"min":…}` object; optional bounds omitted when absent.
+    Range {
+        value: Binding,
+        on_change: Option<Closure>,
+        min: Option<f64>,
+        max: Option<f64>,
+        step: Option<f64>,
+    },
+    SegmentedChoice {
+        options: Binding,
+        value: Binding,
+        on_change: Option<Closure>,
+        orientation: Orientation,
+    },
+    /// Phase 1811 — `DateTime` (was `Date`): the field already took a date, a
+    /// time of day or both via `variant`; the name now says so.
+    DateTime {
+        value: Binding,
+        on_change: Option<Closure>,
+        variant: DateTimeVariant,
+        min: Option<String>,
+        max: Option<String>,
+        step: Option<f64>,
+    },
+    /// 0.7.0 — the single-control date range (`DateTimeRange` since Phase 1811):
+    /// `Range`'s pair mechanics with `DateTime`'s value conventions (an identical
+    /// field list to `DateTime`). A `Static`
+    /// pair rides as the bare `{"from":…,"to":…}` object; `variant` is always
+    /// emitted; `min`/`max` (ISO strings) and `step` (seconds) bound BOTH ends and
+    /// are omitted when absent. In a filter context the pair binds ONE filter
+    /// param, not two — the reason the case exists rather than two coordinated
+    /// `DateTime` fields.
+    DateTimeRange {
+        value: Binding,
+        on_change: Option<Closure>,
+        variant: DateTimeVariant,
+        min: Option<String>,
+        max: Option<String>,
+        step: Option<f64>,
+    },
+    /// Phase 1113 - the searchable form of `Choice` (WIRE_FORMAT.md 3.6.9).
+    /// `options` / `value` / `on_change` are `Choice`'s, deliberately and
+    /// normatively: the constrained combobox IS a searchable select, so a
+    /// document migrating between the two changes its `$type` and nothing else,
+    /// and a host implementing a different value contract here would break
+    /// exactly that migration.
+    ///
+    /// `allow_free_text` omits at `false`, and the polarity is load-bearing -
+    /// the SHORTEST combobox document is the CONSTRAINED one, and admitting
+    /// off-list values is the thing an emitter has to ask for.
+    Combobox {
+        allow_free_text: bool,
+        on_change: Option<Closure>,
+        options: Binding,
+        value: Binding,
+    },
+    /// Phase 1130 — a subjective score on a small ordinal scale
+    /// (WIRE_FORMAT.md §3.6.17). The line against `RangedNumber` is who the
+    /// number belongs to: a rating is a judgement a person GIVES, a ranged
+    /// number is a measurement they REPORT.
+    ///
+    /// `max` is the case's only required member and is refused below 1 — a
+    /// scale with no positions has nothing to draw and no keystroke that could
+    /// change anything. `value` is a float even where nothing can type a
+    /// fraction, because the commonest rating a reader sees is an AVERAGE
+    /// arriving through a `Query`. `allow_half` governs ENTRY, never display.
+    Rating {
+        allow_half: bool,
+        max: i64,
+        on_change: Option<Closure>,
+        value: Binding,
+    },
+    /// Phase 1130 — the platform's own colour picker (WIRE_FORMAT.md §3.6.17).
+    /// A CONTROL, not a `rule.format`: a swatch that opens the operating
+    /// system's picker, which no format on a text field can produce.
+    ///
+    /// Both members optional. The value is `#rrggbb` and nothing else — the one
+    /// form a native colour input can hold or return — and case is PRESERVED
+    /// rather than normalised, so `#FFAA00` round-trips byte-identically.
+    Color {
+        on_change: Option<Closure>,
+        value: Binding,
+    },
+    /// Phase 1121 — SEVERAL values accumulated as removable chips, over a
+    /// suggestion set that may be open, searchable, asynchronous, or absent
+    /// entirely (WIRE_FORMAT.md §3.6.19).
+    ///
+    /// Every member is optional, so `{"$type":"Tokens"}` is a complete
+    /// document. `allow_free_text` omits at **`true`** — the OPPOSITE polarity
+    /// to `Combobox`, and the one thing about this case a host is most likely
+    /// to get wrong: `Combobox.options` is required so "constrained" is its
+    /// resting state, where `suggestions` is optional so "open" is this one's.
+    /// The default follows the required-ness of the set.
+    ///
+    /// `value` is a `Binding<string list>` and the list is ORDERED — chips
+    /// appear where the reader added them, so a host must not sort or
+    /// de-duplicate it.
+    Tokens {
+        allow_free_text: bool,
+        on_change: Option<Closure>,
+        suggestions: Option<Binding>,
+        value: Binding,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Format {
+    Number {
+        decimals: Option<i64>,
+    },
+    Currency {
+        iso_code: String,
+    },
+    Percent {
+        decimals: Option<i64>,
+    },
+    /// Phase 1810 — `dateStyle` / `timeStyle` are BOTH optional: `timeStyle`
+    /// alone is a time of day, both together a date-time, `dateStyle` alone the
+    /// shape every pre-1810 document carries. Neither present is a validator
+    /// concern (FUARAN155 on the reference host), not a decode refusal.
+    /// Phase 1811 — `DateTime` (was `Date`): an honest name once it renders a time.
+    DateTime {
+        date_style: Option<DateStyle>,
+        time_style: Option<TimeStyle>,
+    },
+    RelativeTime {
+        unit: RelativeTimeUnit,
+    },
+    /// Phase 819 — locale-independent duration formatting.
+    Duration {
+        unit: DurationUnit,
+        style: DurationStyle,
+    },
+    /// Phase 1533 — the INSTANT-reading twin of `RelativeTime`.
+    ///
+    /// `RelativeTime`'s source is a signed COUNT of its unit, already computed
+    /// by whoever produced it; this one's source is an instant in whole
+    /// Unix-epoch seconds (`Date`'s convention) and the count is the delta the
+    /// HOST takes against its own furnished instant.
+    ///
+    /// `unit: None` is NOT a default — it is the auto-selection request,
+    /// resolved from the fixed threshold ladder in WIRE_FORMAT.md §4b.
+    Since {
+        unit: Option<RelativeTimeUnit>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HoleDecl {
+    Value {
+        name: String,
+        space: HoleValueSpace,
+        default: Option<FragmentScalar>,
+    },
+    Slot {
+        name: String,
+        kind_constraint: Option<String>,
+    },
+    Repeat {
+        name: String,
+        count_space: HoleValueSpace,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum HoleValueSpace {
+    IntRange {
+        min: i64,
+        max: i64,
+    },
+    FloatRange {
+        min: f64,
+        max: f64,
+    },
+    StringLen {
+        min_len: i64,
+        max_len: i64,
+    },
+    Enum {
+        choices: Vec<String>,
+    },
+    AnyString,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LocalFlushTrigger {
+    OnBlur,
+    OnSubmit,
+    OnDebounce {
+        milliseconds: i64,
+    },
+    OnCommitAction,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LocaleSource {
+    Ambient,
+    Explicit {
+        tag: String,
+    },
+}
+
+/// Phase 1076 — which media surface a [`MediaSpec`] is (§3.6.6). A
+/// `$type`-DISCRIMINATED union nested at `kind.kind`, so an unknown case
+/// reports at `$.kind.kind.$type` rather than at the bare slot.
+///
+/// **`Audio` has no autoplay pathway — in the type, on the wire, or in the
+/// emission.** That is stronger than a default of `false`: a slot defaulting to
+/// off is one a document can switch on, and there is no document this format
+/// wants to be able to state in which a page begins making sound unbidden. The
+/// case declares no such field, so `{"$type":"Audio","autoplay":true}` decodes
+/// to an audio surface that does not autoplay — the value has nowhere to land,
+/// and no renderer arm below can acquire a branch for it by a later edit.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MediaKind {
+    Video {
+        /// A DECLARATION whose rendering is constrained: a host that honours it
+        /// MUST emit it together with a muted attribute (§3.6.6). There is
+        /// deliberately no separate `muted` slot on the wire — a second knob
+        /// free to disagree with the first would add only the combination no
+        /// host may render.
+        autoplay: bool,
+        /// A second URL through the §19 floor; a REFUSED one is dropped rather
+        /// than neutered (a `<video>` with no poster shows its first frame,
+        /// which is a working rendering).
+        poster: Option<Binding>,
+    },
+    Audio,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FragmentScalar {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+}
+
+/// The closed, typed vector-graphics vocabulary (no raw-SVG / attribute-bag
+/// escape hatch). An unrecognised `$type` is `UNKNOWN_DU_CASE` at decode.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Shape {
+    Group {
+        children: Vec<Shape>,
+        style: DrawStyle,
+    },
+    Rectangle {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        corner_radius: Option<f64>,
+        style: DrawStyle,
+    },
+    Line {
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        style: DrawStyle,
+    },
+    Polyline {
+        points: Vec<DrawPoint>,
+        style: DrawStyle,
+    },
+    Polygon {
+        points: Vec<DrawPoint>,
+        style: DrawStyle,
+    },
+    Curve {
+        commands: Vec<CurveCommand>,
+        style: DrawStyle,
+    },
+    Circle {
+        cx: f64,
+        cy: f64,
+        r: f64,
+        style: DrawStyle,
+    },
+    Ellipse {
+        cx: f64,
+        cy: f64,
+        rx: f64,
+        ry: f64,
+        style: DrawStyle,
+    },
+    Label {
+        x: f64,
+        y: f64,
+        text: TextSource,
+        style: DrawStyle,
+    },
+}
+
+/// A text-producing position (`§3.3`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TextSource {
+    Literal(String),
+    Bound(Box<Binding>),
+    /// `args` is a name-keyed ARGUMENT map — always emitted, `{}` when empty.
+    /// Since Phase 1661 an argument is an [`I18nArg`], not a bare `JVal`.
+    I18n {
+        key: String,
+        args: Vec<(String, I18nArg)>,
+    },
+}
+
+/// The node's primitive kind: the closed, flat `kind.$type` vocabulary. The
+/// behavioural categories (Layout / Display / Input / Visualisation /
+/// Structural) are a host-side classification (see [`NodeKind::category`]), not
+/// a wire level.
+///
+/// The variants are written here because each carries a hand-modelled spec; the
+/// SET is the IDL's. `NodeKind::type_name` and `NodeKind::category` are
+/// generated from the IDL's kind rows as matches with no catch-all arm, so a
+/// kind on one side and not the other does not compile.
+#[derive(Debug, Clone, PartialEq)]
+pub enum NodeKind {
+    Badge(BadgeSpec),
+    Box(BoxSpec),
+    Button(ButtonSpec),
+    Callout(CalloutSpec),
+    Chart(ChartSpec),
+    CodeBlock(CodeBlockSpec),
+    Custom(CustomSpec),
+    DataGrid(GridSpec),
+    Disclosure(DisclosureSpec),
+    Drawing(DrawingSpec),
+    Embed(EmbedSpec),
+    ErrorBoundary(ErrorBoundarySpec),
+    Fact(FactSpec),
+    FileUpload(FileUploadSpec),
+    Filters(Vec<FilterSpec>),
+    Form(FormSpec),
+    FragmentDecl(FragmentDeclSpec),
+    FragmentRef(FragmentRefSpec),
+    Heading(HeadingSpec),
+    Icon(IconSpec),
+    Image(ImageSpec),
+    LabelValueRow(LabelValueRowSpec),
+    Link(LinkSpec),
+    List(ListSpec),
+    Map(MapSpec),
+    Markdown(MarkdownSpec),
+    Math(MathSpec),
+    Media(MediaSpec),
+    Metric(MetricSpec),
+    Modal(ModalSpec),
+    Mount(MountSpec),
+    Progress(ProgressSpec),
+    ScrollArea(ScrollAreaSpec),
+    Select(SelectSpec),
+    Skeleton(SkeletonSpec),
+    Sparkline(SparklineSpec),
+    SplitPanel(SplitPanelSpec),
+    Stepper(StepperSpec),
+    SummaryList(SummaryListSpec),
+    Switch(SwitchSpec),
+    Tabs(TabsSpec),
+    Toast(ToastSpec),
+    Tree(TreeSpec),
+}
+
+/// The typed UI tree node (§3.1). `motion` / `extraAttributes` are wire-omitted
+/// by design (§9) and therefore not modelled by this host.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Node {
+    pub id: NodeId,
+    pub kind: NodeKind,
+    pub accessibility: Option<Accessibility>,
+    /// Phase 1812 — the author-declared degraded rendering: a full node a BEHIND
+    /// reader (one that meets this node's kind as a transport-only `Unknown`)
+    /// renders in place of its placeholder. A current reader decodes, preserves
+    /// and re-encodes it byte-for-byte and never renders it. Omitted when absent.
+    pub fallback: Option<Box<Node>>,
+    /// Restored to empty when the wire omits it (the common case).
+    pub state: StateBehaviour,
+    /// Restored to all-default when the wire omits it (the common case).
+    pub style: SemanticStyle,
+    /// Phase 1112 - the node-level tooltip TRAIT (WIRE_FORMAT.md 3.6). A hint is
+    /// uniform across kinds, so it sits on the envelope beside `accessibility`
+    /// rather than in any kind. It is a DESCRIPTION, never a NAME: a host
+    /// projects it as `aria-describedby` and never as `aria-label`.
+    pub tooltip: Option<TextSource>,
+    /// Phase 1535 — whether the node is PRESENT in the rendered output at all
+    /// (WIRE_FORMAT.md §3.6). A node-level trait for the reason the trait tier
+    /// exists: "should this be here at all" is uniform across every kind, and
+    /// forty-odd per-spec spellings of it would be forty-odd independently
+    /// driftable decisions about one concept.
+    ///
+    /// It is NOT `accessibility.hidden`, and the two have opposite polarity: a
+    /// resolved `false` here emits NOTHING — no element, no layout, no
+    /// accessibility-tree entry — where `hidden` is `aria-hidden` over a node
+    /// that IS rendered. Content the reader should not have now takes this;
+    /// decoration the reader should never hear takes `hidden`.
+    ///
+    /// Any outcome other than a resolved `false` renders the node, unresolved
+    /// and errored included: hiding on absence is the one failure a reader
+    /// cannot see, cannot report and cannot work around.
+    pub visible: Option<Binding>,
+}
+
+/// A tree edit, one variant per top-level wire `$type` case.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TreeOp {
+    Batch(Vec<TreeOp>),
+    EditNode {
+        new_kind: NodeKind,
+        target: NodeId,
+    },
+    InsertChild {
+        child: Node,
+        parent_id: NodeId,
+    },
+    MoveNode {
+        new_parent_id: NodeId,
+        target: NodeId,
+    },
+    /// Phase 2291 — the field-level style edit: a patch over the target's
+    /// current style, setting exactly the fields `style` names.
+    PatchStyle {
+        style: StyleDelta,
+        target: NodeId,
+    },
+    RemoveNode {
+        target: NodeId,
+    },
+    ReorderChildren {
+        new_order: Vec<NodeId>,
+        parent_id: NodeId,
+    },
+    ReplaceBinding {
+        binding: Binding,
+        slot: String,
+        target: NodeId,
+    },
+    ReplaceRoot {
+        node: Node,
+    },
+    /// `value` is a structured-JSON position (rule 12); `path` is a plain
+    /// string at codec level (grammar violations surface at apply time, §3.4).
+    UpdateProp {
+        path: String,
+        target: NodeId,
+        value: JVal,
+    },
+    UpdateState {
+        state: StateBehaviour,
+        target: NodeId,
+    },
+    UpdateStyle {
+        style: SemanticStyle,
+        target: NodeId,
+    },
 }
 
 // ─── Omit-at-default (§3.6) ─────────────────────────────────────────────────

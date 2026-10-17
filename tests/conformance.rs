@@ -112,9 +112,9 @@ fn corpus_idl(corpus: &Path) -> String {
 ///
 /// This replaces the two set pins that compared hand-kept kind and control lists
 /// with the corpus manifest: those lists are now generated from the IDL the
-/// manifest is emitted beside, and every `NodeKind` / `FormFieldKind` variant is
-/// held to them by an exhaustive generated `match`, so the drift those pins
-/// caught cannot be written any more.
+/// manifest is emitted beside, and since Phase 2315 the `NodeKind` /
+/// `FormFieldKind` enums themselves are generated from the same rows, so the
+/// drift those pins caught cannot be written any more.
 #[test]
 fn generated_module_matches_the_corpus_idl() {
     let corpus = common::corpus_root();
@@ -195,7 +195,7 @@ fn the_generator_reacts_to_each_vocabulary_move() {
             "a new field",
             "\"name\": \"label\",",
             "\"name\": \"probeField\", \"optionality\": {\"$type\": \"optional\"}, \"type\": {\"$type\": \"str\"}}, {\"name\": \"label\",",
-            "probe_field: _",
+            "pub probe_field: Option<String>,",
         ),
     ];
     for (what, from, to, witness) in moves {
@@ -212,6 +212,57 @@ fn the_generator_reacts_to_each_vocabulary_move() {
             moved.contains(witness) && !base.contains(witness),
             "{what} did not surface as `{witness}` in the generated module"
         );
+    }
+}
+
+/// Phase 2315: the dialect (`src/wire/dialect.rs`) is checked against the IDL at
+/// generation, so it cannot decay into a mirror. Each of the three ways an entry
+/// goes stale is provoked on a perturbed copy of the corpus's `idl.json` and must
+/// be REFUSED, naming the entry: a departure the uniform rules now reproduce, an
+/// entry naming a field the IDL no longer has, and a note naming nothing the
+/// generator emits. The unperturbed copy must generate, so a refusal is the
+/// perturbation's and not the rendering's.
+#[test]
+fn the_generator_refuses_a_stale_dialect_entry() {
+    let corpus = common::corpus_root();
+    let parsed = fuaran_rs::canonical::parse(&corpus_idl(&corpus))
+        .unwrap_or_else(|e| panic!("the corpus idl.json does not parse: {e:?}"));
+    let idl = fuaran_rs::canonical::render_canonical(&parsed);
+    fuaran_rs::wire::idl_codegen::generate(&idl)
+        .unwrap_or_else(|e| panic!("the canonical rendering of idl.json was refused: {e}"));
+    let refusals = [
+        (
+            "a departure the rules now reproduce",
+            r#""name":"multiple","optionality":{"$type":"optional"}"#,
+            r#""name":"multiple","optionality":{"$type":"omitDefault","default":{"$type":"bool","value":false}}"#,
+            "dialect entry Select.multiple is stale",
+        ),
+        (
+            "an entry naming an absent field",
+            r#""name":"stateKey""#,
+            r#""name":"stateKeyProbe""#,
+            "dialect entry Switch.stateKey names a field the IDL does not have",
+        ),
+        (
+            "a note naming nothing emitted",
+            r#""name":"trendPolarity""#,
+            r#""name":"trendPolarityProbe""#,
+            "dialect note 'MetricSpec.trend_polarity' names nothing",
+        ),
+    ];
+    for (what, from, to, witness) in refusals {
+        assert_eq!(
+            idl.matches(from).count(),
+            1,
+            "the probe for {what} no longer finds exactly one anchor in idl.json: {from}"
+        );
+        match fuaran_rs::wire::idl_codegen::generate(&idl.replacen(from, to, 1)) {
+            Ok(_) => panic!("{what}: the generator accepted a stale dialect"),
+            Err(e) => assert!(
+                e.contains(witness),
+                "{what}: the generator refused, but not naming `{witness}`: {e}"
+            ),
+        }
     }
 }
 

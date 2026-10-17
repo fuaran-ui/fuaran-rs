@@ -11,33 +11,32 @@
 //!   `CANONICAL_NODE_KINDS` and the unknown-kind hint, all from the IDL's kind
 //!   rows;
 //! - the discriminator sets of every tagged union and of `TreeOp`, as tag lists
-//!   the decoder's refusal hints read, each beside an exhaustive `match` over the
-//!   Rust enum that names every IDL case;
-//! - a field pin per modelled kind spec, record and op: an exhaustive
-//!   destructuring pattern naming exactly the IDL's wire fields;
+//!   the decoder's refusal hints read;
+//! - every WIRE TYPE (Phase 2315): each kind's spec struct, each record and
+//!   union, `NodeKind`, the node envelope `Node` and `TreeOp`, written by the
+//!   uniform mapping rules below — one function per rule: type naming, field
+//!   naming, optionality, value types, boxing of recursive slots, derives, and
+//!   record and union representation — except where this host's dialect
+//!   (`dialect.rs`) declares a departure;
 //! - the omit-at-default table as typed constants (`defaults`), which the decoder
 //!   fills absent fields from and the encoder omits by;
 //! - the node-bearing slot enumeration a walk over a wire tree descends through.
 //!
-//! **Why the pins are code and not tests.** Rust has no reflection over a type's
-//! variants or fields, so a hand-kept list beside an enum can only be checked by a
-//! test that compares it with something else. A generated `match` with no
-//! catch-all arm, and a generated struct pattern with no `..`, are checked by the
-//! COMPILER: an IDL kind, case or field this host does not model is a build error
-//! naming it, and so is a Rust variant or field the IDL does not have. The kind
-//! set the corpus declares is therefore no longer pinned by a test — the
-//! regeneration drift test in `tests/conformance.rs` plus the compiler make the
-//! drift it caught impossible.
+//! **The dialect is checked, so it cannot become a mirror.** It lists only the
+//! positions the rules map differently from this host's public types, each with
+//! its reason; a field the IDL gains needs no entry. Generation refuses an entry
+//! naming a field the IDL does not have, an entry the rules would now reproduce,
+//! and a note naming nothing generated — `tests/conformance.rs` provokes all
+//! three. Because the types are generated, a kind, case or field on one side and
+//! not the other cannot be written, which retired Phase 2298's compile-time pins.
 //!
-//! **What stays hand-written, deliberately.** The spec structs themselves, decode
-//! policy, refusal wording, leniency, relational and limit checks, the encoder's
-//! behaviour-bearing paths, rendering and the C ABI. The structs stay hand-written
-//! because this host's representation is not a uniform function of the IDL type:
-//! a handful of slots are modelled differently on purpose (a predicate pair folded
-//! into one `SwitchCondition`, a `stateKey` folded into the `on` binding, a
-//! closure slot whose presence is implied). Those are declared in
-//! [`FIELD_OVERLAY`], once, with the reason, and the pins hold every other field
-//! to the IDL by name.
+//! **What stays hand-written, deliberately.** The behaviour over the types:
+//! decode policy, refusal wording, leniency, relational and limit checks, the
+//! encoder, rendering and the C ABI, plus the few host-modelled types the dialect
+//! names (`StaticValue`, `I18nArg`, `TransformSource`, `SwitchCondition`,
+//! `FragmentArg`). A new field therefore still meets the compiler at every struct
+//! literal that builds its owner (the decoder's among them), and a new kind at
+//! every exhaustive `match` over `NodeKind`: those sites decide behaviour.
 //!
 //! **Ruling (2026-10-16).** The generator is host-owned and
 //! reads the published IDL; it is not a target of any other tier, and no codec
@@ -67,91 +66,13 @@ use crate::opstream::sha256_hex;
 /// The relative path, from the crate root, of the module this generator writes.
 pub const GENERATED_PATH: &str = "src/wire/generated.rs";
 
-/// The node category spellings of the IDL, mapped to this host's
-/// [`NodeCategory`](super::NodeCategory) variants and the article the
-/// unknown-kind hint uses, in the order the hint lists them. The IDL calls the
-/// structural kinds `Meta`; this host's public enum has always called them
-/// `Structural`, and a public variant name is kept. An IDL category missing here
-/// is a generator error, never a silent bucket.
-const CATEGORIES: &[(&str, &str, &str)] = &[
-    ("Layout", "Layout", "a"),
-    ("Display", "Display", "a"),
-    ("Input", "Input", "an"),
-    ("Visualisation", "Visualisation", "a"),
-    ("Meta", "Structural", "a"),
-];
+// The host's dialect: every place this host's representation departs from the
+// uniform rules below, one entry each with its reason, checked against the IDL at
+// generation. Compiled with the generator only.
+#[path = "dialect.rs"]
+mod dialect;
 
-/// IDL type name to this host's Rust type name, where the two differ.
-const TYPE_NAMES: &[(&str, &str)] = &[
-    ("DataGrid", "GridSpec"),
-    ("GuestChannel", "MountChannel"),
-    ("Scalar", "FragmentScalar"),
-];
-
-/// IDL kinds, records and unions this host does not model as one Rust type of
-/// the same shape, so no field or case pin is generated for them. Each carries
-/// its reason.
-const UNPINNED: &[(&str, &str)] = &[
-    (
-        "Filters",
-        "the NodeKind variant holds Vec<FilterSpec> directly; FilterSpec is pinned",
-    ),
-    (
-        "ButtonGroupItem",
-        "inlined into CellKindErased::ButtonGroup",
-    ),
-    (
-        "DateTimeRangePair",
-        "inlined into the DateTimeRange control's value",
-    ),
-    ("RangePair", "inlined into the Range control's value"),
-    (
-        "FragmentArg",
-        "modelled as Value(FragmentScalar) | Slot; its tag set is still generated",
-    ),
-];
-
-/// Per-field representation choices this host makes on purpose. `None` means
-/// the IDL field has no Rust field at all; `Some(name)` names the Rust field
-/// that carries it.
-const FIELD_OVERLAY: &[(&str, &str, Option<&str>, &str)] = &[
-    (
-        "FileUpload",
-        "onSelect",
-        None,
-        "closure slot whose presence is implied: the encoder always writes the sentinel",
-    ),
-    (
-        "Stepper",
-        "onSelect",
-        None,
-        "closure slot whose presence is implied: the encoder always writes the sentinel",
-    ),
-    (
-        "Mount",
-        "onBubble",
-        None,
-        "closure slot whose presence is implied: the encoder always writes the sentinel",
-    ),
-    (
-        "Switch",
-        "stateKey",
-        Some("on"),
-        "the state-keyed form is one of the `on` binding's shapes",
-    ),
-    (
-        "SwitchCase",
-        "match",
-        Some("condition"),
-        "the match/when pair is one SwitchCondition",
-    ),
-    (
-        "SwitchCase",
-        "when",
-        Some("condition"),
-        "the match/when pair is one SwitchCondition",
-    ),
-];
+use dialect::{CATEGORIES, DERIVES, FIELDS, HAND_TYPES, INLINED, KIND_PAYLOADS, NOTES, TYPE_NAMES};
 
 /// Rust keywords an IDL field or case name can collide with, and how this host
 /// spells them: a raw identifier for a field, a trailing underscore for an enum
@@ -349,10 +270,6 @@ fn rust_type_name(idl: &str) -> String {
         .map_or_else(|| idl.to_string(), |(_, r)| (*r).to_string())
 }
 
-fn is_unpinned(name: &str) -> bool {
-    UNPINNED.iter().any(|(n, _)| *n == name)
-}
-
 fn snake(camel: &str) -> String {
     let mut out = String::new();
     for c in camel.chars() {
@@ -442,27 +359,469 @@ fn wire_enums(idl: &Idl) -> std::collections::BTreeSet<String> {
     out
 }
 
-/// The wire fields of an owner as this host names them, after the overlay.
-/// Deduplicated, in IDL order.
-fn rust_fields(owner: &str, fields: &[Field]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for f in fields {
-        if f.optionality == "hostOnly" {
-            continue;
+// ── The uniform mapping rules ──────────────────────────────────────────────
+//
+// One function per rule. Every Rust type the generator writes is the product of
+// these, except where `dialect.rs` declares a departure; the generator refuses a
+// departure the rules would now produce anyway.
+
+/// Rule: the Rust type name of a kind's spec — `<Tag>Spec`, unless the dialect
+/// renames it.
+fn kind_type_name(tag: &str) -> String {
+    TYPE_NAMES
+        .iter()
+        .find(|(i, _)| *i == tag)
+        .map_or_else(|| format!("{tag}Spec"), |(_, r)| (*r).to_string())
+}
+
+/// Rule: optionality. A required field and a field omitted at its default are the
+/// plain type (the default is a generated constant in `defaults`); an optional
+/// field is `Option<T>`; a host-only field has no Rust member.
+fn optionality_type(optionality: &str, inner: String) -> Result<Option<String>, String> {
+    match optionality {
+        "required" | "omitDefault" => Ok(Some(inner)),
+        "optional" => Ok(Some(format!("Option<{inner}>"))),
+        "hostOnly" => Ok(None),
+        other => Err(format!("unknown optionality '{other}'")),
+    }
+}
+
+/// The by-value containment graph over the Rust types the IDL defines: an edge
+/// from an owner to every named type one of its wire fields holds directly (not
+/// through a list or a map, which allocate).
+type Graph = std::collections::BTreeMap<String, std::collections::BTreeSet<String>>;
+
+/// The named Rust type a position holds by value, if any.
+fn named_type(ty: &JVal) -> Option<String> {
+    match ty_tag(ty) {
+        "enum" | "union" | "record" => match ty.field("name") {
+            Some(JVal::Str(n)) => Some(rust_type_name(n)),
+            _ => None,
+        },
+        "node" => Some("Node".into()),
+        "kind" => Some("NodeKind".into()),
+        "op" => Some("TreeOp".into()),
+        "hosted" => ty.field("wire").and_then(named_type),
+        _ => None,
+    }
+}
+
+fn containment(idl: &Idl) -> Graph {
+    let mut g = Graph::new();
+    let mut add = |owner: &str, fields: &[Field]| {
+        for f in fields.iter().filter(|f| f.optionality != "hostOnly") {
+            if let Some(n) = named_type(&f.ty) {
+                g.entry(owner.to_string()).or_default().insert(n);
+            }
         }
-        let ident = match FIELD_OVERLAY
-            .iter()
-            .find(|(o, n, _, _)| *o == owner && *n == f.name)
-        {
-            Some((_, _, None, _)) => continue,
-            Some((_, _, Some(r), _)) => (*r).to_string(),
-            None => field_ident(&f.name),
-        };
-        if !out.contains(&ident) {
-            out.push(ident);
+    };
+    for k in &idl.kinds {
+        add(&kind_type_name(&k.owner.name), &k.owner.fields);
+    }
+    for r in &idl.records {
+        add(&rust_type_name(&r.name), &r.fields);
+    }
+    for u in &idl.unions {
+        for c in &u.cases {
+            add(&rust_type_name(&u.name), &c.fields);
         }
     }
-    out
+    for o in &idl.ops {
+        add("TreeOp", &o.fields);
+    }
+    add("Node", &idl.node_fields);
+    let specs: Vec<String> = idl
+        .kinds
+        .iter()
+        .filter(|k| !KIND_PAYLOADS.iter().any(|(t, _, _)| *t == k.owner.name))
+        .map(|k| kind_type_name(&k.owner.name))
+        .collect();
+    g.entry("NodeKind".into()).or_default().extend(specs);
+    g.entry("Node".into())
+        .or_default()
+        .insert("NodeKind".into());
+    g
+}
+
+/// Whether `from` reaches `to` by value. With `through_nodes` false the walk does
+/// not pass through `Node`, whose own recursion the node-slot rule breaks.
+fn reaches(g: &Graph, from: &str, to: &str, through_nodes: bool) -> bool {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut stack = vec![from.to_string()];
+    while let Some(at) = stack.pop() {
+        if at == to {
+            return true;
+        }
+        if !seen.insert(at.clone()) {
+            continue;
+        }
+        for next in g.get(&at).into_iter().flatten() {
+            if through_nodes || next != "Node" || next == to {
+                stack.push(next.clone());
+            }
+        }
+    }
+    false
+}
+
+/// Rule: boxing of recursive slots. A node slot is boxed when its owner is held
+/// by value inside a node; any other named slot is boxed when its type holds the
+/// owner by value without passing through a node. Every other position is plain.
+fn boxed(g: &Graph, target: &str, owner: &str) -> bool {
+    if target == "Node" {
+        reaches(g, "Node", owner, true)
+    } else {
+        reaches(g, target, owner, false)
+    }
+}
+
+/// Rule: the Rust type of a wire position. Scalars map to the host's scalar types;
+/// a list is a `Vec`, a map an ordered `Vec` of name-value pairs; a union's type
+/// arguments and a type variable are erased; a hosted position is its wire type
+/// (`json` is `JVal`); a closure is the presence marker `Closure`. `by_value` is
+/// false under a list or a map, where no slot is boxed.
+fn value_type(g: &Graph, ty: &JVal, owner: &str, by_value: bool) -> Result<String, String> {
+    Ok(match ty_tag(ty) {
+        "str" => "String".into(),
+        "bool" => "bool".into(),
+        "int" => "i64".into(),
+        "float" => "f64".into(),
+        "json" | "var" => "JVal".into(),
+        "fn" => "Closure".into(),
+        "list" => format!(
+            "Vec<{}>",
+            value_type(
+                g,
+                ty.field("of").ok_or("a list with no 'of'")?,
+                owner,
+                false
+            )?
+        ),
+        "map" => format!(
+            "Vec<(String, {})>",
+            value_type(
+                g,
+                ty.field("values").ok_or("a map with no 'values'")?,
+                owner,
+                false
+            )?
+        ),
+        "hosted" => match ty.field("wire") {
+            Some(JVal::Str(s)) if s == "json" => "JVal".into(),
+            Some(wire @ JVal::Obj(_)) => value_type(g, wire, owner, by_value)?,
+            _ => return Err("a hosted position with no wire type".into()),
+        },
+        "enum" | "union" | "record" | "node" | "kind" | "op" => {
+            let n = named_type(ty).ok_or("a named position with no name")?;
+            if by_value && boxed(g, &n, owner) {
+                format!("Box<{n}>")
+            } else {
+                n
+            }
+        }
+        other => return Err(format!("no mapping rule for a '{other}' position")),
+    })
+}
+
+/// One Rust member: a named field, or a positional one (`"0"`, `"1"`, …).
+#[derive(Debug, Clone, PartialEq)]
+struct Member {
+    ident: String,
+    ty: String,
+}
+
+/// Rule: one IDL field as Rust members under the uniform rules — none for a
+/// host-only field, otherwise one, named by [`field_ident`].
+fn uniform_members(g: &Graph, owner: &str, f: &Field) -> Result<Vec<Member>, String> {
+    if f.optionality == "hostOnly" {
+        return Ok(Vec::new());
+    }
+    let inner = value_type(g, &f.ty, owner, true)?;
+    Ok(optionality_type(&f.optionality, inner)?
+        .map(|ty| Member {
+            ident: field_ident(&f.name),
+            ty,
+        })
+        .into_iter()
+        .collect())
+}
+
+type Used = std::collections::BTreeSet<(String, String)>;
+type Noted = std::collections::BTreeSet<String>;
+
+/// The Rust members of an owner: the uniform rules, except where the dialect
+/// declares a departure. An entry that the rules now reproduce is refused, and
+/// every entry used is recorded so an entry naming nothing can be refused after.
+fn members(
+    g: &Graph,
+    key: &str,
+    rust_owner: &str,
+    fields: &[Field],
+    used: &mut Used,
+) -> Result<Vec<Member>, String> {
+    let mut out: Vec<Member> = Vec::new();
+    for f in fields {
+        let uniform = uniform_members(g, rust_owner, f)?;
+        let rep = match FIELDS.iter().find(|(o, n, _, _)| *o == key && *n == f.name) {
+            Some((_, _, rust, _)) => {
+                used.insert((key.to_string(), f.name.clone()));
+                let declared: Vec<Member> = rust
+                    .iter()
+                    .map(|(i, t)| Member {
+                        ident: (*i).to_string(),
+                        ty: (*t).to_string(),
+                    })
+                    .collect();
+                if declared == uniform {
+                    return Err(format!(
+                        "dialect entry {key}.{} is stale: the uniform rules now map it the \
+                         same; delete the entry",
+                        f.name
+                    ));
+                }
+                declared
+            }
+            None => uniform,
+        };
+        for m in rep {
+            match out.iter().find(|o| o.ident == m.ident) {
+                Some(o) if o.ty == m.ty => {}
+                Some(o) => {
+                    return Err(format!(
+                        "{key}: member {} declared as both {} and {}",
+                        m.ident, o.ty, m.ty
+                    ));
+                }
+                None => out.push(m),
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The doc comment for a generated item, from the dialect's notes.
+fn write_doc(w: &mut String, indent: &str, key: &str, noted: &mut Noted) {
+    if let Some((_, text)) = NOTES.iter().find(|(k, _)| *k == key) {
+        noted.insert(key.to_string());
+        for line in text.lines() {
+            if line.is_empty() {
+                let _ = writeln!(w, "{indent}///");
+            } else {
+                let _ = writeln!(w, "{indent}/// {line}");
+            }
+        }
+    }
+}
+
+/// Rule: derives. Every generated type derives `Debug, Clone, PartialEq`; the
+/// dialect adds to that per type.
+fn write_derives(w: &mut String, ty: &str) {
+    let extra: &[&str] = DERIVES
+        .iter()
+        .find(|(t, _, _)| *t == ty)
+        .map_or(&[], |(_, d, _)| d);
+    let all: Vec<&str> = ["Debug", "Clone", "Copy", "PartialEq", "Eq", "Default"]
+        .into_iter()
+        .filter(|d| matches!(*d, "Debug" | "Clone" | "PartialEq") || extra.contains(d))
+        .collect();
+    let _ = writeln!(w, "#[derive({})]", all.join(", "));
+}
+
+fn key_ident(ident: &str) -> &str {
+    ident.trim_start_matches("r#")
+}
+
+/// Rule: record representation — a struct with one public field per member.
+fn write_struct(w: &mut String, ty: &str, ms: &[Member], noted: &mut Noted) {
+    write_doc(w, "", ty, noted);
+    write_derives(w, ty);
+    let _ = writeln!(w, "pub struct {ty} {{");
+    for m in ms {
+        write_doc(w, "    ", &format!("{ty}.{}", key_ident(&m.ident)), noted);
+        let _ = writeln!(w, "    pub {}: {},", m.ident, m.ty);
+    }
+    let _ = writeln!(w, "}}\n");
+}
+
+/// Rule: union representation — an enum with one variant per case: a unit
+/// variant for a case with no members, a tuple variant when every member is
+/// positional, otherwise a struct variant.
+fn write_enum(
+    w: &mut String,
+    ty: &str,
+    cases: &[(String, Vec<Member>)],
+    noted: &mut Noted,
+) -> Result<(), String> {
+    write_doc(w, "", ty, noted);
+    write_derives(w, ty);
+    let _ = writeln!(w, "pub enum {ty} {{");
+    for (case, ms) in cases {
+        write_doc(w, "    ", &format!("{ty}::{case}"), noted);
+        let positional = ms
+            .iter()
+            .filter(|m| m.ident.chars().all(|c| c.is_ascii_digit()))
+            .count();
+        if ms.is_empty() {
+            let _ = writeln!(w, "    {case},");
+        } else if positional == ms.len() {
+            let tys: Vec<&str> = ms.iter().map(|m| m.ty.as_str()).collect();
+            let _ = writeln!(w, "    {case}({}),", tys.join(", "));
+        } else if positional == 0 {
+            let _ = writeln!(w, "    {case} {{");
+            for m in ms {
+                let key = format!("{ty}::{case}.{}", key_ident(&m.ident));
+                write_doc(w, "        ", &key, noted);
+                let _ = writeln!(w, "        {}: {},", m.ident, m.ty);
+            }
+            let _ = writeln!(w, "    }},");
+        } else {
+            return Err(format!("{ty}::{case} mixes positional and named members"));
+        }
+    }
+    let _ = writeln!(w, "}}\n");
+    Ok(())
+}
+
+/// The wire types: every kind's spec, every record and union, `NodeKind`, the
+/// node envelope and `TreeOp`, through the rules and the dialect, with the
+/// dialect checked against the IDL as it is read.
+fn write_types(w: &mut String, idl: &Idl) -> Result<(), String> {
+    check_dialect_names(idl)?;
+    let g = containment(idl);
+    let mut used = Used::new();
+    let mut noted = Noted::new();
+    let mut emitted: Vec<String> = Vec::new();
+    let _ = writeln!(
+        w,
+        "\n// ─── Wire types ─────────────────────────────────────────────────────────────
+//
+// Every type the IDL defines, through the uniform rules in idl_codegen.rs and the
+// departures declared in dialect.rs. Behaviour impls stay in model.rs.\n"
+    );
+    for k in &idl.kinds {
+        if KIND_PAYLOADS.iter().any(|(t, _, _)| *t == k.owner.name) {
+            continue;
+        }
+        let ty = kind_type_name(&k.owner.name);
+        let ms = members(&g, &k.owner.name, &ty, &k.owner.fields, &mut used)?;
+        write_struct(w, &ty, &ms, &mut noted);
+        emitted.push(ty);
+    }
+    let hand =
+        |n: &str| INLINED.iter().any(|(i, _)| *i == n) || HAND_TYPES.iter().any(|(h, _)| *h == n);
+    for r in idl.records.iter().filter(|r| !hand(&r.name)) {
+        let ty = rust_type_name(&r.name);
+        let ms = members(&g, &r.name, &ty, &r.fields, &mut used)?;
+        write_struct(w, &ty, &ms, &mut noted);
+        emitted.push(ty);
+    }
+    for u in idl.unions.iter().filter(|u| !hand(&u.name)) {
+        let ty = rust_type_name(&u.name);
+        let mut cases = Vec::new();
+        for c in &u.cases {
+            let key = format!("{}.{}", u.name, c.name);
+            let ms = members(&g, &key, &ty, &c.fields, &mut used)?;
+            cases.push((c.name.clone(), ms));
+        }
+        write_enum(w, &ty, &cases, &mut noted)?;
+        emitted.push(ty);
+    }
+    let kinds: Vec<(String, Vec<Member>)> = idl
+        .kinds
+        .iter()
+        .map(|k| {
+            let payload = KIND_PAYLOADS
+                .iter()
+                .find(|(t, _, _)| *t == k.owner.name)
+                .map_or_else(
+                    || kind_type_name(&k.owner.name),
+                    |(_, p, _)| (*p).to_string(),
+                );
+            let member = Member {
+                ident: "0".into(),
+                ty: payload,
+            };
+            (k.owner.name.clone(), vec![member])
+        })
+        .collect();
+    write_enum(w, "NodeKind", &kinds, &mut noted)?;
+    // The node envelope (§3.1): its identity and its kind, then the IDL's node
+    // fields.
+    let mut envelope = vec![
+        Member {
+            ident: "id".into(),
+            ty: "NodeId".into(),
+        },
+        Member {
+            ident: "kind".into(),
+            ty: "NodeKind".into(),
+        },
+    ];
+    envelope.extend(members(&g, "Node", "Node", &idl.node_fields, &mut used)?);
+    write_struct(w, "Node", &envelope, &mut noted);
+    let mut ops = Vec::new();
+    for o in &idl.ops {
+        let key = format!("TreeOp.{}", o.name);
+        let ms = members(&g, &key, "TreeOp", &o.fields, &mut used)?;
+        ops.push((o.name.clone(), ms));
+    }
+    write_enum(w, "TreeOp", &ops, &mut noted)?;
+    emitted.extend(["NodeKind", "Node", "TreeOp"].map(String::from));
+
+    for (owner, field, _, _) in FIELDS {
+        if !used.contains(&((*owner).to_string(), (*field).to_string())) {
+            return Err(format!(
+                "dialect entry {owner}.{field} names a field the IDL does not have; delete it"
+            ));
+        }
+    }
+    for (key, _) in NOTES {
+        if !noted.contains(*key) {
+            return Err(format!(
+                "dialect note '{key}' names nothing the generator emits"
+            ));
+        }
+    }
+    for (ty, _, _) in DERIVES {
+        if !emitted.iter().any(|e| e == ty) {
+            return Err(format!(
+                "dialect derive entry '{ty}' names no generated type"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The dialect's type-level entries each name something the IDL defines.
+fn check_dialect_names(idl: &Idl) -> Result<(), String> {
+    let kind = |n: &str| idl.kinds.iter().any(|k| k.owner.name == n);
+    let record = |n: &str| idl.records.iter().any(|r| r.name == n);
+    let union = |n: &str| idl.unions.iter().any(|u| u.name == n);
+    for (n, _) in TYPE_NAMES {
+        if !(kind(n) || record(n) || union(n)) {
+            return Err(format!(
+                "dialect type name '{n}' names no IDL kind, record or union"
+            ));
+        }
+    }
+    for (n, _) in INLINED {
+        if !record(n) {
+            return Err(format!("dialect inlined record '{n}' names no IDL record"));
+        }
+    }
+    for (n, _) in HAND_TYPES {
+        if !(record(n) || union(n)) {
+            return Err(format!(
+                "dialect hand type '{n}' names no IDL record or union"
+            ));
+        }
+    }
+    for (n, _, _) in KIND_PAYLOADS {
+        if !kind(n) {
+            return Err(format!("dialect kind payload '{n}' names no IDL kind"));
+        }
+    }
+    Ok(())
 }
 
 fn enum_by_name<'a>(idl: &'a Idl, name: &str) -> Option<&'a Enum> {
@@ -575,12 +934,13 @@ pub fn generate(idl_text: &str) -> Result<String, String> {
 //
 //     FUARAN_IDL_REGENERATE=1 cargo test --test conformance generated_module
 //
-// Everything structural about the wire vocabulary that this host does not choose
-// for itself lives here; behaviour stays in model.rs, decode.rs and encode.rs.
+// Everything structural about the wire vocabulary lives here: the IDL through the
+// uniform rules in idl_codegen.rs and the departures declared in dialect.rs.
+// Behaviour stays in model.rs, decode.rs and encode.rs.
 
 use super::model::*;
 use crate::core::bare_enum;
-
+@@IMPORTS@@
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
 pub const IDL_SHA256: &str = \"{}\";
 
@@ -719,96 +1079,15 @@ pub const CANONICAL_FORM_FIELD_KINDS: &[&str] = {};
                 str_list(&tags)
             );
         }
-        if is_unpinned(&u.name) {
-            continue;
-        }
-        let rust = rust_type_name(&u.name);
-        let _ = writeln!(
-            w,
-            "#[allow(clippy::unneeded_struct_pattern)]
-fn _cases_{}(v: &{rust}) -> &'static str {{
-    match v {{",
-            snake(&u.name).trim_start_matches('_')
-        );
-        for t in &tags {
-            let _ = writeln!(w, "        {rust}::{t} {{ .. }} => \"{t}\",");
-        }
-        let _ = writeln!(w, "    }}\n}}\n");
     }
     let op_tags: Vec<String> = idl.ops.iter().map(|o| o.name.clone()).collect();
     let _ = writeln!(
         w,
-        "pub(crate) const TREE_OP_TAGS: &[&str] = {};
-
-fn _cases_tree_op(v: &TreeOp) -> &'static str {{
-    match v {{",
+        "pub(crate) const TREE_OP_TAGS: &[&str] = {};",
         str_list(&op_tags)
     );
-    for t in &op_tags {
-        let _ = writeln!(w, "        TreeOp::{t} {{ .. }} => \"{t}\",");
-    }
-    let _ = writeln!(w, "    }}\n}}");
 
-    // ── Field pins ──────────────────────────────────────────────────────────
-    let _ = writeln!(
-        w,
-        "\n// ─── Field pins ─────────────────────────────────────────────────────────────
-//
-// An exhaustive pattern per modelled spec, record and op, naming the IDL's wire
-// fields as this host spells them: a field on either side and not the other is
-// a build error. Representation choices are declared in idl_codegen.rs's
-// FIELD_OVERLAY, never here.\n"
-    );
-    let pinned_owners = idl
-        .kinds
-        .iter()
-        .filter(|k| !is_unpinned(&k.owner.name))
-        .map(|k| (format!("{}Spec", k.owner.name), &k.owner))
-        .map(|(spec, o)| {
-            let ty = TYPE_NAMES
-                .iter()
-                .find(|(i, _)| *i == o.name)
-                .map_or(spec, |(_, r)| (*r).to_string());
-            (ty, o)
-        })
-        .chain(
-            idl.records
-                .iter()
-                .filter(|r| !is_unpinned(&r.name))
-                .map(|r| (rust_type_name(&r.name), r)),
-        );
-    for (ty, owner) in pinned_owners {
-        let fields = rust_fields(&owner.name, &owner.fields);
-        let pattern: Vec<String> = fields.iter().map(|f| format!("{f}: _")).collect();
-        let _ = writeln!(
-            w,
-            "fn _fields_{}(v: &{ty}) {{
-    let {ty} {{ {} }} = v;
-}}
-",
-            snake(&ty).trim_start_matches('_'),
-            pattern.join(", ")
-        );
-    }
-    for op in &idl.ops {
-        let fields = rust_fields(&op.name, &op.fields);
-        // `Batch` is a tuple variant over its op list; every other op names its
-        // fields.
-        if op.name == "Batch" {
-            continue;
-        }
-        let pattern: Vec<String> = fields.iter().map(|f| format!("{f}: _")).collect();
-        let _ = writeln!(
-            w,
-            "fn _fields_op_{}(v: &TreeOp) {{
-    if let TreeOp::{} {{ {} }} = v {{}}
-}}
-",
-            snake(&op.name).trim_start_matches('_'),
-            op.name,
-            pattern.join(", ")
-        );
-    }
+    write_types(w, &idl)?;
 
     // ── Defaults ────────────────────────────────────────────────────────────
     let _ = writeln!(
@@ -896,5 +1175,17 @@ pub const NODE_RECORD_SLOTS: &[&str] = {};",
         str_list(&node_slots),
         str_list(&record_slots)
     );
-    Ok(out)
+    // The imports the wire types need, and only those: a dialect entry that
+    // stops naming a map type must not leave an unused import behind.
+    let mut imports = String::from(
+        "use crate::canonical::JVal;
+",
+    );
+    if out.contains("BTreeMap<") {
+        imports.push_str(
+            "use std::collections::BTreeMap;
+",
+        );
+    }
+    Ok(out.replacen("@@IMPORTS@@", &imports, 1))
 }
