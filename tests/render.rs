@@ -2052,7 +2052,7 @@ fn image_presentation_tokens_map_to_classes_never_to_styles() {
 /// is authored DESCENDING, must re-encode descending and render ascending.
 #[test]
 fn srcset_renders_ascending_while_the_wire_keeps_authored_order() {
-    let json = r#"{"id":"i","kind":{"$type":"Image","alt":"Boats","src":{"$type":"Static","value":"/h.jpg"},"srcSet":[{"src":{"$type":"Static","value":"/h-1600.jpg"},"width":1600},{"src":{"$type":"Static","value":"/h-800.jpg"},"width":800},{"src":{"$type":"Static","value":"/h-400.jpg"},"width":400}],"variant":"Default"}}"#;
+    let json = r#"{"id":"i","kind":{"$type":"Image","alt":"Boats","src":{"$type":"Static","value":"/h.jpg"},"srcSet":[{"src":{"$type":"Static","value":"/h-1600.jpg"},"width":1600},{"src":{"$type":"Static","value":"/h-800.jpg"},"width":800},{"src":{"$type":"Static","value":"/h-400.jpg"},"width":400}]}}"#;
     assert_eq!(encode_node(&node(json)), json, "the codec must not re-sort");
     let html = render(json);
     let tag = open_tag(&html, "img");
