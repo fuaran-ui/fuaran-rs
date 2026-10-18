@@ -65,15 +65,11 @@
       "pending": "this host's suite does not yet run this law family's vectors"
     },
     "laws/dataframeParity": "covered",
-    "laws/decimal": {
-      "pending": "this host's suite does not yet run this law family's vectors"
-    },
+    "laws/decimal": "covered",
     "laws/fieldLaws": {
       "pending": "this host's suite does not yet run this law family's vectors"
     },
-    "laws/transformLaws": {
-      "pending": "the evaluator certifies against the authored dataframeParity cases; the drawn transform sample is not run yet"
-    },
+    "laws/transformLaws": "covered",
     "lenient-accept": "covered",
     "lowers-to": "covered",
     "merge-conformance": "covered",

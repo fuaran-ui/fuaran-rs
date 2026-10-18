@@ -7,9 +7,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::dataframe::{
     Agg, AggFn, BinOp, CaseArm, Cell, ColExpr, ColumnType, DataColumn, DataSource, JoinKind,
-    ScalarFn, SchemaEntry, SortDir, SortKey, TransformStep, WindowFn,
+    Rounding, RoundingMode, RoundingScale, ScalarFn, SchemaEntry, SortDir, SortKey, TransformStep,
+    WindowFn,
 };
 use super::number::format_number;
+
+/// The exact decimal's text and arithmetic (Phase 2001), published beside the
+/// evaluator that computes with it as `crate::transform::decimal`.
+pub use super::decimal;
 
 /// A concrete evaluated table — schema (column order + types) + columnar cells.
 /// The public input/output form of the evaluator (an `Embedded` `DataSource`).
@@ -145,7 +150,8 @@ fn of_frame(f: &Frame) -> Table {
 
 // ─── pinned scalar semantics ─────────────────────────────────────────────────
 
-/// The canonical string of a cell (float via the shared canonical layout).
+/// The canonical string of a cell (float via the shared canonical layout, a
+/// decimal as its canonical text).
 pub fn cell_string(c: &Cell) -> String {
     match c {
         Cell::Int(v) => v.to_string(),
@@ -158,6 +164,7 @@ pub fn cell_string(c: &Cell) -> String {
             }
         }
         Cell::Str(s) | Cell::Date(s) | Cell::Timestamp(s) => s.clone(),
+        Cell::Decimal(s) => decimal::try_canonical(s).unwrap_or_else(|| s.clone()),
         Cell::Null => String::new(),
     }
 }
@@ -170,12 +177,39 @@ fn as_num(c: &Cell) -> Option<f64> {
     }
 }
 
-/// Total comparison of two present cells; `None` ⇒ incomparable families.
-fn compare_cells(a: &Cell, b: &Cell) -> Option<Ordering> {
-    if let (Some(an), Some(bn)) = (as_num(a), as_num(b)) {
-        return an.partial_cmp(&bn);
+/// A cell as exact-decimal text — a decimal's, or an int's digits (the lossless
+/// promotion) — or `None` for any other cell.
+fn decimal_text(c: &Cell) -> Option<String> {
+    match c {
+        Cell::Decimal(s) => Some(s.clone()),
+        Cell::Int(v) => Some(v.to_string()),
+        _ => None,
     }
+}
+
+/// The float order every numeric comparison uses: IEEE order on the non-NaN
+/// values, `-0 = 0`, and NaN one value ABOVE every other — never the host's
+/// partial order, which leaves NaN unordered.
+fn compare_float(a: f64, b: f64) -> Ordering {
+    match (a.is_nan(), b.is_nan()) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => a.partial_cmp(&b).unwrap_or(Ordering::Equal),
+    }
+}
+
+/// Total comparison of two present cells; `None` ⇒ incomparable families. A
+/// decimal compares EXACTLY against a decimal or an int; against a float it is
+/// incomparable — nothing converts between the two unless a `Cast` says which way.
+fn compare_cells(a: &Cell, b: &Cell) -> Option<Ordering> {
     match (a, b) {
+        (Cell::Int(_) | Cell::Float(_), Cell::Int(_) | Cell::Float(_)) => {
+            Some(compare_float(as_num(a)?, as_num(b)?))
+        }
+        (Cell::Decimal(_) | Cell::Int(_), Cell::Decimal(_) | Cell::Int(_)) => {
+            decimal::compare(&decimal_text(a)?, &decimal_text(b)?)
+        }
         (Cell::Bool(x), Cell::Bool(y)) => Some(x.cmp(y)),
         (Cell::Str(x), Cell::Str(y)) => Some(x.cmp(y)),
         (Cell::Date(x), Cell::Date(y)) => Some(x.cmp(y)),
@@ -184,20 +218,78 @@ fn compare_cells(a: &Cell, b: &Cell) -> Option<Ordering> {
     }
 }
 
+/// The join-key / pivot on-value match: the numeric family as floats (`Int 1`
+/// matches `Float 1.0`), a decimal only against a decimal, and a null nothing.
 fn cell_eq(a: &Cell, b: &Cell) -> bool {
-    if is_null(a) || is_null(b) {
-        return false;
+    match (a, b) {
+        (Cell::Null, _) | (_, Cell::Null) => false,
+        (Cell::Decimal(_), Cell::Decimal(_)) => compare_cells(a, b) == Some(Ordering::Equal),
+        (Cell::Decimal(_), _) | (_, Cell::Decimal(_)) => false,
+        _ => compare_cells(a, b) == Some(Ordering::Equal),
     }
-    compare_cells(a, b) == Some(Ordering::Equal)
 }
 
 fn both_int(a: &Cell, b: &Cell) -> bool {
     matches!(a, Cell::Int(_)) && matches!(b, Cell::Int(_))
 }
 
+/// The refusal a decimal beside a float meets, naming the `Cast` that resolves it.
+fn decimal_float_mismatch(what: &str) -> EvalError {
+    EvalError::TypeError {
+        detail: format!(
+            "{what} between a decimal and a float: cast one to the other's type first — \
+             Cast(decimal, …) to keep the digits exact, Cast(float, …) to compute approximately"
+        ),
+    }
+}
+
+/// A decimal answer, or the refusal for an operand that is not decimal text.
+fn decimal_result(ctx: &str, r: Option<String>) -> Result<Cell, EvalError> {
+    r.map(Cell::Decimal).ok_or_else(|| EvalError::TypeError {
+        detail: format!("{ctx}: an operand is not decimal text"),
+    })
+}
+
+/// `Add` / `Sub` / `Mul` / `Mod` over two exact operands, at least one a decimal:
+/// exact, and a decimal. `Div` is refused by name — a quotient of decimals is not
+/// a finite decimal in general, so the pipeline names its rounding.
+fn decimal_arith(op: BinOp, x: &str, y: &str) -> Result<Cell, EvalError> {
+    match op {
+        BinOp::Add => decimal_result("add", decimal::add(x, y)),
+        BinOp::Sub => decimal_result("sub", decimal::sub(x, y)),
+        BinOp::Mul => decimal_result("mul", decimal::mul(x, y)),
+        BinOp::Mod => {
+            if decimal::is_zero(y) {
+                Ok(NULL)
+            } else {
+                decimal_result("mod", decimal::rem(x, y))
+            }
+        }
+        BinOp::Div => Err(EvalError::TypeError {
+            detail: "division of an exact decimal names its rounding: write Quotient(dividend, divisor, { Scale; Mode })"
+                .to_string(),
+        }),
+        _ => Err(EvalError::TypeError {
+            detail: "not an arithmetic operator".to_string(),
+        }),
+    }
+}
+
 fn arith(op: BinOp, a: &Cell, b: &Cell) -> Result<Cell, EvalError> {
-    if is_null(a) || is_null(b) {
-        return Ok(NULL);
+    match (a, b) {
+        (Cell::Null, _) | (_, Cell::Null) => return Ok(NULL),
+        (Cell::Decimal(_), Cell::Decimal(_) | Cell::Int(_)) | (Cell::Int(_), Cell::Decimal(_)) => {
+            return match (decimal_text(a), decimal_text(b)) {
+                (Some(x), Some(y)) => decimal_arith(op, &x, &y),
+                _ => Err(EvalError::TypeError {
+                    detail: "arithmetic on a non-numeric operand".to_string(),
+                }),
+            };
+        }
+        (Cell::Decimal(_), Cell::Float(_)) | (Cell::Float(_), Cell::Decimal(_)) => {
+            return Err(decimal_float_mismatch("arithmetic"));
+        }
+        _ => {}
     }
     let (x, y) = match (as_num(a), as_num(b)) {
         (Some(x), Some(y)) => (x, y),
@@ -248,9 +340,19 @@ fn comparison(op: BinOp, a: &Cell, b: &Cell) -> Result<Cell, EvalError> {
     if is_null(a) || is_null(b) {
         return Ok(NULL);
     }
-    let c = compare_cells(a, b).ok_or(EvalError::TypeError {
-        detail: "comparison between incompatible types".to_string(),
-    })?;
+    let c = match compare_cells(a, b) {
+        Some(c) => c,
+        None => {
+            return Err(match (a, b) {
+                (Cell::Decimal(_), Cell::Float(_)) | (Cell::Float(_), Cell::Decimal(_)) => {
+                    decimal_float_mismatch("comparison")
+                }
+                _ => EvalError::TypeError {
+                    detail: "comparison between incompatible types".to_string(),
+                },
+            });
+        }
+    };
     let r = match op {
         BinOp::Eq => c == Ordering::Equal,
         BinOp::Ne => c != Ordering::Equal,
@@ -354,21 +456,43 @@ fn cast_cell(ty: ColumnType, c: &Cell) -> Result<Cell, EvalError> {
         ColumnType::Float => {
             if let Some(n) = as_num(c) {
                 Ok(Cell::Float(n))
-            } else if let Cell::Str(s) = c {
-                try_parse_float(s)
-                    .map(Cell::Float)
-                    .ok_or(EvalError::TypeError {
-                        detail: format!("cannot cast '{s}' to float"),
-                    })
             } else {
-                Err(EvalError::TypeError {
-                    detail: "cannot cast to float".to_string(),
-                })
+                match c {
+                    // The nearest float to the decimal — the cast says the
+                    // pipeline asked for the approximation. Past the float range
+                    // it is refused, never an infinity.
+                    Cell::Decimal(s) => {
+                        decimal::try_to_float(s).map(Cell::Float).ok_or_else(|| {
+                            EvalError::TypeError {
+                                detail: format!(
+                                    "cannot cast decimal '{s}' to float: outside the float range"
+                                ),
+                            }
+                        })
+                    }
+                    Cell::Str(s) => {
+                        try_parse_float(s)
+                            .map(Cell::Float)
+                            .ok_or(EvalError::TypeError {
+                                detail: format!("cannot cast '{s}' to float"),
+                            })
+                    }
+                    _ => Err(EvalError::TypeError {
+                        detail: "cannot cast to float".to_string(),
+                    }),
+                }
             }
         }
         ColumnType::Int => match c {
             Cell::Int(_) => Ok(c.clone()),
             Cell::Float(v) => Ok(Cell::Int(v.trunc() as i64)),
+            // Truncated toward zero, as a float is; outside int32 a named refusal.
+            Cell::Decimal(s) => match decimal::truncate_to_i64(s) {
+                Some(v) if v >= i64::from(i32::MIN) && v <= i64::from(i32::MAX) => Ok(Cell::Int(v)),
+                _ => Err(EvalError::TypeError {
+                    detail: format!("decimal→int cast out of int32 range: {s}"),
+                }),
+            },
             Cell::Bool(b) => Ok(Cell::Int(if *b { 1 } else { 0 })),
             Cell::Str(s) => try_parse_int(s).map(Cell::Int).ok_or(EvalError::TypeError {
                 detail: format!("cannot cast '{s}' to int"),
@@ -398,6 +522,108 @@ fn cast_cell(ty: ColumnType, c: &Cell) -> Result<Cell, EvalError> {
                 detail: "cannot cast to timestamp".to_string(),
             }),
         },
+        // An int is exactly a decimal; a string is read by the decimal grammar; a
+        // FLOAT is the one place an approximation enters a decimal — its shortest
+        // round-trip digits, which are the float's.
+        ColumnType::Decimal => {
+            let refused = |s: &str| EvalError::TypeError {
+                detail: format!("cannot cast '{s}' to decimal"),
+            };
+            match c {
+                Cell::Decimal(s) | Cell::Str(s) => decimal::try_canonical(s)
+                    .map(Cell::Decimal)
+                    .ok_or_else(|| refused(s)),
+                Cell::Int(v) => Ok(Cell::Decimal(v.to_string())),
+                Cell::Float(f) => {
+                    decimal::of_float(*f)
+                        .map(Cell::Decimal)
+                        .ok_or(EvalError::TypeError {
+                            detail: "cannot cast a non-finite float to decimal".to_string(),
+                        })
+                }
+                _ => Err(EvalError::TypeError {
+                    detail: "cannot cast to decimal".to_string(),
+                }),
+            }
+        }
+    }
+}
+
+/// A rounding's scale against the evaluation env: a literal is itself; a param
+/// reads the env — unbound is `UnboundParam`, a cell that is not an int a
+/// `TypeError` naming the rounding scale. The range is the primitive's check.
+fn resolve_scale(env: &EvalEnv, s: &RoundingScale) -> Result<i64, EvalError> {
+    match s {
+        RoundingScale::Lit(n) => Ok(*n),
+        RoundingScale::Param(name) => match env.get(name) {
+            Some(Cell::Int(v)) => Ok(*v),
+            Some(_) => Err(EvalError::TypeError {
+                detail: format!("rounding scale: param '{name}' is not bound to an int"),
+            }),
+            None => Err(EvalError::UnboundParam {
+                name: name.clone(),
+                bound: env.keys().cloned().collect(),
+            }),
+        },
+    }
+}
+
+fn check_scale(scale: i64) -> Result<(), EvalError> {
+    if (0..=decimal::MAX_SCALE).contains(&scale) {
+        Ok(())
+    } else {
+        Err(EvalError::TypeError {
+            detail: format!(
+                "rounding scale {scale} is outside 0..{}",
+                decimal::MAX_SCALE
+            ),
+        })
+    }
+}
+
+/// THE rounding primitive over cells: `Rounded`'s, and through it the decimal
+/// arm of `Round` / `Floor` / `Ceil`. The scale is checked first, then a null
+/// propagates, then an exact operand is brought to the scale; a float names the
+/// `Cast`.
+fn rounded_cell(mode: RoundingMode, scale: i64, c: &Cell) -> Result<Cell, EvalError> {
+    check_scale(scale)?;
+    match c {
+        Cell::Null => Ok(NULL),
+        Cell::Decimal(_) | Cell::Int(_) => decimal_result(
+            "rounded",
+            decimal_text(c).and_then(|t| decimal::quantize(mode, scale, &t)),
+        ),
+        Cell::Float(_) => Err(decimal_float_mismatch("rounding")),
+        _ => Err(EvalError::TypeError {
+            detail: "rounding of a non-numeric".to_string(),
+        }),
+    }
+}
+
+/// `Quotient`'s primitive: the scale first, then a null operand propagates, then
+/// two exact operands divide, correctly rounded; a zero divisor answers null.
+fn quotient_cell(mode: RoundingMode, scale: i64, a: &Cell, b: &Cell) -> Result<Cell, EvalError> {
+    check_scale(scale)?;
+    match (a, b) {
+        (Cell::Null, _) | (_, Cell::Null) => Ok(NULL),
+        (Cell::Decimal(_) | Cell::Int(_), Cell::Decimal(_) | Cell::Int(_)) => {
+            let not_text = || EvalError::TypeError {
+                detail: "quotient: an operand is not decimal text".to_string(),
+            };
+            let (x, y) = (
+                decimal_text(a).ok_or_else(not_text)?,
+                decimal_text(b).ok_or_else(not_text)?,
+            );
+            match decimal::divide(mode, scale, &x, &y) {
+                Some(Some(q)) => Ok(Cell::Decimal(q)),
+                Some(None) => Ok(NULL),
+                None => Err(not_text()),
+            }
+        }
+        (Cell::Float(_), _) | (_, Cell::Float(_)) => Err(decimal_float_mismatch("quotient")),
+        _ => Err(EvalError::TypeError {
+            detail: "quotient of a non-numeric".to_string(),
+        }),
     }
 }
 
@@ -433,30 +659,40 @@ fn apply_scalar(func: ScalarFn, args: &[Cell]) -> Result<Cell, EvalError> {
         ScalarFn::Abs => unary(&|c| match c {
             Cell::Int(v) => Ok(Cell::Int(v.abs())),
             Cell::Float(v) => Ok(Cell::Float(v.abs())),
+            Cell::Decimal(s) => decimal_result("abs", decimal::abs(s)),
             _ => Err(EvalError::TypeError {
                 detail: "abs of a non-numeric".to_string(),
             }),
         }),
-        ScalarFn::Round => unary(&|c| {
-            as_num(c)
+        // Over a decimal, a scale-0 `Rounded` under its pinned mode — exact,
+        // through the one rounding kernel; over the numeric family, unchanged.
+        ScalarFn::Round => unary(&|c| match c {
+            Cell::Decimal(_) => rounded_cell(RoundingMode::HalfUp, 0, c),
+            _ => as_num(c)
                 .map(|n| Cell::Float(round_half_away(n)))
                 .ok_or(EvalError::TypeError {
                     detail: "round of a non-numeric".to_string(),
-                })
+                }),
         }),
-        ScalarFn::Floor => unary(&|c| {
-            as_num(c)
+        // Over a decimal, a scale-0 `Rounded` under its pinned mode — exact,
+        // through the one rounding kernel; over the numeric family, unchanged.
+        ScalarFn::Floor => unary(&|c| match c {
+            Cell::Decimal(_) => rounded_cell(RoundingMode::Floor, 0, c),
+            _ => as_num(c)
                 .map(|n| Cell::Float(n.floor()))
                 .ok_or(EvalError::TypeError {
                     detail: "floor of a non-numeric".to_string(),
-                })
+                }),
         }),
-        ScalarFn::Ceil => unary(&|c| {
-            as_num(c)
+        // Over a decimal, a scale-0 `Rounded` under its pinned mode — exact,
+        // through the one rounding kernel; over the numeric family, unchanged.
+        ScalarFn::Ceil => unary(&|c| match c {
+            Cell::Decimal(_) => rounded_cell(RoundingMode::Ceiling, 0, c),
+            _ => as_num(c)
                 .map(|n| Cell::Float(n.ceil()))
                 .ok_or(EvalError::TypeError {
                     detail: "ceil of a non-numeric".to_string(),
-                })
+                }),
         }),
         ScalarFn::Length => unary(&|c| match c {
             Cell::Str(s) => Ok(Cell::Int(s.chars().count() as i64)),
@@ -772,10 +1008,448 @@ fn eval_expr(
             let v = eval_expr(cols, row, expr, env)?;
             Ok(Cell::Bool(is_null(&v)))
         }
+        // Evaluation order: the scale, the dividend, the divisor.
+        ColExpr::Quotient {
+            dividend,
+            divisor,
+            rounding,
+        } => {
+            let scale = resolve_scale(env, &rounding.scale)?;
+            let a = eval_expr(cols, row, dividend, env)?;
+            let b = eval_expr(cols, row, divisor, env)?;
+            quotient_cell(rounding.mode, scale, &a, &b)
+        }
+        ColExpr::Rounded { expr, rounding } => {
+            let scale = resolve_scale(env, &rounding.scale)?;
+            let v = eval_expr(cols, row, expr, env)?;
+            rounded_cell(rounding.mode, scale, &v)
+        }
     }
 }
 
-// ─── type inference for derived/melted columns ───────────────────────────────
+// ─── static typing + the derived-column typing rule (fuaran-core#338) ───────
+//
+// What an expression's PRESENT values can be, decided from a step's schema and
+// nothing else — three states, because a node that never produces a present
+// value (a null literal) is compatible with every type, and folding it into
+// "unknown" would cost the type of every `Case` whose else is a null literal.
+//
+// THE derived-column rule, read by `Derive` and `Unpivot` alike:
+//  - the typer decides the column (`Of ty`) ⇒ `ty` on every frame, empty or
+//    all-null included;
+//  - no present value can occur (`Absent`) ⇒ `string`;
+//  - undecidable from the schema (`Unknown`) ⇒ the substituted expression where
+//    the env's params decide it, else the CELLS decide by the widening join
+//    (`string` when none is present);
+//  - a float beside a decimal ⇒ refused by name, never widened.
+
+/// The static type of a node's present values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Typing {
+    /// No present value is ever produced: every row answers null or an error.
+    Absent,
+    /// Every present value carries this type.
+    Of(ColumnType),
+    /// Undecidable from the schema.
+    Unknown,
+}
+
+impl Typing {
+    /// The least typing covering both: `Absent` is the identity, two equal
+    /// types agree, anything else is `Unknown`. Deliberately NOT the widening
+    /// join — `Of` is an exactness claim.
+    fn join(self, other: Typing) -> Typing {
+        match (self, other) {
+            (Typing::Absent, t) | (t, Typing::Absent) => t,
+            (Typing::Of(x), Typing::Of(y)) if x == y => Typing::Of(x),
+            _ => Typing::Unknown,
+        }
+    }
+
+    fn join_all(ts: impl IntoIterator<Item = Typing>) -> Typing {
+        ts.into_iter().fold(Typing::Absent, Typing::join)
+    }
+
+    fn of_cell(c: &Cell) -> Typing {
+        cell_type_of(c).map_or(Typing::Absent, Typing::Of)
+    }
+
+    fn numeric(self) -> bool {
+        matches!(self, Typing::Of(ColumnType::Int | ColumnType::Float))
+    }
+
+    fn bool_like(self) -> bool {
+        matches!(self, Typing::Absent | Typing::Of(ColumnType::Bool))
+    }
+
+    /// The exact family: a decimal, or an int, which promotes losslessly.
+    fn exact(self) -> bool {
+        matches!(self, Typing::Of(ColumnType::Int | ColumnType::Decimal))
+    }
+}
+
+/// Two exact operands at least one of which is a decimal.
+fn decimal_pair(a: Typing, b: Typing) -> bool {
+    a.exact()
+        && b.exact()
+        && (a == Typing::Of(ColumnType::Decimal) || b == Typing::Of(ColumnType::Decimal))
+}
+
+fn typing_binary(op: BinOp, a: Typing, b: Typing) -> Typing {
+    let null_propagating = |decide: &dyn Fn() -> Typing| -> Typing {
+        if a == Typing::Absent || b == Typing::Absent {
+            Typing::Absent
+        } else {
+            decide()
+        }
+    };
+    match op {
+        BinOp::Add | BinOp::Sub | BinOp::Mul => null_propagating(&|| match (a, b) {
+            (Typing::Of(ColumnType::Int), Typing::Of(ColumnType::Int)) => {
+                Typing::Of(ColumnType::Int)
+            }
+            _ if a.numeric() && b.numeric() => Typing::Of(ColumnType::Float),
+            _ if decimal_pair(a, b) => Typing::Of(ColumnType::Decimal),
+            _ => Typing::Unknown,
+        }),
+        // A decimal `Div` is refused on every row, so no present value of it.
+        BinOp::Div => null_propagating(&|| {
+            if a.numeric() && b.numeric() {
+                Typing::Of(ColumnType::Float)
+            } else {
+                Typing::Unknown
+            }
+        }),
+        BinOp::Mod => null_propagating(&|| match (a, b) {
+            (Typing::Of(ColumnType::Int), Typing::Of(ColumnType::Int)) => {
+                Typing::Of(ColumnType::Int)
+            }
+            _ if decimal_pair(a, b) => Typing::Of(ColumnType::Decimal),
+            _ => Typing::Unknown,
+        }),
+        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+            null_propagating(&|| match (a, b) {
+                _ if a.numeric() && b.numeric() => Typing::Of(ColumnType::Bool),
+                _ if a.exact() && b.exact() => Typing::Of(ColumnType::Bool),
+                (Typing::Of(x), Typing::Of(y))
+                    if x == y
+                        && matches!(
+                            x,
+                            ColumnType::Str
+                                | ColumnType::Date
+                                | ColumnType::Timestamp
+                                | ColumnType::Bool
+                        ) =>
+                {
+                    Typing::Of(ColumnType::Bool)
+                }
+                _ => Typing::Unknown,
+            })
+        }
+        BinOp::And | BinOp::Or => {
+            if a.bool_like() && b.bool_like() {
+                a.join(b)
+            } else {
+                Typing::Unknown
+            }
+        }
+        BinOp::Contains | BinOp::StartsWith | BinOp::EndsWith => {
+            null_propagating(&|| match (a, b) {
+                (Typing::Of(ColumnType::Str), Typing::Of(ColumnType::Str)) => {
+                    Typing::Of(ColumnType::Bool)
+                }
+                _ => Typing::Unknown,
+            })
+        }
+    }
+}
+
+/// A scalar function's typing, total over `ScalarFn`. An arity the function
+/// refuses is an error on every row, so `Absent`; a null argument propagates
+/// exactly where the function propagates it.
+fn typing_apply(func: ScalarFn, args: &[Typing]) -> Typing {
+    let any_absent = args.contains(&Typing::Absent);
+    let unary = |decide: &dyn Fn(Typing) -> Typing| -> Typing {
+        match args {
+            [Typing::Absent] => Typing::Absent,
+            [t] => decide(*t),
+            _ => Typing::Absent,
+        }
+    };
+    match func {
+        ScalarFn::Abs => unary(&|t| match t {
+            Typing::Of(ty @ (ColumnType::Int | ColumnType::Float | ColumnType::Decimal)) => {
+                Typing::Of(ty)
+            }
+            _ => Typing::Unknown,
+        }),
+        // Over a decimal these are scale-0 `Rounded`s and answer a decimal; over
+        // an operand the typer cannot decide they cannot be decided either.
+        ScalarFn::Round | ScalarFn::Floor | ScalarFn::Ceil => unary(&|t| match t {
+            Typing::Of(ColumnType::Decimal) => Typing::Of(ColumnType::Decimal),
+            Typing::Unknown => Typing::Unknown,
+            Typing::Absent | Typing::Of(_) => Typing::Of(ColumnType::Float),
+        }),
+        ScalarFn::Length => unary(&|_| Typing::Of(ColumnType::Int)),
+        ScalarFn::Lower | ScalarFn::Upper | ScalarFn::Trim => {
+            unary(&|_| Typing::Of(ColumnType::Str))
+        }
+        ScalarFn::Substr => match args {
+            [Typing::Absent, _, _] => Typing::Absent,
+            [_, _, _] => Typing::Of(ColumnType::Str),
+            _ => Typing::Absent,
+        },
+        ScalarFn::DatePart => match args {
+            [_, Typing::Absent] => Typing::Absent,
+            [_, _] => Typing::Of(ColumnType::Int),
+            _ => Typing::Absent,
+        },
+        ScalarFn::Concat => {
+            if args.is_empty() || any_absent {
+                Typing::Absent
+            } else {
+                Typing::Of(ColumnType::Str)
+            }
+        }
+        ScalarFn::Replace => {
+            if args.len() != 3 || any_absent {
+                Typing::Absent
+            } else {
+                Typing::Of(ColumnType::Str)
+            }
+        }
+        ScalarFn::DateDiffDays => {
+            if args.len() != 2 || any_absent {
+                Typing::Absent
+            } else {
+                Typing::Of(ColumnType::Int)
+            }
+        }
+    }
+}
+
+/// The static typing of an expression over a schema, with no env. Total over
+/// the closed `ColExpr` enum with no catch-all.
+fn typing(cols: &[SchemaEntry], e: &ColExpr) -> Typing {
+    let go = |x: &ColExpr| typing(cols, x);
+    match e {
+        ColExpr::Col { name } => col_type(cols, name).map_or(Typing::Unknown, Typing::Of),
+        ColExpr::Lit { cell } => Typing::of_cell(cell),
+        ColExpr::Param { .. } => Typing::Unknown,
+        ColExpr::Binary { op, left, right } => typing_binary(*op, go(left), go(right)),
+        ColExpr::Not { expr } => match go(expr) {
+            Typing::Absent => Typing::Absent,
+            Typing::Of(ColumnType::Bool) => Typing::Of(ColumnType::Bool),
+            Typing::Of(_) | Typing::Unknown => Typing::Unknown,
+        },
+        ColExpr::Coalesce { exprs } => Typing::join_all(exprs.iter().map(go)),
+        ColExpr::Case { cases, else_expr } => Typing::join_all(
+            std::iter::once(go(else_expr)).chain(cases.iter().map(|c| go(&c.then))),
+        ),
+        // A cast's present values are always of the target type.
+        ColExpr::Cast { column_type, expr } => match go(expr) {
+            Typing::Absent => Typing::Absent,
+            Typing::Of(_) | Typing::Unknown => Typing::Of(*column_type),
+        },
+        ColExpr::Apply { func, args } => {
+            typing_apply(*func, &args.iter().map(go).collect::<Vec<_>>())
+        }
+        // Membership is three-valued: a null subject answers null, else a bool.
+        ColExpr::InList { subject, .. } | ColExpr::InParam { subject, .. } => match go(subject) {
+            Typing::Absent => Typing::Absent,
+            Typing::Of(_) | Typing::Unknown => Typing::Of(ColumnType::Bool),
+        },
+        ColExpr::IsNull { .. } => Typing::Of(ColumnType::Bool),
+        ColExpr::Quotient {
+            dividend, divisor, ..
+        } => match (go(dividend), go(divisor)) {
+            (Typing::Absent, _) | (_, Typing::Absent) => Typing::Absent,
+            (a, b) if a.exact() && b.exact() => Typing::Of(ColumnType::Decimal),
+            _ => Typing::Unknown,
+        },
+        ColExpr::Rounded { expr, .. } => match go(expr) {
+            Typing::Absent => Typing::Absent,
+            t if t.exact() => Typing::Of(ColumnType::Decimal),
+            _ => Typing::Unknown,
+        },
+    }
+}
+
+/// How a derived column is typed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DerivedTyping {
+    /// The schema decides the type: the same on every frame.
+    Decided(ColumnType),
+    /// The cells decide it, by the widening join of the present cells' types.
+    ByCells,
+    /// A float beside a decimal, visible in the expression's own arms.
+    Refused,
+}
+
+/// Does an arm the derived value is drawn from — through `Case` and
+/// `Coalesce`, whose answer IS one of their operands' — carry type `ty`?
+fn arms_have(ty: ColumnType, cols: &[SchemaEntry], e: &ColExpr) -> bool {
+    match e {
+        ColExpr::Coalesce { exprs } => exprs.iter().any(|x| arms_have(ty, cols, x)),
+        ColExpr::Case { cases, else_expr } => {
+            arms_have(ty, cols, else_expr) || cases.iter().any(|c| arms_have(ty, cols, &c.then))
+        }
+        ColExpr::Col { .. }
+        | ColExpr::Lit { .. }
+        | ColExpr::Param { .. }
+        | ColExpr::Binary { .. }
+        | ColExpr::Not { .. }
+        | ColExpr::Cast { .. }
+        | ColExpr::Apply { .. }
+        | ColExpr::InList { .. }
+        | ColExpr::InParam { .. }
+        | ColExpr::IsNull { .. }
+        | ColExpr::Quotient { .. }
+        | ColExpr::Rounded { .. } => typing(cols, e) == Typing::Of(ty),
+    }
+}
+
+/// How a `Derive` of `e` over `cols` types its column, statically.
+fn derived_typing(cols: &[SchemaEntry], e: &ColExpr) -> DerivedTyping {
+    if arms_have(ColumnType::Float, cols, e) && arms_have(ColumnType::Decimal, cols, e) {
+        return DerivedTyping::Refused;
+    }
+    match typing(cols, e) {
+        Typing::Of(ty) => DerivedTyping::Decided(ty),
+        Typing::Absent => DerivedTyping::Decided(ColumnType::Str),
+        Typing::Unknown => DerivedTyping::ByCells,
+    }
+}
+
+/// `e` with every param bound in `env` replaced by its literal — the expression
+/// the evaluator answers exactly as it answers `e`.
+fn substitute_params(env: &EvalEnv, e: &ColExpr) -> ColExpr {
+    let go = |x: &ColExpr| Box::new(substitute_params(env, x));
+    let scale = |r: &Rounding| Rounding {
+        scale: match &r.scale {
+            RoundingScale::Param(name) => match env.get(name) {
+                Some(Cell::Int(v)) => RoundingScale::Lit(*v),
+                _ => r.scale.clone(),
+            },
+            RoundingScale::Lit(_) => r.scale.clone(),
+        },
+        mode: r.mode,
+    };
+    match e {
+        ColExpr::Param { name } => match env.get(name) {
+            Some(cell) => ColExpr::Lit { cell: cell.clone() },
+            None => e.clone(),
+        },
+        ColExpr::Col { .. } | ColExpr::Lit { .. } => e.clone(),
+        ColExpr::Binary { op, left, right } => ColExpr::Binary {
+            op: *op,
+            left: go(left),
+            right: go(right),
+        },
+        ColExpr::Not { expr } => ColExpr::Not { expr: go(expr) },
+        ColExpr::Coalesce { exprs } => ColExpr::Coalesce {
+            exprs: exprs.iter().map(|x| substitute_params(env, x)).collect(),
+        },
+        ColExpr::Case { cases, else_expr } => ColExpr::Case {
+            cases: cases
+                .iter()
+                .map(|c| CaseArm {
+                    when: substitute_params(env, &c.when),
+                    then: substitute_params(env, &c.then),
+                })
+                .collect(),
+            else_expr: go(else_expr),
+        },
+        ColExpr::Cast { column_type, expr } => ColExpr::Cast {
+            column_type: *column_type,
+            expr: go(expr),
+        },
+        ColExpr::Apply { func, args } => ColExpr::Apply {
+            func: *func,
+            args: args.iter().map(|x| substitute_params(env, x)).collect(),
+        },
+        ColExpr::InList { subject, items } => ColExpr::InList {
+            subject: go(subject),
+            items: items.iter().map(|x| substitute_params(env, x)).collect(),
+        },
+        ColExpr::InParam { subject, name } => ColExpr::InParam {
+            subject: go(subject),
+            name: name.clone(),
+        },
+        ColExpr::IsNull { expr } => ColExpr::IsNull { expr: go(expr) },
+        ColExpr::Quotient {
+            dividend,
+            divisor,
+            rounding,
+        } => ColExpr::Quotient {
+            dividend: go(dividend),
+            divisor: go(divisor),
+            rounding: scale(rounding),
+        },
+        ColExpr::Rounded { expr, rounding } => ColExpr::Rounded {
+            expr: go(expr),
+            rounding: scale(rounding),
+        },
+    }
+}
+
+/// How an EVALUATION of a `Derive` types its column: the static rule wherever
+/// it decides or refuses, and where it leaves the column to the cells, the type
+/// the same rule decides over the expression with the env's params substituted.
+fn derived_typing_in(env: &EvalEnv, cols: &[SchemaEntry], e: &ColExpr) -> DerivedTyping {
+    match derived_typing(cols, e) {
+        DerivedTyping::ByCells => match derived_typing(cols, &substitute_params(env, e)) {
+            dt @ DerivedTyping::Decided(_) => dt,
+            DerivedTyping::ByCells | DerivedTyping::Refused => DerivedTyping::ByCells,
+        },
+        dt @ (DerivedTyping::Decided(_) | DerivedTyping::Refused) => dt,
+    }
+}
+
+/// The least column type two types both widen into — `int` and `float` join at
+/// `float`, `int` and `decimal` at `decimal` — or `None` (a float beside a
+/// decimal included).
+fn join_column_type(a: ColumnType, b: ColumnType) -> Option<ColumnType> {
+    match (a, b) {
+        _ if a == b => Some(a),
+        (ColumnType::Int, ColumnType::Float) | (ColumnType::Float, ColumnType::Int) => {
+            Some(ColumnType::Float)
+        }
+        (ColumnType::Int, ColumnType::Decimal) | (ColumnType::Decimal, ColumnType::Int) => {
+            Some(ColumnType::Decimal)
+        }
+        _ => None,
+    }
+}
+
+/// How an `Unpivot`'s value column is typed over the value columns' declared
+/// types: the same rule, the value columns being its arms.
+fn unpivot_typing(types: &[ColumnType]) -> DerivedTyping {
+    if types.contains(&ColumnType::Float) && types.contains(&ColumnType::Decimal) {
+        return DerivedTyping::Refused;
+    }
+    let mut acc: Option<Option<ColumnType>> = None;
+    for t in types {
+        acc = Some(match acc {
+            None => Some(*t),
+            Some(Some(a)) => join_column_type(a, *t),
+            Some(None) => None,
+        });
+    }
+    match acc {
+        None => DerivedTyping::Decided(ColumnType::Str),
+        Some(Some(ty)) => DerivedTyping::Decided(ty),
+        Some(None) => DerivedTyping::ByCells,
+    }
+}
+
+fn float_beside_decimal(column: &str) -> EvalError {
+    EvalError::TypeError {
+        detail: format!(
+            "derived column '{column}' joins a float and a decimal: cast one to the other's type first - Cast(decimal, ...) to keep the digits exact, Cast(float, ...) to compute approximately"
+        ),
+    }
+}
 
 fn cell_type_of(c: &Cell) -> Option<ColumnType> {
     match c {
@@ -785,45 +1459,58 @@ fn cell_type_of(c: &Cell) -> Option<ColumnType> {
         Cell::Str(_) => Some(ColumnType::Str),
         Cell::Date(_) => Some(ColumnType::Date),
         Cell::Timestamp(_) => Some(ColumnType::Timestamp),
+        Cell::Decimal(_) => Some(ColumnType::Decimal),
         Cell::Null => None,
     }
 }
 
-/// The column type an expression is typed at from the schema alone, where that
-/// is decidable. A derive whose every cell is null has no value to read a type
-/// off, and the reference evaluator types it from the expression
-/// (`laws/dataframeParity`'s `derive-div-by-zero`: an int quotient of all-null
-/// cells is a `float` column). `None` leaves the value-inferred default.
-fn static_type(cols: &[SchemaEntry], e: &ColExpr) -> Option<ColumnType> {
-    match e {
-        ColExpr::Col { name } => col_type(cols, name),
-        ColExpr::Lit { cell } => cell_type_of(cell),
-        ColExpr::Cast { column_type, .. } => Some(*column_type),
-        ColExpr::Not { .. } | ColExpr::IsNull { .. } | ColExpr::InList { .. } => {
-            Some(ColumnType::Bool)
-        }
-        ColExpr::Binary { op, left, right } => match op {
-            BinOp::Div => Some(ColumnType::Float),
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Mod => {
-                match (static_type(cols, left)?, static_type(cols, right)?) {
-                    (ColumnType::Int, ColumnType::Int) => Some(ColumnType::Int),
-                    (ColumnType::Int | ColumnType::Float, ColumnType::Int | ColumnType::Float) => {
-                        Some(ColumnType::Float)
-                    }
-                    _ => None,
+/// The cells' half of the rule: the widening join over the present cells,
+/// `string` when none is present, and the named refusals where the cells hold
+/// a float beside a decimal, or two types no column type holds together.
+fn type_from_cells(column: &str, cells: &[Cell]) -> Result<ColumnType, EvalError> {
+    let mut acc: Option<ColumnType> = None;
+    let (mut saw_float, mut saw_decimal) = (false, false);
+    let mut disjoint: Option<(ColumnType, ColumnType)> = None;
+    for t in cells.iter().filter_map(cell_type_of) {
+        saw_float |= t == ColumnType::Float;
+        saw_decimal |= t == ColumnType::Decimal;
+        acc = Some(match acc {
+            None => t,
+            Some(a) => match join_column_type(a, t) {
+                Some(j) => j,
+                None => {
+                    disjoint.get_or_insert((a, t));
+                    a
                 }
-            }
-            _ => Some(ColumnType::Bool),
-        },
-        _ => None,
+            },
+        });
     }
+    if saw_float && saw_decimal {
+        return Err(float_beside_decimal(column));
+    }
+    if let Some((a, b)) = disjoint {
+        return Err(EvalError::TypeError {
+            detail: format!(
+                "derived column '{column}' holds a {} beside a {}, which no column type holds together: cast one to the other's type first",
+                a.as_str(),
+                b.as_str()
+            ),
+        });
+    }
+    Ok(acc.unwrap_or(ColumnType::Str))
 }
 
-fn infer_type(cells: &[Cell]) -> ColumnType {
-    cells
-        .iter()
-        .find_map(cell_type_of)
-        .unwrap_or(ColumnType::Str)
+/// A derived column's type under its typing: the decided type, or the cells'.
+fn column_type_by(
+    dt: DerivedTyping,
+    column: &str,
+    cells: &[Cell],
+) -> Result<ColumnType, EvalError> {
+    match dt {
+        DerivedTyping::Decided(ty) => Ok(ty),
+        DerivedTyping::ByCells => type_from_cells(column, cells),
+        DerivedTyping::Refused => Err(float_beside_decimal(column)),
+    }
 }
 
 // ─── aggregates (pinned) ─────────────────────────────────────────────────────
@@ -832,10 +1519,138 @@ fn present_nums(cells: &[Cell]) -> Vec<f64> {
     cells.iter().filter_map(as_num).collect()
 }
 
-fn agg_cells(func: AggFn, src_type: ColumnType, cells: &[Cell]) -> Cell {
-    let present: Vec<&Cell> = cells.iter().filter(|c| !is_null(c)).collect();
-    match func {
+fn float_mean(nums: &[f64]) -> Cell {
+    if nums.is_empty() {
+        NULL
+    } else {
+        Cell::Float(nums.iter().sum::<f64>() / nums.len() as f64)
+    }
+}
+
+/// The POPULATION standard deviation.
+fn float_stddev(nums: &[f64]) -> Cell {
+    if nums.is_empty() {
+        return NULL;
+    }
+    let n = nums.len() as f64;
+    let mean = nums.iter().sum::<f64>() / n;
+    let variance = nums.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / n;
+    Cell::Float(variance.sqrt())
+}
+
+/// The median in the float order (a STABLE sort, NaN counted at the top).
+fn float_median(mut nums: Vec<f64>) -> Cell {
+    if nums.is_empty() {
+        return NULL;
+    }
+    nums.sort_by(|a, b| compare_float(*a, *b));
+    let mid = nums.len() / 2;
+    if nums.len() % 2 == 1 {
+        Cell::Float(nums[mid])
+    } else {
+        Cell::Float((nums[mid - 1] + nums[mid]) / 2.0)
+    }
+}
+
+/// `Min` / `Max`: the least / greatest present value by the cell order — an
+/// incomparable pair keeping the incumbent, `Min` keeping the FIRST of equals
+/// and `Max` the LAST — and null over no present value.
+fn extreme(func: AggFn, present: &[&Cell]) -> Cell {
+    let Some((first, rest)) = present.split_first() else {
+        return NULL;
+    };
+    let mut acc = (*first).clone();
+    for b in rest {
+        if let Some(ord) = compare_cells(&acc, b) {
+            let c_le = ord != Ordering::Greater;
+            let keep_acc = (func == AggFn::Min) == c_le;
+            if !keep_acc {
+                acc = (*b).clone();
+            }
+        }
+    }
+    acc
+}
+
+/// The distinct present values under the cell identity token.
+fn count_distinct(present: &[&Cell]) -> Cell {
+    let keys: BTreeSet<String> = present.iter().map(|c| cell_token(c)).collect();
+    Cell::Int(keys.len() as i64)
+}
+
+/// Every aggregate over a decimal column. The column is ADMITTED first: a
+/// present cell that is not decimal text (an int reads as its digits) is a
+/// named refusal outranking every answer, and every value is read
+/// canonicalised. `Sum` is exact and a decimal; `Min` / `Max` compare exactly;
+/// `Mean` / `Median` / `StdDev` read each value at its nearest double, and a
+/// value past the float range is refused for them.
+fn agg_decimal_cells(func: AggFn, cells: &[Cell]) -> Result<Cell, EvalError> {
+    let mut admitted: Vec<Cell> = Vec::with_capacity(cells.len());
+    for c in cells {
+        admitted.push(match c {
+            Cell::Null => NULL,
+            other => match decimal_text(other).and_then(|t| decimal::try_canonical(&t)) {
+                Some(text) => Cell::Decimal(text),
+                None => {
+                    return Err(EvalError::AggError {
+                        detail: format!(
+                            "aggregate over a decimal column met a cell outside its type: {}",
+                            cell_string(other)
+                        ),
+                    });
+                }
+            },
+        });
+    }
+    let present: Vec<&Cell> = admitted.iter().filter(|c| !is_null(c)).collect();
+    let texts = || {
+        present.iter().filter_map(|c| match c {
+            Cell::Decimal(t) => Some(t.as_str()),
+            _ => None,
+        })
+    };
+    let floats = || -> Result<Vec<f64>, EvalError> {
+        texts()
+            .map(|t| {
+                decimal::try_to_float(t).ok_or_else(|| EvalError::AggError {
+                    detail: format!(
+                        "the decimal {t} is past the float range, and {} is a float",
+                        func.as_str()
+                    ),
+                })
+            })
+            .collect()
+    };
+    Ok(match func {
         AggFn::Count => Cell::Int(present.len() as i64),
+        AggFn::First => admitted.first().cloned().unwrap_or(NULL),
+        AggFn::Last => admitted.last().cloned().unwrap_or(NULL),
+        AggFn::Min | AggFn::Max => extreme(func, &present),
+        AggFn::CountDistinct => count_distinct(&present),
+        AggFn::Sum => {
+            let mut total: Option<String> = None;
+            for t in texts() {
+                total = Some(match total {
+                    None => t.to_string(),
+                    Some(acc) => decimal::add(&acc, t).unwrap_or(acc),
+                });
+            }
+            total.map_or(NULL, Cell::Decimal)
+        }
+        AggFn::Mean => float_mean(&floats()?),
+        AggFn::Median => float_median(floats()?),
+        AggFn::Stddev => float_stddev(&floats()?),
+    })
+}
+
+fn agg_cells(func: AggFn, src_type: ColumnType, cells: &[Cell]) -> Result<Cell, EvalError> {
+    if src_type == ColumnType::Decimal {
+        return agg_decimal_cells(func, cells);
+    }
+    let present: Vec<&Cell> = cells.iter().filter(|c| !is_null(c)).collect();
+    Ok(match func {
+        AggFn::Count => Cell::Int(present.len() as i64),
+        AggFn::CountDistinct => count_distinct(&present),
         AggFn::First => cells.first().cloned().unwrap_or(NULL),
         AggFn::Last => cells.last().cloned().unwrap_or(NULL),
         AggFn::Sum => {
@@ -848,64 +1663,53 @@ fn agg_cells(func: AggFn, src_type: ColumnType, cells: &[Cell]) -> Cell {
                 Cell::Float(nums.iter().sum())
             }
         }
-        AggFn::Mean => {
-            let nums = present_nums(cells);
-            if nums.is_empty() {
-                NULL
-            } else {
-                Cell::Float(nums.iter().sum::<f64>() / nums.len() as f64)
-            }
-        }
-        AggFn::Stddev => {
-            let nums = present_nums(cells);
-            if nums.is_empty() {
-                NULL
-            } else {
-                let n = nums.len() as f64;
-                let mean = nums.iter().sum::<f64>() / n;
-                let variance = nums.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / n;
-                Cell::Float(variance.sqrt())
-            }
-        }
-        AggFn::Median => {
-            let mut nums = present_nums(cells);
-            if nums.is_empty() {
-                return NULL;
-            }
-            nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-            let n = nums.len();
-            let mid = n / 2;
-            if n % 2 == 1 {
-                Cell::Float(nums[mid])
-            } else {
-                Cell::Float((nums[mid - 1] + nums[mid]) / 2.0)
-            }
-        }
-        AggFn::Min | AggFn::Max => {
-            if present.is_empty() {
-                return NULL;
-            }
-            let mut acc = present[0].clone();
-            for b in &present[1..] {
-                if let Some(ord) = compare_cells(&acc, b) {
-                    let c_le = ord != Ordering::Greater;
-                    let keep_acc = (func == AggFn::Min) == c_le;
-                    if !keep_acc {
-                        acc = (*b).clone();
-                    }
-                }
-                // incomparable ⇒ keep acc (matches the reference `None -> a`)
-            }
-            acc
-        }
-    }
+        AggFn::Mean => float_mean(&present_nums(cells)),
+        AggFn::Stddev => float_stddev(&present_nums(cells)),
+        AggFn::Median => float_median(present_nums(cells)),
+        AggFn::Min | AggFn::Max => extreme(func, &present),
+    })
 }
 
 fn agg_type(func: AggFn, src_type: ColumnType) -> ColumnType {
     match func {
-        AggFn::Count => ColumnType::Int,
+        AggFn::Count | AggFn::CountDistinct => ColumnType::Int,
         AggFn::Mean | AggFn::Median | AggFn::Stddev => ColumnType::Float,
         AggFn::Sum | AggFn::Min | AggFn::Max | AggFn::First | AggFn::Last => src_type,
+    }
+}
+
+/// One aggregate over a column of `src_type` — the public form the decimal law
+/// family's `aggregate` case runs.
+pub fn aggregate(func: AggFn, src_type: ColumnType, cells: &[Cell]) -> Result<Cell, EvalError> {
+    agg_cells(func, src_type, cells)
+}
+
+/// The canonical identity token of a cell — `m:<canonical>` for a decimal, as
+/// the reference's `Cell.token` spells it.
+pub fn cell_token(c: &Cell) -> String {
+    match c {
+        Cell::Int(v) => format!("i:{v}"),
+        Cell::Float(v) => format!(
+            "f:{}",
+            if v.is_nan() {
+                "NaN".to_string()
+            } else if *v == f64::INFINITY {
+                "Inf".to_string()
+            } else if *v == f64::NEG_INFINITY {
+                "-Inf".to_string()
+            } else {
+                format_number(*v)
+            }
+        ),
+        Cell::Bool(b) => format!("b:{}", if *b { "1" } else { "0" }),
+        Cell::Str(s) => format!("s:{s}"),
+        Cell::Date(s) => format!("d:{s}"),
+        Cell::Timestamp(s) => format!("t:{s}"),
+        Cell::Decimal(s) => format!(
+            "m:{}",
+            decimal::try_canonical(s).unwrap_or_else(|| s.clone())
+        ),
+        Cell::Null => "n:".to_string(),
     }
 }
 
@@ -945,20 +1749,17 @@ fn row_key_compare(cols: &[SchemaEntry], by: &[SortKey], r1: &[Cell], r2: &[Cell
 
 // ─── grouping keys (structural, type-aware) ──────────────────────────────────
 
-fn cell_key(c: &Cell) -> String {
-    match c {
-        Cell::Null => "N".to_string(),
-        Cell::Int(v) => format!("I{v}"),
-        Cell::Float(v) => format!("F{}", format_number(*v)),
-        Cell::Bool(b) => format!("B{}", if *b { "1" } else { "0" }),
-        Cell::Str(s) => format!("S{s}"),
-        Cell::Date(s) => format!("D{s}"),
-        Cell::Timestamp(s) => format!("T{s}"),
-    }
-}
-
+/// A row's identity key: each cell's token, LENGTH-PREFIXED so the joined key
+/// is injective (two rows share a key exactly when their tokens agree cell by
+/// cell — a bare concatenation let `("aS","b")` and `("a","Sb")` collide).
 fn row_key(cells: &[Cell]) -> String {
-    cells.iter().map(cell_key).collect()
+    cells
+        .iter()
+        .map(|c| {
+            let t = cell_token(c);
+            format!("{}:{t}", t.len())
+        })
+        .collect()
 }
 
 // ─── per-verb evaluation ─────────────────────────────────────────────────────
@@ -999,15 +1800,18 @@ fn eval_project(f: &Frame, pairs: &[(String, String)]) -> Result<Frame, EvalErro
 }
 
 fn eval_derive(f: &Frame, name: &str, expr: &ColExpr, env: &EvalEnv) -> Result<Frame, EvalError> {
+    // The column's typing is read off the schema before any row: a derive
+    // refused statically is refused on every frame, an empty one included, and
+    // a decided one carries its type whatever rows the frame holds.
+    let dt = derived_typing_in(env, &f.cols, expr);
+    if dt == DerivedTyping::Refused {
+        return Err(float_beside_decimal(name));
+    }
     let mut new_cells = Vec::with_capacity(f.rows.len());
     for row in &f.rows {
         new_cells.push(eval_expr(&f.cols, row, expr, env)?);
     }
-    let ty = if new_cells.iter().all(|c| matches!(c, Cell::Null)) {
-        static_type(&f.cols, expr).unwrap_or_else(|| infer_type(&new_cells))
-    } else {
-        infer_type(&new_cells)
-    };
+    let ty = column_type_by(dt, name, &new_cells)?;
     if let Some(i) = col_index(&f.cols, name) {
         let cols = f
             .cols
@@ -1111,11 +1915,11 @@ fn eval_group_by(f: &Frame, keys: &[String], aggs: &[Agg]) -> Result<Frame, Eval
             let mut r = key.clone();
             for (a, ty, idx) in &resolved {
                 let col: Vec<Cell> = grp_rows.iter().map(|row| row[*idx].clone()).collect();
-                r.push(agg_cells(a.func, *ty, &col));
+                r.push(agg_cells(a.func, *ty, &col)?);
             }
-            r
+            Ok(r)
         })
-        .collect();
+        .collect::<Result<_, EvalError>>()?;
 
     Ok(Frame {
         cols: out_cols,
@@ -1233,9 +2037,63 @@ fn eval_union(f: &Frame, other: &Frame) -> Result<Frame, EvalError> {
             detail: "union requires matching column names".to_string(),
         });
     }
+    // A column of the union takes the JOIN of the two sides' types where one
+    // exists (an int column over a float one is a float column, its cells packed
+    // under it), and is refused by name where none does.
+    let mut cols = Vec::with_capacity(f.cols.len());
+    for (l, r) in f.cols.iter().zip(&other.cols) {
+        let ty = join_column_type(l.column_type, r.column_type).ok_or_else(|| {
+            EvalError::TypeError {
+                detail: format!(
+                    "union column '{}' holds a {} beside a {}, which no column type holds together: cast one to the other's type first",
+                    l.name,
+                    l.column_type.as_str(),
+                    r.column_type.as_str()
+                ),
+            }
+        })?;
+        cols.push(SchemaEntry {
+            name: l.name.clone(),
+            column_type: ty,
+        });
+    }
+    let pack = |row: &Vec<Cell>| -> Vec<Cell> {
+        row.iter()
+            .zip(&cols)
+            .map(|(c, e)| match (c, e.column_type) {
+                (Cell::Int(v), ColumnType::Float) => Cell::Float(*v as f64),
+                (Cell::Int(v), ColumnType::Decimal) => Cell::Decimal(v.to_string()),
+                _ => c.clone(),
+            })
+            .collect()
+    };
+    let rows = f.rows.iter().chain(&other.rows).map(pack).collect();
+    Ok(Frame { cols, rows })
+}
+
+/// `Intersect` / `Except` — the multiset set-ops, keyed on the SAME row identity
+/// `Distinct` dedups on, so a null is a value that matches itself. `keep_present`
+/// selects intersect from except; the left's order and multiplicity survive.
+fn eval_set_op(
+    verb: &str,
+    keep_present: bool,
+    f: &Frame,
+    other: &Frame,
+) -> Result<Frame, EvalError> {
+    if available(&f.cols) != available(&other.cols) {
+        return Err(EvalError::JoinError {
+            detail: format!("{verb} requires matching column names"),
+        });
+    }
+    let right: BTreeSet<String> = other.rows.iter().map(|r| row_key(r)).collect();
     Ok(Frame {
         cols: f.cols.clone(),
-        rows: [f.rows.clone(), other.rows.clone()].concat(),
+        rows: f
+            .rows
+            .iter()
+            .filter(|r| right.contains(&row_key(r)) == keep_present)
+            .cloned()
+            .collect(),
     })
 }
 
@@ -1275,6 +2133,9 @@ fn eval_window(
     }
 
     let value_at = |row: &[Cell]| -> Cell { of_idx.map(|i| row[i].clone()).unwrap_or(NULL) };
+    // Over a decimal column the running total is EXACT and a decimal, as `Sum`
+    // over one is — never a float in silence.
+    let source_is_decimal = col_type(&f.cols, of) == Some(ColumnType::Decimal);
 
     let mut computed: Vec<(usize, Cell)> = Vec::new();
     for k in &order {
@@ -1318,6 +2179,17 @@ fn eval_window(
                 o.push(NULL);
                 o
             }
+            WindowFn::CumulSum if source_is_decimal => {
+                let mut acc = "0".to_string();
+                vals.iter()
+                    .map(|v| {
+                        if let Some(x) = decimal_text(v) {
+                            acc = decimal::add(&acc, &x).unwrap_or(acc.clone());
+                        }
+                        Cell::Decimal(acc.clone())
+                    })
+                    .collect()
+            }
             WindowFn::CumulSum => {
                 let mut acc = 0.0;
                 vals.iter()
@@ -1332,13 +2204,16 @@ fn eval_window(
             WindowFn::RollingMean => (0..vals.len())
                 .map(|i| {
                     let lo = i.saturating_sub(2);
-                    let window = &vals[lo..=i];
-                    let nums = present_nums(window);
-                    if nums.is_empty() {
-                        NULL
-                    } else {
-                        Cell::Float(nums.iter().sum::<f64>() / nums.len() as f64)
-                    }
+                    // A decimal is read at its nearest float: a window's MEAN
+                    // over a decimal column is a float, as `Mean` over one is.
+                    let nums: Vec<f64> = vals[lo..=i]
+                        .iter()
+                        .filter_map(|v| match v {
+                            Cell::Decimal(t) => decimal::try_to_float(t),
+                            other => as_num(other),
+                        })
+                        .collect();
+                    float_mean(&nums)
                 })
                 .collect(),
         };
@@ -1352,6 +2227,7 @@ fn eval_window(
 
     let ty = match func {
         WindowFn::RowNumber | WindowFn::Rank => ColumnType::Int,
+        WindowFn::CumulSum if source_is_decimal => ColumnType::Decimal,
         WindowFn::CumulSum | WindowFn::RollingMean => ColumnType::Float,
         WindowFn::Lag | WindowFn::Lead => col_type(&f.cols, of).unwrap_or(ColumnType::Str),
     };
@@ -1400,7 +2276,7 @@ fn eval_pivot(
         if is_null(c) {
             continue;
         }
-        if on_seen.insert(cell_key(c)) {
+        if on_seen.insert(cell_token(c)) {
             on_values.push(c.clone());
         }
     }
@@ -1440,11 +2316,11 @@ fn eval_pivot(
                     .filter(|row| row_key(&index_key(row)) == ks && cell_eq(&row[on_idx], ov))
                     .map(|row| row[val_idx].clone())
                     .collect();
-                r.push(agg_cells(agg, val_type, &matching));
+                r.push(agg_cells(agg, val_type, &matching)?);
             }
-            r
+            Ok(r)
         })
-        .collect();
+        .collect::<Result<_, EvalError>>()?;
 
     Ok(Frame { cols, rows })
 }
@@ -1458,10 +2334,27 @@ fn eval_unpivot(f: &Frame, id_vars: &[String], value_vars: &[String]) -> Result<
     for n in value_vars {
         val_idx.push(col_index(&f.cols, n).ok_or_else(|| unknown_column(n, &f.cols))?);
     }
-    let val_type = value_vars
-        .iter()
-        .find_map(|n| col_type(&f.cols, n))
-        .unwrap_or(ColumnType::Str);
+    // The value column is typed by the one derived-column rule, the value
+    // columns being its arms: their declared types' join where the schema
+    // decides it — over an empty frame too — and the melted cells only where it
+    // does not.
+    let declared: Vec<ColumnType> = val_idx.iter().map(|i| f.cols[*i].column_type).collect();
+    let dt = unpivot_typing(&declared);
+    if dt == DerivedTyping::Refused {
+        return Err(float_beside_decimal("value"));
+    }
+    let mut rows = Vec::new();
+    for row in &f.rows {
+        let id_cells: Vec<Cell> = id_idx.iter().map(|i| row[*i].clone()).collect();
+        for (k, name) in value_vars.iter().enumerate() {
+            let mut r = id_cells.clone();
+            r.push(Cell::Str(name.clone()));
+            r.push(row[val_idx[k]].clone());
+            rows.push(r);
+        }
+    }
+    let melted: Vec<Cell> = rows.iter().map(|r| r[id_vars.len() + 1].clone()).collect();
+    let val_type = column_type_by(dt, "value", &melted)?;
 
     let mut cols: Vec<SchemaEntry> = id_vars
         .iter()
@@ -1478,18 +2371,43 @@ fn eval_unpivot(f: &Frame, id_vars: &[String], value_vars: &[String]) -> Result<
         name: "value".to_string(),
         column_type: val_type,
     });
+    Ok(Frame { cols, rows })
+}
 
-    let mut rows = Vec::new();
-    for row in &f.rows {
-        let id_cells: Vec<Cell> = id_idx.iter().map(|i| row[*i].clone()).collect();
-        for (k, name) in value_vars.iter().enumerate() {
-            let mut r = id_cells.clone();
-            r.push(Cell::Str(name.clone()));
-            r.push(row[val_idx[k]].clone());
-            rows.push(r);
+// ─── the guarded table check ─────────────────────────────────────────────────
+
+/// Does every present cell of `t` belong to its column's type? An int widens
+/// into a float or a decimal column; a decimal must be CANONICAL text, so a
+/// table built by hand cannot put a second spelling of one value on the wire.
+/// The guard a caller runs before encoding a table it did not decode
+/// (Phase 2001).
+pub fn validate_table(t: &Table) -> Result<(), EvalError> {
+    for col in &t.columns {
+        for c in &col.cells {
+            let fits = match (c, col.column_type) {
+                (Cell::Null, _) => true,
+                (Cell::Decimal(s), ColumnType::Decimal) => decimal::is_canonical(s),
+                (Cell::Int(_), ColumnType::Int | ColumnType::Float | ColumnType::Decimal) => true,
+                (Cell::Float(_), ColumnType::Float)
+                | (Cell::Bool(_), ColumnType::Bool)
+                | (Cell::Str(_), ColumnType::Str)
+                | (Cell::Date(_), ColumnType::Date)
+                | (Cell::Timestamp(_), ColumnType::Timestamp) => true,
+                _ => false,
+            };
+            if !fits {
+                return Err(EvalError::TypeError {
+                    detail: format!(
+                        "column '{}' of type {} holds a cell outside its type: {}",
+                        col.name,
+                        col.column_type.as_str(),
+                        cell_token(c)
+                    ),
+                });
+            }
         }
     }
-    Ok(Frame { cols, rows })
+    Ok(())
 }
 
 // ─── pipeline driver ─────────────────────────────────────────────────────────
@@ -1549,6 +2467,14 @@ fn eval_step(
         TransformStep::Union { source } => {
             let other = eval_source(resolve, source)?;
             eval_union(f, &other.to_frame())
+        }
+        TransformStep::Intersect { source } => {
+            let other = eval_source(resolve, source)?;
+            eval_set_op("intersect", true, f, &other.to_frame())
+        }
+        TransformStep::Except { source } => {
+            let other = eval_source(resolve, source)?;
+            eval_set_op("except", false, f, &other.to_frame())
         }
     }
 }
@@ -1663,6 +2589,27 @@ fn col_expr_params(e: &ColExpr) -> Vec<String> {
             out
         }
         ColExpr::IsNull { expr } => col_expr_params(expr),
+        ColExpr::Quotient {
+            dividend,
+            divisor,
+            rounding,
+        } => [
+            col_expr_params(dividend),
+            col_expr_params(divisor),
+            scale_params(rounding),
+        ]
+        .concat(),
+        ColExpr::Rounded { expr, rounding } => {
+            [col_expr_params(expr), scale_params(rounding)].concat()
+        }
+    }
+}
+
+/// A rounding's scale param, when it names one.
+fn scale_params(r: &Rounding) -> Vec<String> {
+    match &r.scale {
+        RoundingScale::Param(name) => vec![name.clone()],
+        RoundingScale::Lit(_) => Vec::new(),
     }
 }
 
@@ -1773,6 +2720,19 @@ fn substitute_list_params_expr(list_env: &ListEnv, e: &ColExpr) -> ColExpr {
         ColExpr::IsNull { expr } => ColExpr::IsNull {
             expr: Box::new(substitute_list_params_expr(list_env, expr)),
         },
+        ColExpr::Quotient {
+            dividend,
+            divisor,
+            rounding,
+        } => ColExpr::Quotient {
+            dividend: Box::new(substitute_list_params_expr(list_env, dividend)),
+            divisor: Box::new(substitute_list_params_expr(list_env, divisor)),
+            rounding: rounding.clone(),
+        },
+        ColExpr::Rounded { expr, rounding } => ColExpr::Rounded {
+            expr: Box::new(substitute_list_params_expr(list_env, expr)),
+            rounding: rounding.clone(),
+        },
     }
 }
 
@@ -1821,7 +2781,9 @@ pub fn substitute_list_params(
             | TransformStep::Sort { .. }
             | TransformStep::Distinct
             | TransformStep::Limit { .. }
-            | TransformStep::Union { .. } => t.clone(),
+            | TransformStep::Union { .. }
+            | TransformStep::Intersect { .. }
+            | TransformStep::Except { .. } => t.clone(),
         })
         .collect()
 }

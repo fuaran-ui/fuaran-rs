@@ -138,17 +138,22 @@ pub(super) fn cell_column_wire(ty: ColumnType, c: &Cell) -> String {
             ColumnType::Bool => boolean(false),
             ColumnType::Int | ColumnType::Float => "0".to_string(),
             ColumnType::Str | ColumnType::Date | ColumnType::Timestamp => s(""),
+            // A decimal column's absent slot is the decimal zero, a string.
+            ColumnType::Decimal => s("0"),
         },
-        Cell::Int(v) => {
-            if ty == ColumnType::Float {
-                num(*v as f64)
-            } else {
-                int(*v)
-            }
-        }
+        Cell::Int(v) => match ty {
+            ColumnType::Float => num(*v as f64),
+            // An int widens into a decimal column, written as that type: text.
+            ColumnType::Decimal => s(&v.to_string()),
+            ColumnType::Int
+            | ColumnType::Bool
+            | ColumnType::Str
+            | ColumnType::Date
+            | ColumnType::Timestamp => int(*v),
+        },
         Cell::Float(v) => num(*v),
         Cell::Bool(v) => boolean(*v),
-        Cell::Str(v) | Cell::Date(v) | Cell::Timestamp(v) => s(v),
+        Cell::Str(v) | Cell::Date(v) | Cell::Timestamp(v) | Cell::Decimal(v) => s(v),
     }
 }
 
@@ -221,6 +226,7 @@ pub(super) fn cell_lit(c: &Cell) -> String {
         Cell::Str(v) => case_obj("Str", vec![field("value", s(v))]),
         Cell::Date(v) => case_obj("Date", vec![field("value", s(v))]),
         Cell::Timestamp(v) => case_obj("Timestamp", vec![field("value", s(v))]),
+        Cell::Decimal(v) => case_obj("Decimal", vec![field("value", s(v))]),
     }
 }
 
@@ -286,7 +292,39 @@ pub(super) fn col_expr(e: &ColExpr) -> String {
             vec![field("expr", col_expr(subject)), field("param", s(name))],
         ),
         ColExpr::IsNull { expr } => case_obj("isNull", vec![field("expr", col_expr(expr))]),
+        ColExpr::Quotient {
+            dividend,
+            divisor,
+            rounding,
+        } => case_obj(
+            "quotient",
+            vec![
+                field("dividend", col_expr(dividend)),
+                field("divisor", col_expr(divisor)),
+                field("rounding", rounding_json(rounding)),
+            ],
+        ),
+        ColExpr::Rounded { expr, rounding } => case_obj(
+            "rounded",
+            vec![
+                field("expr", col_expr(expr)),
+                field("rounding", rounding_json(rounding)),
+            ],
+        ),
     }
+}
+
+/// A rounding policy (Phase 2001): the mode's spelling and the scale slot — a
+/// literal int, or `{"$param":"<name>"}`.
+pub(super) fn rounding_json(r: &Rounding) -> String {
+    let scale = match &r.scale {
+        RoundingScale::Lit(n) => int(*n),
+        RoundingScale::Param(name) => obj(vec![field("$param", s(name))]),
+    };
+    obj(vec![
+        field("mode", s(r.mode.as_str())),
+        field("scale", scale),
+    ])
 }
 
 pub(super) fn col_pair(p: &ColPair) -> String {
@@ -391,6 +429,12 @@ pub(super) fn transform_step(t: &TransformStep) -> String {
         ),
         TransformStep::Union { source } => {
             case_obj("union", vec![field("source", data_source(source))])
+        }
+        TransformStep::Intersect { source } => {
+            case_obj("intersect", vec![field("source", data_source(source))])
+        }
+        TransformStep::Except { source } => {
+            case_obj("except", vec![field("source", data_source(source))])
         }
     }
 }

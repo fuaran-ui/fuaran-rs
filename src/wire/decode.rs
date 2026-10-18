@@ -541,9 +541,24 @@ pub(super) fn decode_cell_lit(j: &JVal) -> CResult<Cell> {
         ("Str", JVal::Str(s)) => Ok(Cell::Str(s.clone())),
         ("Date", JVal::Str(s)) => Ok(Cell::Date(s.clone())),
         ("Timestamp", JVal::Str(s)) => Ok(Cell::Timestamp(s.clone())),
+        // Phase 2001: decimal TEXT, canonicalised on read; an integer token (the
+        // int32 range a literal int holds) is exact and read too; anything else,
+        // a fractional number token included, is refused.
+        ("Decimal", JVal::Str(s)) => crate::core::decimal::try_canonical(s)
+            .map(Cell::Decimal)
+            .ok_or_else(mismatch),
+        ("Decimal", JVal::Num(n))
+            if *n == n.trunc() && *n >= INT_SLOT_MIN && *n <= INT_SLOT_MAX =>
+        {
+            Ok(Cell::Decimal((*n as i64).to_string()))
+        }
         _ => Err(mismatch()),
     }
 }
+
+/// The largest integer a JSON number token carries exactly — the bound past
+/// which a whole-valued token has been through a float (Phase 2001).
+const INT53_MAX: f64 = 9_007_199_254_740_992.0;
 
 pub(super) fn decode_column_cell(col_name: &str, ty: ColumnType, v: &JVal) -> CResult<Cell> {
     let mismatch = || {
@@ -560,6 +575,20 @@ pub(super) fn decode_column_cell(col_name: &str, ty: ColumnType, v: &JVal) -> CR
         (ColumnType::Str, JVal::Str(s)) => Ok(Cell::Str(s.clone())),
         (ColumnType::Date, JVal::Str(s)) => Ok(Cell::Date(s.clone())),
         (ColumnType::Timestamp, JVal::Str(s)) => Ok(Cell::Timestamp(s.clone())),
+        // Phase 2001: a decimal column reads a STRING of decimal text and
+        // canonicalises it; it reads a whole-valued number token within 2^53 as
+        // its digits, and refuses a fractional token or one past 2^53 — that
+        // value has been through a float, and an exact type cannot vouch for it.
+        (ColumnType::Decimal, JVal::Str(s)) => crate::core::decimal::try_canonical(s)
+            .map(Cell::Decimal)
+            .ok_or_else(|| {
+                format!(
+                    "malformed: column '{col_name}': a decimal value must be decimal text — an optional '-', digits, and an optional '.' followed by digits, with no exponent, sign '+', separator or white space"
+                )
+            }),
+        (ColumnType::Decimal, JVal::Num(n)) if *n == n.trunc() && n.abs() <= INT53_MAX => {
+            Ok(Cell::Decimal((*n as i64).to_string()))
+        }
         // Lenient-ingest (Core Phase 94): a declared-timestamp column accepts
         // an epoch NUMBER — unit by magnitude (>= 1e11 => milliseconds; epoch
         // seconds stay below 1e11 until year 5138) — normalised to the
@@ -815,6 +844,10 @@ pub(super) fn expr_children(e: &ColExpr) -> Vec<&ColExpr> {
             out
         }
         ColExpr::InParam { subject, .. } => vec![subject],
+        ColExpr::Quotient {
+            dividend, divisor, ..
+        } => vec![dividend, divisor],
+        ColExpr::Rounded { expr, .. } => vec![expr],
     }
 }
 
@@ -864,7 +897,9 @@ pub(super) fn first_pipeline_expr_breach(
             | TransformStep::Sort { .. }
             | TransformStep::Distinct
             | TransformStep::Limit { .. }
-            | TransformStep::Union { .. } => return None,
+            | TransformStep::Union { .. }
+            | TransformStep::Intersect { .. }
+            | TransformStep::Except { .. } => return None,
         };
         (count_expr_nodes(expr) > crate::limits::MAX_EXPR_NODES).then_some((i, slot))
     })
@@ -994,6 +1029,16 @@ pub(super) fn decode_col_expr(j: &JVal) -> CResult<ColExpr> {
         "isNull" => Ok(ColExpr::IsNull {
             expr: Box::new(decode_col_expr(c_field(fields, "expr")?)?),
         }),
+        // Phase 2001: the two exact-number forms, each carrying a rounding.
+        "quotient" => Ok(ColExpr::Quotient {
+            dividend: Box::new(decode_col_expr(c_field(fields, "dividend")?)?),
+            divisor: Box::new(decode_col_expr(c_field(fields, "divisor")?)?),
+            rounding: decode_rounding(c_field(fields, "rounding")?)?,
+        }),
+        "rounded" => Ok(ColExpr::Rounded {
+            expr: Box::new(decode_col_expr(c_field(fields, "expr")?)?),
+            rounding: decode_rounding(c_field(fields, "rounding")?)?,
+        }),
         // Lenient-ingest (Core Phase 93): expression-level string-predicate
         // spellings — {"$type":"contains","expr":X,"other":Y} (also
         // left/right) denotes exactly the canonical binary form.
@@ -1073,10 +1118,42 @@ pub(super) fn decode_col_expr(j: &JVal) -> CResult<ColExpr> {
                 args: expr_args(fields)?,
             }),
             None => Err(format!(
-                "unknown column type '{other}'; expected one of: col, lit, param, binary, not, coalesce, case, cast, apply, in, isNull"
+                "unknown column type '{other}'; expected one of: col, lit, param, binary, not, coalesce, case, cast, apply, in, isNull, quotient, rounded"
             )),
         },
     }
+}
+
+/// A rounding policy (Phase 2001): `mode` one of the seven spellings — an
+/// unknown one refused naming them — and `scale` an integer slot, a literal or
+/// a `{"$param":"<name>"}` object.
+pub(super) fn decode_rounding(j: &JVal) -> CResult<Rounding> {
+    let fields = c_obj(j)?;
+    let mode = c_str_field(fields, "mode")?;
+    let mode = RoundingMode::from_wire(&mode).ok_or_else(|| {
+        format!(
+            "unknown rounding mode '{mode}'; expected one of: {}",
+            RoundingMode::WIRE_NAMES.join(", ")
+        )
+    })?;
+    let scale = match c_field(fields, "scale")? {
+        JVal::Obj(slot) => match get(slot, "$param") {
+            Some(JVal::Str(name)) => RoundingScale::Param(name.clone()),
+            Some(_) => {
+                return Err(
+                    "malformed: \"$param\" must be a JSON string (rounding scale)".to_string(),
+                );
+            }
+            None => {
+                return Err(
+                    "malformed: rounding scale: an object here is a parameter slot and must carry \"$param\""
+                        .to_string(),
+                );
+            }
+        },
+        other => RoundingScale::Lit(c_int(other)?),
+    };
+    Ok(Rounding { scale, mode })
 }
 
 /// One of the canonical field or its observed alias — Core Phase 92's `fieldAliased`.
@@ -1317,8 +1394,14 @@ pub(super) fn decode_transform_step(j: &JVal) -> CResult<TransformStep> {
         "union" => Ok(TransformStep::Union {
             source: decode_data_source(c_field(fields, "source")?)?,
         }),
+        "intersect" => Ok(TransformStep::Intersect {
+            source: decode_data_source(c_field(fields, "source")?)?,
+        }),
+        "except" => Ok(TransformStep::Except {
+            source: decode_data_source(c_field(fields, "source")?)?,
+        }),
         other => Err(format!(
-            "unknown column type '{other}'; expected one of: filter, project, derive, groupBy, join, window, pivot, unpivot, sort, distinct, limit, union"
+            "unknown column type '{other}'; expected one of: filter, project, derive, groupBy, join, window, pivot, unpivot, sort, distinct, limit, union, intersect, except"
         )),
     }
 }

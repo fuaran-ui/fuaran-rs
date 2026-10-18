@@ -7,6 +7,8 @@
 //! - [`transform`] — the Transform evaluator and list-param substitution;
 //! - [`function`] — the signature-searchable function registry
 //!   (`findBySignature` + compose-path resolution);
+//! - [`decimal`] — the exact decimal: canonical text, order, and the exact
+//!   arithmetic and rounding kernel the evaluator computes decimals with;
 //! - [`number`] — the canonical number form (`formatFiniteDouble`).
 //!
 //! It mirrors `Fuaran.Core`, the reference these twins certify against. The
@@ -20,6 +22,7 @@
 //! day these twins are lifted into a crate of their own, the lift is a copy.
 
 pub mod dataframe;
+pub mod decimal;
 pub mod function;
 pub mod number;
 pub mod transform;
