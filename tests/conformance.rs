@@ -1026,14 +1026,9 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
     ),
     ("laws/capabilityLaws", FamilyAnswer::Pending(LAW_UNRUN)),
     ("laws/dataframeParity", FamilyAnswer::Covered),
-    ("laws/decimal", FamilyAnswer::Pending(LAW_UNRUN)),
+    ("laws/decimal", FamilyAnswer::Covered),
     ("laws/fieldLaws", FamilyAnswer::Pending(LAW_UNRUN)),
-    (
-        "laws/transformLaws",
-        FamilyAnswer::Pending(
-            "the evaluator certifies against the authored dataframeParity cases; the drawn transform sample is not run yet",
-        ),
-    ),
+    ("laws/transformLaws", FamilyAnswer::Covered),
     ("lenient-accept", FamilyAnswer::Covered),
     ("lowers-to", FamilyAnswer::Covered),
     ("merge-conformance", FamilyAnswer::Covered),
