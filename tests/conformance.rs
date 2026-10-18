@@ -1026,6 +1026,12 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
         "repair",
         FamilyAnswer::Pending("this host has no §28 repair function yet"),
     ),
+    (
+        "row-encode",
+        FamilyAnswer::NotApplicable(
+            "a row cell's only number is an f64 and the wire model holds no date value, so neither §5 encode refusal can arise here",
+        ),
+    ),
     ("sanitization", FamilyAnswer::Covered),
     (
         "stored-emissions",

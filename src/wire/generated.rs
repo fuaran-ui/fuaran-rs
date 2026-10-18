@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "c0ca90a68de458ae90cc369c5afe6e75cf0a1b36d8383579a0f48073ef8157d8";
+pub const IDL_SHA256: &str = "78d050701b82fe3475e0925f2d617689daa1ea786eda74084a8343ea9889b9cd";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
