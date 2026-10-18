@@ -1705,3 +1705,856 @@ string at codec level (grammar violations surface at apply time, §3.4)."#,
 current style, setting exactly the fields `style` names."#,
     ),
 ];
+
+// ── Codec hooks (Phase 2333) ─────────────────────────────────────────────────
+//
+// The generator writes the UNIFORM half of the codec (`gen_encode` /
+// `gen_decode` in the generated module). Every position whose wire handling is
+// POLICY is declared here, naming the hand function in `encode.rs` or
+// `decode.rs` that handles it; a field with no entry is coded by the uniform
+// rules. Owner keys are the ones `FIELDS` uses.
+
+/// What a hook departs from, which decides when the generator refuses it as stale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Hook {
+    /// The uniform rules have no codec for the position: its Rust members are a
+    /// `FIELDS` departure, or its default is no generated constant. Refused as
+    /// stale once the rules cover it.
+    Shape,
+    /// The uniform rules would code it, and this host's behaviour differs on
+    /// purpose (leniency, a refusal, a fold, a typed slot).
+    Policy,
+}
+
+/// When an owner-level decode check runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Check {
+    /// Before any field is read: `fn(path, fields) -> DResult<()>`.
+    Pre,
+    /// After the owner is built: `fn(path, fields, &Owner) -> DResult<()>`.
+    Post,
+}
+
+/// `(owner, IDL field, hand function, kind, reason)`. An encode hook takes a
+/// reference to each Rust member the field maps to and returns the field's wire
+/// value, or `None` to omit it.
+pub(super) const ENCODE_HOOKS: &[(&str, &str, &str, Hook, &str)] = &[
+    (
+        "Custom",
+        "exposedNodeIds",
+        "encode_exposed_node_ids",
+        Hook::Shape,
+        "optional in the IDL and a plain list here: an empty list is not written",
+    ),
+    (
+        "FragmentDecl",
+        "effect",
+        "encode_fragment_effect",
+        Hook::Shape,
+        "omitted at the IDL's record default, which the defaults table does not render",
+    ),
+    (
+        "FragmentRef",
+        "args",
+        "encode_fragment_args",
+        Hook::Shape,
+        "optional in the IDL and a plain map here: an empty map is not written",
+    ),
+    (
+        "Mount",
+        "inputs",
+        "encode_fragment_args",
+        Hook::Shape,
+        "optional in the IDL and a plain map here: an empty map is not written",
+    ),
+    (
+        "Select",
+        "multiple",
+        "encode_select_multiple",
+        Hook::Shape,
+        "optional in the IDL and a plain bool here: only `true` is written",
+    ),
+    (
+        "Tabs",
+        "activeIndex",
+        "encode_tabs_active_index",
+        Hook::Shape,
+        "omitted at its default, the literal binding 0, which the defaults table does not          render",
+    ),
+    (
+        "Accessibility",
+        "role",
+        "encode_aria_role",
+        Hook::Shape,
+        "a hosted JSON position this host carries as the role's token string",
+    ),
+    (
+        "MapMarker",
+        "label",
+        "encode_text_label",
+        Hook::Shape,
+        "the host reads a full TextSource where the IDL types a string",
+    ),
+    (
+        "SelectOption",
+        "label",
+        "encode_text_label",
+        Hook::Shape,
+        "the host reads a full TextSource where the IDL types a string",
+    ),
+    (
+        "Binding.Static",
+        "value",
+        "encode_static_payload",
+        Hook::Shape,
+        "absence is a StaticValue sentinel here, so an absent payload omits the key",
+    ),
+    (
+        "Binding.State",
+        "defaultValue",
+        "encode_state_default",
+        Hook::Shape,
+        "written exactly when the document declared it (the default_declared member)",
+    ),
+    (
+        "Binding.Query",
+        "dependsOn",
+        "encode_depends_on",
+        Hook::Policy,
+        "an empty list says nothing and is not written",
+    ),
+    (
+        "Binding.Expr",
+        "params",
+        "encode_binding_params",
+        Hook::Policy,
+        "§3.3 omits the slot when empty: Some(empty) is the same fact as None",
+    ),
+    (
+        "Binding.Transform",
+        "params",
+        "encode_binding_params",
+        Hook::Policy,
+        "§3.3 omits the slot when empty: Some(empty) is the same fact as None",
+    ),
+    (
+        "CellKindErased.ButtonGroup",
+        "buttons",
+        "encode_button_group",
+        Hook::Shape,
+        "each item is inlined to its label; the click handler is the sentinel",
+    ),
+    (
+        "CellKindErased.TonedPill",
+        "map",
+        "encode_tone_map",
+        Hook::Shape,
+        "a BTreeMap lookup table, written as an object",
+    ),
+    (
+        "Node",
+        "state",
+        "encode_node_state",
+        Hook::Shape,
+        "optional in the IDL and a plain record here: only a non-empty state is written",
+    ),
+    (
+        "Node",
+        "style",
+        "encode_node_style",
+        Hook::Shape,
+        "optional in the IDL and a plain record here: only a non-default style is written",
+    ),
+];
+
+/// `(owner, IDL field, hand function, kind, reason)`. A decode hook is
+/// `fn(path, fields) -> DResult<_>` returning the members the field maps to (a
+/// tuple for several, `()` for none).
+pub(super) const DECODE_HOOKS: &[(&str, &str, &str, Hook, &str)] = &[
+    (
+        "DataGrid",
+        "source",
+        "decode_grid_source",
+        Hook::Policy,
+        "the rows feed decodes through the Rows payload slot; `data` and `rows` are its foreign spellings",
+    ),
+    (
+        "Chart",
+        "source",
+        "decode_chart_source",
+        Hook::Policy,
+        "the rows feed decodes through the Rows payload slot; `data` is its foreign spelling",
+    ),
+    (
+        "Select",
+        "value",
+        "decode_select_value",
+        Hook::Policy,
+        "the selection decodes through the StringOpt payload slot: no selection is a value",
+    ),
+    (
+        "Custom",
+        "exposedNodeIds",
+        "decode_exposed_node_ids",
+        Hook::Shape,
+        "optional in the IDL and a plain list here: absent is the empty list",
+    ),
+    (
+        "FragmentDecl",
+        "effect",
+        "decode_fragment_effect",
+        Hook::Shape,
+        "absent is the IDL's record default, which the defaults table does not render",
+    ),
+    (
+        "FragmentRef",
+        "args",
+        "decode_fragment_ref_args",
+        Hook::Shape,
+        "optional in the IDL and a plain map here: absent is the empty map",
+    ),
+    (
+        "Mount",
+        "inputs",
+        "decode_mount_inputs",
+        Hook::Shape,
+        "optional in the IDL and a plain map here: absent is the empty map",
+    ),
+    (
+        "Select",
+        "multiple",
+        "decode_select_multiple",
+        Hook::Shape,
+        "optional in the IDL and a plain bool here: absent is false",
+    ),
+    (
+        "Switch",
+        "on",
+        "decode_switch_on",
+        Hook::Shape,
+        "folds `stateKey` in: absent, the compact spelling names a State binding; an explicit `on` decodes untyped",
+    ),
+    (
+        "Switch",
+        "stateKey",
+        "decode_switch_state_key",
+        Hook::Shape,
+        "folded into `on`, whose hook reads it",
+    ),
+    (
+        "Tabs",
+        "activeIndex",
+        "decode_tabs_active_index",
+        Hook::Shape,
+        "absent is the literal binding 0, which the defaults table does not render",
+    ),
+    (
+        "Accessibility",
+        "role",
+        "decode_aria_role",
+        Hook::Shape,
+        "a hosted JSON position this host carries as the role's token string",
+    ),
+    (
+        "MapMarker",
+        "label",
+        "decode_text_label",
+        Hook::Shape,
+        "the host reads a full TextSource where the IDL types a string",
+    ),
+    (
+        "SelectOption",
+        "label",
+        "decode_text_label",
+        Hook::Shape,
+        "the host reads a full TextSource where the IDL types a string",
+    ),
+    (
+        "CellKindErased.ButtonGroup",
+        "buttons",
+        "decode_button_group",
+        Hook::Shape,
+        "each button object contributes its label; the click handler is the sentinel",
+    ),
+    (
+        "CellKindErased.TonedPill",
+        "map",
+        "decode_toned_pill_map",
+        Hook::Shape,
+        "a BTreeMap lookup table under its canonical key or a foreign one",
+    ),
+    (
+        "Node",
+        "id",
+        "decode_node_id",
+        Hook::Policy,
+        "an empty id is EMPTY_NODE_ID",
+    ),
+    (
+        "Node",
+        "state",
+        "decode_node_state",
+        Hook::Shape,
+        "optional in the IDL and a plain record here: absent is the empty behaviour",
+    ),
+    (
+        "Node",
+        "style",
+        "decode_node_style",
+        Hook::Shape,
+        "optional in the IDL and a plain record here: absent is the default style",
+    ),
+    (
+        "Fact",
+        "emphasis",
+        "decode_fact_emphasis",
+        Hook::Policy,
+        "the behavioural bool, which a model also spells with the Emphasis style tokens",
+    ),
+    (
+        "LabelValueRow",
+        "emphasis",
+        "decode_row_emphasis",
+        Hook::Policy,
+        "the behavioural bool, which a model also spells with the Emphasis style tokens",
+    ),
+    (
+        "SrcSetEntry",
+        "width",
+        "decode_src_set_width",
+        Hook::Policy,
+        "a positive integer pixel width: zero and negative are WRONG_TYPE",
+    ),
+    (
+        "FormField",
+        "kind",
+        "decode_form_field_control",
+        Hook::Policy,
+        "context: an absent control value auto-binds to the field id",
+    ),
+    (
+        "FilterSpec",
+        "kind",
+        "decode_filter_control",
+        Hook::Policy,
+        "context: an absent control value auto-binds to the chip name",
+    ),
+    (
+        "Shape.Group",
+        "style",
+        "decode_style_or_default",
+        Hook::Policy,
+        "lenient: absent is the default style",
+    ),
+    (
+        "Shape.Rectangle",
+        "style",
+        "decode_style_or_default",
+        Hook::Policy,
+        "lenient: absent is the default style",
+    ),
+    (
+        "Shape.Line",
+        "style",
+        "decode_style_or_default",
+        Hook::Policy,
+        "lenient: absent is the default style",
+    ),
+    (
+        "Shape.Polyline",
+        "style",
+        "decode_style_or_default",
+        Hook::Policy,
+        "lenient: absent is the default style",
+    ),
+    (
+        "Shape.Polygon",
+        "style",
+        "decode_style_or_default",
+        Hook::Policy,
+        "lenient: absent is the default style",
+    ),
+    (
+        "Shape.Curve",
+        "style",
+        "decode_style_or_default",
+        Hook::Policy,
+        "lenient: absent is the default style",
+    ),
+    (
+        "Shape.Circle",
+        "style",
+        "decode_style_or_default",
+        Hook::Policy,
+        "lenient: absent is the default style",
+    ),
+    (
+        "Shape.Ellipse",
+        "style",
+        "decode_style_or_default",
+        Hook::Policy,
+        "lenient: absent is the default style",
+    ),
+    (
+        "Shape.Label",
+        "style",
+        "decode_style_or_default",
+        Hook::Policy,
+        "lenient: absent is the default style",
+    ),
+    (
+        "Drawing",
+        "style",
+        "decode_style_or_default",
+        Hook::Policy,
+        "lenient: absent is the default style",
+    ),
+    (
+        "BoxLayout.Grid",
+        "cols",
+        "decode_grid_cols",
+        Hook::Policy,
+        "absent beside a template is one column; `columns` is its foreign spelling",
+    ),
+    (
+        "TextSource.Bound",
+        "binding",
+        "decode_text_bound",
+        Hook::Policy,
+        "read untyped: the bound value is rendered as text whatever it carries",
+    ),
+    (
+        "TextSource.I18n",
+        "args",
+        "decode_text_i18n_args",
+        Hook::Policy,
+        "absent is the empty bag; each argument is discriminated by inspection",
+    ),
+];
+
+/// `(owner, hand function, kind, reason)`: the whole owner encoded by hand. The
+/// function takes a reference to every member of the owner, so a member the IDL
+/// gains changes its arity.
+pub(super) const ENCODE_OWNERS: &[(&str, &str, Hook, &str)] = &[
+    (
+        "Filters",
+        "encode_filters_kind",
+        Hook::Shape,
+        "the variant holds the items list directly",
+    ),
+    (
+        "Switch",
+        "encode_switch_spec",
+        Hook::Shape,
+        "`on` and `stateKey` fold into one binding: an undeclared-default State binding is          written as the `stateKey` shorthand",
+    ),
+    (
+        "SwitchCase",
+        "encode_switch_case",
+        Hook::Shape,
+        "`match` and `when` fold into one SwitchCondition",
+    ),
+    (
+        "FormFieldKind",
+        "form_field_kind",
+        Hook::Policy,
+        "context: a control whose value is the auto-binding its field id or chip name          implies omits it, so the encoder takes the enclosing ControlAutoBind",
+    ),
+    (
+        "FormField",
+        "encode_form_field",
+        Hook::Policy,
+        "its control's auto-bound value is omitted, which needs the field id",
+    ),
+    (
+        "FilterSpec",
+        "encode_filter_spec",
+        Hook::Policy,
+        "its control's auto-bound value is omitted, which needs the chip name",
+    ),
+];
+
+/// `(owner, hand function, kind, reason)`: the whole owner decoded by hand,
+/// `fn(path, j) -> DResult<Owner>` (for a union case, `fn(path, fields)`). A hand
+/// union decoder dispatches over the generated `<Union>Tag`.
+pub(super) const DECODE_OWNERS: &[(&str, &str, Hook, &str)] = &[
+    (
+        "Filters",
+        "decode_filters_kind",
+        Hook::Shape,
+        "the variant holds the items list directly",
+    ),
+    (
+        "SwitchCase",
+        "decode_switch_case_folded",
+        Hook::Shape,
+        "`match` and `when` fold into one SwitchCondition: exactly one is present",
+    ),
+    (
+        "Binding",
+        "",
+        Hook::Policy,
+        "context: every case decodes through the enclosing slot's StaticSlot (typed Static payloads and defaults), plus the bare-scalar and `Bound` spellings; the hand decoder dispatches over BindingTag",
+    ),
+    (
+        "FormFieldKind",
+        "",
+        Hook::Policy,
+        "context: an absent control value auto-binds to the enclosing field id or chip name, plus the Date/Time tag spellings; the hand decoder dispatches over FormFieldKindTag",
+    ),
+    (
+        "Action.SetState",
+        "decode_set_state",
+        Hook::Policy,
+        "exactly one of `value` and `valueFrom`",
+    ),
+    (
+        "Action.Print",
+        "decode_print",
+        Hook::Policy,
+        "the payload-free action refuses any member beside $type",
+    ),
+    (
+        "Emphasis",
+        "decode_emphasis",
+        Hook::Policy,
+        "also reads a bool (true is Loud) and the Strong/Bold/Subtle/Muted spellings, through the Static envelope",
+    ),
+    (
+        "BoxRole",
+        "decode_box_role",
+        Hook::Policy,
+        "reads through the Static envelope like a plain scalar",
+    ),
+    (
+        "HashStrictness",
+        "decode_hash_strictness",
+        Hook::Policy,
+        "reads through the Static envelope like a plain scalar",
+    ),
+    (
+        "HostEffect",
+        "decode_host_effect",
+        Hook::Policy,
+        "reads through the Static envelope like a plain scalar",
+    ),
+    (
+        "DeterminismSource",
+        "decode_determinism_source",
+        Hook::Policy,
+        "reads through the Static envelope like a plain scalar",
+    ),
+    (
+        "ChannelDirection",
+        "decode_channel_direction",
+        Hook::Policy,
+        "reads through the Static envelope like a plain scalar",
+    ),
+];
+
+/// `(owner, hand function, when, reason)`: an owner-level decode check.
+pub(super) const DECODE_CHECKS: &[(&str, &str, Check, &str)] = &[
+    (
+        "FormField",
+        "check_form_field_near_misses",
+        Check::Pre,
+        "the near-miss refusals (validation/constraints/validate for rule)",
+    ),
+    (
+        "ColumnErased",
+        "check_column_near_misses",
+        Check::Pre,
+        "the grid vocabulary's near misses (readOnly)",
+    ),
+    (
+        "DataGrid",
+        "check_grid_near_misses",
+        Check::Pre,
+        "the grid-behaviour near misses (paging, sorting, editing spellings)",
+    ),
+    (
+        "Accessibility",
+        "check_a11y_near_misses",
+        Check::Pre,
+        "the ARIA attribute spellings of each member",
+    ),
+    (
+        "TreeOp.InsertChild",
+        "check_insert_child",
+        Check::Pre,
+        "the retired positional slot `position` is refused by name",
+    ),
+    (
+        "TreeOp.MoveNode",
+        "check_move_node",
+        Check::Pre,
+        "the retired positional slot `newPosition` is refused by name",
+    ),
+    (
+        "Skeleton",
+        "check_skeleton",
+        Check::Post,
+        "the §21.9 row bound",
+    ),
+    (
+        "FieldRule",
+        "check_field_rule",
+        Check::Post,
+        "a rule constrains something, and its length bounds are not inverted",
+    ),
+    (
+        "FileUpload",
+        "check_file_upload",
+        Check::Post,
+        "a named destination is non-empty and each ceiling positive",
+    ),
+    (
+        "DefaultSort",
+        "check_default_sort",
+        Check::Post,
+        "a non-negative header index",
+    ),
+    (
+        "DataGrid",
+        "check_grid",
+        Check::Post,
+        "a page holds at least one row",
+    ),
+    (
+        "ChartAnnotationX.Date",
+        "check_annotation_date",
+        Check::Post,
+        "a canonical ISO day",
+    ),
+    (
+        "ChartAnnotationRange.ValueRange",
+        "check_value_range",
+        Check::Post,
+        "finite ends, in order",
+    ),
+    (
+        "ChartAnnotationRange.XRange",
+        "check_x_range",
+        Check::Post,
+        "two dates run forwards",
+    ),
+    (
+        "ChartAnnotation.ReferenceLine",
+        "check_reference_line",
+        Check::Post,
+        "a finite value",
+    ),
+    (
+        "BoxLayout.Masonry",
+        "check_masonry",
+        Check::Post,
+        "a positive column count",
+    ),
+    (
+        "StyleDelta",
+        "check_style_delta",
+        Check::Post,
+        "a patch names at least one member",
+    ),
+    (
+        "Action.Confirm",
+        "check_confirm",
+        Check::Post,
+        "no confirmation nested inside another",
+    ),
+    (
+        "Switch",
+        "check_switch",
+        Check::Post,
+        "a positive auto-advance interval",
+    ),
+];
+
+/// `(owner, hand function, reason)`: `fn(path) -> DResult<Guard>`, held while the
+/// owner decodes.
+pub(super) const DECODE_ENTER: &[(&str, &str, &str)] = &[
+    (
+        "Node",
+        "enter_node",
+        "the §21 node-depth and total-node bounds",
+    ),
+    ("TreeOp", "enter_op", "the §21.5 op-axis bound"),
+    ("TreeItem", "enter_tree_item", "the tree item nesting bound"),
+];
+
+/// `(union, hand function, reason)`: `fn(path, j) -> Option<DResult<Union>>`, tried
+/// before the discriminator is read (a shorthand spelling of a case).
+pub(super) const UNION_PRE: &[(&str, &str, &str)] = &[
+    (
+        "SelectOption",
+        "select_option_shorthand",
+        "a bare string is the option whose value and label are that string",
+    ),
+    (
+        "Format",
+        "format_date_alias",
+        "`Date` is the foreign spelling of `DateTime`",
+    ),
+    (
+        "CellFormat",
+        "cell_format_date_alias",
+        "`Date` is the foreign spelling of `DateTime`",
+    ),
+    (
+        "CellKindErased",
+        "pill_with_tone_map",
+        "a `Pill` carrying a tone map is the declarative TonedPill",
+    ),
+    (
+        "BoxLayout",
+        "grid_without_columns",
+        "a `Grid` naming neither a column count nor a template is `Auto`",
+    ),
+];
+
+/// `(owner, IDL field, foreign spellings, reason)`: names a model writes for the
+/// field, decoded to it when the canonical name is absent and never encoded.
+pub(super) const DECODE_ALIASES: &[(&str, &str, &[&str], &str)] = &[
+    (
+        "Action.Call",
+        "endpoint",
+        &["url"],
+        "a spelling models write for this field",
+    ),
+    (
+        "Action.Navigate",
+        "route",
+        &["href", "url", "to"],
+        "a spelling models write for this field",
+    ),
+    (
+        "Metric",
+        "value",
+        &["data"],
+        "a spelling models write for this field",
+    ),
+    (
+        "LabelValueRow",
+        "value",
+        &["data"],
+        "a spelling models write for this field",
+    ),
+    (
+        "Sparkline",
+        "source",
+        &["data"],
+        "a spelling models write for this field",
+    ),
+    (
+        "Callout",
+        "heading",
+        &["title"],
+        "a spelling models write for this field",
+    ),
+    (
+        "FormField",
+        "id",
+        &["name"],
+        "a spelling models write for this field",
+    ),
+    (
+        "Select",
+        "source",
+        &["options", "data"],
+        "a spelling models write for this field",
+    ),
+    (
+        "ColumnErased",
+        "kind",
+        &["type"],
+        "a spelling models write for this field",
+    ),
+    (
+        "ColumnErased",
+        "label",
+        &["header", "title"],
+        "a spelling models write for this field",
+    ),
+    (
+        "Map",
+        "source",
+        &["data", "markers"],
+        "a spelling models write for this field",
+    ),
+    (
+        "BoxLayout.Masonry",
+        "cols",
+        &["columns"],
+        "a spelling models write for this field",
+    ),
+    (
+        "Box",
+        "heading",
+        &["title"],
+        "a spelling models write for this field",
+    ),
+    (
+        "SummaryList",
+        "heading",
+        &["title"],
+        "a spelling models write for this field",
+    ),
+    (
+        "Disclosure",
+        "heading",
+        &["title"],
+        "a spelling models write for this field",
+    ),
+    (
+        "Modal",
+        "heading",
+        &["title"],
+        "a spelling models write for this field",
+    ),
+];
+
+/// `(enum, (foreign spelling, case), reason)`: a bare-enum decoder's foreign
+/// spellings of a case, decoded to it and never encoded.
+pub(super) type EnumAliases = (
+    &'static str,
+    &'static [(&'static str, &'static str)],
+    &'static str,
+);
+
+pub(super) const ENUM_ALIASES: &[EnumAliases] = &[
+    (
+        "Orientation",
+        &[
+            ("Row", "Horizontal"),
+            ("row", "Horizontal"),
+            ("Column", "Vertical"),
+            ("column", "Vertical"),
+        ],
+        "the CSS flex-direction prior: a row lays out horizontally, a column vertically",
+    ),
+    (
+        "BadgeVariant",
+        &[("Default", "Neutral"), ("Danger", "Critical")],
+        "`Default` is the universal no-special-variant prior; `Danger` the Bootstrap prior for Critical",
+    ),
+    (
+        "ButtonVariant",
+        &[("Danger", "Destructive")],
+        "Bootstrap's `Danger` names the same concept as Destructive",
+    ),
+    (
+        "HeadingVariant",
+        &[("Default", "Standard")],
+        "`Default` is the identity case's prior",
+    ),
+    (
+        "ToneVariant",
+        &[
+            ("Positive", "Success"),
+            ("Danger", "Critical"),
+            ("Negative", "Critical"),
+            ("Neutral", "Default"),
+        ],
+        "faithful semantic mappings only",
+    ),
+];

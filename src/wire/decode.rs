@@ -8,21 +8,31 @@
 //! `"<closure>"` sentinel; opaque `Binding.Static` payloads (§5) decode to the
 //! faithful parsed value whose non-primitive forms re-encode as `"<opaque>"` —
 //! keeping the round-trip byte-stable.
+//!
+//! Phase 2333: the per-owner decoders are GENERATED (`gen_decode` in
+//! `generated.rs`) from the IDL, and their dispatch over every union's
+//! discriminators with them. This file keeps the readers they call, the
+//! host-modelled types' decoders (the compute layer, typed `Static` payloads),
+//! the two context-taking unions (`Binding` over its `StaticSlot`,
+//! `FormFieldKind` over its auto-bind context, each matching exhaustively over
+//! its generated tag enum), and the policy hooks `dialect.rs` declares:
+//! leniency, aliases, refusals and checks.
 
 use std::collections::BTreeMap;
 
 use crate::canonical::{JVal, parse};
 
+use super::generated::gen_decode::*;
 use super::model::*;
 use super::result::{DecodeError, DecodeErrorCode};
 
-type DResult<T> = Result<T, DecodeError>;
+pub(super) type DResult<T> = Result<T, DecodeError>;
 
-const OPAQUE: &str = "<opaque>";
+pub(super) const OPAQUE: &str = "<opaque>";
 
 // ─── Error constructors ──────────────────────────────────────────────────────
 
-fn make_error(
+pub(super) fn make_error(
     code: DecodeErrorCode,
     path: impl Into<String>,
     message: impl Into<String>,
@@ -36,7 +46,7 @@ fn make_error(
     }
 }
 
-fn missing_field(path: &str, key: &str, expected: &str) -> DecodeError {
+pub(super) fn missing_field(path: &str, key: &str, expected: &str) -> DecodeError {
     make_error(
         DecodeErrorCode::MissingField,
         format!("{path}.{key}"),
@@ -45,7 +55,7 @@ fn missing_field(path: &str, key: &str, expected: &str) -> DecodeError {
     )
 }
 
-fn wrong_type(path: &str, expected: &str) -> DecodeError {
+pub(super) fn wrong_type(path: &str, expected: &str) -> DecodeError {
     make_error(
         DecodeErrorCode::WrongType,
         path,
@@ -60,7 +70,7 @@ fn wrong_type(path: &str, expected: &str) -> DecodeError {
 /// reported path names that member.
 /// The hint lists the union's cases, read from the generated discriminator set,
 /// so it cannot name fewer cases than the decoder accepts.
-fn unknown_du_case(path: &str, got: &str, cases: &[&str]) -> DecodeError {
+pub(super) fn unknown_du_case(path: &str, got: &str, cases: &[&str]) -> DecodeError {
     make_error(
         DecodeErrorCode::UnknownDuCase,
         format!("{path}.$type"),
@@ -81,7 +91,7 @@ fn unknown_du_case(path: &str, got: &str, cases: &[&str]) -> DecodeError {
 /// already bare here — written out longhand rather than through the macro — so this host
 /// was internally inconsistent as well as divergent. Do not route a bare enum through
 /// `unknown_du_case`.
-fn unknown_enum_case(path: &str, got: &str, expected: &str) -> DecodeError {
+pub(super) fn unknown_enum_case(path: &str, got: &str, expected: &str) -> DecodeError {
     make_error(
         DecodeErrorCode::UnknownDuCase,
         path,
@@ -90,7 +100,7 @@ fn unknown_enum_case(path: &str, got: &str, expected: &str) -> DecodeError {
     )
 }
 
-fn null_not_representable(path: &str) -> DecodeError {
+pub(super) fn null_not_representable(path: &str) -> DecodeError {
     make_error(
         DecodeErrorCode::WrongType,
         path,
@@ -101,7 +111,7 @@ fn null_not_representable(path: &str) -> DecodeError {
 
 // ─── AST require-helpers ─────────────────────────────────────────────────────
 
-type Fields = [(String, JVal)];
+pub(super) type Fields = [(String, JVal)];
 
 /// Lenient AI-ingest (§3.6, generalised): a `Static` envelope wrapped around a
 /// PLAIN scalar unwraps before the scalar readers — the inverse of the
@@ -109,7 +119,7 @@ type Fields = [(String, JVal)];
 /// position in one place. Unambiguous: at a plain-scalar position the envelope
 /// has exactly one reading. Objects that are NOT a well-formed Static envelope
 /// pass through untouched and fail with the normal error.
-fn unwrap_static_envelope(j: &JVal) -> &JVal {
+pub(super) fn unwrap_static_envelope(j: &JVal) -> &JVal {
     if let JVal::Obj(fields) = j
         && let Some(JVal::Str(t)) = get(fields, "$type")
         && t == "Static"
@@ -120,28 +130,28 @@ fn unwrap_static_envelope(j: &JVal) -> &JVal {
     j
 }
 
-fn as_obj<'a>(path: &str, j: &'a JVal) -> DResult<&'a Fields> {
+pub(super) fn as_obj<'a>(path: &str, j: &'a JVal) -> DResult<&'a Fields> {
     match j {
         JVal::Obj(fields) => Ok(fields),
         _ => Err(wrong_type(path, "JSON object")),
     }
 }
 
-fn as_str<'a>(path: &str, j: &'a JVal) -> DResult<&'a str> {
+pub(super) fn as_str<'a>(path: &str, j: &'a JVal) -> DResult<&'a str> {
     match unwrap_static_envelope(j) {
         JVal::Str(s) => Ok(s),
         _ => Err(wrong_type(path, "JSON string")),
     }
 }
 
-fn as_bool(path: &str, j: &JVal) -> DResult<bool> {
+pub(super) fn as_bool(path: &str, j: &JVal) -> DResult<bool> {
     match unwrap_static_envelope(j) {
         JVal::Bool(b) => Ok(*b),
         _ => Err(wrong_type(path, "JSON boolean")),
     }
 }
 
-fn as_float(path: &str, j: &JVal) -> DResult<f64> {
+pub(super) fn as_float(path: &str, j: &JVal) -> DResult<f64> {
     match unwrap_static_envelope(j) {
         JVal::Num(n) => Ok(*n),
         JVal::Str(s) if s == "NaN" => Ok(f64::NAN),
@@ -159,8 +169,8 @@ fn as_float(path: &str, j: &JVal) -> DResult<f64> {
 /// that one is where integer IDENTITY stops in an untyped payload position,
 /// this one is the width of the SLOT, and a value the slot cannot hold has
 /// nowhere to land.
-const INT_SLOT_MIN: f64 = -2_147_483_648.0;
-const INT_SLOT_MAX: f64 = 2_147_483_647.0;
+pub(super) const INT_SLOT_MIN: f64 = -2_147_483_648.0;
+pub(super) const INT_SLOT_MAX: f64 = 2_147_483_647.0;
 
 /// The §7.1 integer-slot accept set: a finite JSON number with no fractional
 /// part, inside the signed 32-bit range.
@@ -173,7 +183,7 @@ const INT_SLOT_MAX: f64 = 2_147_483_647.0;
 /// the row that was measured, since `as i64` saturates here and the equivalent
 /// is implementation-defined elsewhere, so the same bytes became
 /// `Int32.MinValue` on one runtime and `1410065408` on another.
-fn as_int(path: &str, j: &JVal) -> DResult<i64> {
+pub(super) fn as_int(path: &str, j: &JVal) -> DResult<i64> {
     match unwrap_static_envelope(j) {
         JVal::Num(n) => {
             if !n.is_finite() {
@@ -203,22 +213,27 @@ fn as_int(path: &str, j: &JVal) -> DResult<i64> {
     }
 }
 
-fn as_arr<'a>(path: &str, j: &'a JVal) -> DResult<&'a [JVal]> {
+pub(super) fn as_arr<'a>(path: &str, j: &'a JVal) -> DResult<&'a [JVal]> {
     match j {
         JVal::Arr(items) => Ok(items),
         _ => Err(wrong_type(path, "JSON array")),
     }
 }
 
-fn get<'a>(fields: &'a Fields, key: &str) -> Option<&'a JVal> {
+pub(super) fn get<'a>(fields: &'a Fields, key: &str) -> Option<&'a JVal> {
     fields.iter().find(|(k, _)| k == key).map(|(_, v)| v)
 }
 
-fn req<'a>(path: &str, fields: &'a Fields, key: &str, expected: &str) -> DResult<&'a JVal> {
+pub(super) fn req<'a>(
+    path: &str,
+    fields: &'a Fields,
+    key: &str,
+    expected: &str,
+) -> DResult<&'a JVal> {
     get(fields, key).ok_or_else(|| missing_field(path, key, expected))
 }
 
-fn disc<'a>(path: &str, fields: &'a Fields) -> DResult<&'a str> {
+pub(super) fn disc<'a>(path: &str, fields: &'a Fields) -> DResult<&'a str> {
     match get(fields, "$type") {
         None => Err(missing_field(
             path,
@@ -233,48 +248,36 @@ fn disc<'a>(path: &str, fields: &'a Fields) -> DResult<&'a str> {
     }
 }
 
-fn req_string(path: &str, fields: &Fields, key: &str, expected: &str) -> DResult<String> {
+pub(super) fn req_string(
+    path: &str,
+    fields: &Fields,
+    key: &str,
+    expected: &str,
+) -> DResult<String> {
     let v = req(path, fields, key, expected)?;
     Ok(as_str(&format!("{path}.{key}"), v)?.to_string())
 }
 
-fn req_bool(path: &str, fields: &Fields, key: &str, expected: &str) -> DResult<bool> {
-    let v = req(path, fields, key, expected)?;
-    as_bool(&format!("{path}.{key}"), v)
-}
-
-fn req_float(path: &str, fields: &Fields, key: &str, expected: &str) -> DResult<f64> {
-    let v = req(path, fields, key, expected)?;
-    as_float(&format!("{path}.{key}"), v)
-}
-
-fn req_int(path: &str, fields: &Fields, key: &str, expected: &str) -> DResult<i64> {
+pub(super) fn req_int(path: &str, fields: &Fields, key: &str, expected: &str) -> DResult<i64> {
     let v = req(path, fields, key, expected)?;
     as_int(&format!("{path}.{key}"), v)
 }
 
-fn opt_string(path: &str, fields: &Fields, key: &str) -> DResult<Option<String>> {
+pub(super) fn opt_string(path: &str, fields: &Fields, key: &str) -> DResult<Option<String>> {
     match get(fields, key) {
         None => Ok(None),
         Some(v) => Ok(Some(as_str(&format!("{path}.{key}"), v)?.to_string())),
     }
 }
 
-fn opt_int(path: &str, fields: &Fields, key: &str) -> DResult<Option<i64>> {
-    match get(fields, key) {
-        None => Ok(None),
-        Some(v) => Ok(Some(as_int(&format!("{path}.{key}"), v)?)),
-    }
-}
-
-fn opt_float(path: &str, fields: &Fields, key: &str) -> DResult<Option<f64>> {
+pub(super) fn opt_float(path: &str, fields: &Fields, key: &str) -> DResult<Option<f64>> {
     match get(fields, key) {
         None => Ok(None),
         Some(v) => Ok(Some(as_float(&format!("{path}.{key}"), v)?)),
     }
 }
 
-fn opt_bool(path: &str, fields: &Fields, key: &str) -> DResult<Option<bool>> {
+pub(super) fn opt_bool(path: &str, fields: &Fields, key: &str) -> DResult<Option<bool>> {
     match get(fields, key) {
         None => Ok(None),
         Some(v) => Ok(Some(as_bool(&format!("{path}.{key}"), v)?)),
@@ -283,7 +286,7 @@ fn opt_bool(path: &str, fields: &Fields, key: &str) -> DResult<Option<bool>> {
 
 /// A closure sentinel slot: presence maps to `Some(Closure)`, absence to `None`
 /// (Phases 423/426 — an omitted handler arms the renderer's write-back default).
-fn opt_closure(fields: &Fields, key: &str) -> Option<Closure> {
+pub(super) fn opt_closure(fields: &Fields, key: &str) -> Option<Closure> {
     get(fields, key).map(|_| Closure)
 }
 
@@ -297,13 +300,17 @@ fn opt_closure(fields: &Fields, key: &str) -> Option<Closure> {
 // `requireFieldAliased` / `optFieldAliased`.
 
 /// Resolve a canonical field, falling back to the first present alias.
-fn get_aliased<'a>(fields: &'a Fields, canonical: &str, aliases: &[&str]) -> Option<&'a JVal> {
+pub(super) fn get_aliased<'a>(
+    fields: &'a Fields,
+    canonical: &str,
+    aliases: &[&str],
+) -> Option<&'a JVal> {
     get(fields, canonical).or_else(|| aliases.iter().find_map(|a| get(fields, a)))
 }
 
 /// Require a canonical field or one of its aliases; the nested path always uses
 /// the canonical name (matching the F# reference).
-fn req_aliased<'a>(
+pub(super) fn req_aliased<'a>(
     path: &str,
     fields: &'a Fields,
     canonical: &str,
@@ -313,7 +320,7 @@ fn req_aliased<'a>(
     get_aliased(fields, canonical, aliases).ok_or_else(|| missing_field(path, canonical, expected))
 }
 
-fn req_string_aliased(
+pub(super) fn req_string_aliased(
     path: &str,
     fields: &Fields,
     canonical: &str,
@@ -324,203 +331,12 @@ fn req_string_aliased(
     Ok(as_str(&format!("{path}.{canonical}"), v)?.to_string())
 }
 
-fn req_binding_slot_aliased(
-    path: &str,
-    fields: &Fields,
-    canonical: &str,
-    aliases: &[&str],
-    expected: &str,
-    slot: StaticSlot,
-) -> DResult<Binding> {
-    let v = req_aliased(path, fields, canonical, aliases, expected)?;
-    decode_binding_slot(&format!("{path}.{canonical}"), v, slot)
-}
-
-fn req_text_source_aliased(
-    path: &str,
-    fields: &Fields,
-    canonical: &str,
-    aliases: &[&str],
-    expected: &str,
-) -> DResult<TextSource> {
-    let v = req_aliased(path, fields, canonical, aliases, expected)?;
-    decode_text_source(&format!("{path}.{canonical}"), v)
-}
-
-fn opt_text_source_aliased(
-    path: &str,
-    fields: &Fields,
-    canonical: &str,
-    aliases: &[&str],
-) -> DResult<Option<TextSource>> {
-    match get_aliased(fields, canonical, aliases) {
-        None => Ok(None),
-        Some(v) => Ok(Some(decode_text_source(&format!("{path}.{canonical}"), v)?)),
-    }
-}
-
-// ─── Phase 460 — stylistic fields omitted-when-default on decode (§3.6) ───────
-//
-// These stylistic slots restore their default when ABSENT; a present
-// explicit-default value keeps decoding (read-compat). The default each caller
-// passes is the IDL's, from the generated `defaults` table, which is also the
-// value the encoder omits at.
-
-fn opt_cell_format_default(
-    path: &str,
-    fields: &Fields,
-    key: &str,
-    default: CellFormat,
-) -> DResult<CellFormat> {
-    match get(fields, key) {
-        None => Ok(default),
-        Some(v) => decode_cell_format(&format!("{path}.{key}"), v),
-    }
-}
-
-fn opt_tone_default(
-    path: &str,
-    fields: &Fields,
-    key: &str,
-    default: ToneVariant,
-) -> DResult<ToneVariant> {
-    match get(fields, key) {
-        None => Ok(default),
-        Some(v) => decode_tone(&format!("{path}.{key}"), v),
-    }
-}
-
-fn opt_weight_default(
-    path: &str,
-    fields: &Fields,
-    key: &str,
-    default: StyleWeight,
-) -> DResult<StyleWeight> {
-    match get(fields, key) {
-        None => Ok(default),
-        Some(v) => decode_weight(&format!("{path}.{key}"), v),
-    }
-}
-
-fn opt_emphasis_default(
-    path: &str,
-    fields: &Fields,
-    key: &str,
-    default: Emphasis,
-) -> DResult<Emphasis> {
-    match get(fields, key) {
-        None => Ok(default),
-        Some(v) => decode_emphasis(&format!("{path}.{key}"), v),
-    }
-}
-
-/// Phase 867 — `Metric.trendPolarity`, omitted-when-`HigherIsBetter` (§3.6.1
-/// clause 4: an absent declaration means the ordinary reading, up is good).
-fn opt_trend_polarity_default(
-    path: &str,
-    fields: &Fields,
-    key: &str,
-    default: TrendPolarity,
-) -> DResult<TrendPolarity> {
-    match get(fields, key) {
-        None => Ok(default),
-        Some(v) => decode_trend_polarity(&format!("{path}.{key}"), v),
-    }
-}
-
-fn opt_column_width_default(
-    path: &str,
-    fields: &Fields,
-    key: &str,
-    default: ColumnWidth,
-) -> DResult<ColumnWidth> {
-    match get(fields, key) {
-        None => Ok(default),
-        Some(v) => decode_column_width(&format!("{path}.{key}"), v),
-    }
-}
-
-// ─── Bare-string enum decode ─────────────────────────────────────────────────
-
-macro_rules! decode_bare_enum {
-    ($fn_name:ident, $ty:ident, $label:literal) => {
-        fn $fn_name(path: &str, j: &JVal) -> DResult<$ty> {
-            let s = match j {
-                JVal::Str(s) => s,
-                _ => return Err(wrong_type(path, concat!("JSON string (", $label, ")"))),
-            };
-            $ty::from_wire(s).ok_or_else(|| unknown_enum_case(path, s, &$ty::WIRE_NAMES.join(" | ")))
-        }
-    };
-    // Lenient-ingest alias arm (decode-only; WIRE_FORMAT.md §3.6). Canonical wire
-    // spellings decode via `from_wire`; a curated set of same-concept synonyms
-    // maps to a canonical case. A re-encode always normalises to the canonical
-    // name (aliases never appear in the schema or the conformance corpus). Any
-    // other unknown case still fails `UNKNOWN_DU_CASE` with the canonical list.
-    ($fn_name:ident, $ty:ident, $label:literal, aliases: { $($alias:literal => $case:ident),+ $(,)? }) => {
-        fn $fn_name(path: &str, j: &JVal) -> DResult<$ty> {
-            let s = match j {
-                JVal::Str(s) => s,
-                _ => return Err(wrong_type(path, concat!("JSON string (", $label, ")"))),
-            };
-            if let Some(v) = $ty::from_wire(s) {
-                return Ok(v);
-            }
-            match s.as_str() {
-                $($alias => Ok($ty::$case),)+
-                _ => Err(unknown_enum_case(path, s, &$ty::WIRE_NAMES.join(" | "))),
-            }
-        }
-    };
-}
-
-// The CSS flex-direction prior: a row lays out horizontally, a column vertically.
-decode_bare_enum!(decode_orientation, Orientation, "Orientation", aliases: {
-    "Row" => Horizontal, "row" => Horizontal,
-    "Column" => Vertical, "column" => Vertical,
-});
-decode_bare_enum!(
-    decode_scroll_orientation,
-    ScrollOrientation,
-    "ScrollOrientation"
-);
-// `Default` is the universal no-special-variant prior (BadgeVariant's identity
-// case is Neutral); `Danger` is the Bootstrap prior for Critical.
-decode_bare_enum!(decode_badge_variant, BadgeVariant, "BadgeVariant", aliases: {
-    "Default" => Neutral, "Danger" => Critical,
-});
-// Bootstrap's `Danger` names the same concept as Destructive (the red button).
-decode_bare_enum!(decode_button_variant, ButtonVariant, "ButtonVariant", aliases: {
-    "Danger" => Destructive,
-});
-// `Default` → the identity case. Other guesses (Title/Page/Section) stay rejects.
-decode_bare_enum!(decode_heading_variant, HeadingVariant, "HeadingVariant", aliases: {
-    "Default" => Standard,
-});
-// Faithful semantic mappings only: Positive→Success, Danger/Negative→Critical,
-// Neutral→Default.
-decode_bare_enum!(decode_tone, ToneVariant, "ToneVariant", aliases: {
-    "Positive" => Success, "Danger" => Critical, "Negative" => Critical, "Neutral" => Default,
-});
-// `StyleWeight` is deliberately NOT aliased — Bold/Heavy is font-weight intent,
-// but the language means layout density (Compact|Standard|Spacious).
-decode_bare_enum!(decode_weight, StyleWeight, "StyleWeight");
-// Phase 867 — `TrendPolarity` is deliberately NOT aliased, and the omission is
-// load-bearing rather than an oversight. The obvious candidates are exactly the
-// spellings that must NOT be accepted: `"Neutral"` is the RESERVED case (see
-// `TrendPolarity`), so aliasing it onto either canonical case would silently
-// decide the question the reservation holds open and make a later admission a
-// breaking re-meaning of already-emitted bytes rather than an addition; and
-// `"Inverted"` / `"Descending"` would resurrect the boolean spelling §3.6.1
-// refuses. An unknown spelling therefore fails `UNKNOWN_DU_CASE` naming only the
-// two the format accepts.
-decode_bare_enum!(decode_trend_polarity, TrendPolarity, "TrendPolarity");
 // Prominence intent survives: Strong/Bold→Loud, Subtle/Muted→Quiet. The
 // `emphasis` name is a same-name cross-vocabulary collision (style ENUM here
 // vs behavioural BOOL on Fact/LabelValueRow) and models cross it in both
 // directions: a bool in the enum slot projects one-to-one (true ⇒ Loud,
 // false ⇒ Normal). The bool sites' direction lives in `decode_emphasis_flag`.
-fn decode_emphasis(path: &str, j: &JVal) -> DResult<Emphasis> {
+pub(super) fn decode_emphasis(path: &str, j: &JVal) -> DResult<Emphasis> {
     let s = match unwrap_static_envelope(j) {
         JVal::Bool(true) => return Ok(Emphasis::Loud),
         JVal::Bool(false) => return Ok(Emphasis::Normal),
@@ -546,7 +362,7 @@ fn decode_emphasis(path: &str, j: &JVal) -> DResult<Emphasis> {
 /// through; the enum AND its aliases project one-to-one (Loud/Strong/Bold ⇒
 /// true, Normal/Quiet/Subtle/Muted ⇒ false); any other string is the didactic
 /// reject naming both vocabularies.
-fn decode_emphasis_flag(path: &str, j: &JVal) -> DResult<bool> {
+pub(super) fn decode_emphasis_flag(path: &str, j: &JVal) -> DResult<bool> {
     match unwrap_static_envelope(j) {
         JVal::Bool(b) => Ok(*b),
         JVal::Str(s) => match s.as_str() {
@@ -564,80 +380,10 @@ fn decode_emphasis_flag(path: &str, j: &JVal) -> DResult<bool> {
         _ => Err(wrong_type(path, "JSON boolean")),
     }
 }
-decode_bare_enum!(decode_text_anchor, TextAnchor, "TextAnchor");
-decode_bare_enum!(decode_style_role, StyleRole, "StyleRole");
-decode_bare_enum!(decode_font_voice, FontVoice, "FontVoice");
-decode_bare_enum!(decode_chart_kind, ChartKind, "ChartKind");
-decode_bare_enum!(
-    decode_chart_legend_position,
-    ChartLegendPosition,
-    "ChartLegendPosition"
-);
-decode_bare_enum!(decode_chart_data_labels, ChartDataLabels, "ChartDataLabels");
-decode_bare_enum!(decode_chart_x_scale, ChartXScale, "ChartXScale");
-decode_bare_enum!(decode_image_variant, ImageVariant, "ImageVariant");
-// Phase 1077 — the three `Image` presentation vocabularies (§3.6.2). BARE
-// enums, so `reject/reject-unknown-image-aspect` reports at `$.kind.aspectRatio`
-// with no `.$type` suffix (the Phase 1073 ruling) — the CSS ratio spelling
-// `"16/9"` is refused rather than parsed, because admitting a numeric pair
-// would reintroduce the free-form escape the tokens exist to close.
-decode_bare_enum!(decode_image_fit, ImageFit, "ImageFit");
-decode_bare_enum!(decode_image_aspect, ImageAspect, "ImageAspect");
-decode_bare_enum!(decode_image_loading, ImageLoading, "ImageLoading");
-// Phase 1110 - the timed-text track vocabulary. BARE, so an unrecognised
-// spelling reports at `$.kind.tracks[i].kind` with no `.$type` suffix.
-decode_bare_enum!(decode_track_kind, TrackKind, "TrackKind");
-// Phase 1111 - the sandbox-relaxation vocabulary. BARE and reported at the
-// ELEMENT's own path (`$.kind.permissions[0]`), which is what makes the HTML
-// token an author reaches for from memory (`"allow-top-navigation"`) an
-// UNKNOWN_DU_CASE there rather than a silent drop.
-decode_bare_enum!(decode_embed_permission, EmbedPermission, "EmbedPermission");
-// WIRE_FORMAT.md 3.6.11 / Phase 1472 - the modality and direction tokens.
-decode_bare_enum!(decode_modality_kind, ModalityKind, "ModalityKind");
-decode_bare_enum!(decode_text_direction, TextDirection, "TextDirection");
-decode_bare_enum!(decode_link_protection, LinkProtection, "LinkProtection");
-decode_bare_enum!(decode_math_display, MathDisplay, "MathDisplay");
-decode_bare_enum!(decode_date_time_variant, DateTimeVariant, "DateTimeVariant");
-// Phase 1536 — `Action::Navigate`'s destination window. BARE, so `"_blank"`
-// reports at `$.kind.onClick.target` with no `.$type` suffix, and is refused
-// rather than aliased: the HTML vocabulary it comes from also contains
-// `_parent` and `_top`, which are frame-busting gestures a hosted tree must not
-// be able to ask for.
-decode_bare_enum!(decode_navigate_target, NavigateTarget, "NavigateTarget");
-// Phase 1116 — the recording device. BARE, so `"Screen"` reports at
-// `$.kind.capture` with no `.$type` suffix, and a host MUST NOT fall back to
-// either device on an unrecognised value.
-decode_bare_enum!(decode_capture_source, CaptureSource, "CaptureSource");
-decode_bare_enum!(decode_text_format, TextFormat, "TextFormat");
-decode_bare_enum!(decode_compare_op, CompareOp, "CompareOp");
-decode_bare_enum!(
-    decode_file_read_encoding,
-    FileReadEncoding,
-    "FileReadEncoding"
-);
-decode_bare_enum!(decode_live_region, LiveRegionKind, "LiveRegionKind");
-decode_bare_enum!(decode_sort_direction, SortDirection, "SortDirection");
-decode_bare_enum!(decode_date_style, DateStyle, "DateStyle");
-decode_bare_enum!(decode_time_style, TimeStyle, "TimeStyle");
-decode_bare_enum!(
-    decode_relative_time_unit,
-    RelativeTimeUnit,
-    "RelativeTimeUnit"
-);
-// Phase 1533 — the `Binding::Now` grain: a strict SUBSET of RelativeTimeUnit.
-// `Week` / `Month` / `Year` are refused rather than quietly accepted, because a
-// calendar instant has no truncation to those that every host agrees on.
-decode_bare_enum!(decode_time_grain, TimeGrain, "TimeGrain");
-// Phase 819 — the Duration format enums (`decode_cell_format` /
-// `decode_format` share them).
-decode_bare_enum!(decode_duration_unit, DurationUnit, "DurationUnit");
-decode_bare_enum!(decode_duration_style, DurationStyle, "DurationStyle");
-// Phase 821 — the standalone icon-only display kind's size modifier.
-decode_bare_enum!(decode_icon_size, IconSize, "IconSize");
 
 // ─── Strict JVal decode (rule 12 — structured JSON positions) ────────────────
 
-fn decode_jval(path: &str, j: &JVal) -> DResult<JVal> {
+pub(super) fn decode_jval(path: &str, j: &JVal) -> DResult<JVal> {
     match j {
         JVal::Null => Err(null_not_representable(path)),
         JVal::Str(_) | JVal::Bool(_) | JVal::Num(_) => Ok(j.clone()),
@@ -658,15 +404,6 @@ fn decode_jval(path: &str, j: &JVal) -> DResult<JVal> {
     }
 }
 
-fn decode_jval_map(path: &str, j: &JVal) -> DResult<Vec<(String, JVal)>> {
-    let fields = as_obj(path, j)?;
-    let mut out = Vec::with_capacity(fields.len());
-    for (k, v) in fields {
-        out.push((k.clone(), decode_jval(&format!("{path}.{k}"), v)?));
-    }
-    Ok(out)
-}
-
 /// A `TextSource.I18n` argument bag — discriminated BY INSPECTION (§5, Phase 1661).
 ///
 /// An object carrying a `$type` member is a BINDING and decodes as one, so an
@@ -682,7 +419,7 @@ fn decode_jval_map(path: &str, j: &JVal) -> DResult<Vec<(String, JVal)>> {
 /// `StaticValue::Ast` rule-11 path. A missing or null value stays a binding:
 /// absence is structural (Phase 677), has no bare spelling, and `decode_binding`
 /// is already this host's one implementation of it.
-fn decode_i18n_args(path: &str, j: &JVal) -> DResult<Vec<(String, I18nArg)>> {
+pub(super) fn decode_i18n_args(path: &str, j: &JVal) -> DResult<Vec<(String, I18nArg)>> {
     let fields = as_obj(path, j)?;
     let mut out = Vec::with_capacity(fields.len());
     for (k, v) in fields {
@@ -707,9 +444,9 @@ fn decode_i18n_args(path: &str, j: &JVal) -> DResult<Vec<(String, I18nArg)>> {
 
 // ─── Compute layer (Core-style string errors) ────────────────────────────────
 
-type CResult<T> = Result<T, String>;
+pub(super) type CResult<T> = Result<T, String>;
 
-fn ast_kind(j: &JVal) -> &'static str {
+pub(super) fn ast_kind(j: &JVal) -> &'static str {
     match j {
         JVal::Str(_) => "string",
         JVal::Num(_) => "number",
@@ -720,25 +457,25 @@ fn ast_kind(j: &JVal) -> &'static str {
     }
 }
 
-fn c_obj(j: &JVal) -> CResult<&Fields> {
+pub(super) fn c_obj(j: &JVal) -> CResult<&Fields> {
     match j {
         JVal::Obj(fields) => Ok(fields),
         _ => Err(format!("malformed: expected object, got {}", ast_kind(j))),
     }
 }
 
-fn c_field<'a>(fields: &'a Fields, key: &str) -> CResult<&'a JVal> {
+pub(super) fn c_field<'a>(fields: &'a Fields, key: &str) -> CResult<&'a JVal> {
     get(fields, key).ok_or_else(|| format!("missing field: {key}"))
 }
 
-fn c_str(j: &JVal) -> CResult<String> {
+pub(super) fn c_str(j: &JVal) -> CResult<String> {
     match j {
         JVal::Str(s) => Ok(s.clone()),
         _ => Err(format!("malformed: expected string, got {}", ast_kind(j))),
     }
 }
 
-fn c_arr(j: &JVal) -> CResult<&[JVal]> {
+pub(super) fn c_arr(j: &JVal) -> CResult<&[JVal]> {
     match j {
         JVal::Arr(items) => Ok(items),
         _ => Err(format!("malformed: expected array, got {}", ast_kind(j))),
@@ -749,7 +486,7 @@ fn c_arr(j: &JVal) -> CResult<&[JVal]> {
 /// `as_int`. A second reader with a looser rule would be an undeclared divergent
 /// entry point under §20.1 — the coercion bridge is reached from
 /// `TreeOp::UpdateProp`, which is wire input like any other.
-fn c_int(j: &JVal) -> CResult<i64> {
+pub(super) fn c_int(j: &JVal) -> CResult<i64> {
     match j {
         JVal::Num(n) if !n.is_finite() => {
             Err("malformed: expected a finite integer, got a non-finite number".to_string())
@@ -765,15 +502,19 @@ fn c_int(j: &JVal) -> CResult<i64> {
     }
 }
 
-fn c_str_field(fields: &Fields, key: &str) -> CResult<String> {
+pub(super) fn c_str_field(fields: &Fields, key: &str) -> CResult<String> {
     c_str(c_field(fields, key)?)
 }
 
-fn c_str_list(j: &JVal) -> CResult<Vec<String>> {
+pub(super) fn c_str_list(j: &JVal) -> CResult<Vec<String>> {
     c_arr(j)?.iter().map(c_str).collect()
 }
 
-fn c_enum<T: Copy>(value: &str, parse_wire: fn(&str) -> Option<T>, names: &[&str]) -> CResult<T> {
+pub(super) fn c_enum<T: Copy>(
+    value: &str,
+    parse_wire: fn(&str) -> Option<T>,
+    names: &[&str],
+) -> CResult<T> {
     parse_wire(value).ok_or_else(|| {
         format!(
             "unknown column type '{value}'; expected one of: {}",
@@ -782,7 +523,7 @@ fn c_enum<T: Copy>(value: &str, parse_wire: fn(&str) -> Option<T>, names: &[&str
     })
 }
 
-fn decode_cell_lit(j: &JVal) -> CResult<Cell> {
+pub(super) fn decode_cell_lit(j: &JVal) -> CResult<Cell> {
     let fields = c_obj(j).map_err(|_| "malformed: lit: expected object".to_string())?;
     let tag = match get(fields, "$type") {
         Some(JVal::Str(s)) => s.clone(),
@@ -804,7 +545,7 @@ fn decode_cell_lit(j: &JVal) -> CResult<Cell> {
     }
 }
 
-fn decode_column_cell(col_name: &str, ty: ColumnType, v: &JVal) -> CResult<Cell> {
+pub(super) fn decode_column_cell(col_name: &str, ty: ColumnType, v: &JVal) -> CResult<Cell> {
     let mismatch = || {
         format!(
             "column '{col_name}': expected {} value, got {}",
@@ -839,7 +580,7 @@ fn decode_column_cell(col_name: &str, ty: ColumnType, v: &JVal) -> CResult<Cell>
 /// Render an epoch-seconds instant as the canonical ISO-8601 UTC timestamp
 /// string. Pure integer civil-from-days arithmetic — deterministic and
 /// clock-free; negative epochs (pre-1970) are handled.
-fn iso_of_epoch_seconds(secs: i64) -> String {
+pub(super) fn iso_of_epoch_seconds(secs: i64) -> String {
     let days = {
         let d = secs / 86_400;
         if secs % 86_400 < 0 { d - 1 } else { d }
@@ -862,7 +603,7 @@ fn iso_of_epoch_seconds(secs: i64) -> String {
     )
 }
 
-fn decode_col_schema(j: &JVal) -> CResult<Vec<SchemaEntry>> {
+pub(super) fn decode_col_schema(j: &JVal) -> CResult<Vec<SchemaEntry>> {
     c_arr(j)?
         .iter()
         .map(|e| {
@@ -881,7 +622,7 @@ fn decode_col_schema(j: &JVal) -> CResult<Vec<SchemaEntry>> {
 /// array can only mean every cell present); a wrapped object carrying `values`
 /// but no `validity` is the same all-present statement. The full wrapped form
 /// stays canonical.
-fn column_parts<'a>(
+pub(super) fn column_parts<'a>(
     name: &str,
     col: &'a JVal,
 ) -> CResult<(&'a [JVal], std::borrow::Cow<'a, [JVal]>)> {
@@ -897,7 +638,11 @@ fn column_parts<'a>(
     }
 }
 
-fn decode_data_column(columns: &Fields, name: &str, ty: ColumnType) -> CResult<DataColumn> {
+pub(super) fn decode_data_column(
+    columns: &Fields,
+    name: &str,
+    ty: ColumnType,
+) -> CResult<DataColumn> {
     let col = get(columns, name).ok_or_else(|| format!("missing field: columns.{name}"))?;
     let (values, validity) = column_parts(name, col)?;
     let validity: &[JVal] = &validity;
@@ -933,7 +678,7 @@ fn decode_data_column(columns: &Fields, name: &str, ty: ColumnType) -> CResult<D
 /// float, all-bool => bool, all-string => string — never date/timestamp
 /// (temporal types require a declared schema). Empty / mixed is a didactic
 /// reject naming the explicit-schema remedy.
-fn infer_column_type(name: &str, values: &[JVal]) -> CResult<ColumnType> {
+pub(super) fn infer_column_type(name: &str, values: &[JVal]) -> CResult<ColumnType> {
     if values.is_empty() {
         return Err(format!(
             "malformed: {name}: cannot infer a column type from an empty / all-null column — declare it in an explicit \"schema\" array"
@@ -964,7 +709,7 @@ fn infer_column_type(name: &str, values: &[JVal]) -> CResult<ColumnType> {
     }
 }
 
-fn decode_data_source(j: &JVal) -> CResult<DataSource> {
+pub(super) fn decode_data_source(j: &JVal) -> CResult<DataSource> {
     let fields = c_obj(j)?;
     // Lenient-ingest (Core Phase 88): `schema` may be omitted on an EMBEDDED
     // source (inferred per column, Ordinal key order); a `ref` source still
@@ -1017,7 +762,10 @@ fn decode_data_source(j: &JVal) -> CResult<DataSource> {
 /// Lenient AI-ingest (§3.6): a `{name: <Binding>}` MAP is accepted alongside
 /// the canonical `[{from, name}]` array — normalised to the array form sorted
 /// by name (the reference host's map iteration order). Omitted when empty.
-fn decode_binding_params(path: &str, fields: &Fields) -> DResult<Option<Vec<TransformParam>>> {
+pub(super) fn decode_binding_params(
+    path: &str,
+    fields: &Fields,
+) -> DResult<Option<Vec<TransformParam>>> {
     match get(fields, "params") {
         None => Ok(None),
         Some(JVal::Obj(map_fields)) => {
@@ -1039,18 +787,14 @@ fn decode_binding_params(path: &str, fields: &Fields) -> DResult<Option<Vec<Tran
             let p = format!("{path}.params[]");
             let mut out = Vec::with_capacity(items.len());
             for item in items {
-                let pf = as_obj(&p, item)?;
-                let name = req_string(&p, pf, "name", "param name string")?;
-                let from_j = req(&p, pf, "from", "param source Binding")?;
-                let from = decode_binding(&format!("{p}.from"), from_j)?;
-                out.push(TransformParam { name, from });
+                out.push(decode_transform_param(&p, item)?);
             }
             Ok(Some(out))
         }
     }
 }
 
-fn expr_children(e: &ColExpr) -> Vec<&ColExpr> {
+pub(super) fn expr_children(e: &ColExpr) -> Vec<&ColExpr> {
     match e {
         ColExpr::Col { .. } | ColExpr::Param { .. } | ColExpr::Lit { .. } => vec![],
         ColExpr::Binary { left, right, .. } => vec![left, right],
@@ -1076,7 +820,7 @@ fn expr_children(e: &ColExpr) -> Vec<&ColExpr> {
 
 /// The `ColExpr` node count of one expression — the subject of §21.8's
 /// `MaxExprNodes`, which is counted per EXPRESSION rather than per document.
-fn count_expr_nodes(e: &ColExpr) -> usize {
+pub(super) fn count_expr_nodes(e: &ColExpr) -> usize {
     1 + expr_children(e)
         .into_iter()
         .map(count_expr_nodes)
@@ -1104,7 +848,9 @@ fn count_expr_nodes(e: &ColExpr) -> usize {
 /// reused rather than re-derived — its figure is exactly what this bound wants,
 /// and the `col` verdict `Binding::Expr` also needs is irrelevant here, since a
 /// `col` is perfectly ordinary in a pipeline expression.
-fn first_pipeline_expr_breach(pipeline: &[TransformStep]) -> Option<(usize, &'static str)> {
+pub(super) fn first_pipeline_expr_breach(
+    pipeline: &[TransformStep],
+) -> Option<(usize, &'static str)> {
     pipeline.iter().enumerate().find_map(|(i, step)| {
         let (slot, expr) = match step {
             TransformStep::Filter { pred } => ("pred", pred),
@@ -1125,7 +871,7 @@ fn first_pipeline_expr_breach(pipeline: &[TransformStep]) -> Option<(usize, &'st
 }
 
 /// The first `col` reference reachable in `e`, if any (§3.3.2 refusal 1).
-fn first_col_reference(e: &ColExpr) -> Option<&str> {
+pub(super) fn first_col_reference(e: &ColExpr) -> Option<&str> {
     if let ColExpr::Col { name } = e {
         return Some(name);
     }
@@ -1136,7 +882,7 @@ fn first_col_reference(e: &ColExpr) -> Option<&str> {
 /// (§3.3.2 refusal 2). `InParam`'s name is a param too — it is the LIST
 /// spelling of the same reference, so leaving it out would admit an unbound
 /// membership test through the one arm that reads a param without being one.
-fn first_unbound_param<'a>(e: &'a ColExpr, bound: &[&str]) -> Option<&'a str> {
+pub(super) fn first_unbound_param<'a>(e: &'a ColExpr, bound: &[&str]) -> Option<&'a str> {
     let named = match e {
         ColExpr::Param { name } | ColExpr::InParam { name, .. } => Some(name.as_str()),
         _ => None,
@@ -1151,7 +897,7 @@ fn first_unbound_param<'a>(e: &'a ColExpr, bound: &[&str]) -> Option<&'a str> {
         .find_map(|child| first_unbound_param(child, bound))
 }
 
-fn decode_col_expr(j: &JVal) -> CResult<ColExpr> {
+pub(super) fn decode_col_expr(j: &JVal) -> CResult<ColExpr> {
     let fields = c_obj(j)?;
     let tag = c_str_field(fields, "$type")?;
     match tag.as_str() {
@@ -1340,7 +1086,11 @@ fn decode_col_expr(j: &JVal) -> CResult<ColExpr> {
 /// mistake into a document that decodes to something they did not write. This matches
 /// the reference codec and every sibling host; until 0.28.0 this host let the canonical
 /// win, which was the one behaviour of the family it did not share.
-fn c_field_aliased<'a>(fields: &'a Fields, canonical: &str, alias: &str) -> CResult<&'a JVal> {
+pub(super) fn c_field_aliased<'a>(
+    fields: &'a Fields,
+    canonical: &str,
+    alias: &str,
+) -> CResult<&'a JVal> {
     match (get(fields, canonical), get(fields, alias)) {
         (Some(_), Some(_)) => Err(format!(
             "malformed: give \"{canonical}\" (canonical) or \"{alias}\" (alias), not both"
@@ -1352,7 +1102,7 @@ fn c_field_aliased<'a>(fields: &'a Fields, canonical: &str, alias: &str) -> CRes
 
 /// The `args` of an apply-shaped node: the canonical array, or a lone `expr`
 /// field standing in for a one-element list (Core Phase 94).
-fn expr_args(fields: &Fields) -> CResult<Vec<ColExpr>> {
+pub(super) fn expr_args(fields: &Fields) -> CResult<Vec<ColExpr>> {
     match get(fields, "args") {
         Some(args_j) => c_arr(args_j)?
             .iter()
@@ -1362,7 +1112,7 @@ fn expr_args(fields: &Fields) -> CResult<Vec<ColExpr>> {
     }
 }
 
-fn decode_col_pair(j: &JVal) -> CResult<ColPair> {
+pub(super) fn decode_col_pair(j: &JVal) -> CResult<ColPair> {
     let fields = c_obj(j)?;
     Ok(ColPair {
         a: c_str_field(fields, "a")?,
@@ -1370,7 +1120,7 @@ fn decode_col_pair(j: &JVal) -> CResult<ColPair> {
     })
 }
 
-fn decode_agg(j: &JVal) -> CResult<Agg> {
+pub(super) fn decode_agg(j: &JVal) -> CResult<Agg> {
     let fields = c_obj(j)?;
     // Lenient-ingest (Core Phase 92) — entry aliases: `as` for `name`, `op`
     // for `fn`, `column` for `of`; `avg` aliases `mean` (the SQL prior).
@@ -1384,7 +1134,7 @@ fn decode_agg(j: &JVal) -> CResult<Agg> {
     Ok(Agg { name, func, of })
 }
 
-fn decode_order(j: &JVal) -> CResult<SortKey> {
+pub(super) fn decode_order(j: &JVal) -> CResult<SortKey> {
     let fields = c_obj(j)?;
     // Core Phase 92 admitted `column` as an alias of `col`; 0.28.0 SWAPPED which of the
     // two is canonical — a member whose only honest name is "the column" is spelled out
@@ -1420,7 +1170,7 @@ fn decode_order(j: &JVal) -> CResult<SortKey> {
     Ok(SortKey { col, dir })
 }
 
-fn decode_transform_step(j: &JVal) -> CResult<TransformStep> {
+pub(super) fn decode_transform_step(j: &JVal) -> CResult<TransformStep> {
     let fields = c_obj(j)?;
     let tag = c_str_field(fields, "$type")?;
     match tag.as_str() {
@@ -1573,14 +1323,14 @@ fn decode_transform_step(j: &JVal) -> CResult<TransformStep> {
     }
 }
 
-fn decode_pipeline(j: &JVal) -> CResult<Vec<TransformStep>> {
+pub(super) fn decode_pipeline(j: &JVal) -> CResult<Vec<TransformStep>> {
     match j {
         JVal::Arr(items) => items.iter().map(decode_transform_step).collect(),
         _ => Err("malformed: pipeline: expected a JSON array of transform steps".to_string()),
     }
 }
 
-fn decode_invoke_args(path: &str, j: &JVal) -> DResult<Vec<InvokeArg>> {
+pub(super) fn decode_invoke_args(path: &str, j: &JVal) -> DResult<Vec<InvokeArg>> {
     let items = match j {
         JVal::Arr(items) => items,
         _ => return Err(wrong_type(path, "JSON array of invoke args")),
@@ -1602,7 +1352,7 @@ fn decode_invoke_args(path: &str, j: &JVal) -> DResult<Vec<InvokeArg>> {
 /// Which typed `Static` payload shape a binding slot carries (§5); `Untyped` is
 /// the faithful-AST residual boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StaticSlot {
+pub(super) enum StaticSlot {
     Untyped,
     /// A `Binding<string>` slot. The parsed payload still rides as
     /// `StaticValue::Ast`, so nothing downstream and no encoded byte changes —
@@ -1841,181 +1591,6 @@ impl StaticSlot {
     }
 }
 
-fn decode_select_option(path: &str, j: &JVal) -> DResult<SelectOption> {
-    // Lenient AI-ingest shorthand (§5): a bare JSON string `"A"` reads as
-    // `{label: "A", value: "A"}` (the HTML `<select>` prior); the canonical
-    // re-encode is the object form.
-    if let JVal::Str(s) = j {
-        return Ok(SelectOption {
-            value: s.clone(),
-            label: TextSource::Literal(s.clone()),
-        });
-    }
-    let fields = as_obj(path, j)?;
-    let value = req_string(path, fields, "value", "option value string")?;
-    let label_j = req(path, fields, "label", "option label TextSource")?;
-    let label = decode_text_source(&format!("{path}.label"), label_j)?;
-    Ok(SelectOption { value, label })
-}
-
-fn decode_map_marker(path: &str, j: &JVal) -> DResult<MapMarker> {
-    let fields = as_obj(path, j)?;
-    let label_j = req(path, fields, "label", "marker label TextSource")?;
-    let label = decode_text_source(&format!("{path}.label"), label_j)?;
-    let latitude = req_float(path, fields, "latitude", "marker latitude float")?;
-    let longitude = req_float(path, fields, "longitude", "marker longitude float")?;
-    Ok(MapMarker {
-        label,
-        latitude,
-        longitude,
-    })
-}
-
-// ─── LocalFlushTrigger / Format / LocaleSource / CellFormat / ColumnWidth ────
-
-fn decode_local_flush_trigger(path: &str, j: &JVal) -> DResult<LocalFlushTrigger> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "OnBlur" => Ok(LocalFlushTrigger::OnBlur),
-        "OnSubmit" => Ok(LocalFlushTrigger::OnSubmit),
-        "OnCommitAction" => Ok(LocalFlushTrigger::OnCommitAction),
-        "OnDebounce" => Ok(LocalFlushTrigger::OnDebounce {
-            milliseconds: req_int(
-                path,
-                fields,
-                "milliseconds",
-                "debounce milliseconds integer",
-            )?,
-        }),
-        other => Err(unknown_du_case(path, other, LOCAL_FLUSH_TRIGGER_TAGS)),
-    }
-}
-
-fn decode_format(path: &str, j: &JVal) -> DResult<Format> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "Number" => Ok(Format::Number {
-            decimals: opt_int(path, fields, "decimals")?,
-        }),
-        "Currency" => Ok(Format::Currency {
-            iso_code: req_string(path, fields, "isoCode", "ISO-4217 currency code string")?,
-        }),
-        "Percent" => Ok(Format::Percent {
-            decimals: opt_int(path, fields, "decimals")?,
-        }),
-        // Phase 1811 — `DateTime` is canonical; `Date` (the pre-rename spelling) is
-        // its §16 lenient alias, decoded to the same value and re-encoded canonical.
-        // Phase 1810 — BOTH style slots are optional; neither present decodes
-        // structurally and is the validator's subject, not a shape error.
-        "DateTime" | "Date" => {
-            let date_style = match get(fields, "dateStyle") {
-                None => None,
-                Some(v) => Some(decode_date_style(&format!("{path}.dateStyle"), v)?),
-            };
-            let time_style = match get(fields, "timeStyle") {
-                None => None,
-                Some(v) => Some(decode_time_style(&format!("{path}.timeStyle"), v)?),
-            };
-            Ok(Format::DateTime {
-                date_style,
-                time_style,
-            })
-        }
-        "RelativeTime" => {
-            let v = req(path, fields, "unit", "RelativeTimeUnit string")?;
-            Ok(Format::RelativeTime {
-                unit: decode_relative_time_unit(&format!("{path}.unit"), v)?,
-            })
-        }
-        "Duration" => {
-            // Phase 819 — locale-independent duration formatting.
-            let unit_j = req(path, fields, "unit", "DurationUnit string")?;
-            let unit = decode_duration_unit(&format!("{path}.unit"), unit_j)?;
-            let style_j = req(path, fields, "style", "DurationStyle string")?;
-            let style = decode_duration_style(&format!("{path}.style"), style_j)?;
-            Ok(Format::Duration { style, unit })
-        }
-        "Since" => {
-            // Phase 1533 — `unit` is OPTIONAL and its absence is the
-            // auto-selection request, not a default. Present-but-unreadable is
-            // still a refusal.
-            let unit = match get(fields, "unit") {
-                None => None,
-                Some(v) => Some(decode_relative_time_unit(&format!("{path}.unit"), v)?),
-            };
-            Ok(Format::Since { unit })
-        }
-        other => Err(unknown_du_case(path, other, FORMAT_TAGS)),
-    }
-}
-
-fn decode_locale_source(path: &str, j: &JVal) -> DResult<LocaleSource> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "Ambient" => Ok(LocaleSource::Ambient),
-        "Explicit" => Ok(LocaleSource::Explicit {
-            tag: req_string(path, fields, "tag", "BCP-47 locale tag string")?,
-        }),
-        other => Err(unknown_du_case(path, other, LOCALE_SOURCE_TAGS)),
-    }
-}
-
-fn decode_cell_format(path: &str, j: &JVal) -> DResult<CellFormat> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "None" => Ok(CellFormat::None),
-        "Number" => Ok(CellFormat::Number {
-            decimals: opt_int(path, fields, "decimals")?,
-        }),
-        "Currency" => Ok(CellFormat::Currency {
-            code: req_string(path, fields, "code", "ISO currency code string")?,
-        }),
-        "Percent" => Ok(CellFormat::Percent {
-            decimals: opt_int(path, fields, "decimals")?,
-        }),
-        "SignificantDigits" => Ok(CellFormat::SignificantDigits {
-            digits: req_int(path, fields, "digits", "integer digit count")?,
-        }),
-        // Phase 1811 — `DateTime` is canonical; `Date` (the pre-rename spelling) is
-        // its §16 lenient alias, decoded to the same value and re-encoded canonical.
-        "DateTime" | "Date" => Ok(CellFormat::DateTime {
-            format: req_string(path, fields, "format", "format string")?,
-        }),
-        "Duration" => {
-            // Phase 819 — trendable duration cells: raw float counts `unit`s,
-            // rendered per `style`.
-            let unit_j = req(path, fields, "unit", "DurationUnit string")?;
-            let unit = decode_duration_unit(&format!("{path}.unit"), unit_j)?;
-            let style_j = req(path, fields, "style", "DurationStyle string")?;
-            let style = decode_duration_style(&format!("{path}.style"), style_j)?;
-            Ok(CellFormat::Duration { style, unit })
-        }
-        "RelativeTime" => {
-            // Phase 819 — cell-vocabulary parity with `Format::RelativeTime`.
-            let v = req(path, fields, "unit", "RelativeTimeUnit string")?;
-            Ok(CellFormat::RelativeTime {
-                unit: decode_relative_time_unit(&format!("{path}.unit"), v)?,
-            })
-        }
-        "Custom" => Ok(CellFormat::Custom),
-        other => Err(unknown_du_case(path, other, CELL_FORMAT_TAGS)),
-    }
-}
-
-fn decode_column_width(path: &str, j: &JVal) -> DResult<ColumnWidth> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "Auto" => Ok(ColumnWidth::Auto),
-        "Fixed" => Ok(ColumnWidth::Fixed {
-            pixels: req_int(path, fields, "pixels", "integer pixel count")?,
-        }),
-        "Flex" => Ok(ColumnWidth::Flex {
-            weight: req_float(path, fields, "weight", "float weight")?,
-        }),
-        other => Err(unknown_du_case(path, other, COLUMN_WIDTH_TAGS)),
-    }
-}
-
 // ─── Binding (recursive) ─────────────────────────────────────────────────────
 
 /// Phase 815 — organic-demand leniencies for the Transform `source` slot, both
@@ -2038,7 +1613,7 @@ fn decode_column_width(path: &str, j: &JVal) -> DResult<ColumnWidth> {
 /// Ragged / mixed-type rows may still fail downstream (the mixed-type
 /// didactic) — deliberately not special-cased. A wrapper carrying neither
 /// `defaultValue` nor `value` stays UNCHANGED and fails the columnar decode.
-fn normalise_transform_source(j: &JVal) -> JVal {
+pub(super) fn normalise_transform_source(j: &JVal) -> JVal {
     let unwrapped: &JVal = match j {
         JVal::Obj(fields) => match get(fields, "$type") {
             Some(JVal::Str(t)) if t == "State" || t == "Static" || t == "Bound" => {
@@ -2103,11 +1678,11 @@ pub(crate) fn live_data_source(data: &JVal) -> Result<DataSource, String> {
     decode_data_source(&transpose_row_major(data))
 }
 
-fn decode_binding(path: &str, j: &JVal) -> DResult<Binding> {
+pub(super) fn decode_binding(path: &str, j: &JVal) -> DResult<Binding> {
     decode_binding_slot(path, j, StaticSlot::Untyped)
 }
 
-fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Binding> {
+pub(super) fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Binding> {
     // Lenient AI-ingest shape coercion (§3.6): a bare JSON array (`options:
     // ["A","B"]`, the HTML-select prior) or bare SCALAR (`fraction: 0.9`)
     // where a Binding is expected is accepted as `Static` with that value —
@@ -2122,8 +1697,17 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
         _ => {}
     }
     let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "Static" => {
+    let tag = disc(path, fields)?;
+    // Lenient AI-ingest: the `TextSource.Bound` wrapper convention
+    // transferred to a bare-Binding slot — `{"$type":"Bound","binding":X}`
+    // carries exactly one payload field, so the unwrap is one-to-one.
+    // Decode-only; the canonical encoder never wraps bare-Binding slots.
+    if tag == "Bound" {
+        let inner = req(path, fields, "binding", "the wrapped Binding object")?;
+        return decode_binding_slot(&format!("{path}.binding"), inner, slot);
+    }
+    match BindingTag::of(tag) {
+        Some(BindingTag::Static) => {
             // Phase 677 — absence is structural: a MISSING `value` means the
             // binding carries none, and the legacy `"value": null` spelling
             // normalises to the same thing (§16 shorthand) by routing to the very
@@ -2133,7 +1717,7 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
             let value = slot.parse(&format!("{path}.value"), v)?;
             Ok(Binding::Static { value })
         }
-        "Query" => {
+        Some(BindingTag::Query) => {
             let name = req_string(path, fields, "name", "query name string")?;
             // Field aliases: deps / dependencies → dependsOn.
             let depends_on = match get_aliased(fields, "dependsOn", &["deps", "dependencies"]) {
@@ -2149,7 +1733,7 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
             };
             Ok(Binding::Query { name, depends_on })
         }
-        "Filter" => {
+        Some(BindingTag::Filter) => {
             let name = req_string(path, fields, "name", "filter name string")?;
             // 0.2.0 — optional `defaultValue`, decoded through the slot's typed
             // static parser (mirroring `State.defaultValue`); a parse failure
@@ -2161,7 +1745,7 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                 default_value,
             })
         }
-        "Selection" => {
+        Some(BindingTag::Selection) => {
             let node_id = req_string(path, fields, "nodeId", "selection NodeId string")?;
             // 0.2.9 — optional `defaultValue` (the Filter.defaultValue
             // convention); 0.2.10 — optional `field` (the declarative
@@ -2178,7 +1762,7 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                 field,
             })
         }
-        "State" => {
+        Some(BindingTag::State) => {
             let key = req_string(path, fields, "key", "state key string")?;
             // Field aliases: initialValue / default → defaultValue.
             //
@@ -2221,7 +1805,7 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                 default_declared: parsed.is_some(),
             })
         }
-        "Computed" => Ok(Binding::Computed),
+        Some(BindingTag::Computed) => Ok(Binding::Computed),
         // Phase 765 — the host-furnished INSTANT is never on the wire. The
         // instant is already the wire-shaped string, so a decoded reader
         // receives it as-is (the sibling hosts' identity projection; this
@@ -2232,14 +1816,14 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
         // than a silent fallback to the default: a document that names a grain
         // the host cannot honour must not be rendered at a neighbouring
         // resolution in silence.
-        "Now" => {
+        Some(BindingTag::Now) => {
             let grain = match get(fields, "grain") {
                 None => None,
                 Some(v) => Some(decode_time_grain(&format!("{path}.grain"), v)?),
             };
             Ok(Binding::Now { grain })
         }
-        "I18n" => {
+        Some(BindingTag::I18n) => {
             let key = req_string(path, fields, "key", "i18n key string")?;
             let args = match get(fields, "args") {
                 None => None,
@@ -2254,7 +1838,7 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
             };
             Ok(Binding::I18n { key, args })
         }
-        "Local" => {
+        Some(BindingTag::Local) => {
             let initial_j = req(path, fields, "initialFrom", "Local InitialFrom Binding")?;
             let initial_from =
                 decode_binding_slot(&format!("{path}.initialFrom"), initial_j, slot)?;
@@ -2307,7 +1891,7 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                 on_commit,
             })
         }
-        "Format" => {
+        Some(BindingTag::Format) => {
             let source_j = req(path, fields, "source", "Binding<number> source object")?;
             let source = decode_binding(&format!("{path}.source"), source_j)?;
             let fmt_j = req(path, fields, "format", "Format DU object")?;
@@ -2320,7 +1904,7 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                 source: Box::new(source),
             })
         }
-        "Transform" => {
+        Some(BindingTag::Transform) => {
             let src_j = req(path, fields, "source", "Transform DataSource object")?;
             let pipe_j = req(path, fields, "pipeline", "Transform pipeline array")?;
             // Phase 815 — normalise the organic-demand source shapes (Static /
@@ -2521,7 +2105,7 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
         // The expression is the SAME `ColExpr` algebra a `Transform` pipeline
         // step carries, decoded by the same codec, so there is one algebra to
         // specify, certify and teach rather than two that drift apart.
-        "Expr" => {
+        Some(BindingTag::Expr) => {
             let expr_j = req(path, fields, "expr", "ColExpr object")?;
             let expr_path = format!("{path}.expr");
             let expr = decode_col_expr(expr_j)
@@ -2575,7 +2159,7 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
             }
             Ok(Binding::Expr { expr, params })
         }
-        "Invoke" => {
+        Some(BindingTag::Invoke) => {
             let capability_id = req_string(path, fields, "capabilityId", "capability id string")?;
             let args_j = req(path, fields, "args", "invoke args array")?;
             let args = decode_invoke_args(&format!("{path}.args"), args_j)?;
@@ -2584,24 +2168,11 @@ fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DResult<Bindin
                 args,
             })
         }
-        // Lenient AI-ingest: the `TextSource.Bound` wrapper convention
-        // transferred to a bare-Binding slot — `{"$type":"Bound","binding":X}`
-        // carries exactly one payload field, so the unwrap is one-to-one.
-        // Decode-only; the canonical encoder never wraps bare-Binding slots.
-        "Bound" => {
-            let inner = req(path, fields, "binding", "the wrapped Binding object")?;
-            decode_binding_slot(&format!("{path}.binding"), inner, slot)
-        }
-        other => Err(unknown_du_case(path, other, BINDING_TAGS)),
+        None => Err(unknown_du_case(path, tag, BINDING_TAGS)),
     }
 }
 
-fn req_binding(path: &str, fields: &Fields, key: &str, expected: &str) -> DResult<Binding> {
-    let v = req(path, fields, key, expected)?;
-    decode_binding(&format!("{path}.{key}"), v)
-}
-
-fn req_binding_slot(
+pub(super) fn req_binding_slot(
     path: &str,
     fields: &Fields,
     key: &str,
@@ -2612,7 +2183,7 @@ fn req_binding_slot(
     decode_binding_slot(&format!("{path}.{key}"), v, slot)
 }
 
-fn opt_binding_slot(
+pub(super) fn opt_binding_slot(
     path: &str,
     fields: &Fields,
     key: &str,
@@ -2628,260 +2199,14 @@ fn opt_binding_slot(
     }
 }
 
-// ─── TextSource ──────────────────────────────────────────────────────────────
-
-fn decode_text_source(path: &str, j: &JVal) -> DResult<TextSource> {
-    // Lenient AI-ingest shorthand (§16, normative for every conformant host): a
-    // bare JSON string decodes as `TextSource.Literal` and re-encodes verbose.
-    if let JVal::Str(s) = j {
-        return Ok(TextSource::Literal(s.clone()));
-    }
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "Literal" => Ok(TextSource::Literal(req_string(
-            path,
-            fields,
-            "text",
-            "literal text string",
-        )?)),
-        "Bound" => {
-            let v = req(path, fields, "binding", "Binding<string> object")?;
-            let binding = decode_binding(&format!("{path}.binding"), v)?;
-            Ok(TextSource::Bound(Box::new(binding)))
-        }
-        "I18n" => {
-            let key = req_string(path, fields, "key", "i18n key string")?;
-            let args = match get(fields, "args") {
-                None => vec![],
-                Some(v) => decode_i18n_args(&format!("{path}.args"), v)?,
-            };
-            Ok(TextSource::I18n { key, args })
-        }
-        other => Err(unknown_du_case(path, other, TEXT_SOURCE_TAGS)),
-    }
-}
-
-fn req_text_source(path: &str, fields: &Fields, key: &str, expected: &str) -> DResult<TextSource> {
+pub(super) fn req_text_source(
+    path: &str,
+    fields: &Fields,
+    key: &str,
+    expected: &str,
+) -> DResult<TextSource> {
     let v = req(path, fields, key, expected)?;
     decode_text_source(&format!("{path}.{key}"), v)
-}
-
-fn opt_text_source(path: &str, fields: &Fields, key: &str) -> DResult<Option<TextSource>> {
-    match get(fields, key) {
-        None => Ok(None),
-        Some(v) => Ok(Some(decode_text_source(&format!("{path}.{key}"), v)?)),
-    }
-}
-
-// ─── Action ──────────────────────────────────────────────────────────────────
-
-fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "Dispatch" => Ok(Action::Dispatch),
-        "Call" => {
-            // Field alias: url → endpoint.
-            let endpoint =
-                req_string_aliased(path, fields, "endpoint", &["url"], "ApiEndpoint string")?;
-            let into = match get(fields, "into") {
-                None => None,
-                Some(v) => {
-                    let into_path = format!("{path}.into");
-                    let io = as_obj(&into_path, v)?;
-                    match disc(&into_path, io)? {
-                        "State" => Some(CallResultTarget::State {
-                            key: req_string(&into_path, io, "key", "state key string")?,
-                        }),
-                        "Query" => Some(CallResultTarget::Query {
-                            name: req_string(&into_path, io, "name", "query name string")?,
-                        }),
-                        other => {
-                            return Err(unknown_du_case(
-                                &into_path,
-                                other,
-                                CALL_RESULT_TARGET_TAGS,
-                            ));
-                        }
-                    }
-                }
-            };
-            Ok(Action::Call {
-                endpoint,
-                into,
-                on_result: opt_closure(fields, "onResult"),
-            })
-        }
-        "Notify" => {
-            let channel = req_string(path, fields, "channel", "notification channel string")?;
-            let payload_j = req(path, fields, "payload", "JsonValue payload")?;
-            let payload = decode_jval(&format!("{path}.payload"), payload_j)?;
-            Ok(Action::Notify { channel, payload })
-        }
-        "Navigate" => Ok(Action::Navigate {
-            // Field aliases: href (the dominant web name) / url / to → route.
-            //
-            // Phase 1536 — the route is a `TextSource`, so a tree can name a
-            // destination it computes from what the reader is looking at. The
-            // bare JSON string IS `Literal`'s canonical form, so every document
-            // written before the widening decodes exactly as it did — aliases
-            // included, since they resolve before the value is decoded.
-            route: req_text_source_aliased(
-                path,
-                fields,
-                "route",
-                &["href", "url", "to"],
-                "route TextSource",
-            )?,
-            // Omitted at `Self`, so absence is the pre-1536 behaviour.
-            target: match get(fields, "target") {
-                None => defaults::ACTION_NAVIGATE_TARGET,
-                Some(v) => decode_navigate_target(&format!("{path}.target"), v)?,
-            },
-        }),
-        "SetState" => {
-            // Phase 818 — `value` (a literal JSON value, written verbatim) XOR
-            // `valueFrom` (a Binding evaluated at dispatch time inside the
-            // existing gate). Exactly one must be present; both / neither
-            // error didactically naming both fields.
-            let key = req_string(path, fields, "key", "state key string")?;
-            let value_j = get(fields, "value");
-            let from_j = get(fields, "valueFrom");
-            match (value_j, from_j) {
-                (Some(_), Some(_)) => Err(make_error(
-                    DecodeErrorCode::WrongType,
-                    format!("{path}.valueFrom"),
-                    "SetState carries both 'value' and 'valueFrom' — exactly one is allowed: 'value' is a literal JSON value written verbatim; 'valueFrom' derives the written value from a Binding at dispatch time; remove one".to_string(),
-                    None,
-                )),
-                (None, None) => Err(make_error(
-                    DecodeErrorCode::MissingField,
-                    format!("{path}.value"),
-                    "missing required field 'value' — provide 'value' (a literal JSON value) or 'valueFrom' (a Binding evaluated at dispatch time)".to_string(),
-                    None,
-                )),
-                (Some(v), None) => Ok(Action::SetState {
-                    key,
-                    value: Some(decode_jval(&format!("{path}.value"), v)?),
-                    value_from: None,
-                }),
-                (None, Some(b)) => Ok(Action::SetState {
-                    key,
-                    value: None,
-                    value_from: Some(Box::new(decode_binding(
-                        &format!("{path}.valueFrom"),
-                        b,
-                    )?)),
-                }),
-            }
-        }
-        "AiTool" => {
-            let tool_name = req_string(path, fields, "toolName", "AI tool name string")?;
-            let args_j = req(path, fields, "args", "JsonValue args")?;
-            let args = decode_jval(&format!("{path}.args"), args_j)?;
-            Ok(Action::AiTool { tool_name, args })
-        }
-        "Chain" => {
-            let ops_j = req(path, fields, "ops", "Action list (Chain)")?;
-            let items = as_arr(&format!("{path}.ops"), ops_j)?;
-            let mut actions = Vec::with_capacity(items.len());
-            for (i, item) in items.iter().enumerate() {
-                actions.push(decode_action(&format!("{path}.ops[{i}]"), item)?);
-            }
-            Ok(Action::Chain(actions))
-        }
-        "CommitLocal" => Ok(Action::CommitLocal {
-            node_id: req_string(path, fields, "nodeId", "Local-bound input NodeId string")?,
-        }),
-        // Phase 1126 — the payload is a `TextSource`; the bare JSON string IS
-        // `Literal`'s canonical form, so the explicit `{"$type":"Literal",…}`
-        // envelope normalises down to it here as at every other text slot
-        // (§16). Never coerced from a non-text JSON value: a host that read the
-        // widening as "this member is now open" would put a JSON literal on the
-        // reader's clipboard, which the reader later pastes with authority.
-        "WriteToClipboard" => Ok(Action::WriteToClipboard {
-            text: req_text_source(path, fields, "text", "clipboard payload TextSource")?,
-        }),
-        // Phase 1124 — the payload-free print, and the ONE `Action` arm strict
-        // about unrecognised members. Everywhere else in this format an unknown
-        // member is one the reading host has not learned yet, and dropping it is
-        // the forward-compatible answer; here there is nothing to learn — page
-        // range, size, margins and copies are the host's page setup and the
-        // reader's dialogue — so accepting `{"$type":"Print","pageRange":"1-3"}`
-        // would leave the emitter believing it had constrained a printing it had
-        // not, with no error anywhere saying otherwise. The refusal names the
-        // offending member's own path, taking the FIRST in sorted order so which
-        // member is named is deterministic.
-        "Print" => {
-            let mut extras: Vec<&str> = fields
-                .iter()
-                .map(|(k, _)| k.as_str())
-                .filter(|k| *k != "$type")
-                .collect();
-            if !extras.is_empty() {
-                extras.sort_unstable();
-                return Err(wrong_type(
-                    &format!("{path}.{}", extras[0]),
-                    "no member beside $type — Print takes no payload",
-                ));
-            }
-            Ok(Action::Print)
-        }
-        // Phase 1537 — ask, then act. The DEPTH-ONE REFUSAL is the substance of
-        // this arm: a `Confirm` reachable from either continuation is refused,
-        // and the check walks the DECODED continuation rather than its immediate
-        // `$type`, so a nested confirm inside a `Chain` is caught by the same
-        // line that catches a bare one. A dialogue that answers a dialogue is a
-        // modal stack the reader cannot escape, and it says nothing one question
-        // does not.
-        //
-        // `WRONG_TYPE` follows the `SetState` value/valueFrom and
-        // `Print`-with-payload precedents: a decoder POLICY refusal reuses it
-        // rather than minting a code every host in the roster would owe an
-        // adoption for.
-        "Confirm" => {
-            let prompt = req_text_source(path, fields, "prompt", "confirmation prompt TextSource")?;
-            let on_confirm_j = req(path, fields, "onConfirm", "Action (onConfirm)")?;
-            let on_confirm_path = format!("{path}.onConfirm");
-            let on_confirm = decode_action(&on_confirm_path, on_confirm_j)?;
-            refuse_nested_confirm(&on_confirm, &on_confirm_path)?;
-            let on_cancel = match get(fields, "onCancel") {
-                None => None,
-                Some(v) => {
-                    let on_cancel_path = format!("{path}.onCancel");
-                    let action = decode_action(&on_cancel_path, v)?;
-                    refuse_nested_confirm(&action, &on_cancel_path)?;
-                    Some(Box::new(action))
-                }
-            };
-            Ok(Action::Confirm {
-                prompt,
-                on_confirm: Box::new(on_confirm),
-                on_cancel,
-            })
-        }
-        // Phase 1537 — a bare node id, the `CommitLocal` shape above. It
-        // addresses a node in THIS document, so there is nothing for a binding
-        // to compute and no `TextSource` here.
-        "Focus" => Ok(Action::Focus {
-            node_id: req_string(path, fields, "nodeId", "focus target NodeId string")?,
-        }),
-        "ReadFileBody" => {
-            let file_ref = req_string(path, fields, "fileRef", "FileRef id string")?;
-            let enc_j = req(path, fields, "encoding", "FileReadEncoding")?;
-            let encoding = decode_file_read_encoding(&format!("{path}.encoding"), enc_j)?;
-            Ok(Action::ReadFileBody { file_ref, encoding })
-        }
-        "Invoke" => {
-            let capability_id = req_string(path, fields, "capabilityId", "capability id string")?;
-            let args_j = req(path, fields, "args", "invoke args array")?;
-            let args = decode_invoke_args(&format!("{path}.args"), args_j)?;
-            Ok(Action::Invoke {
-                capability_id,
-                args,
-            })
-        }
-        other => Err(unknown_du_case(path, other, ACTION_TAGS)),
-    }
 }
 
 /// Phase 1537 — fail when a `Confirm` is reachable from `action`. Confirmation
@@ -2892,7 +2217,7 @@ fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
 /// It walks the DECODED action rather than raw JSON, and descends `Chain`,
 /// because a chain is otherwise a hiding place — a check written against the
 /// continuation's immediate `$type` passes a nested confirm one level down.
-fn refuse_nested_confirm(action: &Action, path: &str) -> DResult<()> {
+pub(super) fn refuse_nested_confirm(action: &Action, path: &str) -> DResult<()> {
     match action {
         Action::Confirm { .. } => Err(wrong_type(
             path,
@@ -2909,658 +2234,7 @@ fn refuse_nested_confirm(action: &Action, path: &str) -> DResult<()> {
     }
 }
 
-fn req_action(path: &str, fields: &Fields, key: &str, expected: &str) -> DResult<Action> {
-    let v = req(path, fields, key, expected)?;
-    decode_action(&format!("{path}.{key}"), v)
-}
-
-// ─── Display specs ───────────────────────────────────────────────────────────
-
-fn decode_metric_spec(path: &str, j: &JVal) -> DResult<MetricSpec> {
-    let fields = as_obj(path, j)?;
-    let label = req_text_source(path, fields, "label", "Metric label TextSource")?;
-    // 0.2.0 rename law — scalar displayed value ⇒ `value`; the retired
-    // `source` spelling is a hard error (clean break), the web-prior `data`
-    // alias remains (§3.6).
-    let value = req_binding_slot_aliased(
-        path,
-        fields,
-        "value",
-        &["data"],
-        "Metric value binding",
-        StaticSlot::Float,
-    )?;
-    // Phase 460 — the stylistic fields are omitted-when-default on the wire.
-    let format = opt_cell_format_default(path, fields, "format", defaults::METRIC_FORMAT)?;
-    let tone = opt_tone_default(path, fields, "tone", defaults::METRIC_TONE)?;
-    let weight = opt_weight_default(path, fields, "weight", defaults::METRIC_WEIGHT)?;
-    let emphasis = opt_emphasis_default(path, fields, "emphasis", defaults::METRIC_EMPHASIS)?;
-    let trend = opt_binding_slot(path, fields, "trend", StaticSlot::Float)?;
-    let trend_format = match get(fields, "trendFormat") {
-        None => None,
-        Some(v) => Some(decode_cell_format(&format!("{path}.trendFormat"), v)?),
-    };
-    // Phase 867 — the polarity declaration (§3.6.1). Decoded UNCONDITIONALLY,
-    // not gated on `trend` being present: the slot is inert without a trend but
-    // it is legal, and refusing it would reject a document the format admits.
-    let trend_polarity = opt_trend_polarity_default(
-        path,
-        fields,
-        "trendPolarity",
-        defaults::METRIC_TREND_POLARITY,
-    )?;
-    let icon = opt_string(path, fields, "icon")?;
-    let subtext = opt_text_source(path, fields, "subtext")?;
-    Ok(MetricSpec {
-        label,
-        value,
-        format,
-        tone,
-        weight,
-        emphasis,
-        trend,
-        trend_format,
-        trend_polarity,
-        icon,
-        subtext,
-    })
-}
-
-fn decode_heading_spec(path: &str, j: &JVal) -> DResult<HeadingSpec> {
-    let fields = as_obj(path, j)?;
-    let level = req_int(path, fields, "level", "heading level integer")?;
-    let text = req_text_source(path, fields, "text", "heading TextSource")?;
-    let variant_j = req(path, fields, "variant", "HeadingVariant")?;
-    let variant = decode_heading_variant(&format!("{path}.variant"), variant_j)?;
-    Ok(HeadingSpec {
-        level,
-        text,
-        variant,
-    })
-}
-
-fn decode_label_value_row_spec(path: &str, j: &JVal) -> DResult<LabelValueRowSpec> {
-    let fields = as_obj(path, j)?;
-    let label = req_text_source(path, fields, "label", "row TextSource label")?;
-    // 0.2.0 rename law — scalar displayed value ⇒ `value` (`data` alias kept).
-    let value = req_binding_slot_aliased(
-        path,
-        fields,
-        "value",
-        &["data"],
-        "row Binding<float> value",
-        StaticSlot::Float,
-    )?;
-    // Phase 460 — `format` omitted-when-default. The `emphasis` here is the
-    // behavioural bool (not the `Emphasis` style DU): 0.2.2 omitted-when-false,
-    // cross-vocab coerced when a model writes the enum spelling.
-    let format = opt_cell_format_default(path, fields, "format", defaults::LABEL_VALUE_ROW_FORMAT)?;
-    let emphasis = match get(fields, "emphasis") {
-        None => defaults::LABEL_VALUE_ROW_EMPHASIS,
-        Some(v) => decode_emphasis_flag(&format!("{path}.emphasis"), v)?,
-    };
-    let help = opt_text_source(path, fields, "help")?;
-    Ok(LabelValueRowSpec {
-        label,
-        value,
-        format,
-        emphasis,
-        help,
-    })
-}
-
-fn decode_fact_spec(path: &str, j: &JVal) -> DResult<FactSpec> {
-    let fields = as_obj(path, j)?;
-    let label = req_text_source(path, fields, "label", "Fact label TextSource")?;
-    let value = req_text_source(path, fields, "value", "Fact value TextSource")?;
-    let emphasis = match get(fields, "emphasis") {
-        None => defaults::FACT_EMPHASIS,
-        Some(v) => decode_emphasis_flag(&format!("{path}.emphasis"), v)?,
-    };
-    let tone = opt_tone_default(path, fields, "tone", defaults::FACT_TONE)?;
-    let help = opt_text_source(path, fields, "help")?;
-    let icon = opt_string(path, fields, "icon")?;
-    Ok(FactSpec {
-        label,
-        value,
-        emphasis,
-        tone,
-        help,
-        icon,
-    })
-}
-
-fn decode_markdown_spec(path: &str, j: &JVal) -> DResult<MarkdownSpec> {
-    let fields = as_obj(path, j)?;
-    let text = req_text_source(path, fields, "text", "markdown TextSource")?;
-    Ok(MarkdownSpec { text })
-}
-
-fn decode_badge_spec(path: &str, j: &JVal) -> DResult<BadgeSpec> {
-    let fields = as_obj(path, j)?;
-    let label = req_text_source(path, fields, "label", "Badge label TextSource")?;
-    let variant_j = req(path, fields, "variant", "BadgeVariant")?;
-    let variant = decode_badge_variant(&format!("{path}.variant"), variant_j)?;
-    Ok(BadgeSpec { label, variant })
-}
-
-fn decode_link_spec(path: &str, j: &JVal) -> DResult<LinkSpec> {
-    let fields = as_obj(path, j)?;
-    let href = req_binding_slot(
-        path,
-        fields,
-        "href",
-        "link Binding<string> Href",
-        StaticSlot::Str,
-    )?;
-    let label = req_text_source(path, fields, "label", "link label TextSource")?;
-    let download = req_bool(path, fields, "download", "download bool")?;
-    let rel = opt_string(path, fields, "rel")?;
-    let target = opt_string(path, fields, "target")?;
-    // Optional closed enumeration — an unknown case is UNKNOWN_DU_CASE at
-    // `$.kind.protection`.
-    let protection = match get(fields, "protection") {
-        None => None,
-        Some(v) => Some(decode_link_protection(&format!("{path}.protection"), v)?),
-    };
-    Ok(LinkSpec {
-        href,
-        label,
-        download,
-        rel,
-        target,
-        protection,
-    })
-}
-
-/// Phase 1080 — one `srcSet` candidate (§3.6.4). `width` is the intrinsic pixel
-/// width of this rendition and MUST be a POSITIVE INTEGER; zero and negative
-/// values are a `WRONG_TYPE` at `<path>.width`, which is what the published
-/// schema's `minimum: 1` says too, so the two expressions of the contract
-/// agree. Zero is refused as firmly as a negative and that is the interesting
-/// half: a `0w` descriptor is not a small image, it is a candidate a client can
-/// never select, so admitting it would let the wire carry a rendition no host
-/// can use.
-fn decode_src_set_entry(path: &str, j: &JVal) -> DResult<SrcSetEntry> {
-    let fields = as_obj(path, j)?;
-    let src = req_binding_slot(
-        path,
-        fields,
-        "src",
-        "srcSet entry Binding<string> src",
-        StaticSlot::Str,
-    )?;
-    let width_j = req(path, fields, "width", "positive intrinsic pixel width")?;
-    match width_j {
-        JVal::Num(n) if *n > 0.0 && n.fract() == 0.0 => Ok(SrcSetEntry {
-            src,
-            width: *n as i64,
-        }),
-        _ => Err(wrong_type(
-            &format!("{path}.width"),
-            "JSON number (positive integer pixel width)",
-        )),
-    }
-}
-
-fn decode_image_spec(path: &str, j: &JVal) -> DResult<ImageSpec> {
-    let fields = as_obj(path, j)?;
-    let alt = req_text_source(path, fields, "alt", "Image alt TextSource")?;
-    let src = req_binding_slot(
-        path,
-        fields,
-        "src",
-        "Image Binding<string> Src",
-        StaticSlot::Str,
-    )?;
-    let variant_j = req(path, fields, "variant", "ImageVariant")?;
-    let variant = decode_image_variant(&format!("{path}.variant"), variant_j)?;
-    // Phase 1077 — omitted-when-default on both boundaries; an absent slot
-    // restores today's behaviour, which is what keeps every pre-phase document
-    // decoding unchanged and re-encoding to the bytes it already had.
-    let fit = match get(fields, "fit") {
-        None => defaults::IMAGE_FIT,
-        Some(v) => decode_image_fit(&format!("{path}.fit"), v)?,
-    };
-    let aspect_ratio = match get(fields, "aspectRatio") {
-        None => defaults::IMAGE_ASPECT_RATIO,
-        Some(v) => decode_image_aspect(&format!("{path}.aspectRatio"), v)?,
-    };
-    let loading = match get(fields, "loading") {
-        None => defaults::IMAGE_LOADING,
-        Some(v) => decode_image_loading(&format!("{path}.loading"), v)?,
-    };
-    // Phase 1078 — `caption` is optional CONTENT, so absent means ABSENT
-    // (rule 4), not absent-means-a-default. `opt_text_source` is the same
-    // decoder `alt` reaches through, which is what lets the §16 bare-string
-    // shorthand and every `TextSource` case reach the slot with no
-    // caption-specific rule.
-    let caption = opt_text_source(path, fields, "caption")?;
-    // Phase 1080 — the MISSING-LIST-FIELD decode class, and the one branch in
-    // this decoder most worth reading. An ABSENT `srcSet` IS the empty list:
-    // not `None`, not `null`, not an error. A PRESENT `null` is refused
-    // (`WRONG_TYPE` at `$.kind.srcSet`) rather than read as absence — absence
-    // already has a spelling, and admitting a second lets two conformant hosts
-    // emit different canonical bytes for the same document. The authored ORDER
-    // is preserved: a JSON array is ordered data, canonicalisation sorts object
-    // KEYS only, and a codec that re-sorted here would emit bytes it did not
-    // decode.
-    let src_set = match get(fields, "srcSet") {
-        None => Vec::new(),
-        Some(v) => {
-            let arr = as_arr(&format!("{path}.srcSet"), v)?;
-            let mut entries = Vec::with_capacity(arr.len());
-            for (i, entry) in arr.iter().enumerate() {
-                entries.push(decode_src_set_entry(&format!("{path}.srcSet[{i}]"), entry)?);
-            }
-            entries
-        }
-    };
-    // Phase 1079 — an ordinary omit-at-default bool: absent is `false`, and a
-    // present non-boolean is a `WRONG_TYPE` rather than a truthiness coercion.
-    // `"expandable":"true"` is an emitter guessing, and a decoder that guessed
-    // back would have to rule on `"false"` and `""` as well — at which point
-    // two conformant hosts can disagree about whether the document declares an
-    // affordance at all.
-    let expandable = opt_bool(path, fields, "expandable")?.unwrap_or(defaults::IMAGE_EXPANDABLE);
-    Ok(ImageSpec {
-        alt,
-        src,
-        variant,
-        fit,
-        aspect_ratio,
-        loading,
-        caption,
-        src_set,
-        expandable,
-    })
-}
-
-/// Phase 1076 — which media surface this is (§3.6.6). A `$type`-DISCRIMINATED
-/// union, so an unknown case reports at `<path>.$type` (the `Binding` /
-/// `TextSource` position) rather than at the bare slot, and the case set is
-/// CLOSED at `Video | Audio` — admitting a third surface later is an addition,
-/// never a re-meaning of shipped bytes.
-///
-/// `Audio` reads no field and refuses none either. What matters is that there
-/// is no autoplay slot to read: `{"$type":"Audio","autoplay":true}` decodes to
-/// an audio surface that does not autoplay, because the value has nowhere to
-/// land.
-fn decode_media_kind(path: &str, j: &JVal) -> DResult<MediaKind> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "Video" => {
-            // Omit-at-default bool, refused rather than coerced when present
-            // and non-boolean — the `Image.expandable` ruling, on the slot
-            // where getting it wrong starts playing a video the document says
-            // not to.
-            let autoplay =
-                opt_bool(path, fields, "autoplay")?.unwrap_or(defaults::MEDIA_KIND_VIDEO_AUTOPLAY);
-            let poster = opt_binding_slot(path, fields, "poster", StaticSlot::Str)?;
-            Ok(MediaKind::Video { autoplay, poster })
-        }
-        "Audio" => Ok(MediaKind::Audio),
-        other => Err(unknown_du_case(path, other, MEDIA_KIND_TAGS)),
-    }
-}
-
-/// Phase 1076 — the media spec (§3.6.6). `label` is REQUIRED, which is the a11y
-/// floor expressed where a decoder can enforce it: a transport has no
-/// decorative case, and there is no value to default to that would not be a
-/// fabricated name for someone else's recording. `controls` is the second
-/// omit-at-TRUE slot in the vocabulary, so an absent key is the ACCESSIBLE
-/// value and a document only spends a key to take the transport away.
-fn decode_media_spec(path: &str, j: &JVal) -> DResult<MediaSpec> {
-    let fields = as_obj(path, j)?;
-    let src = req_binding_slot(
-        path,
-        fields,
-        "src",
-        "Media Binding<string> Src",
-        StaticSlot::Str,
-    )?;
-    let label = req_text_source(path, fields, "label", "Media accessible label TextSource")?;
-    let kind_j = req(path, fields, "kind", "MediaKind (Video | Audio)")?;
-    let kind = decode_media_kind(&format!("{path}.kind"), kind_j)?;
-    let controls = opt_bool(path, fields, "controls")?.unwrap_or(defaults::MEDIA_CONTROLS);
-    let r#loop = opt_bool(path, fields, "loop")?.unwrap_or(defaults::MEDIA_LOOP);
-    // Phase 1110 - the MISSING-LIST-FIELD class again (`srcSet`'s rule, one kind
-    // over): an ABSENT `tracks` IS the empty list, never `None` and never null.
-    // A PRESENT `null` goes through `as_arr` and is refused, because absence
-    // already has a spelling and admitting a second lets two conformant hosts
-    // emit different canonical bytes for the same document. The AUTHORED order
-    // is preserved here and at render - a reader picks a track from a menu the
-    // user agent builds in document order, so sorting it would be rewriting
-    // somebody else's menu.
-    let tracks = match get(fields, "tracks") {
-        None => Vec::new(),
-        Some(v) => {
-            let arr = as_arr(&format!("{path}.tracks"), v)?;
-            let mut out = Vec::with_capacity(arr.len());
-            for (i, entry) in arr.iter().enumerate() {
-                out.push(decode_track_entry(&format!("{path}.tracks[{i}]"), entry)?);
-            }
-            out
-        }
-    };
-    // An ordinary optional: absent means the document offers no transcript,
-    // which is a different statement from offering an empty one.
-    let transcript = opt_text_source(path, fields, "transcript")?;
-    Ok(MediaSpec {
-        src,
-        label,
-        controls,
-        r#loop,
-        kind,
-        tracks,
-        transcript,
-    })
-}
-
-/// Phase 1110 - one `TrackEntry` (WIRE_FORMAT.md 3.6.6), the strictest record on
-/// the wire: four of five members REQUIRED.
-///
-/// `srcLang` is required on EVERY kind, where HTML makes it mandatory only on a
-/// subtitles track - there is no value to default to that would not be an
-/// invented claim about someone else's recording. The path carries the array
-/// index the caller supplied, so a document with four tracks names the one at
-/// fault.
-///
-/// `default` is the one omitted-at-`false` slot and is NOT truthiness-coerced: a
-/// stringified boolean is `WRONG_TYPE`, at the position a host decoding array
-/// elements with a looser walker than its records would get wrong.
-fn decode_track_entry(path: &str, j: &JVal) -> DResult<TrackEntry> {
-    let fields = as_obj(path, j)?;
-    let kind_j = req(path, fields, "kind", "TrackKind")?;
-    let kind = decode_track_kind(&format!("{path}.kind"), kind_j)?;
-    let src = req_binding_slot(
-        path,
-        fields,
-        "src",
-        "TrackEntry Binding<string> Src",
-        StaticSlot::Str,
-    )?;
-    let src_lang = req_string(path, fields, "srcLang", "TrackEntry srcLang string")?;
-    let label = req_text_source(path, fields, "label", "TrackEntry label TextSource")?;
-    let default = opt_bool(path, fields, "default")?.unwrap_or(defaults::TRACK_ENTRY_DEFAULT);
-    Ok(TrackEntry {
-        kind,
-        src,
-        src_lang,
-        label,
-        default,
-    })
-}
-
-/// Phase 1111 - the sandboxed third-party embed (WIRE_FORMAT.md 3.6.8).
-///
-/// `title` is REQUIRED and refused when absent rather than defaulted: an
-/// invented title is a claim about somebody else's document. `permissions` is
-/// the empty list when absent, and empty means TOTAL DENIAL - so the
-/// wire-cheapest document is also the most locked-down one.
-fn decode_embed_spec(path: &str, j: &JVal) -> DResult<EmbedSpec> {
-    let fields = as_obj(path, j)?;
-    let src = req_binding_slot(
-        path,
-        fields,
-        "src",
-        "Embed Binding<string> Src",
-        StaticSlot::Str,
-    )?;
-    let title = req_text_source(path, fields, "title", "Embed accessible title TextSource")?;
-    let aspect_ratio = match get(fields, "aspectRatio") {
-        None => defaults::EMBED_ASPECT_RATIO,
-        Some(v) => decode_image_aspect(&format!("{path}.aspectRatio"), v)?,
-    };
-    // An unrecognised permission is REFUSED, never dropped: dropping would turn
-    // a document asking for something this vocabulary has no name for into a
-    // document asking for LESS, which reads as success.
-    let permissions = match get(fields, "permissions") {
-        None => Vec::new(),
-        Some(v) => {
-            let arr = as_arr(&format!("{path}.permissions"), v)?;
-            let mut out = Vec::with_capacity(arr.len());
-            for (i, entry) in arr.iter().enumerate() {
-                out.push(decode_embed_permission(
-                    &format!("{path}.permissions[{i}]"),
-                    entry,
-                )?);
-            }
-            out
-        }
-    };
-    Ok(EmbedSpec {
-        src,
-        title,
-        aspect_ratio,
-        permissions,
-    })
-}
-
-/// Phase 1120 - `Tree` (WIRE_FORMAT.md 3.6.12).
-fn decode_tree_spec(path: &str, j: &JVal) -> DResult<TreeSpec> {
-    let fields = as_obj(path, j)?;
-    let items_j = req(path, fields, "items", "Tree item list")?;
-    let arr = as_arr(&format!("{path}.items"), items_j)?;
-    let mut items = Vec::with_capacity(arr.len());
-    for (i, item) in arr.iter().enumerate() {
-        items.push(decode_tree_item(&format!("{path}.items[{i}]"), item)?);
-    }
-    Ok(TreeSpec {
-        items,
-        expanded_state_key: opt_string(path, fields, "expandedStateKey")?,
-        selection_state_key: opt_string(path, fields, "selectionStateKey")?,
-        on_select: opt_closure(fields, "onSelect"),
-    })
-}
-
-/// Phase 1120 - one `TreeItem`, the format's first SELF-REFERENTIAL shape.
-///
-/// Item nesting is bounded on its OWN axis (WIRE_FORMAT.md 21.5): a whole
-/// hierarchy lives inside one node, so it consumes no node depth at all, and the
-/// `TreeOp::Batch` precedent is what fixes the ceiling at `MAX_NODE_DEPTH`
-/// counted separately. The guard refuses on the way DOWN and pops in `Drop`,
-/// which is what keeps the counter correct on this decoder's many `?` returns.
-///
-/// The child walk is THIS function, not a looser inline one: a host whose child
-/// walker is looser than its root walker passes
-/// `reject-tree-item-missing-{id,label}` and fails
-/// `reject-tree-nested-item-missing-id` one level down.
-fn decode_tree_item(path: &str, j: &JVal) -> DResult<TreeItem> {
-    let _guard = crate::limits::TreeItemGuard::enter().map_err(|b| limit_error(path, b))?;
-
-    let fields = as_obj(path, j)?;
-    let id = req_string(path, fields, "id", "TreeItem id string")?;
-    let label = req_text_source(path, fields, "label", "TreeItem label TextSource")?;
-    let children = match get(fields, "children") {
-        None => Vec::new(),
-        Some(v) => {
-            let arr = as_arr(&format!("{path}.children"), v)?;
-            let mut out = Vec::with_capacity(arr.len());
-            for (i, child) in arr.iter().enumerate() {
-                out.push(decode_tree_item(&format!("{path}.children[{i}]"), child)?);
-            }
-            out
-        }
-    };
-    let icon = opt_string(path, fields, "icon")?;
-    Ok(TreeItem {
-        id,
-        label,
-        children,
-        icon,
-    })
-}
-
-fn decode_list_spec(path: &str, j: &JVal) -> DResult<ListSpec> {
-    let fields = as_obj(path, j)?;
-    let items_j = req(path, fields, "items", "List items TextSource array")?;
-    let arr = as_arr(&format!("{path}.items"), items_j)?;
-    let mut items = Vec::with_capacity(arr.len());
-    for (i, item) in arr.iter().enumerate() {
-        items.push(decode_text_source(&format!("{path}.items[{i}]"), item)?);
-    }
-    let ordered = req_bool(path, fields, "ordered", "ordered bool")?;
-    Ok(ListSpec { items, ordered })
-}
-
-fn decode_toast_spec(path: &str, j: &JVal) -> DResult<ToastSpec> {
-    let fields = as_obj(path, j)?;
-    let message = req_text_source(path, fields, "message", "Toast message TextSource")?;
-    let tone = opt_tone_default(path, fields, "tone", defaults::TOAST_TONE)?;
-    let open = req_binding_slot(path, fields, "open", "Toast open binding", StaticSlot::Bool)?;
-    // 0.2.0 — omitted-when-TRUE (a toast is dismissable unless said otherwise;
-    // the one inverted default in §3.6's table).
-    let dismissable = opt_bool(path, fields, "dismissable")?.unwrap_or(defaults::TOAST_DISMISSABLE);
-    Ok(ToastSpec {
-        message,
-        tone,
-        open,
-        dismissable,
-    })
-}
-
-fn decode_code_block_spec(path: &str, j: &JVal) -> DResult<CodeBlockSpec> {
-    let fields = as_obj(path, j)?;
-    let code = req_string(path, fields, "code", "code-block code string")?;
-    let language = req_string(path, fields, "language", "code-block language string")?;
-    let line_numbers = req_bool(path, fields, "lineNumbers", "lineNumbers bool")?;
-    let copyable = req_bool(path, fields, "copyable", "copyable bool")?;
-    let lines_j = req(path, fields, "highlightLines", "highlightLines int array")?;
-    let arr = as_arr(&format!("{path}.highlightLines"), lines_j)?;
-    let mut highlight_lines = Vec::with_capacity(arr.len());
-    for (i, item) in arr.iter().enumerate() {
-        highlight_lines.push(as_int(&format!("{path}.highlightLines[{i}]"), item)?);
-    }
-    Ok(CodeBlockSpec {
-        code,
-        language,
-        line_numbers,
-        highlight_lines,
-        copyable,
-    })
-}
-
-fn decode_math_spec(path: &str, j: &JVal) -> DResult<MathSpec> {
-    let fields = as_obj(path, j)?;
-    let source = req_string(path, fields, "source", "math LaTeX source string")?;
-    let display_j = req(path, fields, "display", "MathDisplay")?;
-    let display = decode_math_display(&format!("{path}.display"), display_j)?;
-    Ok(MathSpec { source, display })
-}
-
-fn decode_sparkline_spec(path: &str, j: &JVal) -> DResult<SparklineSpec> {
-    let fields = as_obj(path, j)?;
-    // Field alias: data → source.
-    let source = req_binding_slot_aliased(
-        path,
-        fields,
-        "source",
-        &["data"],
-        "Sparkline Source binding",
-        StaticSlot::FloatSeq,
-    )?;
-    Ok(SparklineSpec { source })
-}
-
-// Phase 1666 — `Skeleton.rows` is bounded by §21.9.
-//
-// `req_int` decides FIRST, so §7.1's slot rule is untouched: a fractional,
-// non-finite or out-of-32-bit value is still a `WrongType` and never a limit
-// breach. The bound then refuses a value the slot CAN hold but the format will
-// not carry the work of — a renderer emits one placeholder row per count, so
-// `{"rows":100000000}` names 10^8 rendered rows in a handful of bytes. The two
-// codes answer different questions and the ORDER is what keeps them apart.
-//
-// Upper bound only, deliberately: a negative count is an authoring defect
-// (`FUARAN152` in the pre-emit family), not a resource breach.
-fn decode_skeleton_spec(path: &str, j: &JVal) -> DResult<SkeletonSpec> {
-    let fields = as_obj(path, j)?;
-    let rows = req_int(path, fields, "rows", "skeleton row count integer")?;
-    if rows > crate::limits::MAX_SKELETON_ROWS {
-        return Err(make_error(
-            DecodeErrorCode::LimitExceeded,
-            format!("{path}.rows"),
-            format!(
-                "skeleton rows {rows} exceeds the maximum of {} (WIRE_FORMAT 21.9)",
-                crate::limits::MAX_SKELETON_ROWS
-            ),
-            Some(format!(
-                "at most {} rows on one Skeleton",
-                crate::limits::MAX_SKELETON_ROWS
-            )),
-        ));
-    }
-    Ok(SkeletonSpec { rows })
-}
-
-// Phase 821 — the standalone icon-only display kind.
-fn decode_icon_spec(path: &str, j: &JVal) -> DResult<IconSpec> {
-    let fields = as_obj(path, j)?;
-    let icon = req_string(path, fields, "icon", "icon name string")?;
-    // `size` omitted-when-`Medium`; `tone` omitted-when-default (the
-    // Phase 460 discipline); `label` omitted-when-decorative.
-    let size = match get(fields, "size") {
-        None => defaults::ICON_SIZE,
-        Some(v) => decode_icon_size(&format!("{path}.size"), v)?,
-    };
-    let tone = opt_tone_default(path, fields, "tone", defaults::ICON_TONE)?;
-    let label = match get(fields, "label") {
-        None => None,
-        Some(v) => Some(as_str(&format!("{path}.label"), v)?.to_string()),
-    };
-    Ok(IconSpec {
-        icon,
-        size,
-        tone,
-        label,
-    })
-}
-
-fn decode_callout_spec(path: &str, j: &JVal) -> DResult<CalloutSpec> {
-    let fields = as_obj(path, j)?;
-    let body = req_text_source(path, fields, "body", "Callout body TextSource")?;
-    // 0.2.0 — omitted-when-default (false).
-    let dismissable =
-        opt_bool(path, fields, "dismissable")?.unwrap_or(defaults::CALLOUT_DISMISSABLE);
-    let tone = opt_tone_default(path, fields, "tone", defaults::CALLOUT_TONE)?;
-    // Field alias: title → heading (Callout is in the scoped title→heading set).
-    let heading = opt_text_source_aliased(path, fields, "heading", &["title"])?;
-    let icon = opt_string(path, fields, "icon")?;
-    Ok(CalloutSpec {
-        body,
-        dismissable,
-        tone,
-        heading,
-        icon,
-    })
-}
-
-fn decode_progress_spec(path: &str, j: &JVal) -> DResult<ProgressSpec> {
-    let fields = as_obj(path, j)?;
-    let fraction = req_binding_slot(
-        path,
-        fields,
-        "fraction",
-        "Progress fraction binding",
-        StaticSlot::Float,
-    )?;
-    // 0.2.0 — omitted-when-default (false).
-    let indeterminate =
-        opt_bool(path, fields, "indeterminate")?.unwrap_or(defaults::PROGRESS_INDETERMINATE);
-    let tone = opt_tone_default(path, fields, "tone", defaults::PROGRESS_TONE)?;
-    let label = opt_text_source(path, fields, "label")?;
-    let caveat = opt_text_source(path, fields, "caveat")?;
-    Ok(ProgressSpec {
-        fraction,
-        indeterminate,
-        tone,
-        label,
-        caveat,
-    })
-}
-
-// ─── Input specs ─────────────────────────────────────────────────────────────
+// ─── Controls (FormFieldKind, decoded in its auto-bind context) ───────────────
 
 /// Phase 596 — the auto-bind context for a control's ABSENT `value` slot. One
 /// rule across the whole control vocabulary: every control may omit `value`; a
@@ -3568,7 +2242,7 @@ fn decode_progress_spec(path: &str, j: &JVal) -> DResult<ProgressSpec> {
 /// auto-binds `$state.<field id>` with the slot's typed placeholder as the
 /// State default (0.2.1).
 #[derive(Clone, Copy)]
-enum ControlAutoBind<'a> {
+pub(super) enum ControlAutoBind<'a> {
     FilterChip(&'a str),
     FormFieldId(&'a str),
 }
@@ -3595,7 +2269,7 @@ impl ControlAutoBind<'_> {
 /// reference implementations and the `form-declarative-minimal` fixture:
 /// empty string / `0` / `false` / null-choice / `{min 0, max 0}` / ISO-empty
 /// date / ISO-empty `{from, to}` pair.
-mod control_value_defaults {
+pub(super) mod control_value_defaults {
     use super::*;
 
     pub fn text() -> StaticValue {
@@ -3653,7 +2327,7 @@ pub fn is_hex_colour(s: &str) -> bool {
 /// explicit member beside it must agree — a `$type` of `Time` carrying
 /// `variant: "Date"` is refused as ambiguous rather than resolved to either, the
 /// 0.28.0 column-member posture applied to a `$type`.
-fn temporal_variant(
+pub(super) fn temporal_variant(
     path: &str,
     fields: &Fields,
     tag: &str,
@@ -3678,7 +2352,7 @@ fn temporal_variant(
     }
 }
 
-fn decode_form_field_kind(
+pub(super) fn decode_form_field_kind(
     auto_bind: ControlAutoBind<'_>,
     path: &str,
     j: &JVal,
@@ -3697,26 +2371,33 @@ fn decode_form_field_kind(
         }
     };
     let tag = disc(path, fields)?;
-    match tag {
-        "Text" => Ok(FormFieldKind::Text {
+    // The Date/Time spellings name the temporal controls; `temporal_variant`
+    // reads which one was written.
+    let canonical = match tag {
+        "Date" | "Time" => "DateTime",
+        "DateRange" | "TimeRange" => "DateTimeRange",
+        t => t,
+    };
+    match FormFieldKindTag::of(canonical) {
+        Some(FormFieldKindTag::Text) => Ok(FormFieldKind::Text {
             value: value_or(StaticSlot::Str, control_value_defaults::text())?,
             on_change,
         }),
-        "Number" => Ok(FormFieldKind::Number {
+        Some(FormFieldKindTag::Number) => Ok(FormFieldKind::Number {
             value: value_or(StaticSlot::Float, control_value_defaults::number())?,
             on_change,
         }),
-        "Checkbox" => Ok(FormFieldKind::Checkbox {
+        Some(FormFieldKindTag::Checkbox) => Ok(FormFieldKind::Checkbox {
             value: value_or(StaticSlot::Bool, control_value_defaults::checkbox())?,
             on_change,
         }),
         // Phase 766 — the switch affordance: Checkbox's mechanics under a
         // distinct tag.
-        "Toggle" => Ok(FormFieldKind::Toggle {
+        Some(FormFieldKindTag::Toggle) => Ok(FormFieldKind::Toggle {
             value: value_or(StaticSlot::Bool, control_value_defaults::checkbox())?,
             on_change,
         }),
-        "Choice" => Ok(FormFieldKind::Choice {
+        Some(FormFieldKindTag::Choice) => Ok(FormFieldKind::Choice {
             options: req_binding_slot(
                 path,
                 fields,
@@ -3732,7 +2413,7 @@ fn decode_form_field_kind(
         // nothing else, so the auto-bind placeholder is `choice()`'s too.
         // `allowFreeText` is NOT truthiness-coerced - a lenient read would widen
         // the field on `"no"` and `"false"` alike.
-        "Combobox" => Ok(FormFieldKind::Combobox {
+        Some(FormFieldKindTag::Combobox) => Ok(FormFieldKind::Combobox {
             options: req_binding_slot(
                 path,
                 fields,
@@ -3748,7 +2429,7 @@ fn decode_form_field_kind(
         // 0.2.0 — the dual-thumb numeric range (absorbed FilterKind.RangeFilter).
         // The canonical Static pair rides as the BARE `{min, max}` object (no
         // `$type`) — accept it before the generic binding dispatch.
-        "Range" => Ok(FormFieldKind::Range {
+        Some(FormFieldKindTag::Range) => Ok(FormFieldKind::Range {
             value: match get(fields, "value") {
                 Some(JVal::Obj(pf))
                     if get(pf, "$type").is_none()
@@ -3767,14 +2448,14 @@ fn decode_form_field_kind(
             step: opt_float(path, fields, "step")?,
             on_change,
         }),
-        "RangedNumber" => Ok(FormFieldKind::RangedNumber {
+        Some(FormFieldKindTag::RangedNumber) => Ok(FormFieldKind::RangedNumber {
             value: value_or(StaticSlot::Float, control_value_defaults::number())?,
             min: opt_float(path, fields, "min")?,
             max: opt_float(path, fields, "max")?,
             step: opt_float(path, fields, "step")?,
             on_change,
         }),
-        "SegmentedChoice" => {
+        Some(FormFieldKindTag::SegmentedChoice) => {
             let options = req_binding_slot(
                 path,
                 fields,
@@ -3797,7 +2478,7 @@ fn decode_form_field_kind(
                 on_change,
             })
         }
-        "TextArea" => Ok(FormFieldKind::TextArea {
+        Some(FormFieldKindTag::TextArea) => Ok(FormFieldKind::TextArea {
             rows: req_int(path, fields, "rows", "textarea row count integer")?,
             value: value_or(StaticSlot::Str, control_value_defaults::text())?,
             on_change,
@@ -3808,7 +2489,7 @@ fn decode_form_field_kind(
         // `DateTime{variant:"Time"}` reached for by intent, so the alias SUPPLIES
         // the variant when absent and REFUSES a disagreeing one beside it. All
         // three re-encode canonical.
-        "DateTime" | "Date" | "Time" => {
+        Some(FormFieldKindTag::DateTime) => {
             let value = value_or(StaticSlot::Str, control_value_defaults::date_time())?;
             let variant = temporal_variant(path, fields, tag, "Time")?;
             Ok(FormFieldKind::DateTime {
@@ -3823,7 +2504,7 @@ fn decode_form_field_kind(
         // Phase 1811 — `DateTimeRange` is canonical; `DateRange` (pre-rename) and
         // `TimeRange` (invented, fixes `variant` to `Time`) are its §16 lenient
         // aliases on exactly the `DateTime` rule above.
-        "DateTimeRange" | "DateRange" | "TimeRange" => {
+        Some(FormFieldKindTag::DateTimeRange) => {
             // The canonical Static pair rides as the BARE `{from, to}` object (no
             // `$type`) — accept it before the generic binding dispatch, exactly as
             // `Range` does above. The `value_or` fallback is what carries BOTH
@@ -3863,7 +2544,7 @@ fn decode_form_field_kind(
         // `allowFreeText` rather than at `suggestions`, because the member that
         // was written is the one that names the impossible state — an absent
         // `suggestions` is the ordinary open token box.
-        "Tokens" => {
+        Some(FormFieldKindTag::Tokens) => {
             let suggestions = opt_binding_slot(path, fields, "suggestions", StaticSlot::Options)?;
             let allow_free_text = opt_bool(path, fields, "allowFreeText")?
                 .unwrap_or(defaults::FORM_FIELD_KIND_TOKENS_ALLOW_FREE_TEXT);
@@ -3887,7 +2568,7 @@ fn decode_form_field_kind(
         // corpus pins — the SCALE is refused here and the VALUE is not, because
         // a bound value is invisible to a decoder and a rule enforced only on
         // literals would be two rules wearing one name.
-        "Rating" => {
+        Some(FormFieldKindTag::Rating) => {
             let max = req_int(path, fields, "max", "rating scale integer")?;
             if max < 1 {
                 return Err(wrong_type(
@@ -3911,7 +2592,7 @@ fn decode_form_field_kind(
         // binding carries its text from outside the document, where a decoder
         // cannot see it. The same rule is owed by the pre-emit validator and by
         // the server-side submission floor.
-        "Color" => {
+        Some(FormFieldKindTag::Color) => {
             let value = value_or(StaticSlot::Str, control_value_defaults::color())?;
             if let Binding::Static {
                 value: StaticValue::Ast(JVal::Str(literal)),
@@ -3928,7 +2609,7 @@ fn decode_form_field_kind(
         }
         // The hint is DERIVED from the canonical vocabulary, never hand-typed —
         // the hand-typed form had already drifted (Phase 746).
-        other => Err(unknown_du_case(path, other, CANONICAL_FORM_FIELD_KINDS)),
+        None => Err(unknown_du_case(path, tag, CANONICAL_FORM_FIELD_KINDS)),
     }
 }
 
@@ -3936,7 +2617,7 @@ fn decode_form_field_kind(
 /// the grid's set is: tolerance of unknown keys is right for a field a future
 /// profile may add and wrong for a near miss of one that exists, because the tree
 /// then decodes and renders while constraining nothing.
-const FORM_FIELD_NEAR_MISSES: &[(&str, &str)] = &[
+pub(super) const FORM_FIELD_NEAR_MISSES: &[(&str, &str)] = &[
     ("validation", "rule"),
     ("constraints", "rule"),
     ("validate", "rule"),
@@ -3948,310 +2629,16 @@ const FORM_FIELD_NEAR_MISSES: &[(&str, &str)] = &[
 /// (Phase 1659 — this host and `fuaran-py` both said `form field`, and both
 /// moved). A near-missed rule slot does not merely go unread: the field
 /// still renders, and it constrains nothing at all.
-const FORM_FIELD_NEAR_MISS_CONSEQUENCE: &str = ", and the field would accept anything";
+pub(super) const FORM_FIELD_NEAR_MISS_CONSEQUENCE: &str = ", and the field would accept anything";
 
-fn decode_compare_rule(path: &str, j: &JVal) -> DResult<CompareRule> {
-    let fields = as_obj(path, j)?;
-    let op = decode_compare_op(&format!("{path}.op"), req(path, fields, "op", "CompareOp")?)?;
-    let against = req_binding(path, fields, "against", "against Binding")?;
-    Ok(CompareRule { op, against })
-}
-
-/// A field's declared constraint. Every slot is optional structurally, and two
-/// shapes are refused here as POLICY:
-///
-/// - a rule with every slot absent. A rule that constrains nothing is a defect,
-///   not a no-op: it decodes, validates and renders while declaring nothing,
-///   which is the fake-affordance shape the near-miss table also forecloses,
-///   arriving through an empty object instead of a wrong key. `message` alone does
-///   not rescue it — the message is the prose shown when some OTHER slot is unmet,
-///   so a message-only rule is the help-text failure wearing the new vocabulary's
-///   clothes.
-/// - `minLength` above `maxLength`. The ordered-pair rule applied to a length
-///   pair: an inverted bound admits no value at all, so the field can never be
-///   submitted and the form is dead on arrival.
-///
-/// Neither is a shape — both are relations BETWEEN slots — which is why they live
-/// here rather than in the structural layer.
-fn decode_field_rule(path: &str, j: &JVal) -> DResult<FieldRule> {
-    let fields = as_obj(path, j)?;
-    let format = match get(fields, "format") {
-        Some(v) => Some(decode_text_format(&format!("{path}.format"), v)?),
-        None => None,
-    };
-    let pattern = opt_string(path, fields, "pattern")?;
-    let min_length = opt_int(path, fields, "minLength")?;
-    let max_length = opt_int(path, fields, "maxLength")?;
-    let compare = match get(fields, "compare") {
-        Some(v) => Some(decode_compare_rule(&format!("{path}.compare"), v)?),
-        None => None,
-    };
-    let message = opt_text_source(path, fields, "message")?;
-
-    if format.is_none()
-        && pattern.is_none()
-        && min_length.is_none()
-        && max_length.is_none()
-        && compare.is_none()
-    {
-        return Err(make_error(
-            DecodeErrorCode::WrongType,
-            path.to_string(),
-            "a rule that constrains nothing is a defect, not a no-op — declare at least one of \
-             format / pattern / minLength / maxLength / compare, or omit 'rule' entirely"
-                .to_string(),
-            Some("FieldRule with at least one constraint slot".to_string()),
-        ));
-    }
-
-    if let (Some(lo), Some(hi)) = (min_length, max_length)
-        && lo > hi
-    {
-        return Err(make_error(
-            DecodeErrorCode::WrongType,
-            path.to_string(),
-            format!(
-                "minLength {lo} is above maxLength {hi} — an inverted length bound admits no value \
-                 at all, so the field could never be submitted"
-            ),
-            Some("minLength <= maxLength".to_string()),
-        ));
-    }
-
-    Ok(FieldRule {
-        format,
-        pattern,
-        min_length,
-        max_length,
-        compare,
-        message,
-    })
-}
-
-fn decode_form_field(path: &str, j: &JVal) -> DResult<FormField> {
-    let fields = as_obj(path, j)?;
-    // The near-miss check runs BEFORE the rule decode, so a field carrying both
-    // `validation` and a well-formed `rule` still names the ignored key.
-    //
-    // The vocabulary LABEL is `form`, not `form field` — Phase 1659. The reference
-    // hosts say "is not part of the form vocabulary" and this host said "the form
-    // field vocabulary": terser, not wrong, and invisible to every gate, because an
-    // op-side reject fixture pins the code and the path and never the prose. A
-    // didactic message that reads differently on two hosts sends two authors to two
-    // documents for one defect, which is the whole failure the corpus's
-    // message-parity contract exists to prevent one level up.
-    check_near_misses_in(
-        path,
-        fields,
-        FORM_FIELD_NEAR_MISSES,
-        "form",
-        FORM_FIELD_NEAR_MISS_CONSEQUENCE,
-    )?;
-    // Field alias: name → id. Id decodes first so the form context's
-    // auto-bind can use it (Phase 596).
-    let id = req_string_aliased(path, fields, "id", &["name"], "form field id string")?;
-    let kind_j = req(path, fields, "kind", "FormFieldKind")?;
-    let kind = decode_form_field_kind(
-        ControlAutoBind::FormFieldId(&id),
-        &format!("{path}.kind"),
-        kind_j,
-    )?;
-    let label = req_text_source(path, fields, "label", "field label TextSource")?;
-    let required = req_bool(path, fields, "required", "required bool")?;
-    let help = opt_text_source(path, fields, "help")?;
-    let rule = match get(fields, "rule") {
-        Some(v) => Some(decode_field_rule(&format!("{path}.rule"), v)?),
-        None => None,
-    };
-    Ok(FormField {
-        id,
-        kind,
-        label,
-        required,
-        help,
-        rule,
-    })
-}
-
-fn decode_form_spec(path: &str, j: &JVal) -> DResult<FormSpec> {
-    let obj = as_obj(path, j)?;
-    let fields_j = req(path, obj, "fields", "form field list")?;
-    let arr = as_arr(&format!("{path}.fields"), fields_j)?;
-    let mut form_fields = Vec::with_capacity(arr.len());
-    for (i, item) in arr.iter().enumerate() {
-        form_fields.push(decode_form_field(&format!("{path}.fields[{i}]"), item)?);
-    }
-    let on_submit = req_action(path, obj, "onSubmit", "onSubmit Action")?;
-    let submit_label = req_text_source(path, obj, "submitLabel", "submitLabel TextSource")?;
-    let disabled = opt_binding_slot(path, obj, "disabled", StaticSlot::Bool)?;
-    Ok(FormSpec {
-        fields: form_fields,
-        on_submit,
-        submit_label,
-        disabled,
-    })
-}
-
-fn decode_filter_spec(path: &str, j: &JVal) -> DResult<FilterSpec> {
-    let fields = as_obj(path, j)?;
-    // 0.2.0 filters-unification: the chip's control is an ordinary
-    // FormFieldKind; its absent `value` auto-binds Filter(name). Name decodes
-    // first so the synthesis can use it.
-    let name = req_string(path, fields, "name", "filter name string")?;
-    let kind_j = req(path, fields, "kind", "FormFieldKind control")?;
-    let kind = decode_form_field_kind(
-        ControlAutoBind::FilterChip(&name),
-        &format!("{path}.kind"),
-        kind_j,
-    )?;
-    let label = req_text_source(path, fields, "label", "filter label TextSource")?;
-    Ok(FilterSpec { kind, label, name })
-}
-
-fn decode_button_spec(path: &str, j: &JVal) -> DResult<ButtonSpec> {
-    let fields = as_obj(path, j)?;
-    let label = req_text_source(path, fields, "label", "Button label TextSource")?;
-    let on_click = req_action(path, fields, "onClick", "onClick Action")?;
-    let variant_j = req(path, fields, "variant", "ButtonVariant")?;
-    let variant = decode_button_variant(&format!("{path}.variant"), variant_j)?;
-    let icon = opt_string(path, fields, "icon")?;
-    let disabled = opt_binding_slot(path, fields, "disabled", StaticSlot::Bool)?;
-    Ok(ButtonSpec {
-        label,
-        on_click,
-        variant,
-        icon,
-        disabled,
-    })
-}
-
-fn decode_select_spec(path: &str, j: &JVal) -> DResult<SelectSpec> {
-    let fields = as_obj(path, j)?;
-    let label = req_text_source(path, fields, "label", "Select label TextSource")?;
-    // Field aliases: options / data → source.
-    let source = req_binding_slot_aliased(
-        path,
-        fields,
-        "source",
-        &["options", "data"],
-        "Select source binding",
-        StaticSlot::Options,
-    )?;
-    let value = req_binding_slot(
-        path,
-        fields,
-        "value",
-        "Select value binding",
-        StaticSlot::StringOpt,
-    )?;
-    let placeholder = opt_text_source(path, fields, "placeholder")?;
-    let disabled = opt_binding_slot(path, fields, "disabled", StaticSlot::Bool)?;
-    let multiple = opt_bool(path, fields, "multiple")?;
-    let values = match get(fields, "values") {
-        None => None,
-        Some(v) => Some(decode_binding_slot(
-            &format!("{path}.values"),
-            v,
-            StaticSlot::StringList,
-        )?),
-    };
-    Ok(SelectSpec {
-        label,
-        source,
-        value,
-        on_change: opt_closure(fields, "onChange"),
-        placeholder,
-        disabled,
-        multiple: multiple == Some(true),
-        values,
-        on_change_multi: opt_closure(fields, "onChangeMulti"),
-    })
-}
-
-fn decode_file_upload_spec(path: &str, j: &JVal) -> DResult<FileUploadSpec> {
-    let fields = as_obj(path, j)?;
-    let accept_j = req(path, fields, "accept", "accept string list")?;
-    let arr = as_arr(&format!("{path}.accept"), accept_j)?;
-    let mut accept = Vec::with_capacity(arr.len());
-    for (i, item) in arr.iter().enumerate() {
-        accept.push(as_str(&format!("{path}.accept[{i}]"), item)?.to_string());
-    }
-    let label = req_text_source(path, fields, "label", "FileUpload label TextSource")?;
-    let multiple = req_bool(path, fields, "multiple", "multiple bool")?;
-    let disabled = opt_binding_slot(path, fields, "disabled", StaticSlot::Bool)?;
-    // Phase 1115 - two ADDITIONAL ingress routes. Absent reads as `false`; a
-    // present member of any other type is `WRONG_TYPE` and MUST NOT be coerced,
-    // because the slot decides whether a whole ingress route exists and a
-    // lenient truthiness read would open a drop target on `"no"` and `"false"`
-    // alike.
-    let drop_target =
-        opt_bool(path, fields, "dropTarget")?.unwrap_or(defaults::FILE_UPLOAD_DROP_TARGET);
-    let accept_paste =
-        opt_bool(path, fields, "acceptPaste")?.unwrap_or(defaults::FILE_UPLOAD_ACCEPT_PASTE);
-    // Phase 1116 — OPTIONAL, not omit-at-default: an absent member asks for the
-    // ordinary picker, which is not one of the two devices wearing a default.
-    let capture = match get(fields, "capture") {
-        None => None,
-        Some(v) => Some(decode_capture_source(&format!("{path}.capture"), v)?),
-    };
-    // Phase 1117 — the empty string is a name no host registers, so a document
-    // carrying it describes an upload that can never stream. Refused rather
-    // than read as absence: that coercion silently turns an upload the author
-    // meant to stream into a client-only one, while every visible thing about
-    // the control still works.
-    let destination = match opt_string(path, fields, "destination")? {
-        Some(name) if name.is_empty() => {
-            return Err(wrong_type(
-                &format!("{path}.destination"),
-                "a registered destination name — an absent member is already the spelling for \
-                 an upload that streams nowhere",
-            ));
-        }
-        other => other,
-    };
-    // Phase 1548 — the two declared ceilings (§3.6.23). Absent declares no
-    // ceiling, which is the pre-1548 control and the wire identity. Both go
-    // through `opt_int` FIRST, so §7.1's slot rule decides the shape — a
-    // fractional value is not truncated, and a value beyond the signed 32-bit
-    // slot is refused naming the slot's range rather than wrapped into one the
-    // author never wrote — and only then does the positive floor decide the
-    // sign. Zero is refused as firmly as a negative: a ceiling of zero is not a
-    // small ceiling but a control that can accept nothing, and the author who
-    // means "no ceiling" omits the member.
-    let ceiling = |key: &str, n: Option<i64>| -> DResult<Option<i64>> {
-        match n {
-            Some(v) if v <= 0 => Err(wrong_type(
-                &format!("{path}.{key}"),
-                "a positive integer ceiling — an absent member is already the spelling for \
-                 an upload that declares no ceiling",
-            )),
-            other => Ok(other),
-        }
-    };
-    let max_bytes = ceiling("maxBytes", opt_int(path, fields, "maxBytes")?)?;
-    let max_files = ceiling("maxFiles", opt_int(path, fields, "maxFiles")?)?;
-    Ok(FileUploadSpec {
-        accept,
-        label,
-        multiple,
-        disabled,
-        drop_target,
-        accept_paste,
-        capture,
-        destination,
-        max_bytes,
-        max_files,
-    })
-}
-
-// ─── Visualisation specs ─────────────────────────────────────────────────────
+// ─── Tone maps, near misses, dates ───────────────────────────────────────────
 
 /// The tone-map field names a `TonedPill` cell accepts, canonical first. `map` is
 /// the shortest honest name for a value→tone dictionary and the least descriptive.
-const TONE_MAP_KEYS: [&str; 3] = ["map", "toneMap", "tones"];
+pub(super) const TONE_MAP_KEYS: [&str; 3] = ["map", "toneMap", "tones"];
 
 /// Phase 750 — a `TonedPill`'s `map`: a string-keyed object whose VALUES are
-/// `ToneVariant`s. Routed through `decode_tone` per entry, so the §3.6 tone aliases
+/// `ToneVariant`s. Routed through `decode_tone_variant` per entry, so the §3.6 tone aliases
 /// work inside the map exactly as they do at a `tone` field; a second, private tone
 /// reader here is precisely how this position would come to accept a vocabulary the
 /// `tone` field does not.
@@ -4264,12 +2651,12 @@ const TONE_MAP_KEYS: [&str; 3] = ["map", "toneMap", "tones"];
 /// the offending KEY, because "one of your tones is wrong" is not an actionable
 /// report when the map has nine entries. A non-string value is a `WRONG_TYPE` and
 /// already reports at the right path, so it passes through untouched.
-fn decode_tone_map(path: &str, j: &JVal) -> DResult<BTreeMap<String, ToneVariant>> {
+pub(super) fn decode_tone_map(path: &str, j: &JVal) -> DResult<BTreeMap<String, ToneVariant>> {
     let fields = as_obj(path, j)?;
     let mut map = BTreeMap::new();
     for (key, v) in fields {
         let entry_path = format!("{path}.{key}");
-        let tone = decode_tone(&entry_path, v).map_err(|e| {
+        let tone = decode_tone_variant(&entry_path, v).map_err(|e| {
             if e.code != DecodeErrorCode::UnknownDuCase {
                 return e;
             }
@@ -4287,81 +2674,6 @@ fn decode_tone_map(path: &str, j: &JVal) -> DResult<BTreeMap<String, ToneVariant
         map.insert(key.clone(), tone);
     }
     Ok(map)
-}
-
-/// The shared body of the canonical `TonedPill` case and the `Pill`-tagged §16
-/// shorthand — ONE reader, so the two spellings cannot drift apart in what they
-/// accept.
-fn decode_toned_pill(path: &str, fields: &Fields) -> DResult<CellKindErased> {
-    let field = req_string_aliased(
-        path,
-        fields,
-        "field",
-        &[],
-        "TonedPill row-field name (drives the label and the map key)",
-    )?;
-    let map_j = req_aliased(
-        path,
-        fields,
-        TONE_MAP_KEYS[0],
-        &TONE_MAP_KEYS[1..],
-        "TonedPill value→ToneVariant map",
-    )?;
-    let map = decode_tone_map(&format!("{path}.map"), map_j)?;
-    // `default` is omitted-when-`Default` (Phase 460); an absent key restores the
-    // identity, and an aliased `Neutral` normalises to `Default` and then omits —
-    // two rules composing, in that order.
-    let default_tone = opt_tone_default(
-        path,
-        fields,
-        "default",
-        defaults::CELL_KIND_ERASED_TONED_PILL_DEFAULT,
-    )?;
-    Ok(CellKindErased::TonedPill {
-        field,
-        map,
-        default_tone,
-    })
-}
-
-fn decode_cell_kind_erased(path: &str, j: &JVal) -> DResult<CellKindErased> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        // Lenient-ingest (WIRE_FORMAT.md §16, Phase 750): "pill" is the WORD for the
-        // thing, so a declarative tone rule arrives tagged `Pill` more often than
-        // tagged `TonedPill`. Before this phase those keys were accepted and
-        // DISCARDED — the author's whole intent gone, silently, with no error to
-        // notice. Presence of a tone map is the unambiguous tell: a closure `Pill`
-        // carries only `labelFn`/`toneFn` and can never carry one.
-        "Pill" if TONE_MAP_KEYS.iter().any(|k| get(fields, k).is_some()) => {
-            decode_toned_pill(path, fields)
-        }
-        "TonedPill" => decode_toned_pill(path, fields),
-        "Text" => Ok(CellKindErased::Text),
-        "Numeric" => Ok(CellKindErased::Numeric),
-        "Date" => Ok(CellKindErased::Date),
-        "Editable" => Ok(CellKindErased::Editable),
-        "Checkbox" => Ok(CellKindErased::Checkbox),
-        "Button" => Ok(CellKindErased::Button {
-            label: req_text_source(path, fields, "label", "cell button label TextSource")?,
-        }),
-        "ButtonGroup" => {
-            let buttons_j = req(path, fields, "buttons", "button group list")?;
-            let arr = as_arr(&format!("{path}.buttons"), buttons_j)?;
-            let mut labels = Vec::with_capacity(arr.len());
-            for (i, item) in arr.iter().enumerate() {
-                let p = format!("{path}.buttons[{i}]");
-                let bf = as_obj(&p, item)?;
-                labels.push(req_text_source(&p, bf, "label", "button label TextSource")?);
-            }
-            Ok(CellKindErased::ButtonGroup { labels })
-        }
-        "Link" => Ok(CellKindErased::Link),
-        "Pill" => Ok(CellKindErased::Pill),
-        "Progress" => Ok(CellKindErased::Progress),
-        "Custom" => Ok(CellKindErased::Custom),
-        other => Err(unknown_du_case(path, other, CELL_KIND_ERASED_TAGS)),
-    }
 }
 
 /// Decode-time didactics for the grid-behaviour family's NEAR MISSES (Phase
@@ -4390,7 +2702,12 @@ fn decode_cell_kind_erased(path: &str, j: &JVal) -> DResult<CellKindErased> {
 /// ordering, so an op carrying both a retired ordinal and some other defect names
 /// the ordinal. The ordering is identical in all five hosts, so which defect
 /// surfaces first is deterministic.
-fn retired_positional_field(path: &str, fields: &Fields, name: &str, op_kind: &str) -> DResult<()> {
+pub(super) fn retired_positional_field(
+    path: &str,
+    fields: &Fields,
+    name: &str,
+    op_kind: &str,
+) -> DResult<()> {
     if get(fields, name).is_some() {
         return Err(make_error(
             DecodeErrorCode::WrongType,
@@ -4404,7 +2721,11 @@ fn retired_positional_field(path: &str, fields: &Fields, name: &str, op_kind: &s
     Ok(())
 }
 
-fn check_near_misses(path: &str, fields: &Fields, candidates: &[(&str, &str)]) -> DResult<()> {
+pub(super) fn check_near_misses(
+    path: &str,
+    fields: &Fields,
+    candidates: &[(&str, &str)],
+) -> DResult<()> {
     check_near_misses_in(path, fields, candidates, "grid", "")
 }
 
@@ -4416,7 +2737,7 @@ fn check_near_misses(path: &str, fields: &Fields, candidates: &[(&str, &str)]) -
 /// that particular vocabulary (Phase 959) — the refusal is didactic, and the
 /// didactic is sharper when it says what was LOST, not only what was ignored.
 /// Empty for the grid, whose message the four other hosts pin unchanged.
-fn check_near_misses_in(
+pub(super) fn check_near_misses_in(
     path: &str,
     fields: &Fields,
     candidates: &[(&str, &str)],
@@ -4459,7 +2780,7 @@ fn check_near_misses_in(
 /// emissions); the rest of their families ride in with them. Declaration order
 /// is identical in all five hosts, so which defect surfaces first is
 /// deterministic.
-const A11Y_NEAR_MISSES: &[(&str, &str)] = &[
+pub(super) const A11Y_NEAR_MISSES: &[(&str, &str)] = &[
     (
         "aria-label",
         "label — the accessible name, a Binding<string> (a bare string is the §3.6 shorthand)",
@@ -4521,20 +2842,20 @@ const A11Y_NEAR_MISSES: &[(&str, &str)] = &[
 ];
 
 /// What the silence costs at this position, appended to the refusal message.
-const A11Y_NEAR_MISS_CONSEQUENCE: &str =
+pub(super) const A11Y_NEAR_MISS_CONSEQUENCE: &str =
     ", and the intent would reach assistive technology as nothing at all";
 
 /// Named by the census row itself. Deliberately NOT aliased to `editable:
 /// false`: an inverting alias that guesses wrong makes a read-only column
 /// editable.
-const COLUMN_NEAR_MISSES: &[(&str, &str)] = &[(
+pub(super) const COLUMN_NEAR_MISSES: &[(&str, &str)] = &[(
     "readOnly",
     "editable: false — the column flag NARROWS the grid's editable capability",
 )];
 
 /// The grid-level rejected spellings, walked in declaration order so which
 /// defect surfaces first is deterministic across hosts.
-const GRID_NEAR_MISSES: &[(&str, &str)] = &[
+pub(super) const GRID_NEAR_MISSES: &[(&str, &str)] = &[
     // The sharpest of them: a LITERAL page number is not expressible at all,
     // because the position lives in State so a control can move it.
     (
@@ -4567,183 +2888,6 @@ const GRID_NEAR_MISSES: &[(&str, &str)] = &[
     ),
 ];
 
-fn decode_column_erased(path: &str, j: &JVal) -> DResult<ColumnErased> {
-    let fields = as_obj(path, j)?;
-    check_near_misses(path, fields, COLUMN_NEAR_MISSES)?;
-    // Phase 460 — format/width omitted-when-default. Field aliases: type → kind,
-    // header/title → label.
-    let format = opt_cell_format_default(path, fields, "format", defaults::COLUMN_ERASED_FORMAT)?;
-    let kind_j = req_aliased(path, fields, "kind", &["type"], "CellKindErased")?;
-    let kind = decode_cell_kind_erased(&format!("{path}.kind"), kind_j)?;
-    let label = req_string_aliased(
-        path,
-        fields,
-        "label",
-        &["header", "title"],
-        "column label string",
-    )?;
-    let width = opt_column_width_default(path, fields, "width", defaults::COLUMN_ERASED_WIDTH)?;
-    let field = opt_string(path, fields, "field")?;
-    // Phase 861 / 863 — per-column sort and editability NARROWING; absent
-    // inherits the grid-level flag, so an explicit `false` is carried rather
-    // than omitted-when-default (omitting it would erase the narrowing).
-    let sortable = opt_bool(path, fields, "sortable")?;
-    let editable = opt_bool(path, fields, "editable")?;
-    Ok(ColumnErased {
-        format,
-        kind,
-        label,
-        width,
-        value: opt_closure(fields, "value"),
-        field,
-        sortable,
-        editable,
-    })
-}
-
-fn decode_static_rows(path: &str, j: &JVal) -> DResult<StaticRows> {
-    let fields = as_obj(path, j)?;
-    let headers_j = req(path, fields, "headers", "headers TextSource list")?;
-    let harr = as_arr(&format!("{path}.headers"), headers_j)?;
-    let mut headers = Vec::with_capacity(harr.len());
-    for (i, item) in harr.iter().enumerate() {
-        headers.push(decode_text_source(&format!("{path}.headers[{i}]"), item)?);
-    }
-    let rows_j = req(path, fields, "rows", "rows TextSource matrix")?;
-    let rarr = as_arr(&format!("{path}.rows"), rows_j)?;
-    let mut rows = Vec::with_capacity(rarr.len());
-    for (i, row_j) in rarr.iter().enumerate() {
-        let row_arr = as_arr(&format!("{path}.rows[{i}]"), row_j)?;
-        let mut row = Vec::with_capacity(row_arr.len());
-        for (k, cell) in row_arr.iter().enumerate() {
-            row.push(decode_text_source(&format!("{path}.rows[{i}][{k}]"), cell)?);
-        }
-        rows.push(row);
-    }
-    // Phase 801 — the optional sort-intent slots. Both absent re-encodes
-    // byte-identically to the pre-801 wire.
-    let sortable = opt_bool(path, fields, "sortable")?;
-    let default_sort = match get(fields, "defaultSort") {
-        None => None,
-        Some(v) => Some(decode_default_sort(&format!("{path}.defaultSort"), v)?),
-    };
-    Ok(StaticRows {
-        headers,
-        rows,
-        sortable,
-        default_sort,
-    })
-}
-
-/// Phase 801 — the `{column, direction}` initial-order declaration. `column` is
-/// a NON-NEGATIVE index into `headers`; a negative value is `WRONG_TYPE`, which
-/// is also what `schema.json`'s `minimum: 0` says, so the two expressions of the
-/// contract agree.
-fn decode_default_sort(path: &str, j: &JVal) -> DResult<DefaultSort> {
-    let fields = as_obj(path, j)?;
-    let column = req_int(path, fields, "column", "non-negative header index")?;
-    if column < 0 {
-        return Err(wrong_type(
-            &format!("{path}.column"),
-            "JSON number (non-negative integer header index)",
-        ));
-    }
-    let direction_j = req(path, fields, "direction", "asc | desc")?;
-    let direction = decode_sort_direction(&format!("{path}.direction"), direction_j)?;
-    Ok(DefaultSort { column, direction })
-}
-
-fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
-    let fields = as_obj(path, j)?;
-    let columns_j = req(path, fields, "columns", "columns list")?;
-    let arr = as_arr(&format!("{path}.columns"), columns_j)?;
-    let mut columns = Vec::with_capacity(arr.len());
-    for (i, item) in arr.iter().enumerate() {
-        columns.push(decode_column_erased(&format!("{path}.columns[{i}]"), item)?);
-    }
-    // 0.2.0 — omitted-when-default (false).
-    let editable = opt_bool(path, fields, "editable")?.unwrap_or(defaults::DATA_GRID_EDITABLE);
-    // Field aliases: data / rows → source.
-    let source = req_binding_slot_aliased(
-        path,
-        fields,
-        "source",
-        &["data", "rows"],
-        "Grid source binding",
-        StaticSlot::Rows,
-    )?;
-    let row_key_field = opt_string(path, fields, "rowKeyField")?;
-    // Phase 818 — the grid-sort header affordance: names the State key
-    // carrying the `{column, direction}` sort descriptor. Optional string,
-    // encode-omitted when absent.
-    let sort_state_key = opt_string(path, fields, "sortStateKey")?;
-    // Phase 862 — declarative pagination. `pageSize` is how many rows a page
-    // holds; a page of zero or fewer rows names no page at all, so it is
-    // WRONG_TYPE — which is also what schema.json's `minimum: 1` says. The pager
-    // that writes `pageStateKey` is renderer-owned, so nothing here decodes a
-    // control.
-    let page_size = match opt_int(path, fields, "pageSize")? {
-        None => None,
-        Some(n) if n >= 1 => Some(n),
-        Some(_) => {
-            return Err(wrong_type(
-                &format!("{path}.pageSize"),
-                "JSON number (integer page size of 1 or more)",
-            ));
-        }
-    };
-    // Phase 861 — the bound path's declared initial order, decoded by the SAME
-    // function the staticRows spelling uses: same record, same bound, same
-    // message at a different path.
-    let default_sort = match get(fields, "defaultSort") {
-        None => None,
-        Some(v) => Some(decode_default_sort(&format!("{path}.defaultSort"), v)?),
-    };
-    check_near_misses(path, fields, GRID_NEAR_MISSES)?;
-    // Phase 863 — the declared edit destination.
-    let edit_state_key = opt_string(path, fields, "editStateKey")?;
-    let page_state_key = opt_string(path, fields, "pageStateKey")?;
-    // Phase 934 — omitted-when-default (false), the same convention as
-    // `editable`.
-    let reorderable =
-        opt_bool(path, fields, "reorderable")?.unwrap_or(defaults::DATA_GRID_REORDERABLE);
-    let static_rows = match get(fields, "staticRows") {
-        None => None,
-        Some(v) => Some(decode_static_rows(&format!("{path}.staticRows"), v)?),
-    };
-    Ok(GridSpec {
-        columns,
-        editable,
-        source,
-        on_row_click: opt_closure(fields, "onRowClick"),
-        row_key: opt_closure(fields, "rowKey"),
-        row_key_field,
-        sort_state_key,
-        default_sort,
-        page_size,
-        page_state_key,
-        edit_state_key,
-        reorderable,
-        static_rows,
-        // Phase 1473 — the DataGrid arm of the same refusal.
-        keep_rows_together: opt_bool(path, fields, "keepRowsTogether")?
-            .unwrap_or(defaults::DATA_GRID_KEEP_ROWS_TOGETHER),
-        repeat_header: opt_bool(path, fields, "repeatHeader")?
-            .unwrap_or(defaults::DATA_GRID_REPEAT_HEADER),
-        // Phase 1123 — a bool, omitted at `false`, never truthiness-coerced:
-        // the slot decides whether a whole affordance exists.
-        exportable: opt_bool(path, fields, "exportable")?.unwrap_or(defaults::DATA_GRID_EXPORTABLE),
-        // Phase 1125 — separate decoder arms, so a wrong type on either is
-        // reported at its own path.
-        transfer_in_key: opt_string(path, fields, "transferInKey")?,
-        transfer_out_key: opt_string(path, fields, "transferOutKey")?,
-        // Phase 1892 — the row window and the declared total: a string key and
-        // an int Binding decoded as the other int Binding slots are.
-        window_state_key: opt_string(path, fields, "windowStateKey")?,
-        row_total: opt_binding_slot(path, fields, "rowTotal", StaticSlot::Int)?,
-    })
-}
-
 /// `true` when `text` is a canonical ISO-8601 date the temporal axis can place —
 /// `YYYY-MM-DD`, optionally followed by `T…` whose time-of-day is discarded.
 ///
@@ -4751,7 +2895,7 @@ fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
 /// in 1–12 and a day the month actually has. A locale spelling (`15/01/2026`) and
 /// a bare year are both refused — admitting either would be the string-sniffing
 /// the temporal axis exists to avoid.
-fn is_canonical_iso_day(text: &str) -> bool {
+pub(super) fn is_canonical_iso_day(text: &str) -> bool {
     let b = text.as_bytes();
     if b.len() < 10 || b[4] != b'-' || b[7] != b'-' {
         return false;
@@ -4790,901 +2934,15 @@ fn is_canonical_iso_day(text: &str) -> bool {
     (1..=last).contains(&d)
 }
 
-/// An annotation's X ADDRESS (Phase 1491, §4l "The three addressing forms").
-///
-/// THE DATE MUST BE A DATE, and this refusal is the twin of `ReferenceLine`'s
-/// finite-value narrowing rather than a new posture. The lowering's calendar is
-/// deliberately TOTAL — an unparseable x CELL reads as 1970-01-01, because
-/// FUARAN097 makes a non-date COLUMN loud upstream and refusing per-cell would be
-/// worse. An annotation has no column to be loud about: the string is authored
-/// directly, so nothing upstream can catch it. And because §4l rule 3 has a
-/// temporal address ENTER the axis extent before the ticks are chosen, a typo does
-/// not misplace one marker — it drags the domain back to the epoch and rescales
-/// the whole picture.
-fn decode_chart_annotation_x(path: &str, j: &JVal) -> DResult<ChartAnnotationX> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "Category" => Ok(ChartAnnotationX::Category(req_string(
-            path,
-            fields,
-            "key",
-            "category key (the band's own label)",
-        )?)),
-        "Date" => {
-            let iso = req_string(path, fields, "iso", "ISO-8601 date (YYYY-MM-DD)")?;
-            if !is_canonical_iso_day(&iso) {
-                return Err(wrong_type(
-                    &format!("{path}.iso"),
-                    "a canonical ISO-8601 date (YYYY-MM-DD, optionally followed by a time) naming a real calendar day — an event marker's date is the address it is drawn at, and an unreadable one would place the marker at 1970-01-01 and drag the axis back with it",
-                ));
-            }
-            Ok(ChartAnnotationX::Date(iso))
-        }
-        other => Err(unknown_du_case(path, other, CHART_ANNOTATION_X_TAGS)),
-    }
-}
-
-/// A range band's PAIR (Phase 1492, §4l). The case carries the AXIS as well as
-/// the pair, so a value axis addressed by category keys is not a document this
-/// decoder has to refuse — it is one no encoder can write.
-///
-/// TWO REFUSALS, and they are the pair rules the WIRE can decide by itself. A
-/// non-finite endpoint is `ReferenceLine`'s narrowing at two slots instead of one,
-/// for its reason exactly: §4l rule 3 has both ends enter the value domain, so a
-/// NaN takes the nice-domain, every gridline and every mark with it. An UNORDERED
-/// pair is refused at the pair's own slot — the defect is the pair's, not either
-/// end's — rather than silently swapped.
-///
-/// A CATEGORY pair's order is NOT decided here: the order of two band keys is the
-/// ROWS' order, a cross-reference rather than a local property of the address.
-fn decode_chart_annotation_range(path: &str, j: &JVal) -> DResult<ChartAnnotationRange> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "ValueRange" => {
-            let from = req_float(
-                path,
-                fields,
-                "from",
-                "range-band lower value (a finite JSON number)",
-            )?;
-            let to = req_float(
-                path,
-                fields,
-                "to",
-                "range-band upper value (a finite JSON number)",
-            )?;
-            for (slot, v) in [("from", from), ("to", to)] {
-                if !v.is_finite() {
-                    return Err(wrong_type(
-                        &format!("{path}.{slot}"),
-                        "a FINITE JSON number — a range band's end names a place on the value axis, and NaN / Infinity names none; give the value in the axis's own units, or drop the annotation",
-                    ));
-                }
-            }
-            if from > to {
-                return Err(wrong_type(
-                    path,
-                    "an ORDERED pair — a range band runs from its lower value to its upper one, and this pair runs backwards; swapping the ends silently would draw a band the author did not describe",
-                ));
-            }
-            Ok(ChartAnnotationRange::ValueRange { from, to })
-        }
-        "XRange" => {
-            let from_j = req(
-                path,
-                fields,
-                "from",
-                "range-band lower x address (a ChartAnnotationX)",
-            )?;
-            let from = decode_chart_annotation_x(&format!("{path}.from"), from_j)?;
-            let to_j = req(
-                path,
-                fields,
-                "to",
-                "range-band upper x address (a ChartAnnotationX)",
-            )?;
-            let to = decode_chart_annotation_x(&format!("{path}.to"), to_j)?;
-            // Both dates are already known canonical and calendar-valid (the
-            // address decoder refused anything else), and a canonical
-            // `YYYY-MM-DD` sorts lexicographically exactly as it sorts
-            // chronologically — so no calendar arithmetic is needed here.
-            if let (ChartAnnotationX::Date(a), ChartAnnotationX::Date(b)) = (&from, &to) {
-                if a > b {
-                    return Err(wrong_type(
-                        path,
-                        "an ORDERED pair — a range band runs from its earlier date to its later one, and this pair runs backwards; swapping the ends silently would draw a band the author did not describe",
-                    ));
-                }
-            }
-            Ok(ChartAnnotationRange::XRange { from, to })
-        }
-        other => Err(unknown_du_case(path, other, CHART_ANNOTATION_RANGE_TAGS)),
-    }
-}
-
-/// A chart's data-addressed annotation (Phase 1490, §4l).
-///
-/// THE REFERENCE LINE'S VALUE MUST BE FINITE, and that is a slot-specific
-/// NARROWING of §7 rather than a disagreement with it. §7 admits the quoted
-/// `"NaN"` / `"Infinity"` / `"-Infinity"` sentinels at every float slot and
-/// `as_float` reads them — the widening is deliberate and stays. But a reference
-/// line addresses a place on the VALUE AXIS, and a non-finite value names no such
-/// place: it would enter the domain computation and put every gridline, tick and
-/// mark at a NaN coordinate. The picture is not merely wrong at the annotation, it
-/// is wrong everywhere, and nothing downstream can recover it.
-fn decode_chart_annotation(path: &str, j: &JVal) -> DResult<ChartAnnotation> {
-    let fields = as_obj(path, j)?;
-    let label = opt_text_source(path, fields, "label")?;
-    match disc(path, fields)? {
-        "ReferenceLine" => {
-            let value = req_float(
-                path,
-                fields,
-                "value",
-                "reference-line value (a finite JSON number)",
-            )?;
-            if !value.is_finite() {
-                return Err(wrong_type(
-                    &format!("{path}.value"),
-                    "a FINITE JSON number — a reference line names a place on the value axis, and NaN / Infinity names none; give the value in the axis's own units, or drop the annotation",
-                ));
-            }
-            Ok(ChartAnnotation::ReferenceLine { value, label })
-        }
-        "EventMarker" => {
-            let at_j = req(
-                path,
-                fields,
-                "at",
-                "event-marker x address (a ChartAnnotationX)",
-            )?;
-            let at = decode_chart_annotation_x(&format!("{path}.at"), at_j)?;
-            Ok(ChartAnnotation::EventMarker { at, label })
-        }
-        "RangeBand" => {
-            let range_j = req(
-                path,
-                fields,
-                "range",
-                "range-band pair (a ChartAnnotationRange)",
-            )?;
-            let range = decode_chart_annotation_range(&format!("{path}.range"), range_j)?;
-            Ok(ChartAnnotation::RangeBand { range, label })
-        }
-        other => Err(unknown_du_case(path, other, CHART_ANNOTATION_TAGS)),
-    }
-}
-
-fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
-    let fields = as_obj(path, j)?;
-    let kind_j = req(path, fields, "kind", "ChartKind")?;
-    let kind = decode_chart_kind(&format!("{path}.kind"), kind_j)?;
-    // Field alias: data → source.
-    let source = req_binding_slot_aliased(
-        path,
-        fields,
-        "source",
-        &["data"],
-        "Chart source binding",
-        StaticSlot::Rows,
-    )?;
-    let x_field = req_string(path, fields, "xField", "xField string")?;
-    let y_fields_j = req(path, fields, "yFields", "yFields string list")?;
-    let arr = as_arr(&format!("{path}.yFields"), y_fields_j)?;
-    let mut y_fields = Vec::with_capacity(arr.len());
-    for (i, item) in arr.iter().enumerate() {
-        y_fields.push(as_str(&format!("{path}.yFields[{i}]"), item)?.to_string());
-    }
-    let title = opt_text_source(path, fields, "title")?;
-    // `stacked` round-trips (carried since the fixture corpus pinned it).
-    // Absent restores `false` BY CONTRACT since Phase 1585 made the member
-    // omit-at-default — not, as this note read until then, as tolerance of the
-    // legacy wire that predated the field.
-    let stacked = opt_bool(path, fields, "stacked")?.unwrap_or(defaults::CHART_STACKED);
-    // Phase 876 — `valueFormat`: the value axis's number format, reusing the
-    // existing `Format` vocabulary. Absent is the ordinary shape.
-    let value_format = match get(fields, "valueFormat") {
-        None => None,
-        Some(j) => Some(decode_format(&format!("{path}.valueFormat"), j)?),
-    };
-    // Phase 878 — the axis names + the subtitle. All optional; absent is the
-    // ordinary shape, and the lowering supplies the field-name fallback.
-    let x_title = opt_text_source(path, fields, "xTitle")?;
-    let y_title = opt_text_source(path, fields, "yTitle")?;
-    let subtitle = opt_text_source(path, fields, "subtitle")?;
-    // Phase 880 — the legend's placement. Absent is the ordinary shape and means
-    // the host's default (`Right`), never "no legend": suppression is the explicit
-    // `None` case, which is why this stays an `Option` rather than defaulting here.
-    let legend_position = match get(fields, "legendPosition") {
-        None => None,
-        Some(j) => Some(decode_chart_legend_position(
-            &format!("{path}.legendPosition"),
-            j,
-        )?),
-    };
-    // Phase 881 — whether the values are written onto the picture. Absent is the
-    // ordinary shape and means `Off`, which is ALSO the default, so a pre-881 tree
-    // lowers to the pre-881 picture byte-for-byte.
-    let data_labels = match get(fields, "dataLabels") {
-        None => None,
-        Some(j) => Some(decode_chart_data_labels(&format!("{path}.dataLabels"), j)?),
-    };
-    // Phase 882 — what the x column MEANS: discrete `Category` bands or `Temporal`
-    // dates on a continuous day-scale. Absent means `Category`, which is ALSO the
-    // default, so the ordinary wire shape omits the key and lowers to the pre-882
-    // picture byte-for-byte. A `Temporal` declaration is GROUNDED pre-emit
-    // (FUARAN097) rather than second-guessed here: the decoder's job is to carry
-    // the author's claim faithfully, not to check it against the rows.
-    let x_scale = match get(fields, "xScale") {
-        None => None,
-        Some(j) => Some(decode_chart_x_scale(&format!("{path}.xScale"), j)?),
-    };
-    // Phase 1490 — `annotations` (§4l): the data-addressed attachments — reference
-    // lines, event markers and range bands — as one closed union, so a further
-    // member is a case rather than a further widening of this record. Absent OMITS
-    // on the wire, so every pre-1490 document decodes and lowers byte-for-byte as
-    // it did. An EMPTY list is a different document from an absent field and is
-    // carried as such: it round-trips to `"annotations":[]`, which is what an
-    // author who declared a list and then removed its last member wrote.
-    let annotations = match get(fields, "annotations") {
-        None => None,
-        Some(j) => {
-            let items = as_arr(&format!("{path}.annotations"), j)?;
-            let mut out = Vec::with_capacity(items.len());
-            for (i, item) in items.iter().enumerate() {
-                out.push(decode_chart_annotation(
-                    &format!("{path}.annotations[{i}]"),
-                    item,
-                )?);
-            }
-            Some(out)
-        }
-    };
-    Ok(ChartSpec {
-        kind,
-        source,
-        stacked,
-        x_field,
-        y_fields,
-        title,
-        value_format,
-        x_title,
-        y_title,
-        subtitle,
-        legend_position,
-        data_labels,
-        x_scale,
-        annotations,
-        on_point_click: opt_closure(fields, "onPointClick"),
-    })
-}
-
-fn decode_map_spec(path: &str, j: &JVal) -> DResult<MapSpec> {
-    let fields = as_obj(path, j)?;
-    let centre_latitude = req_float(path, fields, "centreLatitude", "centre latitude float")?;
-    let centre_longitude = req_float(path, fields, "centreLongitude", "centre longitude float")?;
-    // Field aliases: data / markers → source.
-    let source = req_binding_slot_aliased(
-        path,
-        fields,
-        "source",
-        &["data", "markers"],
-        "Map source binding",
-        StaticSlot::Markers,
-    )?;
-    let zoom = req_int(path, fields, "zoom", "zoom integer")?;
-    Ok(MapSpec {
-        centre_latitude,
-        centre_longitude,
-        source,
-        zoom,
-        on_marker_click: opt_closure(fields, "onMarkerClick"),
-    })
-}
-
-// ─── Drawing (Phase 524) — closed Shape / CurveCommand DUs ───────────────────
-//
-// Geometry is static numbers (a Drawing is a resolved artefact); only DrawStyle
-// carries Bindings. An unrecognised Shape / CurveCommand $type is UNKNOWN_DU_CASE
-// at $.kind.shapes[i].$type / $.kind.shapes[i].commands[j].$type (the closed-set
-// default-deny). Missing style defaults to the all-inherited empty style.
-
-fn decode_view_box(path: &str, j: &JVal) -> DResult<ViewBox> {
-    let fields = as_obj(path, j)?;
-    Ok(ViewBox {
-        height: req_float(path, fields, "height", "height number")?,
-        min_x: req_float(path, fields, "minX", "minX number")?,
-        min_y: req_float(path, fields, "minY", "minY number")?,
-        width: req_float(path, fields, "width", "width number")?,
-    })
-}
-
-fn decode_draw_point(path: &str, j: &JVal) -> DResult<DrawPoint> {
-    let fields = as_obj(path, j)?;
-    Ok(DrawPoint {
-        x: req_float(path, fields, "x", "x number")?,
-        y: req_float(path, fields, "y", "y number")?,
-    })
-}
-
-fn decode_req_point(path: &str, fields: &Fields, key: &str) -> DResult<DrawPoint> {
-    let v = req(path, fields, key, "DrawPoint")?;
-    decode_draw_point(&format!("{path}.{key}"), v)
-}
-
-fn decode_point_list(path: &str, fields: &Fields) -> DResult<Vec<DrawPoint>> {
-    let points_j = req(path, fields, "points", "DrawPoint list")?;
-    let arr = as_arr(&format!("{path}.points"), points_j)?;
-    let mut points = Vec::with_capacity(arr.len());
-    for (i, item) in arr.iter().enumerate() {
-        points.push(decode_draw_point(&format!("{path}.points[{i}]"), item)?);
-    }
-    Ok(points)
-}
-
-fn decode_draw_style(path: &str, j: &JVal) -> DResult<DrawStyle> {
-    let fields = as_obj(path, j)?;
-    let text_anchor = match get(fields, "textAnchor") {
-        None => None,
-        Some(v) => Some(decode_text_anchor(&format!("{path}.textAnchor"), v)?),
-    };
-    let emphasis = match get(fields, "emphasis") {
-        None => None,
-        Some(v) => Some(decode_emphasis(&format!("{path}.emphasis"), v)?),
-    };
-    Ok(DrawStyle {
-        fill: opt_binding_slot(path, fields, "fill", StaticSlot::Str)?,
-        stroke: opt_binding_slot(path, fields, "stroke", StaticSlot::Str)?,
-        stroke_width: opt_binding_slot(path, fields, "strokeWidth", StaticSlot::Float)?,
-        opacity: opt_binding_slot(path, fields, "opacity", StaticSlot::Float)?,
-        text_anchor,
-        font_size: opt_float(path, fields, "fontSize")?,
-        emphasis,
-        font_family: opt_string(path, fields, "fontFamily")?,
-        // Phase 642 — keyed mark identity; omitted-when-None.
-        mark_id: opt_string(path, fields, "markId")?,
-        // Phase 877 — Label text rotation in degrees; optional, no default.
-        rotation: opt_float(path, fields, "rotation")?,
-        // Phase 883 — the per-mark hover readout, a full TextSource (so a
-        // `Bound` envelope decodes here as well as the canonical bare-string
-        // `Literal`); optional, absent = untipped.
-        tip: opt_text_source(path, fields, "tip")?,
-    })
-}
-
-fn decode_style_or_default(path: &str, fields: &Fields) -> DResult<DrawStyle> {
-    match get(fields, "style") {
-        None => Ok(DrawStyle::default()),
-        Some(v) => decode_draw_style(&format!("{path}.style"), v),
-    }
-}
-
-fn decode_curve_command(path: &str, j: &JVal) -> DResult<CurveCommand> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "MoveTo" => Ok(CurveCommand::MoveTo(decode_req_point(path, fields, "to")?)),
-        "LineTo" => Ok(CurveCommand::LineTo(decode_req_point(path, fields, "to")?)),
-        "CubicTo" => Ok(CurveCommand::CubicTo {
-            control1: decode_req_point(path, fields, "control1")?,
-            control2: decode_req_point(path, fields, "control2")?,
-            to: decode_req_point(path, fields, "to")?,
-        }),
-        "QuadraticTo" => Ok(CurveCommand::QuadraticTo {
-            control: decode_req_point(path, fields, "control")?,
-            to: decode_req_point(path, fields, "to")?,
-        }),
-        "Close" => Ok(CurveCommand::Close),
-        other => Err(unknown_du_case(path, other, CURVE_COMMAND_TAGS)),
-    }
-}
-
-fn decode_shape(path: &str, j: &JVal) -> DResult<Shape> {
-    let fields = as_obj(path, j)?;
-    let tag = disc(path, fields)?;
-    let style = decode_style_or_default(path, fields)?;
-    match tag {
-        "Group" => {
-            let children_j = req(path, fields, "children", "Shape list")?;
-            let arr = as_arr(&format!("{path}.children"), children_j)?;
-            let mut children = Vec::with_capacity(arr.len());
-            for (i, item) in arr.iter().enumerate() {
-                children.push(decode_shape(&format!("{path}.children[{i}]"), item)?);
-            }
-            Ok(Shape::Group { children, style })
-        }
-        "Rectangle" => Ok(Shape::Rectangle {
-            x: req_float(path, fields, "x", "x number")?,
-            y: req_float(path, fields, "y", "y number")?,
-            width: req_float(path, fields, "width", "width number")?,
-            height: req_float(path, fields, "height", "height number")?,
-            corner_radius: opt_float(path, fields, "cornerRadius")?,
-            style,
-        }),
-        "Line" => Ok(Shape::Line {
-            x1: req_float(path, fields, "x1", "x1 number")?,
-            y1: req_float(path, fields, "y1", "y1 number")?,
-            x2: req_float(path, fields, "x2", "x2 number")?,
-            y2: req_float(path, fields, "y2", "y2 number")?,
-            style,
-        }),
-        "Polyline" => Ok(Shape::Polyline {
-            points: decode_point_list(path, fields)?,
-            style,
-        }),
-        "Polygon" => Ok(Shape::Polygon {
-            points: decode_point_list(path, fields)?,
-            style,
-        }),
-        "Curve" => {
-            let commands_j = req(path, fields, "commands", "CurveCommand list")?;
-            let arr = as_arr(&format!("{path}.commands"), commands_j)?;
-            let mut commands = Vec::with_capacity(arr.len());
-            for (i, item) in arr.iter().enumerate() {
-                commands.push(decode_curve_command(
-                    &format!("{path}.commands[{i}]"),
-                    item,
-                )?);
-            }
-            Ok(Shape::Curve { commands, style })
-        }
-        "Circle" => Ok(Shape::Circle {
-            cx: req_float(path, fields, "cx", "cx number")?,
-            cy: req_float(path, fields, "cy", "cy number")?,
-            r: req_float(path, fields, "r", "r number")?,
-            style,
-        }),
-        "Ellipse" => Ok(Shape::Ellipse {
-            cx: req_float(path, fields, "cx", "cx number")?,
-            cy: req_float(path, fields, "cy", "cy number")?,
-            rx: req_float(path, fields, "rx", "rx number")?,
-            ry: req_float(path, fields, "ry", "ry number")?,
-            style,
-        }),
-        "Label" => Ok(Shape::Label {
-            x: req_float(path, fields, "x", "x number")?,
-            y: req_float(path, fields, "y", "y number")?,
-            text: req_text_source(path, fields, "text", "TextSource")?,
-            style,
-        }),
-        other => Err(unknown_du_case(path, other, SHAPE_TAGS)),
-    }
-}
-
-fn decode_drawing_spec(path: &str, j: &JVal) -> DResult<DrawingSpec> {
-    let fields = as_obj(path, j)?;
-    let shapes_j = req(path, fields, "shapes", "Shape list")?;
-    let arr = as_arr(&format!("{path}.shapes"), shapes_j)?;
-    let mut shapes = Vec::with_capacity(arr.len());
-    for (i, item) in arr.iter().enumerate() {
-        shapes.push(decode_shape(&format!("{path}.shapes[{i}]"), item)?);
-    }
-    let view_box_j = req(path, fields, "viewBox", "ViewBox")?;
-    let view_box = decode_view_box(&format!("{path}.viewBox"), view_box_j)?;
-    Ok(DrawingSpec {
-        view_box,
-        shapes,
-        style: decode_style_or_default(path, fields)?,
-        title: opt_text_source(path, fields, "title")?,
-        description: opt_text_source(path, fields, "description")?,
-    })
-}
-
-// ─── Layout specs ────────────────────────────────────────────────────────────
-
-fn decode_children(path: &str, fields: &Fields) -> DResult<Vec<Node>> {
-    let children_j = req(path, fields, "children", "children Node list")?;
-    let arr = as_arr(&format!("{path}.children"), children_j)?;
-    let mut children = Vec::with_capacity(arr.len());
-    for (i, item) in arr.iter().enumerate() {
-        children.push(decode_node_ast(&format!("{path}.children[{i}]"), item)?);
-    }
-    Ok(children)
-}
-
-fn decode_box_layout(path: &str, j: &JVal) -> DResult<BoxLayout> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "Flex" => {
-            let direction_j = req(path, fields, "direction", "Orientation")?;
-            let direction = decode_orientation(&format!("{path}.direction"), direction_j)?;
-            let wrap = req_bool(path, fields, "wrap", "wrap bool")?;
-            let gap = opt_int(path, fields, "gap")?;
-            Ok(BoxLayout::Flex {
-                direction,
-                gap,
-                wrap,
-            })
-        }
-        "Grid" => {
-            // Field alias: columns → cols. Lenient (§3.6): absent `cols` with
-            // no `templateColumns` reads as `Auto` (the author asked for "a
-            // grid" with no shape — the auto packer is the faithful reading);
-            // absent `cols` WITH a template reads `cols: 1` (the template
-            // carries the real shape; cols is the fallback lane count).
-            let cols_j = get_aliased(fields, "cols", &["columns"]);
-            let template_columns = opt_string(path, fields, "templateColumns")?;
-            match (cols_j, template_columns) {
-                (None, None) => Ok(BoxLayout::Auto),
-                (cols_j, template_columns) => {
-                    let cols = match cols_j {
-                        None => 1,
-                        Some(v) => as_int(&format!("{path}.cols"), v)?,
-                    };
-                    Ok(BoxLayout::Grid {
-                        cols,
-                        gap: opt_int(path, fields, "gap")?,
-                        template_columns,
-                    })
-                }
-            }
-        }
-        "Masonry" => {
-            // WIRE_FORMAT §3.6.7 — column-fill. `cols` is REQUIRED and
-            // POSITIVE, on the §3.6.4 srcSet width-floor pattern:
-            // `column-count: 0` is invalid CSS, so a container declaring it
-            // would fall back to whatever the host stylesheet last said and the
-            // wire would be carrying a host-defined layout.
-            //
-            // No auto-column leniency here, unlike `Grid` above, and the
-            // asymmetry is deliberate rather than an omission: `Grid`
-            // canonicalises a column-less spec to `Auto` because the language
-            // already owns that concept, whereas `Auto` is a ROW-fill mode —
-            // rewriting a masonry into it would discard the author's intent
-            // rather than recover it. Mirror of F# / fuaran-ts.
-            let cols_j = get_aliased(fields, "cols", &["columns"])
-                .ok_or_else(|| missing_field(path, "cols", "positive integer column count"))?;
-            let cols = as_int(&format!("{path}.cols"), cols_j)?;
-            if cols <= 0 {
-                return Err(wrong_type(
-                    &format!("{path}.cols"),
-                    "JSON number (positive integer column count)",
-                ));
-            }
-            Ok(BoxLayout::Masonry {
-                cols,
-                gap: opt_int(path, fields, "gap")?,
-            })
-        }
-        "Auto" => Ok(BoxLayout::Auto),
-        other => Err(unknown_du_case(path, other, BOX_LAYOUT_TAGS)),
-    }
-}
-
-fn decode_box_role(path: &str, j: &JVal) -> DResult<BoxRole> {
+pub(super) fn decode_box_role(path: &str, j: &JVal) -> DResult<BoxRole> {
     let s = as_str(path, j)?;
     BoxRole::from_wire(s)
         .ok_or_else(|| unknown_enum_case(path, s, "Group | Card | Dashboard | Separator"))
 }
 
-fn decode_box_spec(path: &str, j: &JVal) -> DResult<BoxSpec> {
-    let fields = as_obj(path, j)?;
-    let children = decode_children(path, fields)?;
-    // Field alias: title → heading (Box is in the scoped title→heading set).
-    let heading = opt_text_source_aliased(path, fields, "heading", &["title"])?;
-    let layout_j = req(path, fields, "layout", "layout object")?;
-    let layout = decode_box_layout(&format!("{path}.layout"), layout_j)?;
-    let role_j = req(path, fields, "role", "role string")?;
-    let role = decode_box_role(&format!("{path}.role"), role_j)?;
-    Ok(BoxSpec {
-        children,
-        heading,
-        layout,
-        role,
-        // Phase 1473 — refused, never coerced: a document that meant `true` and
-        // wrote `"true"` would otherwise render with its declaration silently
-        // dropped, which is exactly the split block the member exists to
-        // prevent. Pinned on BOTH decoder arms the vocabulary reaches, because
-        // they are separate branches and a vector on one proves nothing about
-        // the other.
-        keep_together: opt_bool(path, fields, "keepTogether")?
-            .unwrap_or(defaults::BOX_KEEP_TOGETHER),
-        break_before: opt_bool(path, fields, "breakBefore")?.unwrap_or(defaults::BOX_BREAK_BEFORE),
-    })
-}
-
-fn decode_split_panel_spec(path: &str, j: &JVal) -> DResult<SplitPanelSpec> {
-    let fields = as_obj(path, j)?;
-    let children = decode_children(path, fields)?;
-    let weight = req_float(path, fields, "weight", "weight float")?;
-    Ok(SplitPanelSpec { children, weight })
-}
-
-fn decode_tab_header(path: &str, j: &JVal) -> DResult<TabHeader> {
-    let fields = as_obj(path, j)?;
-    let label = req_text_source(path, fields, "label", "tab header label TextSource")?;
-    let icon = opt_string(path, fields, "icon")?;
-    let disabled = opt_binding_slot(path, fields, "disabled", StaticSlot::Bool)?;
-    Ok(TabHeader {
-        label,
-        icon,
-        disabled,
-    })
-}
-
-fn decode_tabs_spec(path: &str, j: &JVal) -> DResult<TabsSpec> {
-    let fields = as_obj(path, j)?;
-    let children = decode_children(path, fields)?;
-    // 0.2.0 — omitted-when-default (Horizontal), encoder-symmetric.
-    let orientation = match get(fields, "orientation") {
-        None => defaults::TABS_ORIENTATION,
-        Some(v) => decode_orientation(&format!("{path}.orientation"), v)?,
-    };
-    let tab_headers = match get(fields, "tabHeaders") {
-        None => None,
-        Some(v) => {
-            let arr = as_arr(&format!("{path}.tabHeaders"), v)?;
-            let mut headers = Vec::with_capacity(arr.len());
-            for (i, item) in arr.iter().enumerate() {
-                headers.push(decode_tab_header(&format!("{path}.tabHeaders[{i}]"), item)?);
-            }
-            Some(headers)
-        }
-    };
-    let tab_tags = match get(fields, "tabTags") {
-        None => None,
-        Some(v) => {
-            let arr = as_arr(&format!("{path}.tabTags"), v)?;
-            let mut tags = Vec::with_capacity(arr.len());
-            for (i, item) in arr.iter().enumerate() {
-                tags.push(as_str(&format!("{path}.tabTags[{i}]"), item)?.to_string());
-            }
-            Some(tags)
-        }
-    };
-    let active_tag = opt_binding_slot(path, fields, "activeTag", StaticSlot::Str)?;
-    // `activeIndex` round-trips. Absent restores `Static 0` BY CONTRACT since
-    // Phase 1585 made the member omit-at-default — not, as this note read until
-    // then, as tolerance of the legacy wire that predated the field.
-    let active_index = match get(fields, "activeIndex") {
-        None => Binding::Static {
-            value: StaticValue::Ast(JVal::Num(0.0)),
-        },
-        Some(v) => decode_binding_slot(&format!("{path}.activeIndex"), v, StaticSlot::Int)?,
-    };
-    Ok(TabsSpec {
-        children,
-        orientation,
-        active_index,
-        on_select: opt_closure(fields, "onSelect"),
-        tab_headers,
-        tab_tags,
-        active_tag,
-        on_select_tag: opt_closure(fields, "onSelectTag"),
-    })
-}
-
-fn decode_stepper_spec(path: &str, j: &JVal) -> DResult<StepperSpec> {
-    let fields = as_obj(path, j)?;
-    let active_step = req_binding_slot(
-        path,
-        fields,
-        "activeStep",
-        "activeStep binding",
-        StaticSlot::Int,
-    )?;
-    let children = decode_children(path, fields)?;
-    Ok(StepperSpec {
-        active_step,
-        children,
-    })
-}
-
-fn decode_summary_list_spec(path: &str, j: &JVal) -> DResult<SummaryListSpec> {
-    let fields = as_obj(path, j)?;
-    let children = decode_children(path, fields)?;
-    // Field alias: title → heading.
-    let heading = opt_text_source_aliased(path, fields, "heading", &["title"])?;
-    Ok(SummaryListSpec { children, heading })
-}
-
-fn decode_disclosure_spec(path: &str, j: &JVal) -> DResult<DisclosureSpec> {
-    let fields = as_obj(path, j)?;
-    let children = decode_children(path, fields)?;
-    let default_open = req_bool(path, fields, "defaultOpen", "defaultOpen bool")?;
-    // Field alias: title → heading.
-    let heading = req_text_source_aliased(
-        path,
-        fields,
-        "heading",
-        &["title"],
-        "Disclosure heading TextSource",
-    )?;
-    let open = req_binding_slot(path, fields, "open", "open binding", StaticSlot::Bool)?;
-    Ok(DisclosureSpec {
-        children,
-        default_open,
-        heading,
-        open,
-        on_toggle: opt_closure(fields, "onToggle"),
-    })
-}
-
-fn decode_modal_spec(path: &str, j: &JVal) -> DResult<ModalSpec> {
-    let fields = as_obj(path, j)?;
-    let children = decode_children(path, fields)?;
-    let dismissable = req_bool(path, fields, "dismissable", "dismissable bool")?;
-    let on_dismiss = match get(fields, "onDismiss") {
-        None => None,
-        Some(v) => Some(decode_action(&format!("{path}.onDismiss"), v)?),
-    };
-    let open = req_binding_slot(path, fields, "open", "open binding", StaticSlot::Bool)?;
-    // Field alias: title → heading.
-    let heading = opt_text_source_aliased(path, fields, "heading", &["title"])?;
-    // WIRE_FORMAT.md 3.6.11 - omitted at `Modal`. A non-string is `WRONG_TYPE`
-    // and an unrecognised spelling `UNKNOWN_DU_CASE`, both at `$.kind.modality`
-    // with no `.$type` suffix: this is a BARE enum.
-    let modality = match get(fields, "modality") {
-        None => defaults::MODAL_MODALITY,
-        Some(v) => decode_modality_kind(&format!("{path}.modality"), v)?,
-    };
-    Ok(ModalSpec {
-        children,
-        dismissable,
-        open,
-        on_dismiss,
-        heading,
-        modality,
-        anchor: opt_string(path, fields, "anchor")?,
-    })
-}
-
-fn decode_scroll_area_spec(path: &str, j: &JVal) -> DResult<ScrollAreaSpec> {
-    let fields = as_obj(path, j)?;
-    let children = decode_children(path, fields)?;
-    let orientation_j = req(path, fields, "orientation", "ScrollOrientation")?;
-    let orientation = decode_scroll_orientation(&format!("{path}.orientation"), orientation_j)?;
-    Ok(ScrollAreaSpec {
-        children,
-        orientation,
-        max_height: opt_int(path, fields, "maxHeight")?,
-        max_width: opt_int(path, fields, "maxWidth")?,
-    })
-}
-
-// ─── Fragments / Mount / structural ──────────────────────────────────────────
-
-fn decode_content_hash(path: &str, j: &JVal) -> DResult<ContentHash> {
-    let fields = as_obj(path, j)?;
-    let algorithm = req_string(path, fields, "algorithm", "hash algorithm string")?;
-    let hash = req_string(path, fields, "hash", "hash string")?;
-    let strictness = req_string(
-        path,
-        fields,
-        "strictness",
-        "'StrictReplay' | 'AdvisoryWarning' | 'Enforced'",
-    )?;
-    let strictness = HashStrictness::from_wire(&strictness).ok_or_else(|| {
-        unknown_enum_case(
-            &format!("{path}.strictness"),
-            &strictness,
-            "StrictReplay | AdvisoryWarning | Enforced",
-        )
-    })?;
-    Ok(ContentHash {
-        algorithm,
-        hash,
-        strictness,
-    })
-}
-
-fn decode_hole_value_space(path: &str, j: &JVal) -> DResult<HoleValueSpace> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "IntRange" => Ok(HoleValueSpace::IntRange {
-            min: req_int(path, fields, "min", "IntRange min")?,
-            max: req_int(path, fields, "max", "IntRange max")?,
-        }),
-        "FloatRange" => Ok(HoleValueSpace::FloatRange {
-            min: req_float(path, fields, "min", "FloatRange min")?,
-            max: req_float(path, fields, "max", "FloatRange max")?,
-        }),
-        "StringLen" => Ok(HoleValueSpace::StringLen {
-            min_len: req_int(path, fields, "minLen", "StringLen minLen")?,
-            max_len: req_int(path, fields, "maxLen", "StringLen maxLen")?,
-        }),
-        "Enum" => {
-            let choices_j = req(path, fields, "choices", "Enum choices")?;
-            let arr = as_arr(&format!("{path}.choices"), choices_j)?;
-            let mut choices = Vec::with_capacity(arr.len());
-            for (i, item) in arr.iter().enumerate() {
-                choices.push(as_str(&format!("{path}.choices[{i}]"), item)?.to_string());
-            }
-            Ok(HoleValueSpace::Enum { choices })
-        }
-        "AnyString" => Ok(HoleValueSpace::AnyString),
-        other => Err(unknown_du_case(path, other, HOLE_VALUE_SPACE_TAGS)),
-    }
-}
-
-fn decode_fragment_scalar(path: &str, j: &JVal) -> DResult<FragmentScalar> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "Int" => Ok(FragmentScalar::Int(req_int(
-            path,
-            fields,
-            "value",
-            "Int value",
-        )?)),
-        "Float" => Ok(FragmentScalar::Float(req_float(
-            path,
-            fields,
-            "value",
-            "Float value",
-        )?)),
-        "Bool" => Ok(FragmentScalar::Bool(req_bool(
-            path,
-            fields,
-            "value",
-            "Bool value",
-        )?)),
-        "Str" => Ok(FragmentScalar::Str(req_string(
-            path,
-            fields,
-            "value",
-            "Str value",
-        )?)),
-        other => Err(unknown_du_case(path, other, SCALAR_TAGS)),
-    }
-}
-
-fn decode_hole_decl(path: &str, j: &JVal) -> DResult<HoleDecl> {
-    let fields = as_obj(path, j)?;
-    match disc(path, fields)? {
-        "Value" => {
-            let name = req_string(path, fields, "name", "Value hole name")?;
-            let space_j = req(path, fields, "space", "Value hole space")?;
-            let space = decode_hole_value_space(&format!("{path}.space"), space_j)?;
-            let default = match get(fields, "default") {
-                None => None,
-                Some(v) => Some(decode_fragment_scalar(&format!("{path}.default"), v)?),
-            };
-            Ok(HoleDecl::Value {
-                name,
-                space,
-                default,
-            })
-        }
-        "Slot" => Ok(HoleDecl::Slot {
-            name: req_string(path, fields, "name", "Slot hole name")?,
-            kind_constraint: opt_string(path, fields, "kindConstraint")?,
-        }),
-        "Repeat" => {
-            let name = req_string(path, fields, "name", "Repeat hole name")?;
-            let space_j = req(path, fields, "countSpace", "Repeat hole countSpace")?;
-            let count_space = decode_hole_value_space(&format!("{path}.countSpace"), space_j)?;
-            Ok(HoleDecl::Repeat { name, count_space })
-        }
-        other => Err(unknown_du_case(path, other, HOLE_DECL_TAGS)),
-    }
-}
-
-fn decode_effect_class(path: &str, j: &JVal) -> DResult<EffectClass> {
-    let fields = as_obj(path, j)?;
-    let host = req_string(path, fields, "hostEffect", "EffectClass hostEffect")?;
-    let host_effect = HostEffect::from_wire(&host).ok_or_else(|| {
-        unknown_enum_case(
-            &format!("{path}.hostEffect"),
-            &host,
-            "Pure | ReadsHost | WritesHost",
-        )
-    })?;
-    let det = req_string(path, fields, "determinism", "EffectClass determinism")?;
-    let determinism = DeterminismSource::from_wire(&det).ok_or_else(|| {
-        unknown_enum_case(
-            &format!("{path}.determinism"),
-            &det,
-            "Deterministic | Clock | Random | Network",
-        )
-    })?;
-    Ok(EffectClass {
-        host_effect,
-        determinism,
-    })
-}
-
 /// A `FragmentArg` map entry: `SlotArg` carries a subtree; any other
 /// discriminator reads as a value scalar (Int | Float | Bool | Str).
-fn decode_fragment_arg(path: &str, j: &JVal) -> DResult<FragmentArg> {
+pub(super) fn decode_fragment_arg(path: &str, j: &JVal) -> DResult<FragmentArg> {
     let fields = as_obj(path, j)?;
     let tag = disc(path, fields)?;
     if tag == "SlotArg" {
@@ -5700,7 +2958,7 @@ fn decode_fragment_arg(path: &str, j: &JVal) -> DResult<FragmentArg> {
     }
 }
 
-fn decode_fragment_args(path: &str, j: &JVal) -> DResult<Vec<(String, FragmentArg)>> {
+pub(super) fn decode_fragment_args(path: &str, j: &JVal) -> DResult<Vec<(String, FragmentArg)>> {
     let fields = as_obj(path, j)?;
     let mut out = Vec::with_capacity(fields.len());
     for (key, value) in fields {
@@ -5712,579 +2970,841 @@ fn decode_fragment_args(path: &str, j: &JVal) -> DResult<Vec<(String, FragmentAr
     Ok(out)
 }
 
-// ─── NodeKind ────────────────────────────────────────────────────────────────
+// ─── The generated codec's helpers ───────────────────────────────────────────
 
-/// Decode a `NodeKind` from its `$type`-discriminated object.
-///
-/// # Why this is a chain of small functions rather than one match
-///
-/// It WAS one match over the whole kind vocabulary, and that shape cost this
-/// host its conformance. In a debug build a function's frame reserves space for
-/// every local across all its branches, so a match carrying one spec temporary
-/// per arm held the entire vocabulary's worth of stack at EVERY level of the
-/// recursion. Measured: ~128 KB per node level, which overflows the default
-/// 1 MB main-thread stack at 8 levels — below `MAX_NODE_DEPTH` of 24. So the
-/// unoptimised build ABORTED on documents `WIRE_FORMAT.md` §21.2 rule 1
-/// requires every conformant host to ACCEPT.
-///
-/// A Rust stack overflow is not catchable, so no depth guard could have rescued
-/// that: the guard at 24 was never reached, because the process was already gone
-/// at 9. Shrinking the frame was the prerequisite for the guard, not a tidy-up
-/// beside it.
-///
-/// The groups below are called in SEQUENCE, not nested, so only one group's
-/// slots are live at a time. Each returns `None` for a tag it does not own and
-/// the next is tried. The split is load-bearing: keep the groups small when
-/// adding a kind, and do not merge them back into one match.
-fn decode_node_kind(path: &str, j: &JVal) -> DResult<NodeKind> {
-    let fields = as_obj(path, j)?;
-    let tag = disc(path, fields)?;
-    if let Some(r) = decode_node_kind_g0(tag, path, j, fields) {
-        return r;
+/// A required field (or one of its foreign spellings), decoded at the canonical
+/// field's path. The canonical name wins when both are present.
+pub(super) fn field_req<T>(
+    path: &str,
+    fields: &Fields,
+    key: &str,
+    aliases: &[&str],
+    expected: &str,
+    f: impl FnOnce(&str, &JVal) -> DResult<T>,
+) -> DResult<T> {
+    let v = req_aliased(path, fields, key, aliases, expected)?;
+    f(&format!("{path}.{key}"), v)
+}
+
+/// An optional field: absent is `None`.
+pub(super) fn field_opt<T>(
+    path: &str,
+    fields: &Fields,
+    key: &str,
+    aliases: &[&str],
+    f: impl FnOnce(&str, &JVal) -> DResult<T>,
+) -> DResult<Option<T>> {
+    match get_aliased(fields, key, aliases) {
+        None => Ok(None),
+        Some(v) => f(&format!("{path}.{key}"), v).map(Some),
     }
-    if let Some(r) = decode_node_kind_g1(tag, path, j, fields) {
-        return r;
+}
+
+/// An omit-at-default field: absent is the IDL's default.
+pub(super) fn field_or<T>(
+    path: &str,
+    fields: &Fields,
+    key: &str,
+    aliases: &[&str],
+    default: T,
+    f: impl FnOnce(&str, &JVal) -> DResult<T>,
+) -> DResult<T> {
+    match get_aliased(fields, key, aliases) {
+        None => Ok(default),
+        Some(v) => f(&format!("{path}.{key}"), v),
     }
-    if let Some(r) = decode_node_kind_g2(tag, path, j, fields) {
-        return r;
+}
+
+/// A list: each element at `path[i]`.
+pub(super) fn dec_list<T>(
+    path: &str,
+    j: &JVal,
+    f: impl Fn(&str, &JVal) -> DResult<T>,
+) -> DResult<Vec<T>> {
+    let items = as_arr(path, j)?;
+    let mut out = Vec::with_capacity(items.len());
+    for (i, item) in items.iter().enumerate() {
+        out.push(f(&format!("{path}[{i}]"), item)?);
     }
-    if let Some(r) = decode_node_kind_g3(tag, path, j, fields) {
-        return r;
+    Ok(out)
+}
+
+/// A map: each entry at `path.key`, in document order.
+pub(super) fn dec_map<T>(
+    path: &str,
+    j: &JVal,
+    f: impl Fn(&str, &JVal) -> DResult<T>,
+) -> DResult<Vec<(String, T)>> {
+    let entries = as_obj(path, j)?;
+    let mut out = Vec::with_capacity(entries.len());
+    for (k, v) in entries {
+        out.push((k.clone(), f(&format!("{path}.{k}"), v)?));
     }
-    if let Some(r) = decode_node_kind_g4(tag, path, j, fields) {
-        return r;
-    }
-    let other = tag;
-    Err(make_error(
+    Ok(out)
+}
+
+pub(super) fn dec_string(path: &str, j: &JVal) -> DResult<String> {
+    Ok(as_str(path, j)?.to_string())
+}
+
+/// A closure slot: its presence is the whole fact (the sentinel carries nothing).
+pub(super) fn dec_closure(_path: &str, _j: &JVal) -> DResult<Closure> {
+    Ok(Closure)
+}
+
+/// A bare-string enum: its wire spelling, else one of its foreign spellings,
+/// else `UNKNOWN_DU_CASE` at the field's own path.
+pub(super) fn decode_enum<T: Copy>(
+    path: &str,
+    j: &JVal,
+    label: &str,
+    from_wire: fn(&str) -> Option<T>,
+    names: &[&str],
+    aliases: &[(&str, T)],
+) -> DResult<T> {
+    let s = match j {
+        JVal::Str(s) => s,
+        _ => return Err(wrong_type(path, &format!("JSON string ({label})"))),
+    };
+    from_wire(s)
+        .or_else(|| aliases.iter().find(|(a, _)| a == s).map(|(_, case)| *case))
+        .ok_or_else(|| unknown_enum_case(path, s, &names.join(" | ")))
+}
+
+/// An unknown `NodeKind` discriminator is `WRONG_NODE_KIND` (§6), its hint every
+/// kind grouped by category.
+pub(super) fn wrong_node_kind(path: &str, other: &str) -> DecodeError {
+    make_error(
         DecodeErrorCode::WrongNodeKind,
         format!("{path}.$type"),
         format!("unknown NodeKind discriminator '{other}'"),
         Some(WRONG_NODE_KIND_HINT.to_string()),
-    ))
+    )
 }
 
-/// One group of the `NodeKind` dispatch — see `decode_node_kind` for why the
-/// dispatch is split. Returns `None` for a tag this group does not own.
-fn decode_node_kind_g0(
-    tag: &str,
+// ─── Decode hooks (declared in dialect.rs) ───────────────────────────────────
+//
+// A field hook is `fn(path, fields) -> DResult<_>` returning the member(s) its
+// field maps to; an owner hook decodes the whole owner; a check refuses after (or
+// before) the uniform reads; an enter hook holds a guard for the owner's decode.
+
+/// Enums that read through a `Static` envelope like a plain scalar does.
+fn decode_enum_unwrapped<T: Copy>(
     path: &str,
     j: &JVal,
-    fields: &Fields,
-) -> Option<DResult<NodeKind>> {
-    let _ = fields;
-    Some(match tag {
-        // Layout.
-        "Box" => (|| -> DResult<NodeKind> { Ok(NodeKind::Box(decode_box_spec(path, j)?)) })(),
-        "SplitPanel" => (|| -> DResult<NodeKind> {
-            Ok(NodeKind::SplitPanel(decode_split_panel_spec(path, j)?))
-        })(),
-        "Tabs" => (|| -> DResult<NodeKind> { Ok(NodeKind::Tabs(decode_tabs_spec(path, j)?)) })(),
-        "Stepper" => {
-            (|| -> DResult<NodeKind> { Ok(NodeKind::Stepper(decode_stepper_spec(path, j)?)) })()
-        }
-        "SummaryList" => (|| -> DResult<NodeKind> {
-            Ok(NodeKind::SummaryList(decode_summary_list_spec(path, j)?))
-        })(),
-        "Disclosure" => {
-            (|| -> DResult<NodeKind> { Ok(NodeKind::Disclosure(decode_disclosure_spec(path, j)?)) })(
-            )
-        }
-        "Modal" => (|| -> DResult<NodeKind> { Ok(NodeKind::Modal(decode_modal_spec(path, j)?)) })(),
-        _ => return None,
+    from_wire: fn(&str) -> Option<T>,
+    names: &[&str],
+) -> DResult<T> {
+    let s = as_str(path, j)?;
+    from_wire(s).ok_or_else(|| unknown_enum_case(path, s, &names.join(" | ")))
+}
+
+pub(super) fn decode_hash_strictness(path: &str, j: &JVal) -> DResult<HashStrictness> {
+    decode_enum_unwrapped(
+        path,
+        j,
+        HashStrictness::from_wire,
+        HashStrictness::WIRE_NAMES,
+    )
+}
+
+pub(super) fn decode_host_effect(path: &str, j: &JVal) -> DResult<HostEffect> {
+    decode_enum_unwrapped(path, j, HostEffect::from_wire, HostEffect::WIRE_NAMES)
+}
+
+pub(super) fn decode_determinism_source(path: &str, j: &JVal) -> DResult<DeterminismSource> {
+    decode_enum_unwrapped(
+        path,
+        j,
+        DeterminismSource::from_wire,
+        DeterminismSource::WIRE_NAMES,
+    )
+}
+
+pub(super) fn decode_channel_direction(path: &str, j: &JVal) -> DResult<ChannelDirection> {
+    decode_enum_unwrapped(
+        path,
+        j,
+        ChannelDirection::from_wire,
+        ChannelDirection::WIRE_NAMES,
+    )
+}
+
+/// `Custom.exposedNodeIds` — an absent list is the empty list.
+pub(super) fn decode_exposed_node_ids(path: &str, fields: &Fields) -> DResult<Vec<NodeId>> {
+    field_or(path, fields, "exposedNodeIds", &[], Vec::new(), |p, j| {
+        dec_list(p, j, dec_string)
     })
 }
 
-/// One group of the `NodeKind` dispatch — see `decode_node_kind` for why the
-/// dispatch is split. Returns `None` for a tag this group does not own.
-fn decode_node_kind_g1(
-    tag: &str,
+/// `FragmentDecl.effect` — absent is the pure deterministic class.
+pub(super) fn decode_fragment_effect(path: &str, fields: &Fields) -> DResult<EffectClass> {
+    field_or(
+        path,
+        fields,
+        "effect",
+        &[],
+        EffectClass::PURE_DETERMINISTIC,
+        decode_effect_class,
+    )
+}
+
+/// `FragmentRef.args` — an absent map is the empty map.
+pub(super) fn decode_fragment_ref_args(
     path: &str,
-    j: &JVal,
     fields: &Fields,
-) -> Option<DResult<NodeKind>> {
-    let _ = fields;
-    Some(match tag {
-        // Display.
-        "ScrollArea" => (|| -> DResult<NodeKind> {
-            Ok(NodeKind::ScrollArea(decode_scroll_area_spec(path, j)?))
-        })(),
-        "Heading" => {
-            (|| -> DResult<NodeKind> { Ok(NodeKind::Heading(decode_heading_spec(path, j)?)) })()
+) -> DResult<Vec<(String, FragmentArg)>> {
+    field_or(path, fields, "args", &[], Vec::new(), decode_fragment_args)
+}
+
+/// `Mount.inputs` — an absent map is the empty map.
+pub(super) fn decode_mount_inputs(
+    path: &str,
+    fields: &Fields,
+) -> DResult<Vec<(String, FragmentArg)>> {
+    field_or(
+        path,
+        fields,
+        "inputs",
+        &[],
+        Vec::new(),
+        decode_fragment_args,
+    )
+}
+
+/// `Select.multiple` — an absent flag is `false`.
+pub(super) fn decode_select_multiple(path: &str, fields: &Fields) -> DResult<bool> {
+    Ok(opt_bool(path, fields, "multiple")? == Some(true))
+}
+
+/// `Switch.on` — absent, the compact `stateKey` spelling names a State binding
+/// (required in that case). An explicit `on` decodes untyped.
+pub(super) fn decode_switch_on(path: &str, fields: &Fields) -> DResult<Binding> {
+    match get(fields, "on") {
+        Some(v) => decode_binding(&format!("{path}.on"), v),
+        None => Ok(Binding::State {
+            key: req_string(path, fields, "stateKey", "Switch stateKey string")?,
+            default_value: StaticValue::Ast(JVal::Null),
+            default_declared: false,
+        }),
+    }
+}
+
+/// `Switch.stateKey` — read by `decode_switch_on`, which it folds into.
+pub(super) fn decode_switch_state_key(_path: &str, _fields: &Fields) -> DResult<()> {
+    Ok(())
+}
+
+/// `SwitchCase` — exactly one of `match` (a string) and `when` (a bool binding),
+/// flattened into the case record.
+pub(super) fn decode_switch_case_folded(path: &str, j: &JVal) -> DResult<SwitchCase> {
+    let cf = as_obj(path, j)?;
+    let condition = match (get(cf, "match"), get(cf, "when")) {
+        (Some(_), Some(_)) => {
+            return Err(wrong_type(
+                &format!("{path}.when"),
+                "exactly one of 'match' and 'when' — a precedence rule between \
+                 them would have to be agreed on every host for a document \
+                 nobody meant to write",
+            ));
         }
-        "Markdown" => {
-            (|| -> DResult<NodeKind> { Ok(NodeKind::Markdown(decode_markdown_spec(path, j)?)) })()
+        (None, Some(when_j)) => SwitchCondition::When(decode_binding_slot(
+            &format!("{path}.when"),
+            when_j,
+            StaticSlot::Bool,
+        )?),
+        _ => SwitchCondition::Match(req_string(path, cf, "match", "Switch case match string")?),
+    };
+    let child = field_req(
+        path,
+        cf,
+        "child",
+        &[],
+        "Switch case child Node",
+        decode_node_ast,
+    )?;
+    Ok(SwitchCase { child, condition })
+}
+
+/// `Switch.autoAdvanceMs` — a positive whole interval; an absent key is off.
+pub(super) fn check_switch(path: &str, _fields: &Fields, spec: &SwitchSpec) -> DResult<()> {
+    match spec.auto_advance_ms {
+        Some(ms) if ms < 1 => Err(wrong_type(
+            &format!("{path}.autoAdvanceMs"),
+            "a positive millisecond interval — an absent key is already the \
+             spelling for off",
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// `Tabs.activeIndex` — absent is the literal binding `0` (omit-at-default by
+/// contract); present decodes at an integer slot.
+pub(super) fn decode_tabs_active_index(path: &str, fields: &Fields) -> DResult<Binding> {
+    match get(fields, "activeIndex") {
+        None => Ok(Binding::Static {
+            value: StaticValue::Ast(JVal::Num(0.0)),
+        }),
+        Some(v) => decode_binding_slot(&format!("{path}.activeIndex"), v, StaticSlot::Int),
+    }
+}
+
+/// `Accessibility.role` — the hosted ARIA role rides as its token string.
+pub(super) fn decode_aria_role(path: &str, fields: &Fields) -> DResult<Option<String>> {
+    opt_string(path, fields, "role")
+}
+
+/// `SelectOption.label` / `MapMarker.label` — read as a full `TextSource`.
+pub(super) fn decode_text_label(path: &str, fields: &Fields) -> DResult<TextSource> {
+    req_text_source(path, fields, "label", "label TextSource")
+}
+
+/// `SelectOption` — a bare JSON string is the option whose value and label are
+/// that string.
+pub(super) fn select_option_shorthand(_path: &str, j: &JVal) -> Option<DResult<SelectOption>> {
+    match j {
+        JVal::Str(s) => Some(Ok(SelectOption {
+            value: s.clone(),
+            label: TextSource::Literal(s.clone()),
+        })),
+        _ => None,
+    }
+}
+
+/// `Format` — `Date` is the foreign spelling of `DateTime`.
+pub(super) fn format_date_alias(path: &str, j: &JVal) -> Option<DResult<Format>> {
+    match j {
+        JVal::Obj(fields) if matches!(get(fields, "$type"), Some(JVal::Str(t)) if t == "Date") => {
+            Some(decode_format_date_time(path, fields))
         }
-        "Metric" => {
-            (|| -> DResult<NodeKind> { Ok(NodeKind::Metric(decode_metric_spec(path, j)?)) })()
+        _ => None,
+    }
+}
+
+/// `CellFormat` — `Date` is the foreign spelling of `DateTime`.
+pub(super) fn cell_format_date_alias(path: &str, j: &JVal) -> Option<DResult<CellFormat>> {
+    match j {
+        JVal::Obj(fields) if matches!(get(fields, "$type"), Some(JVal::Str(t)) if t == "Date") => {
+            Some(decode_cell_format_date_time(path, fields))
         }
-        "Badge" => (|| -> DResult<NodeKind> { Ok(NodeKind::Badge(decode_badge_spec(path, j)?)) })(),
-        "Sparkline" => {
-            (|| -> DResult<NodeKind> { Ok(NodeKind::Sparkline(decode_sparkline_spec(path, j)?)) })()
+        _ => None,
+    }
+}
+
+/// `CellKindErased` — a `Pill` carrying a tone map is the declarative pill:
+/// "pill" is the WORD for the thing, so a tone rule arrives tagged `Pill` more
+/// often than `TonedPill`, and the closure `Pill` can never carry a map.
+pub(super) fn pill_with_tone_map(path: &str, j: &JVal) -> Option<DResult<CellKindErased>> {
+    match j {
+        JVal::Obj(fields)
+            if matches!(get(fields, "$type"), Some(JVal::Str(t)) if t == "Pill")
+                && TONE_MAP_KEYS.iter().any(|k| get(fields, k).is_some()) =>
+        {
+            Some(decode_cell_kind_erased_toned_pill(path, fields))
         }
-        "Callout" => {
-            (|| -> DResult<NodeKind> { Ok(NodeKind::Callout(decode_callout_spec(path, j)?)) })()
-        }
-        "Progress" => {
-            (|| -> DResult<NodeKind> { Ok(NodeKind::Progress(decode_progress_spec(path, j)?)) })()
-        }
-        "Skeleton" => {
-            (|| -> DResult<NodeKind> { Ok(NodeKind::Skeleton(decode_skeleton_spec(path, j)?)) })()
-        }
-        "Icon" => (|| -> DResult<NodeKind> { Ok(NodeKind::Icon(decode_icon_spec(path, j)?)) })(),
-        _ => return None,
+        _ => None,
+    }
+}
+
+/// `CellKindErased.TonedPill.map` — the lookup table, under its canonical key or
+/// a foreign one, each entry a tone.
+pub(super) fn decode_toned_pill_map(
+    path: &str,
+    fields: &Fields,
+) -> DResult<BTreeMap<String, ToneVariant>> {
+    let map_j = req_aliased(
+        path,
+        fields,
+        TONE_MAP_KEYS[0],
+        &TONE_MAP_KEYS[1..],
+        "TonedPill value→ToneVariant map",
+    )?;
+    decode_tone_map(&format!("{path}.map"), map_j)
+}
+
+/// `CellKindErased.ButtonGroup.buttons` — each button object contributes its
+/// label; the click handler is the sentinel.
+pub(super) fn decode_button_group(path: &str, fields: &Fields) -> DResult<Vec<TextSource>> {
+    field_req(path, fields, "buttons", &[], "button group list", |p, j| {
+        dec_list(p, j, |bp, item| {
+            let bf = as_obj(bp, item)?;
+            req_text_source(bp, bf, "label", "button label TextSource")
+        })
     })
 }
 
-/// One group of the `NodeKind` dispatch — see `decode_node_kind` for why the
-/// dispatch is split. Returns `None` for a tag this group does not own.
-fn decode_node_kind_g2(
-    tag: &str,
-    path: &str,
-    j: &JVal,
-    fields: &Fields,
-) -> Option<DResult<NodeKind>> {
-    let _ = fields;
-    Some(match tag {
-        "Fact" => (|| -> DResult<NodeKind> { Ok(NodeKind::Fact(decode_fact_spec(path, j)?)) })(),
-        "LabelValueRow" => (|| -> DResult<NodeKind> {
-            Ok(NodeKind::LabelValueRow(decode_label_value_row_spec(
-                path, j,
-            )?))
-        })(),
-        "Link" => (|| -> DResult<NodeKind> { Ok(NodeKind::Link(decode_link_spec(path, j)?)) })(),
-        "Image" => (|| -> DResult<NodeKind> { Ok(NodeKind::Image(decode_image_spec(path, j)?)) })(),
-        "Media" => (|| -> DResult<NodeKind> { Ok(NodeKind::Media(decode_media_spec(path, j)?)) })(),
-        "Embed" => (|| -> DResult<NodeKind> { Ok(NodeKind::Embed(decode_embed_spec(path, j)?)) })(),
-        "Tree" => (|| -> DResult<NodeKind> { Ok(NodeKind::Tree(decode_tree_spec(path, j)?)) })(),
-        "List" => (|| -> DResult<NodeKind> { Ok(NodeKind::List(decode_list_spec(path, j)?)) })(),
-        "Toast" => (|| -> DResult<NodeKind> { Ok(NodeKind::Toast(decode_toast_spec(path, j)?)) })(),
-        "CodeBlock" => {
-            (|| -> DResult<NodeKind> { Ok(NodeKind::CodeBlock(decode_code_block_spec(path, j)?)) })(
-            )
+/// `BoxLayout` — a `Grid` naming neither a column count nor a template is `Auto`.
+pub(super) fn grid_without_columns(path: &str, j: &JVal) -> Option<DResult<BoxLayout>> {
+    match j {
+        JVal::Obj(fields)
+            if matches!(get(fields, "$type"), Some(JVal::Str(t)) if t == "Grid")
+                && get_aliased(fields, "cols", &["columns"]).is_none() =>
+        {
+            match opt_string(path, fields, "templateColumns") {
+                Ok(None) => Some(Ok(BoxLayout::Auto)),
+                Ok(Some(_)) => None,
+                Err(e) => Some(Err(e)),
+            }
         }
-        "Math" => (|| -> DResult<NodeKind> { Ok(NodeKind::Math(decode_math_spec(path, j)?)) })(),
-        _ => return None,
-    })
+        _ => None,
+    }
 }
 
-/// One group of the `NodeKind` dispatch — see `decode_node_kind` for why the
-/// dispatch is split. Returns `None` for a tag this group does not own.
-fn decode_node_kind_g3(
-    tag: &str,
-    path: &str,
-    j: &JVal,
-    fields: &Fields,
-) -> Option<DResult<NodeKind>> {
-    let _ = fields;
-    Some(match tag {
-        // Input.
-        "Drawing" => {
-            (|| -> DResult<NodeKind> { Ok(NodeKind::Drawing(decode_drawing_spec(path, j)?)) })()
-        }
-        "Form" => (|| -> DResult<NodeKind> { Ok(NodeKind::Form(decode_form_spec(path, j)?)) })(),
-        "Filters" => (|| -> DResult<NodeKind> {
-            {
-                let items_j = req(path, fields, "items", "Filters item list")?;
-                let arr = as_arr(&format!("{path}.items"), items_j)?;
-                let mut specs = Vec::with_capacity(arr.len());
-                for (i, item) in arr.iter().enumerate() {
-                    specs.push(decode_filter_spec(&format!("{path}.items[{i}]"), item)?);
-                }
-                Ok(NodeKind::Filters(specs))
-            }
-        })(),
-        "Button" => {
-            (|| -> DResult<NodeKind> { Ok(NodeKind::Button(decode_button_spec(path, j)?)) })()
-        }
-        "FileUpload" => (|| -> DResult<NodeKind> {
-            Ok(NodeKind::FileUpload(decode_file_upload_spec(path, j)?))
-        })(),
-        _ => return None,
-    })
+/// `BoxLayout.Grid.cols` — absent beside a template is one column.
+pub(super) fn decode_grid_cols(path: &str, fields: &Fields) -> DResult<i64> {
+    field_or(path, fields, "cols", &["columns"], 1, as_int)
 }
 
-/// One group of the `NodeKind` dispatch — see `decode_node_kind` for why the
-/// dispatch is split. Returns `None` for a tag this group does not own.
-fn decode_node_kind_g4(
-    tag: &str,
-    path: &str,
-    j: &JVal,
-    fields: &Fields,
-) -> Option<DResult<NodeKind>> {
-    let _ = fields;
-    Some(match tag {
-        // Visualisation.
-        "Select" => {
-            (|| -> DResult<NodeKind> { Ok(NodeKind::Select(decode_select_spec(path, j)?)) })()
-        }
-        "DataGrid" => {
-            (|| -> DResult<NodeKind> { Ok(NodeKind::DataGrid(decode_grid_spec(path, j)?)) })()
-        }
-        "Chart" => (|| -> DResult<NodeKind> { Ok(NodeKind::Chart(decode_chart_spec(path, j)?)) })(),
-        // Structural.
-        "Map" => (|| -> DResult<NodeKind> { Ok(NodeKind::Map(decode_map_spec(path, j)?)) })(),
-        "Custom" => (|| -> DResult<NodeKind> {
-            {
-                let module_id = req_string(path, fields, "moduleId", "Custom moduleId string")?;
-                let component_id =
-                    req_string(path, fields, "componentId", "Custom componentId string")?;
-                let props_j = req(path, fields, "props", "Custom props map")?;
-                let props = decode_jval_map(&format!("{path}.props"), props_j)?;
-                let content_hash = match get(fields, "contentHash") {
-                    None => None,
-                    Some(v) => Some(decode_content_hash(&format!("{path}.contentHash"), v)?),
-                };
-                let exposed_node_ids = match get(fields, "exposedNodeIds") {
-                    None => vec![],
-                    Some(v) => {
-                        let arr = as_arr(&format!("{path}.exposedNodeIds"), v)?;
-                        let mut ids = Vec::with_capacity(arr.len());
-                        for (i, item) in arr.iter().enumerate() {
-                            ids.push(
-                                as_str(&format!("{path}.exposedNodeIds[{i}]"), item)?.to_string(),
-                            );
-                        }
-                        ids
-                    }
-                };
-                Ok(NodeKind::Custom(CustomSpec {
-                    module_id,
-                    component_id,
-                    props,
-                    content_hash,
-                    exposed_node_ids,
-                }))
-            }
-        })(),
-        "ErrorBoundary" => (|| -> DResult<NodeKind> {
-            {
-                let child_j = req(path, fields, "child", "ErrorBoundary child Node")?;
-                let child = decode_node_ast(&format!("{path}.child"), child_j)?;
-                let fallback_j = req(path, fields, "fallback", "ErrorBoundary fallback Node")?;
-                let fallback = decode_node_ast(&format!("{path}.fallback"), fallback_j)?;
-                Ok(NodeKind::ErrorBoundary(ErrorBoundarySpec {
-                    child: Box::new(child),
-                    fallback: Box::new(fallback),
-                }))
-            }
-        })(),
-        "Switch" => (|| -> DResult<NodeKind> {
-            {
-                // Phase 768 — the selector is any Binding: `on` carries the
-                // canonical Binding wire form; the no-default `State` form keeps
-                // the compact `stateKey` spelling. Both absent keeps the stateKey
-                // MISSING_FIELD, so the reject fixture's error is unchanged.
-                let on = match get(fields, "on") {
-                    Some(v) => decode_binding(&format!("{path}.on"), v)?,
-                    None => Binding::State {
-                        key: req_string(path, fields, "stateKey", "Switch stateKey string")?,
-                        default_value: StaticValue::Ast(JVal::Null),
-                        // The compact `stateKey` spelling carries no default by
-                        // construction, which is exactly what lets the encoder
-                        // collapse back to it.
-                        default_declared: false,
-                    },
-                };
-                let cases_j = req(path, fields, "cases", "Switch cases array")?;
-                let arr = as_arr(&format!("{path}.cases"), cases_j)?;
-                let mut cases = Vec::with_capacity(arr.len());
-                for (i, item) in arr.iter().enumerate() {
-                    let cp = format!("{path}.cases[{i}]");
-                    let cf = as_obj(&cp, item)?;
-                    // Phase 1535 — EXACTLY ONE of `match` and `when`. "Both" is
-                    // refused rather than resolved by precedence (a precedence
-                    // rule would have to be specified, agreed on every host and
-                    // remembered by every author, for a document nobody meant
-                    // to write); "neither" keeps the pre-1535 MISSING_FIELD at
-                    // `.match`, which is what the corpus pins — a case naming
-                    // no condition is not one that never matches, and skipping
-                    // it silently is the class of silence the predicate form
-                    // was added to remove.
-                    let condition = match (get(cf, "match"), get(cf, "when")) {
-                        (Some(_), Some(_)) => {
-                            return Err(wrong_type(
-                                &format!("{cp}.when"),
-                                "exactly one of 'match' and 'when' — a precedence rule between                                  them would have to be agreed on every host for a document                                  nobody meant to write",
-                            ));
-                        }
-                        (None, Some(when_j)) => SwitchCondition::When(decode_binding_slot(
-                            &format!("{cp}.when"),
-                            when_j,
-                            StaticSlot::Bool,
-                        )?),
-                        _ => SwitchCondition::Match(req_string(
-                            &cp,
-                            cf,
-                            "match",
-                            "Switch case match string",
-                        )?),
-                    };
-                    let child_j = req(&cp, cf, "child", "Switch case child Node")?;
-                    let child = decode_node_ast(&format!("{cp}.child"), child_j)?;
-                    cases.push(SwitchCase { condition, child });
-                }
-                let default_j = req(path, fields, "default", "Switch default Node")?;
-                let default = decode_node_ast(&format!("{path}.default"), default_j)?;
-                // Phase 1122 — a POSITIVE INTEGER count of milliseconds.
-                // Non-positive is refused rather than canonicalised: `0` is
-                // what an emitter reaches for to mean "off" and absence is
-                // already that spelling, so rewriting it would make two
-                // document shapes mean one thing and tell the emitter nothing
-                // about its misreading. Fractional is refused separately — the
-                // slot is an integer count, and a decoder truncating where
-                // another rounded would leave two hosts disagreeing about a
-                // document neither refused.
-                let auto_advance_ms = match get(fields, "autoAdvanceMs") {
-                    None => None,
-                    Some(v) => {
-                        let ms_path = format!("{path}.autoAdvanceMs");
-                        let ms = opt_int(path, fields, "autoAdvanceMs")?.ok_or_else(|| {
-                            wrong_type(&ms_path, "an integer millisecond interval")
-                        })?;
-                        if !matches!(v, JVal::Num(n) if n.fract() == 0.0) {
-                            return Err(wrong_type(
-                                &ms_path,
-                                "a whole millisecond interval — the slot is an integer count, and                                  a decoder truncating where another rounded would leave two hosts                                  disagreeing",
-                            ));
-                        }
-                        if ms < 1 {
-                            return Err(wrong_type(
-                                &ms_path,
-                                "a positive millisecond interval — an absent key is already the                                  spelling for off",
-                            ));
-                        }
-                        Some(ms)
-                    }
-                };
-                Ok(NodeKind::Switch(SwitchSpec {
-                    on,
-                    cases,
-                    default: Box::new(default),
-                    auto_advance_ms,
-                }))
-            }
-        })(),
-        "FragmentDecl" => (|| -> DResult<NodeKind> {
-            {
-                let name = req_string(path, fields, "name", "FragmentDecl name string")?;
-                let body_j = req(path, fields, "body", "FragmentDecl body Node")?;
-                let body = decode_node_ast(&format!("{path}.body"), body_j)?;
-                let holes = match get(fields, "holes") {
-                    None => vec![],
-                    Some(v) => {
-                        let arr = as_arr(&format!("{path}.holes"), v)?;
-                        let mut holes = Vec::with_capacity(arr.len());
-                        for (i, item) in arr.iter().enumerate() {
-                            holes.push(decode_hole_decl(&format!("{path}.holes[{i}]"), item)?);
-                        }
-                        holes
-                    }
-                };
-                let effect = match get(fields, "effect") {
-                    None => EffectClass::PURE_DETERMINISTIC,
-                    Some(v) => decode_effect_class(&format!("{path}.effect"), v)?,
-                };
-                Ok(NodeKind::FragmentDecl(FragmentDeclSpec {
-                    name,
-                    body: Box::new(body),
-                    holes,
-                    effect,
-                }))
-            }
-        })(),
-        "FragmentRef" => (|| -> DResult<NodeKind> {
-            {
-                let name = req_string(path, fields, "name", "FragmentRef name string")?;
-                let args = match get(fields, "args") {
-                    None => vec![],
-                    Some(v) => decode_fragment_args(&format!("{path}.args"), v)?,
-                };
-                Ok(NodeKind::FragmentRef(FragmentRefSpec { name, args }))
-            }
-        })(),
-        "Mount" => (|| -> DResult<NodeKind> {
-            {
-                let scope_id = req_string(path, fields, "scopeId", "Mount scopeId string")?;
-                let channel_j = req(path, fields, "channel", "Mount channel object")?;
-                let channel_fields = as_obj(&format!("{path}.channel"), channel_j)?;
-                let channel_path = format!("{path}.channel");
-                let direction = req_string(
-                    &channel_path,
-                    channel_fields,
-                    "direction",
-                    "channel direction string",
-                )?;
-                let direction = ChannelDirection::from_wire(&direction).ok_or_else(|| {
-                    make_error(
-                        DecodeErrorCode::UnknownDuCase,
-                        format!("{channel_path}.direction"),
-                        format!("unknown ChannelDirection '{direction}'"),
-                        Some("OutOnly | TwoWay".to_string()),
-                    )
-                })?;
-                let message_shape = opt_string(&channel_path, channel_fields, "messageShape")?;
-                let caps_j = req(path, fields, "capabilities", "Mount capabilities array")?;
-                let caps_arr = as_arr(&format!("{path}.capabilities"), caps_j)?;
-                let mut capabilities = Vec::with_capacity(caps_arr.len());
-                for (i, item) in caps_arr.iter().enumerate() {
-                    capabilities
-                        .push(as_str(&format!("{path}.capabilities[{i}]"), item)?.to_string());
-                }
-                let inputs = match get(fields, "inputs") {
-                    None => vec![],
-                    Some(v) => decode_fragment_args(&format!("{path}.inputs"), v)?,
-                };
-                Ok(NodeKind::Mount(MountSpec {
-                    scope_id,
-                    inputs,
-                    channel: MountChannel {
-                        direction,
-                        message_shape,
-                    },
-                    capabilities,
-                }))
-            }
-        })(),
-        _ => return None,
-    })
+/// `BoxLayout.Masonry.cols` — a positive column count.
+pub(super) fn check_masonry(path: &str, _fields: &Fields, layout: &BoxLayout) -> DResult<()> {
+    match layout {
+        BoxLayout::Masonry { cols, .. } if *cols <= 0 => Err(wrong_type(
+            &format!("{path}.cols"),
+            "JSON number (positive integer column count)",
+        )),
+        _ => Ok(()),
+    }
 }
 
-// ─── StateBehaviour / SemanticStyle / Accessibility / Node ───────────────────
+/// A `Shape` case's and `Drawing`'s `style` — absent is the default style.
+pub(super) fn decode_style_or_default(path: &str, fields: &Fields) -> DResult<DrawStyle> {
+    field_or(
+        path,
+        fields,
+        "style",
+        &[],
+        DrawStyle::default(),
+        decode_draw_style,
+    )
+}
 
-fn decode_state_behaviour(path: &str, j: &JVal) -> DResult<StateBehaviour> {
+/// `TextSource.Bound.binding` — read untyped: the bound value is rendered as
+/// text whatever it carries.
+pub(super) fn decode_text_bound(path: &str, fields: &Fields) -> DResult<Box<Binding>> {
+    field_req(
+        path,
+        fields,
+        "binding",
+        &[],
+        "Binding<string> object",
+        decode_binding,
+    )
+    .map(Box::new)
+}
+
+/// `TextSource.I18n.args` — absent is the empty bag; each argument is
+/// discriminated by inspection (`decode_i18n_args`).
+pub(super) fn decode_text_i18n_args(
+    path: &str,
+    fields: &Fields,
+) -> DResult<Vec<(String, I18nArg)>> {
+    field_or(path, fields, "args", &[], Vec::new(), decode_i18n_args)
+}
+
+/// `Fact.emphasis` — the behavioural bool, which a model also spells with the
+/// `Emphasis` style tokens.
+pub(super) fn decode_fact_emphasis(path: &str, fields: &Fields) -> DResult<bool> {
+    field_or(
+        path,
+        fields,
+        "emphasis",
+        &[],
+        defaults::FACT_EMPHASIS,
+        decode_emphasis_flag,
+    )
+}
+
+/// `LabelValueRow.emphasis` — as `Fact.emphasis`.
+pub(super) fn decode_row_emphasis(path: &str, fields: &Fields) -> DResult<bool> {
+    field_or(
+        path,
+        fields,
+        "emphasis",
+        &[],
+        defaults::LABEL_VALUE_ROW_EMPHASIS,
+        decode_emphasis_flag,
+    )
+}
+
+/// `SrcSetEntry.width` — Phase 1080: a POSITIVE integer pixel width. A `0w`
+/// candidate is not a small image but one a client can never select.
+pub(super) fn decode_src_set_width(path: &str, fields: &Fields) -> DResult<i64> {
+    let width_j = req(path, fields, "width", "positive intrinsic pixel width")?;
+    match width_j {
+        JVal::Num(n) if *n > 0.0 && n.fract() == 0.0 => Ok(*n as i64),
+        _ => Err(wrong_type(
+            &format!("{path}.width"),
+            "JSON number (positive integer pixel width)",
+        )),
+    }
+}
+
+/// `Skeleton.rows` — the §21.9 bound.
+pub(super) fn check_skeleton(path: &str, _fields: &Fields, spec: &SkeletonSpec) -> DResult<()> {
+    if spec.rows > crate::limits::MAX_SKELETON_ROWS {
+        return Err(make_error(
+            DecodeErrorCode::LimitExceeded,
+            format!("{path}.rows"),
+            format!(
+                "skeleton rows {} exceeds the maximum of {} (WIRE_FORMAT 21.9)",
+                spec.rows,
+                crate::limits::MAX_SKELETON_ROWS
+            ),
+            Some(format!(
+                "at most {} rows on one Skeleton",
+                crate::limits::MAX_SKELETON_ROWS
+            )),
+        ));
+    }
+    Ok(())
+}
+
+/// `FieldRule` — a rule must constrain something, and its length bounds must
+/// not be inverted.
+pub(super) fn check_field_rule(path: &str, _fields: &Fields, rule: &FieldRule) -> DResult<()> {
+    if rule.format.is_none()
+        && rule.pattern.is_none()
+        && rule.min_length.is_none()
+        && rule.max_length.is_none()
+        && rule.compare.is_none()
+    {
+        return Err(make_error(
+            DecodeErrorCode::WrongType,
+            path.to_string(),
+            "a rule that constrains nothing is a defect, not a no-op — declare at least one of \
+             format / pattern / minLength / maxLength / compare, or omit 'rule' entirely"
+                .to_string(),
+            Some("FieldRule with at least one constraint slot".to_string()),
+        ));
+    }
+    if let (Some(lo), Some(hi)) = (rule.min_length, rule.max_length)
+        && lo > hi
+    {
+        return Err(make_error(
+            DecodeErrorCode::WrongType,
+            path.to_string(),
+            format!(
+                "minLength {lo} is above maxLength {hi} — an inverted length bound admits no value \
+                 at all, so the field could never be submitted"
+            ),
+            Some("minLength <= maxLength".to_string()),
+        ));
+    }
+    Ok(())
+}
+
+/// `FormField` — the near-miss refusals, before any field is read.
+pub(super) fn check_form_field_near_misses(path: &str, fields: &Fields) -> DResult<()> {
+    check_near_misses_in(
+        path,
+        fields,
+        FORM_FIELD_NEAR_MISSES,
+        "form",
+        FORM_FIELD_NEAR_MISS_CONSEQUENCE,
+    )
+}
+
+/// `FormField.kind` — an absent control value auto-binds to the field id.
+pub(super) fn decode_form_field_control(path: &str, fields: &Fields) -> DResult<FormFieldKind> {
+    let id = req_string_aliased(path, fields, "id", &["name"], "form field id string")?;
+    let kind_j = req(path, fields, "kind", "FormFieldKind")?;
+    decode_form_field_kind(
+        ControlAutoBind::FormFieldId(&id),
+        &format!("{path}.kind"),
+        kind_j,
+    )
+}
+
+/// `FilterSpec.kind` — an absent control value auto-binds to the chip name.
+pub(super) fn decode_filter_control(path: &str, fields: &Fields) -> DResult<FormFieldKind> {
+    let name = req_string(path, fields, "name", "filter name string")?;
+    let kind_j = req(path, fields, "kind", "FormFieldKind control")?;
+    decode_form_field_kind(
+        ControlAutoBind::FilterChip(&name),
+        &format!("{path}.kind"),
+        kind_j,
+    )
+}
+
+/// The `Filters` kind — its variant holds the `items` list directly.
+pub(super) fn decode_filters_kind(path: &str, j: &JVal) -> DResult<Vec<FilterSpec>> {
     let fields = as_obj(path, j)?;
-    let on_loading = match get(fields, "onLoading") {
-        None => None,
-        Some(v) => Some(Box::new(decode_node_ast(&format!("{path}.onLoading"), v)?)),
-    };
-    let on_empty = match get(fields, "onEmpty") {
-        None => None,
-        Some(v) => Some(Box::new(decode_node_ast(&format!("{path}.onEmpty"), v)?)),
-    };
-    Ok(StateBehaviour {
-        on_loading,
-        on_empty,
-        on_error: opt_closure(fields, "onError"),
+    field_req(path, fields, "items", &[], "Filters items list", |p, j| {
+        dec_list(p, j, decode_filter_spec)
     })
 }
 
-fn decode_semantic_style(path: &str, j: &JVal) -> DResult<SemanticStyle> {
-    let fields = as_obj(path, j)?;
-    // Phase 460 — tone/weight/emphasis omitted-when-default (as role/voice below).
-    let tone = opt_tone_default(path, fields, "tone", defaults::SEMANTIC_STYLE_TONE)?;
-    let weight = opt_weight_default(path, fields, "weight", defaults::SEMANTIC_STYLE_WEIGHT)?;
-    let emphasis =
-        opt_emphasis_default(path, fields, "emphasis", defaults::SEMANTIC_STYLE_EMPHASIS)?;
-    // `role` / `voice` are optional on the wire — omitted at their defaults.
-    let role = match get(fields, "role") {
-        None => defaults::SEMANTIC_STYLE_ROLE,
-        Some(v) => decode_style_role(&format!("{path}.role"), v)?,
-    };
-    let voice = match get(fields, "voice") {
-        None => defaults::SEMANTIC_STYLE_VOICE,
-        Some(v) => decode_font_voice(&format!("{path}.voice"), v)?,
-    };
-    // Phase 1472 - omitted at `Auto`. Lower-case tokens, so the upper-case
-    // spelling an author reaches for (`"LTR"`) is UNKNOWN_DU_CASE rather than
-    // being case-folded into acceptance.
-    let direction = match get(fields, "direction") {
-        None => defaults::SEMANTIC_STYLE_DIRECTION,
-        Some(v) => decode_text_direction(&format!("{path}.direction"), v)?,
-    };
-    Ok(SemanticStyle {
-        emphasis,
-        tone,
-        weight,
-        role,
-        voice,
-        direction,
-    })
-}
-
-/// Phase 2291 — the `PatchStyle` payload. The same six members and the same
-/// per-field token decoders as `SemanticStyle`, but each member is OPTIONAL and
-/// absence means "leave this field as it is" — so a present default token is a
-/// real edit, not an omission. Members are read in their wire (alphabetical)
-/// order. A delta naming no field is not an edit: `WRONG_TYPE` at the delta.
-/// Unknown keys are tolerated, exactly as inside an `UpdateStyle` style.
-fn decode_style_delta(path: &str, j: &JVal) -> DResult<StyleDelta> {
-    let fields = as_obj(path, j)?;
-    fn optional<T>(
-        path: &str,
-        fields: &Fields,
-        key: &str,
-        decode: fn(&str, &JVal) -> DResult<T>,
-    ) -> DResult<Option<T>> {
-        match get(fields, key) {
-            None => Ok(None),
-            Some(v) => decode(&format!("{path}.{key}"), v).map(Some),
+/// `FileUpload` — a named destination is non-empty, and each ceiling positive.
+pub(super) fn check_file_upload(
+    path: &str,
+    _fields: &Fields,
+    spec: &FileUploadSpec,
+) -> DResult<()> {
+    if spec.destination.as_deref() == Some("") {
+        return Err(wrong_type(
+            &format!("{path}.destination"),
+            "a registered destination name — an absent member is already the spelling for \
+             an upload that streams nowhere",
+        ));
+    }
+    for (key, n) in [("maxBytes", spec.max_bytes), ("maxFiles", spec.max_files)] {
+        if matches!(n, Some(v) if v <= 0) {
+            return Err(wrong_type(
+                &format!("{path}.{key}"),
+                "a positive integer ceiling — an absent member is already the spelling for \
+                 an upload that declares no ceiling",
+            ));
         }
     }
-    let delta = StyleDelta {
-        direction: optional(path, fields, "direction", decode_text_direction)?,
-        emphasis: optional(path, fields, "emphasis", decode_emphasis)?,
-        role: optional(path, fields, "role", decode_style_role)?,
-        tone: optional(path, fields, "tone", decode_tone)?,
-        voice: optional(path, fields, "voice", decode_font_voice)?,
-        weight: optional(path, fields, "weight", decode_weight)?,
-    };
+    Ok(())
+}
+
+/// `ColumnErased` — the grid vocabulary's near misses, before any field is read.
+pub(super) fn check_column_near_misses(path: &str, fields: &Fields) -> DResult<()> {
+    check_near_misses(path, fields, COLUMN_NEAR_MISSES)
+}
+
+/// `DefaultSort.column` — a non-negative header index.
+pub(super) fn check_default_sort(path: &str, _fields: &Fields, ds: &DefaultSort) -> DResult<()> {
+    if ds.column < 0 {
+        return Err(wrong_type(
+            &format!("{path}.column"),
+            "JSON number (non-negative integer header index)",
+        ));
+    }
+    Ok(())
+}
+
+/// `DataGrid` — the grid-behaviour near misses, before any field is read.
+pub(super) fn check_grid_near_misses(path: &str, fields: &Fields) -> DResult<()> {
+    check_near_misses(path, fields, GRID_NEAR_MISSES)
+}
+
+/// `DataGrid.pageSize` — a page holds at least one row.
+pub(super) fn check_grid(path: &str, _fields: &Fields, spec: &GridSpec) -> DResult<()> {
+    if matches!(spec.page_size, Some(n) if n < 1) {
+        return Err(wrong_type(
+            &format!("{path}.pageSize"),
+            "JSON number (integer page size of 1 or more)",
+        ));
+    }
+    Ok(())
+}
+
+/// `ChartAnnotationX.Date` — the date is the address the marker is drawn at.
+pub(super) fn check_annotation_date(
+    path: &str,
+    _fields: &Fields,
+    x: &ChartAnnotationX,
+) -> DResult<()> {
+    match x {
+        ChartAnnotationX::Date(iso) if !is_canonical_iso_day(iso) => Err(wrong_type(
+            &format!("{path}.iso"),
+            "a canonical ISO-8601 date (YYYY-MM-DD, optionally followed by a time) naming a real calendar day — an event marker's date is the address it is drawn at, and an unreadable one would place the marker at 1970-01-01 and drag the axis back with it",
+        )),
+        _ => Ok(()),
+    }
+}
+
+const BACKWARDS_BAND: &str = "an ORDERED pair — a range band runs from its lower value to its upper one, and this pair runs backwards; swapping the ends silently would draw a band the author did not describe";
+
+/// `ChartAnnotationRange.ValueRange` — finite ends, in order.
+pub(super) fn check_value_range(
+    path: &str,
+    _fields: &Fields,
+    r: &ChartAnnotationRange,
+) -> DResult<()> {
+    if let ChartAnnotationRange::ValueRange { from, to } = r {
+        for (slot, v) in [("from", *from), ("to", *to)] {
+            if !v.is_finite() {
+                return Err(wrong_type(
+                    &format!("{path}.{slot}"),
+                    "a FINITE JSON number — a range band's end names a place on the value axis, and NaN / Infinity names none; give the value in the axis's own units, or drop the annotation",
+                ));
+            }
+        }
+        if from > to {
+            return Err(wrong_type(path, BACKWARDS_BAND));
+        }
+    }
+    Ok(())
+}
+
+/// `ChartAnnotationRange.XRange` — two dates run forwards.
+pub(super) fn check_x_range(path: &str, _fields: &Fields, r: &ChartAnnotationRange) -> DResult<()> {
+    if let ChartAnnotationRange::XRange {
+        from: ChartAnnotationX::Date(a),
+        to: ChartAnnotationX::Date(b),
+    } = r
+        && a > b
+    {
+        return Err(wrong_type(
+            path,
+            "an ORDERED pair — a range band runs from its earlier date to its later one, and this pair runs backwards; swapping the ends silently would draw a band the author did not describe",
+        ));
+    }
+    Ok(())
+}
+
+/// `ChartAnnotation.ReferenceLine.value` — a finite place on the value axis.
+pub(super) fn check_reference_line(
+    path: &str,
+    _fields: &Fields,
+    a: &ChartAnnotation,
+) -> DResult<()> {
+    match a {
+        ChartAnnotation::ReferenceLine { value, .. } if !value.is_finite() => Err(wrong_type(
+            &format!("{path}.value"),
+            "a FINITE JSON number — a reference line names a place on the value axis, and NaN / Infinity names none; give the value in the axis's own units, or drop the annotation",
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// `StyleDelta` — a patch naming nothing is a defect.
+pub(super) fn check_style_delta(path: &str, _fields: &Fields, delta: &StyleDelta) -> DResult<()> {
     if delta.is_empty() {
         return Err(wrong_type(
             path,
             "StyleDelta naming at least one field (direction | emphasis | role | tone | voice | weight)",
         ));
     }
-    Ok(delta)
+    Ok(())
 }
 
-fn decode_accessibility(path: &str, j: &JVal) -> DResult<Accessibility> {
-    let fields = as_obj(path, j)?;
-    // Phase 959 — the near-miss check runs BEFORE the slot reads, matching the
-    // `FormField` ordering, so a trait carrying both `ariaLabel` and a
-    // well-formed `label` still names the ignored key rather than decoding half
-    // the author's intent in silence.
+/// `Accessibility` — the ARIA near misses, before any field is read.
+pub(super) fn check_a11y_near_misses(path: &str, fields: &Fields) -> DResult<()> {
     check_near_misses_in(
         path,
         fields,
         A11Y_NEAR_MISSES,
         "accessibility",
         A11Y_NEAR_MISS_CONSEQUENCE,
-    )?;
-    let label = opt_binding_slot(path, fields, "label", StaticSlot::Str)?;
-    let labelled_by = opt_string(path, fields, "labelledBy")?;
-    let described_by = opt_string(path, fields, "describedBy")?;
-    // Any string is accepted — named ARIA roles and the custom raw escape both
-    // encode as the raw string (§10.2).
-    let role = opt_string(path, fields, "role")?;
-    let live_region = match get(fields, "liveRegion") {
-        None => None,
-        Some(v) => Some(decode_live_region(&format!("{path}.liveRegion"), v)?),
-    };
-    let hidden = opt_binding_slot(path, fields, "hidden", StaticSlot::Bool)?;
-    // Phase 1812 — the spoken rendering, an ordinary `TextSource` slot like
-    // `tooltip`; inert to the visual projection.
-    let speak = opt_text_source(path, fields, "speak")?;
-    Ok(Accessibility {
-        label,
-        labelled_by,
-        described_by,
-        role,
-        live_region,
-        hidden,
-        speak,
+    )
+}
+
+/// `Action.SetState` — exactly one of `value` (a literal) and `valueFrom` (a
+/// binding read at dispatch).
+pub(super) fn decode_set_state(path: &str, fields: &Fields) -> DResult<Action> {
+    let key = req_string(path, fields, "key", "state key string")?;
+    match (get(fields, "value"), get(fields, "valueFrom")) {
+        (Some(_), Some(_)) => Err(make_error(
+            DecodeErrorCode::WrongType,
+            format!("{path}.valueFrom"),
+            "SetState carries both 'value' and 'valueFrom' — exactly one is allowed: 'value' is a literal JSON value written verbatim; 'valueFrom' derives the written value from a Binding at dispatch time; remove one".to_string(),
+            None,
+        )),
+        (None, None) => Err(make_error(
+            DecodeErrorCode::MissingField,
+            format!("{path}.value"),
+            "missing required field 'value' — provide 'value' (a literal JSON value) or 'valueFrom' (a Binding evaluated at dispatch time)".to_string(),
+            None,
+        )),
+        (Some(v), None) => Ok(Action::SetState {
+            key,
+            value: Some(decode_jval(&format!("{path}.value"), v)?),
+            value_from: None,
+        }),
+        (None, Some(b)) => Ok(Action::SetState {
+            key,
+            value: None,
+            value_from: Some(Box::new(decode_binding(&format!("{path}.valueFrom"), b)?)),
+        }),
+    }
+}
+
+/// `Action.Print` — the payload-free action: any member beside `$type` is refused.
+pub(super) fn decode_print(path: &str, fields: &Fields) -> DResult<Action> {
+    let mut extras: Vec<&str> = fields
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .filter(|k| *k != "$type")
+        .collect();
+    if !extras.is_empty() {
+        extras.sort_unstable();
+        return Err(wrong_type(
+            &format!("{path}.{}", extras[0]),
+            "no member beside $type — Print takes no payload",
+        ));
+    }
+    Ok(Action::Print)
+}
+
+/// `Action.Confirm` — no confirmation may be nested inside another.
+pub(super) fn check_confirm(path: &str, _fields: &Fields, a: &Action) -> DResult<()> {
+    if let Action::Confirm {
+        on_confirm,
+        on_cancel,
+        ..
+    } = a
+    {
+        refuse_nested_confirm(on_confirm, &format!("{path}.onConfirm"))?;
+        if let Some(cancel) = on_cancel {
+            refuse_nested_confirm(cancel, &format!("{path}.onCancel"))?;
+        }
+    }
+    Ok(())
+}
+
+/// `TreeOp.InsertChild` — the retired positional slot is refused by name.
+pub(super) fn check_insert_child(path: &str, fields: &Fields) -> DResult<()> {
+    retired_positional_field(path, fields, "position", "InsertChild")
+}
+
+/// `TreeOp.MoveNode` — the retired positional slot is refused by name.
+pub(super) fn check_move_node(path: &str, fields: &Fields) -> DResult<()> {
+    retired_positional_field(path, fields, "newPosition", "MoveNode")
+}
+
+/// `Node` — the §21 node-depth and total-node bounds, entered on the way DOWN;
+/// the guard pops in `Drop`, so the count is right on every error path.
+pub(super) fn enter_node(path: &str) -> DResult<crate::limits::NodeGuard> {
+    crate::limits::NodeGuard::enter().map_err(|b| limit_error(path, b))
+}
+
+/// `TreeOp` — the op axis, counted separately and held to the same ceiling
+/// (§21.5: `Batch` makes the op decoder self-recursive).
+pub(super) fn enter_op(path: &str) -> DResult<crate::limits::OpGuard> {
+    crate::limits::OpGuard::enter().map_err(|b| limit_error(path, b))
+}
+
+/// `TreeItem` — a tree item's own nesting bound.
+pub(super) fn enter_tree_item(path: &str) -> DResult<crate::limits::TreeItemGuard> {
+    crate::limits::TreeItemGuard::enter().map_err(|b| limit_error(path, b))
+}
+
+/// `DataGrid.source` — the rows feed decodes through the `Rows` payload slot
+/// (fuaran#665): an authored feed is typed data, not the opaque sentinel.
+pub(super) fn decode_grid_source(path: &str, fields: &Fields) -> DResult<Binding> {
+    req_binding_slot_aliased(path, fields, "source", &["data", "rows"], StaticSlot::Rows)
+}
+
+/// `Chart.source` — the rows feed decodes through the `Rows` payload slot.
+pub(super) fn decode_chart_source(path: &str, fields: &Fields) -> DResult<Binding> {
+    req_binding_slot_aliased(path, fields, "source", &["data"], StaticSlot::Rows)
+}
+
+/// `Select.value` — the selection is an optional string: "no selection" is a
+/// value, so the payload decodes through `StringOpt`.
+pub(super) fn decode_select_value(path: &str, fields: &Fields) -> DResult<Binding> {
+    req_binding_slot_aliased(path, fields, "value", &[], StaticSlot::StringOpt)
+}
+
+fn req_binding_slot_aliased(
+    path: &str,
+    fields: &Fields,
+    key: &str,
+    aliases: &[&str],
+    slot: StaticSlot,
+) -> DResult<Binding> {
+    field_req(path, fields, key, aliases, "Binding object", |p, j| {
+        decode_binding_slot(p, j, slot)
     })
 }
 
-fn decode_node_ast(path: &str, j: &JVal) -> DResult<Node> {
-    // §21 node-depth + total-node bounds, on the way DOWN (rule 4). The guard
-    // pops in `Drop`, which is what makes the counter correct on the ERROR
-    // paths — and those are most of the paths, since this decoder is a long
-    // chain of `?` early returns.
-    let _guard = crate::limits::NodeGuard::enter().map_err(|b| limit_error(path, b))?;
-
-    let fields = as_obj(path, j)?;
-    let id_j = req(path, fields, "id", "Node id string")?;
-    let id = as_str(&format!("{path}.id"), id_j)?;
+/// `Node.id` — a node id names something, so an empty one is `EMPTY_NODE_ID`.
+pub(super) fn decode_node_id(path: &str, fields: &Fields) -> DResult<NodeId> {
+    let id = field_req(path, fields, "id", &[], "Node id string", dec_string)?;
     if id.is_empty() {
         return Err(make_error(
             DecodeErrorCode::EmptyNodeId,
@@ -6293,240 +3813,36 @@ fn decode_node_ast(path: &str, j: &JVal) -> DResult<Node> {
             Some("non-empty string".to_string()),
         ));
     }
-    let kind_j = req(path, fields, "kind", "NodeKind discriminator object")?;
-    let kind = decode_node_kind(&format!("{path}.kind"), kind_j)?;
-    let state = match get(fields, "state") {
-        None => StateBehaviour::default(),
-        Some(v) => decode_state_behaviour(&format!("{path}.state"), v)?,
-    };
-    let style = match get(fields, "style") {
-        None => SemanticStyle::default(),
-        Some(v) => decode_semantic_style(&format!("{path}.style"), v)?,
-    };
-    let accessibility = match get(fields, "accessibility") {
-        None => None,
-        Some(v) => Some(decode_accessibility(&format!("{path}.accessibility"), v)?),
-    };
-    // Phase 1112 - the tooltip TRAIT, on the envelope beside `accessibility`
-    // rather than in any kind. It takes every `TextSource` arm, so a non-string,
-    // non-object value is `WRONG_TYPE` at `$.tooltip` - reported through the
-    // shared `TextSource` decoder rather than by a second reading here.
-    let tooltip = opt_text_source(path, fields, "tooltip")?;
-    // Phase 1535 — the conditional-presence TRAIT, an ordinary `Binding<bool>`
-    // slot beside `tooltip`. The §3.6 bare-scalar coercion reaches it like any
-    // other binding slot.
-    let visible = opt_binding_slot(path, fields, "visible", StaticSlot::Bool)?;
-    // Phase 1812 — the author-declared fallback: a full node, walked by the same
-    // policy-gated decoder as any nested node (so the §21 bounds apply), preserved
-    // and re-encoded verbatim, never rendered by a reader that decodes the kind.
-    let fallback = match get(fields, "fallback") {
-        None => None,
-        Some(v) => Some(Box::new(decode_node_ast(&format!("{path}.fallback"), v)?)),
-    };
-    Ok(Node {
-        id: id.to_string(),
-        kind,
-        state,
-        style,
-        accessibility,
-        tooltip,
-        visible,
-        fallback,
-    })
+    Ok(id)
 }
 
-// ─── TreeOp ──────────────────────────────────────────────────────────────────
-
-/// Decode a `TreeOp` from its `$type`-discriminated object.
-///
-/// Split into sequential groups for the same reason as `decode_node_kind` — see
-/// that function's note. It matters here despite there being only eleven ops,
-/// because `TreeOp` is over a kilobyte and two of its arms carry a whole `Node`
-/// as well. Measured before the split: the op axis aborted at 23 levels on a
-/// 1 MB main-thread stack, one level short of `MAX_NODE_DEPTH`, so `OpGuard`
-/// could never fire on a conformant document.
-fn decode_tree_op_ast(path: &str, j: &JVal) -> DResult<TreeOp> {
-    // The op axis, counted separately from the node axis and held to the same
-    // ceiling — §21.5's note for implementers, since `Batch` makes this
-    // self-recursive and the syntactic bound only LOOKS like cover for it.
-    let _guard = crate::limits::OpGuard::enter().map_err(|b| limit_error(path, b))?;
-
-    let fields = as_obj(path, j)?;
-    let tag = disc(path, fields)?;
-    if let Some(r) = decode_tree_op_ast_g0(tag, path, j, fields) {
-        return r;
-    }
-    if let Some(r) = decode_tree_op_ast_g1(tag, path, j, fields) {
-        return r;
-    }
-    if let Some(r) = decode_tree_op_ast_g2(tag, path, j, fields) {
-        return r;
-    }
-    let other = tag;
-    Err(unknown_du_case(path, other, TREE_OP_TAGS))
+/// `Node.state` — absent is the empty behaviour.
+pub(super) fn decode_node_state(path: &str, fields: &Fields) -> DResult<StateBehaviour> {
+    field_or(
+        path,
+        fields,
+        "state",
+        &[],
+        StateBehaviour::default(),
+        decode_state_behaviour,
+    )
 }
 
-/// One group of the `TreeOp` dispatch — see `decode_tree_op_ast`.
-fn decode_tree_op_ast_g0(
-    tag: &str,
-    path: &str,
-    j: &JVal,
-    fields: &Fields,
-) -> Option<DResult<TreeOp>> {
-    let _ = (j, fields);
-    Some(match tag {
-        "EditNode" => (|| -> DResult<TreeOp> {
-            {
-                let target = req_string(path, fields, "target", "target NodeId")?;
-                let kind_j = req(path, fields, "newKind", "NodeKind object")?;
-                let new_kind = decode_node_kind(&format!("{path}.newKind"), kind_j)?;
-                Ok(TreeOp::EditNode { target, new_kind })
-            }
-        })(),
-        "UpdateProp" => (|| -> DResult<TreeOp> {
-            {
-                let target = req_string(path, fields, "target", "target NodeId")?;
-                let prop_path = req_string(path, fields, "path", "dot-separated path string")?;
-                let value_j = req(path, fields, "value", "JsonValue payload")?;
-                let value = decode_jval(&format!("{path}.value"), value_j)?;
-                Ok(TreeOp::UpdateProp {
-                    target,
-                    path: prop_path,
-                    value,
-                })
-            }
-        })(),
-        "ReplaceBinding" => (|| -> DResult<TreeOp> {
-            {
-                let target = req_string(path, fields, "target", "target NodeId")?;
-                let slot = req_string(path, fields, "slot", "slot name string")?;
-                let binding = req_binding(path, fields, "binding", "Binding object")?;
-                Ok(TreeOp::ReplaceBinding {
-                    target,
-                    slot,
-                    binding,
-                })
-            }
-        })(),
-        "UpdateStyle" => (|| -> DResult<TreeOp> {
-            {
-                let target = req_string(path, fields, "target", "target NodeId")?;
-                let style_j = req(path, fields, "style", "SemanticStyle object")?;
-                let style = decode_semantic_style(&format!("{path}.style"), style_j)?;
-                Ok(TreeOp::UpdateStyle { target, style })
-            }
-        })(),
-        "PatchStyle" => (|| -> DResult<TreeOp> {
-            {
-                let target = req_string(path, fields, "target", "target NodeId")?;
-                let style_j = req(path, fields, "style", "StyleDelta object")?;
-                let style = decode_style_delta(&format!("{path}.style"), style_j)?;
-                Ok(TreeOp::PatchStyle { target, style })
-            }
-        })(),
-        _ => return None,
-    })
-}
-
-/// One group of the `TreeOp` dispatch — see `decode_tree_op_ast`.
-fn decode_tree_op_ast_g1(
-    tag: &str,
-    path: &str,
-    j: &JVal,
-    fields: &Fields,
-) -> Option<DResult<TreeOp>> {
-    let _ = (j, fields);
-    Some(match tag {
-        "UpdateState" => (|| -> DResult<TreeOp> {
-            {
-                let target = req_string(path, fields, "target", "target NodeId")?;
-                let state_j = req(path, fields, "state", "StateBehaviour object")?;
-                let state = decode_state_behaviour(&format!("{path}.state"), state_j)?;
-                Ok(TreeOp::UpdateState { target, state })
-            }
-        })(),
-        "InsertChild" => (|| -> DResult<TreeOp> {
-            {
-                // Phase 687 CLOSED the migration window Phase 681 opened: a
-                // legacy `position` is a decode error. Checked BEFORE the
-                // required-field reads — see `retired_positional_field`.
-                retired_positional_field(path, fields, "position", "InsertChild")?;
-                let parent_id = req_string(path, fields, "parentId", "parent NodeId")?;
-                let child_j = req(path, fields, "child", "child Node object")?;
-                let child = decode_node_ast(&format!("{path}.child"), child_j)?;
-                Ok(TreeOp::InsertChild { parent_id, child })
-            }
-        })(),
-        "RemoveNode" => (|| -> DResult<TreeOp> {
-            Ok(TreeOp::RemoveNode {
-                target: req_string(path, fields, "target", "target NodeId")?,
-            })
-        })(),
-        "MoveNode" => (|| -> DResult<TreeOp> {
-            {
-                // Legacy `newPosition` is a decode error — see InsertChild above.
-                retired_positional_field(path, fields, "newPosition", "MoveNode")?;
-                let target = req_string(path, fields, "target", "target NodeId")?;
-                let new_parent_id = req_string(path, fields, "newParentId", "new parent NodeId")?;
-                Ok(TreeOp::MoveNode {
-                    target,
-                    new_parent_id,
-                })
-            }
-        })(),
-        _ => return None,
-    })
-}
-
-/// One group of the `TreeOp` dispatch — see `decode_tree_op_ast`.
-fn decode_tree_op_ast_g2(
-    tag: &str,
-    path: &str,
-    j: &JVal,
-    fields: &Fields,
-) -> Option<DResult<TreeOp>> {
-    let _ = (j, fields);
-    Some(match tag {
-        "ReorderChildren" => (|| -> DResult<TreeOp> {
-            {
-                let parent_id = req_string(path, fields, "parentId", "parent NodeId")?;
-                let order_j = req(path, fields, "newOrder", "NodeId list")?;
-                let arr = as_arr(&format!("{path}.newOrder"), order_j)?;
-                let mut new_order = Vec::with_capacity(arr.len());
-                for (i, item) in arr.iter().enumerate() {
-                    new_order.push(as_str(&format!("{path}.newOrder[{i}]"), item)?.to_string());
-                }
-                Ok(TreeOp::ReorderChildren {
-                    parent_id,
-                    new_order,
-                })
-            }
-        })(),
-        "ReplaceRoot" => (|| -> DResult<TreeOp> {
-            {
-                let node_j = req(path, fields, "node", "root Node object")?;
-                let node = decode_node_ast(&format!("{path}.node"), node_j)?;
-                Ok(TreeOp::ReplaceRoot { node })
-            }
-        })(),
-        "Batch" => (|| -> DResult<TreeOp> {
-            {
-                let ops_j = req(path, fields, "ops", "Batch inner-op list")?;
-                let arr = as_arr(&format!("{path}.ops"), ops_j)?;
-                let mut ops = Vec::with_capacity(arr.len());
-                for (i, item) in arr.iter().enumerate() {
-                    ops.push(decode_tree_op_ast(&format!("{path}.ops[{i}]"), item)?);
-                }
-                Ok(TreeOp::Batch(ops))
-            }
-        })(),
-        _ => return None,
-    })
+/// `Node.style` — absent is the default style.
+pub(super) fn decode_node_style(path: &str, fields: &Fields) -> DResult<SemanticStyle> {
+    field_or(
+        path,
+        fields,
+        "style",
+        &[],
+        SemanticStyle::default(),
+        decode_semantic_style,
+    )
 }
 
 // ─── Public surface ──────────────────────────────────────────────────────────
 
-fn invalid_json(parse_message: &str) -> DecodeError {
+pub(super) fn invalid_json(parse_message: &str) -> DecodeError {
     make_error(
         DecodeErrorCode::InvalidJson,
         "$",
@@ -6539,7 +3855,7 @@ fn invalid_json(parse_message: &str) -> DecodeError {
 /// limit breach is `LIMIT_EXCEEDED`, never `INVALID_JSON`. Only the parser knows
 /// which of the two happened, so it flags the distinction rather than leaving it
 /// to be re-derived from a message string.
-fn parse_failure(e: &crate::canonical::ParseError) -> DecodeError {
+pub(super) fn parse_failure(e: &crate::canonical::ParseError) -> DecodeError {
     if e.limit {
         make_error(
             DecodeErrorCode::LimitExceeded,
@@ -6556,7 +3872,7 @@ fn parse_failure(e: &crate::canonical::ParseError) -> DecodeError {
 }
 
 /// A §21 walk-bound refusal at `path`.
-fn limit_error(path: &str, breach: crate::limits::LimitBreach) -> DecodeError {
+pub(super) fn limit_error(path: &str, breach: crate::limits::LimitBreach) -> DecodeError {
     make_error(
         DecodeErrorCode::LimitExceeded,
         path.to_string(),
@@ -6576,7 +3892,7 @@ fn limit_error(path: &str, breach: crate::limits::LimitBreach) -> DecodeError {
 /// `&str` is UTF-8 by construction, so `len()` IS the measured unit and there
 /// is nothing to convert. The path is `$`: the breach is a property of the
 /// document, not of a position in it.
-fn document_bytes_error(json: &str) -> Option<DecodeError> {
+pub(super) fn document_bytes_error(json: &str) -> Option<DecodeError> {
     if json.len() <= crate::limits::MAX_DOCUMENT_BYTES {
         return None;
     }
@@ -6689,11 +4005,11 @@ pub(crate) mod coerce {
     }
 
     pub fn tone(v: &JVal) -> C<ToneVariant> {
-        via(v, decode_tone)
+        via(v, decode_tone_variant)
     }
 
     pub fn weight(v: &JVal) -> C<StyleWeight> {
-        via(v, decode_weight)
+        via(v, decode_style_weight)
     }
 
     pub fn emphasis(v: &JVal) -> C<Emphasis> {

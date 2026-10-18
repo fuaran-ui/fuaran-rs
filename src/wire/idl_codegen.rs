@@ -30,13 +30,20 @@
 //! three. Because the types are generated, a kind, case or field on one side and
 //! not the other cannot be written, which retired Phase 2298's compile-time pins.
 //!
+//! - the UNIFORM half of the codec (Phase 2333): one encoder and one decoder per
+//!   owner, and the discriminator dispatch, written from the IDL type, the
+//!   optionality and the generated members (`gen_encode` / `gen_decode`).
+//!
 //! **What stays hand-written, deliberately.** The behaviour over the types:
-//! decode policy, refusal wording, leniency, relational and limit checks, the
-//! encoder, rendering and the C ABI, plus the few host-modelled types the dialect
-//! names (`StaticValue`, `I18nArg`, `TransformSource`, `SwitchCondition`,
-//! `FragmentArg`). A new field therefore still meets the compiler at every struct
-//! literal that builds its owner (the decoder's among them), and a new kind at
-//! every exhaustive `match` over `NodeKind`: those sites decide behaviour.
+//! decode policy, refusal wording, leniency, relational and limit checks,
+//! rendering and the C ABI, plus the few host-modelled types the dialect names
+//! (`StaticValue`, `I18nArg`, `TransformSource`, `SwitchCondition`,
+//! `FragmentArg`). Codec policy is a hook the dialect declares, naming the hand
+//! function that handles it, and the generator refuses a hook naming nothing and
+//! a `Shape` hook the rules now cover. A plain field the IDL gains is therefore
+//! coded with no hand edit; it meets the compiler only where behaviour builds its
+//! owner (the renderer's projection), and a new kind only at the exhaustive
+//! `match`es over `NodeKind` that decide what a kind DOES.
 //!
 //! **Ruling (2026-10-16).** The generator is host-owned and
 //! reads the published IDL; it is not a target of any other tier, and no codec
@@ -72,7 +79,11 @@ pub const GENERATED_PATH: &str = "src/wire/generated.rs";
 #[path = "dialect.rs"]
 mod dialect;
 
-use dialect::{CATEGORIES, DERIVES, FIELDS, HAND_TYPES, INLINED, KIND_PAYLOADS, NOTES, TYPE_NAMES};
+use dialect::{
+    CATEGORIES, Check, DECODE_ALIASES, DECODE_CHECKS, DECODE_ENTER, DECODE_HOOKS, DECODE_OWNERS,
+    DERIVES, ENCODE_HOOKS, ENCODE_OWNERS, ENUM_ALIASES, FIELDS, HAND_TYPES, Hook, INLINED,
+    KIND_PAYLOADS, NOTES, TYPE_NAMES, UNION_PRE,
+};
 
 /// Rust keywords an IDL field or case name can collide with, and how this host
 /// spells them: a raw identifier for a field, a trailing underscore for an enum
@@ -125,6 +136,8 @@ struct Idl {
     enums: Vec<Enum>,
     ops: Vec<Owner>,
     node_fields: Vec<Field>,
+    /// `(union, case)`: a case whose bare value is its canonical spelling.
+    transparent: Vec<(String, String)>,
 }
 
 fn str_of<'a>(j: &'a JVal, key: &str, at: &str) -> Result<&'a str, String> {
@@ -252,6 +265,15 @@ fn read_idl(text: &str) -> Result<Idl, String> {
         )]),
         "nodeFields",
     )?;
+    let mut transparent = Vec::new();
+    if let Some(JVal::Arr(items)) = j.field("harden").and_then(|h| h.field("transparentUnions")) {
+        for t in items {
+            transparent.push((
+                str_of(t, "union", "transparentUnions[]")?.to_string(),
+                str_of(t, "case", "transparentUnions[]")?.to_string(),
+            ));
+        }
+    }
     Ok(Idl {
         version,
         kinds,
@@ -260,6 +282,7 @@ fn read_idl(text: &str) -> Result<Idl, String> {
         enums,
         ops,
         node_fields,
+        transparent,
     })
 }
 
@@ -1133,6 +1156,8 @@ pub(crate) mod defaults {{
     }
     let _ = writeln!(w, "}}");
 
+    write_codec(w, &idl)?;
+
     // ── Slots ───────────────────────────────────────────────────────────────
     let bearing = node_bearing_records(&idl);
     let mut node_slots: Vec<String> = Vec::new();
@@ -1188,4 +1213,1173 @@ pub const NODE_RECORD_SLOTS: &[&str] = {};",
         );
     }
     Ok(out.replacen("@@IMPORTS@@", &imports, 1))
+}
+
+// ── The generated codec (Phase 2333) ───────────────────────────────────────
+//
+// The UNIFORM half of the codec: one encoder and one decoder per owner (a kind's
+// spec, a record, a union case, a tree op, the node envelope), written from the
+// IDL type, the optionality and the generated Rust members. Every position whose
+// handling is policy is a hook the dialect declares, naming the hand function in
+// `encode.rs` / `decode.rs` that handles it. A hook receives every Rust member its
+// field (or owner) carries, so a field the IDL gains is either written by the
+// generated encoder or changes a hook's arity — never silently absent.
+
+/// One owner the codec covers.
+struct CodecOwner<'a> {
+    /// The dialect key: a kind's tag, a record's name, `Union.Case`, `TreeOp.Tag`
+    /// or `Node`.
+    key: String,
+    /// The `defaults` constant prefix (empty where the table carries none).
+    prefix: String,
+    /// The path the members are bound under: `BadgeSpec` or `Action::Navigate`.
+    path: String,
+    /// The IDL fields, host-only ones included (they carry no member).
+    fields: Vec<&'a Field>,
+    /// Each field's Rust members, parallel to `fields`.
+    per_field: Vec<Vec<Member>>,
+    /// Every member, in declaration order.
+    members: Vec<Member>,
+}
+
+impl CodecOwner<'_> {
+    fn positional(&self) -> bool {
+        !self.members.is_empty()
+            && self
+                .members
+                .iter()
+                .all(|m| m.ident.chars().all(|c| c.is_ascii_digit()))
+    }
+}
+
+/// The name a member is bound to in a generated pattern.
+/// Prefixed, so a member never shadows a codec function of the same name (a
+/// `field` member beside the `field` helper, a `view_box` beside its encoder).
+fn bind(m: &Member) -> String {
+    format!("m_{}", key_ident(&m.ident))
+}
+
+/// The pattern binding every member of an owner (also the expression building
+/// it from the same names).
+fn pattern(o: &CodecOwner) -> String {
+    if o.members.is_empty() {
+        // A unit case is its path; a struct with no members is `Path {}`.
+        if o.path.contains("::") {
+            o.path.clone()
+        } else {
+            format!("{} {{}}", o.path)
+        }
+    } else if o.positional() {
+        let binds: Vec<String> = o.members.iter().map(bind).collect();
+        format!("{}({})", o.path, binds.join(", "))
+    } else {
+        let binds: Vec<String> = o
+            .members
+            .iter()
+            .map(|m| format!("{}: {}", m.ident, bind(m)))
+            .collect();
+        format!("{} {{ {} }}", o.path, binds.join(", "))
+    }
+}
+
+/// A Rust function name for a type: `TextSource` → `text_source`.
+fn fn_name(rust_ty: &str) -> String {
+    snake(rust_ty).trim_start_matches('_').to_string()
+}
+
+fn strip<'a>(prefix: &str, ty: &'a str) -> Option<&'a str> {
+    ty.strip_prefix(prefix).and_then(|t| t.strip_suffix('>'))
+}
+
+/// The IDL type a hosted position carries on the wire.
+fn wire_type(ty: &JVal) -> &JVal {
+    if ty_tag(ty) == "hosted"
+        && let Some(wire @ JVal::Obj(_)) = ty.field("wire")
+    {
+        return wire;
+    }
+    ty
+}
+
+fn is_json(ty: &JVal) -> bool {
+    match ty_tag(ty) {
+        "json" => true,
+        "hosted" => matches!(ty.field("wire"), Some(JVal::Str(s)) if s == "json"),
+        _ => false,
+    }
+}
+
+/// Rule: the `Static` payload slot a `Binding<T>` position decodes through.
+fn static_slot(arg: &JVal) -> Option<&'static str> {
+    if is_json(arg) {
+        return Some("Untyped");
+    }
+    Some(match ty_tag(arg) {
+        "str" => "Str",
+        "bool" => "Bool",
+        "float" => "Float",
+        "int" => "Int",
+        "list" => {
+            let of = arg.field("of")?;
+            match (ty_tag(of), of.field("name")) {
+                ("str", _) => "StringList",
+                ("float", _) => "FloatSeq",
+                ("record", Some(JVal::Str(n))) if n == "SelectOption" => "Options",
+                ("record", Some(JVal::Str(n))) if n == "MapMarker" => "Markers",
+                _ => return None,
+            }
+        }
+        _ => return None,
+    })
+}
+
+enum Default {
+    Const(String),
+    EmptyList,
+}
+
+struct Codec<'a> {
+    enums: std::collections::BTreeSet<String>,
+    idl: &'a Idl,
+}
+
+impl Codec<'_> {
+    /// Whether a non-container Rust type is the uniform rendering of an IDL
+    /// position: a scalar of its scalar, the named type its name maps to, or a
+    /// host-modelled type at a hosted or type-variable position. Anything else is
+    /// a departure, which only a hook may code.
+    fn agrees(idl_ty: &JVal, rust_ty: &str) -> bool {
+        let tag = ty_tag(idl_ty);
+        match rust_ty {
+            "String" | "NodeId" => tag == "str",
+            "bool" => tag == "bool",
+            "i64" => tag == "int",
+            "f64" => tag == "float",
+            "Closure" => tag == "fn",
+            "Node" => tag == "node",
+            "NodeKind" => tag == "kind",
+            "TreeOp" => tag == "op",
+            t => match tag {
+                "hosted" | "var" => true,
+                "enum" | "union" | "record" => {
+                    matches!(idl_ty.field("name"), Some(JVal::Str(n)) if rust_type_name(n) == t)
+                }
+                _ => false,
+            },
+        }
+    }
+
+    /// Rule: the encoder of one value. `x` is an expression of type `&rust_ty`.
+    fn enc_value(&self, idl_ty: &JVal, rust_ty: &str, x: &str) -> Option<String> {
+        let idl_ty = wire_type(idl_ty);
+        if let Some(inner) = strip("Box<", rust_ty) {
+            return self.enc_value(idl_ty, inner, x);
+        }
+        if let Some(inner) = strip("Vec<(String, ", rust_ty).and_then(|t| t.strip_suffix(')')) {
+            if ty_tag(idl_ty) != "map" {
+                return None;
+            }
+            let v = self.enc_value(idl_ty.field("values")?, inner, "v")?;
+            return Some(format!("enc_map({x}, {})", closure(&v)));
+        }
+        if let Some(inner) = strip("Vec<", rust_ty) {
+            if ty_tag(idl_ty) != "list" {
+                return None;
+            }
+            let v = self.enc_value(idl_ty.field("of")?, inner, "v")?;
+            return Some(format!("enc_list({x}, {})", closure(&v)));
+        }
+        if !Self::agrees(idl_ty, rust_ty) && !(rust_ty == "JVal" && is_json(idl_ty)) {
+            return None;
+        }
+        Some(match rust_ty {
+            "String" | "NodeId" => format!("s({x})"),
+            "bool" => format!("boolean(*{x})"),
+            "i64" => format!("int(*{x})"),
+            "f64" => format!("num(*{x})"),
+            "Closure" => "CLOSURE.to_string()".into(),
+            "JVal" if is_json(idl_ty) => format!("json_value({x})"),
+            _ if rust_ty.contains('<') || rust_ty == "JVal" => return None,
+            t if self.enums.contains(t) => format!("s({x}.as_str())"),
+            t => format!("{}({x})", fn_name(t)),
+        })
+    }
+
+    /// Rule: the decoder of one value, as an expression callable as
+    /// `(path: &str, j: &JVal) -> DResult<rust_ty>`.
+    fn dec_value(&self, idl_ty: &JVal, rust_ty: &str) -> Option<String> {
+        let idl_ty = wire_type(idl_ty);
+        if let Some(inner) = strip("Box<", rust_ty) {
+            let d = self.dec_value(idl_ty, inner)?;
+            return Some(format!("|p, j| ({d})(p, j).map(Box::new)"));
+        }
+        if let Some(inner) = strip("Vec<(String, ", rust_ty).and_then(|t| t.strip_suffix(')')) {
+            if ty_tag(idl_ty) != "map" {
+                return None;
+            }
+            let d = self.dec_value(idl_ty.field("values")?, inner)?;
+            return Some(format!("|p, j| dec_map(p, j, {d})"));
+        }
+        if let Some(inner) = strip("Vec<", rust_ty) {
+            if ty_tag(idl_ty) != "list" {
+                return None;
+            }
+            let d = self.dec_value(idl_ty.field("of")?, inner)?;
+            return Some(format!("|p, j| dec_list(p, j, {d})"));
+        }
+        if !Self::agrees(idl_ty, rust_ty) && !(rust_ty == "JVal" && is_json(idl_ty)) {
+            return None;
+        }
+        Some(match rust_ty {
+            "String" | "NodeId" => "dec_string".into(),
+            "bool" => "as_bool".into(),
+            "i64" => "as_int".into(),
+            "f64" => "as_float".into(),
+            "Closure" => "dec_closure".into(),
+            "JVal" if is_json(idl_ty) => "decode_jval".into(),
+            "Binding" if ty_tag(idl_ty) == "union" => match idl_ty.field("args") {
+                Some(JVal::Arr(args)) if !args.is_empty() => match static_slot(&args[0])? {
+                    "Untyped" => "decode_binding".into(),
+                    slot => format!("|p, j| decode_binding_slot(p, j, StaticSlot::{slot})"),
+                },
+                _ => "decode_binding".into(),
+            },
+            "Node" => "decode_node_ast".into(),
+            "TreeOp" => "decode_tree_op_ast".into(),
+            _ if rust_ty.contains('<') || rust_ty == "JVal" => return None,
+            t => format!("decode_{}", fn_name(t)),
+        })
+    }
+
+    /// The `defaults` constant an omit-at-default field compares against, or the
+    /// emptiness test of a list whose default is empty.
+    fn default_of(&self, o: &CodecOwner, f: &Field) -> Option<Default> {
+        let d = f.default.as_ref()?;
+        if ty_tag(d) == "list" && matches!(d.field("items"), Some(JVal::Arr(i)) if i.is_empty()) {
+            return Some(Default::EmptyList);
+        }
+        if o.prefix.is_empty() {
+            return None;
+        }
+        match default_expr(self.idl, &f.ty, d) {
+            Ok(Some(_)) => Some(Default::Const(format!(
+                "defaults::{}_{}",
+                screaming(&o.prefix),
+                screaming(&f.name)
+            ))),
+            _ => None,
+        }
+    }
+
+    /// Rule: the uniform encoder statement for one field, or `None` where the
+    /// rules have no codec for it.
+    fn enc_field(&self, o: &CodecOwner, i: usize) -> Option<String> {
+        let f = o.fields[i];
+        let ms = &o.per_field[i];
+        if ms.is_empty() && ty_tag(&f.ty) == "fn" {
+            // Rule: a closure slot this host carries no member for is always
+            // written as its sentinel (the closure itself never rides the wire).
+            return Some(format!(
+                "f.push(field(\"{}\", CLOSURE.to_string()));",
+                f.name
+            ));
+        }
+        if ms.len() != 1 {
+            return None;
+        }
+        let m = &ms[0];
+        let b = bind(m);
+        let key = &f.name;
+        match (f.optionality.as_str(), strip("Option<", &m.ty)) {
+            ("required", None) => {
+                let e = self.enc_value(&f.ty, &m.ty, &b)?;
+                Some(format!("f.push(field(\"{key}\", {e}));"))
+            }
+            ("optional", Some("Closure")) if ty_tag(&f.ty) == "fn" => Some(format!(
+                "if {b}.is_some() {{
+        f.push(field(\"{key}\", CLOSURE.to_string()));
+    }}"
+            )),
+            ("optional", Some(inner)) => {
+                let e = self.enc_value(&f.ty, inner, "x")?;
+                Some(format!(
+                    "if let Some(x) = {b} {{\n        f.push(field(\"{key}\", {e}));\n    }}"
+                ))
+            }
+            ("omitDefault", None) => {
+                let e = self.enc_value(&f.ty, &m.ty, &b)?;
+                let test = match self.default_of(o, f)? {
+                    Default::Const(c) => format!("*{b} != {c}"),
+                    Default::EmptyList => format!("!{b}.is_empty()"),
+                };
+                Some(format!(
+                    "if {test} {{\n        f.push(field(\"{key}\", {e}));\n    }}"
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// Rule: the uniform decoder statement for one field, or `None` where the
+    /// rules have no codec for it.
+    fn dec_field(&self, o: &CodecOwner, i: usize) -> Option<String> {
+        let f = o.fields[i];
+        let ms = &o.per_field[i];
+        if ms.is_empty() && ty_tag(&f.ty) == "fn" {
+            // Rule: nothing reads a closure slot this host carries no member for.
+            return Some(String::new());
+        }
+        if ms.len() != 1 {
+            return None;
+        }
+        let m = &ms[0];
+        let b = bind(m);
+        let key = &f.name;
+        let aliases = DECODE_ALIASES
+            .iter()
+            .find(|(ow, fd, _, _)| *ow == o.key && *fd == f.name)
+            .map_or_else(String::new, |(_, _, a, _)| {
+                a.iter()
+                    .map(|s| format!("\"{s}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            });
+        match (f.optionality.as_str(), strip("Option<", &m.ty)) {
+            ("required", None) => {
+                let d = self.dec_value(&f.ty, &m.ty)?;
+                Some(format!(
+                    "let {b} = field_req(path, fields, \"{key}\", &[{aliases}], \"{}.{key}: {}\", {d})?;",
+                    o.key,
+                    type_text(&f.ty)
+                ))
+            }
+            ("optional", Some(inner)) => {
+                let d = self.dec_value(&f.ty, inner)?;
+                Some(format!(
+                    "let {b} = field_opt(path, fields, \"{key}\", &[{aliases}], {d})?;"
+                ))
+            }
+            ("omitDefault", None) => {
+                let d = self.dec_value(&f.ty, &m.ty)?;
+                let default = match self.default_of(o, f)? {
+                    Default::Const(c) => c,
+                    Default::EmptyList => "Vec::new()".into(),
+                };
+                Some(format!(
+                    "let {b} = field_or(path, fields, \"{key}\", &[{aliases}], {default}, {d})?;"
+                ))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The element encoder `|v| f(v)` as the function `f` itself when it is one.
+fn closure(body: &str) -> String {
+    match body.strip_suffix("(v)") {
+        Some(f)
+            if f != "s"
+                && f.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') =>
+        {
+            f.to_string()
+        }
+        _ => format!("|v| {body}"),
+    }
+}
+
+/// A short description of an IDL type, for a decoder's `MISSING_FIELD` hint.
+fn type_text(ty: &JVal) -> String {
+    let ty = wire_type(ty);
+    match ty_tag(ty) {
+        "str" => "string".into(),
+        "bool" => "boolean".into(),
+        "int" => "integer".into(),
+        "float" => "number".into(),
+        "json" | "hosted" => "JSON value".into(),
+        "fn" => "closure sentinel".into(),
+        "node" => "Node".into(),
+        "kind" => "NodeKind".into(),
+        "op" => "TreeOp".into(),
+        "list" => format!(
+            "list of {}",
+            ty.field("of").map_or_else(String::new, type_text)
+        ),
+        "map" => format!(
+            "map of {}",
+            ty.field("values").map_or_else(String::new, type_text)
+        ),
+        _ => match ty.field("name") {
+            Some(JVal::Str(n)) => match ty.field("args") {
+                Some(JVal::Arr(args)) if !args.is_empty() => format!(
+                    "{n}<{}>",
+                    args.iter().map(type_text).collect::<Vec<_>>().join(", ")
+                ),
+                _ => n.clone(),
+            },
+            _ => "value".into(),
+        },
+    }
+}
+
+/// The Rust members one IDL field maps to, under the rules or the dialect.
+fn field_members(g: &Graph, key: &str, rust_owner: &str, f: &Field) -> Result<Vec<Member>, String> {
+    match FIELDS.iter().find(|(o, n, _, _)| *o == key && *n == f.name) {
+        Some((_, _, rust, _)) => Ok(rust
+            .iter()
+            .map(|(i, t)| Member {
+                ident: (*i).to_string(),
+                ty: (*t).to_string(),
+            })
+            .collect()),
+        None => uniform_members(g, rust_owner, f),
+    }
+}
+
+fn codec_owner<'a>(
+    g: &Graph,
+    key: String,
+    prefix: String,
+    path: String,
+    rust_owner: &str,
+    fields: Vec<&'a Field>,
+) -> Result<CodecOwner<'a>, String> {
+    let mut per_field = Vec::new();
+    let mut members: Vec<Member> = Vec::new();
+    for f in &fields {
+        let ms = field_members(g, &key, rust_owner, f)?;
+        for m in &ms {
+            if !members.iter().any(|x| x.ident == m.ident) {
+                members.push(m.clone());
+            }
+        }
+        per_field.push(ms);
+    }
+    Ok(CodecOwner {
+        key,
+        prefix,
+        path,
+        fields,
+        per_field,
+        members,
+    })
+}
+
+type HookUse = std::collections::BTreeSet<(String, String)>;
+type OwnerUse = std::collections::BTreeSet<String>;
+type FieldHook = (&'static str, &'static str, &'static str, Hook, &'static str);
+type OwnerHook = (&'static str, &'static str, Hook, &'static str);
+
+fn field_hook<'a>(
+    table: &'a [FieldHook],
+    o: &CodecOwner,
+    f: &Field,
+    used: &mut HookUse,
+) -> Option<&'a FieldHook> {
+    let hit = table.iter().find(|h| h.0 == o.key && h.1 == f.name);
+    if hit.is_some() {
+        used.insert((o.key.clone(), f.name.clone()));
+    }
+    hit
+}
+
+fn owner_hook<'a>(table: &'a [OwnerHook], key: &str, used: &mut OwnerUse) -> Option<&'a OwnerHook> {
+    let hit = table.iter().find(|h| h.0 == key);
+    if hit.is_some() {
+        used.insert(key.to_string());
+    }
+    hit
+}
+
+/// The argument list passing a field's (or an owner's) members to a hook.
+fn args(ms: &[Member]) -> String {
+    ms.iter().map(bind).collect::<Vec<_>>().join(", ")
+}
+
+fn tys(ms: &[Member]) -> String {
+    ms.iter()
+        .map(|m| m.ty.clone())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn case_tag(o: &CodecOwner) -> String {
+    o.path.rsplit("::").next().unwrap_or_default().to_string()
+}
+
+struct Emit {
+    /// Every position no rule and no hook covers, reported together.
+    missing: Vec<String>,
+    enc: String,
+    dec: String,
+    enc_used: HookUse,
+    dec_used: HookUse,
+    enc_owners: OwnerUse,
+    dec_owners: OwnerUse,
+}
+
+impl Emit {
+    /// The encoder body of an owner: its owner hook, or one statement per field
+    /// then `wrap` over the collected fields.
+    fn enc_body(&mut self, c: &Codec, o: &CodecOwner, wrap: &str) -> Result<String, String> {
+        if let Some((_, hook, kind, _)) = owner_hook(ENCODE_OWNERS, &o.key, &mut self.enc_owners) {
+            if *kind == Hook::Shape && (0..o.fields.len()).all(|i| c.enc_field(o, i).is_some()) {
+                return Err(format!(
+                    "dialect encode owner hook {} is stale: the uniform rules now encode every \
+                     field; delete the entry",
+                    o.key
+                ));
+            }
+            return Ok(format!("{hook}({})", args(&o.members)));
+        }
+        let mut stmts = Vec::new();
+        for (i, fd) in o.fields.iter().enumerate() {
+            if fd.optionality == "hostOnly" {
+                continue;
+            }
+            let uniform = c.enc_field(o, i);
+            let stmt = match field_hook(ENCODE_HOOKS, o, fd, &mut self.enc_used) {
+                Some((_, _, hook, kind, _)) => {
+                    if *kind == Hook::Shape && uniform.is_some() {
+                        return Err(format!(
+                            "dialect encode hook {}.{} is stale: the uniform rules now encode it; \
+                             delete the entry",
+                            o.key, fd.name
+                        ));
+                    }
+                    format!(
+                        "if let Some(j) = {hook}({}) {{\n        f.push(field(\"{}\", j));\n    }}",
+                        args(&o.per_field[i]),
+                        fd.name
+                    )
+                }
+                None => uniform.unwrap_or_else(|| {
+                    self.missing.push(format!(
+                        "encode {}.{} ({})",
+                        o.key,
+                        fd.name,
+                        tys(&o.per_field[i])
+                    ));
+                    String::new()
+                }),
+            };
+            stmts.push(stmt);
+        }
+        // The fields every value writes open the list; the conditional ones push.
+        let lead = stmts
+            .iter()
+            .take_while(|s| s.starts_with("f.push(") && !s.contains('\n'))
+            .count();
+        let opening: Vec<&str> = stmts[..lead]
+            .iter()
+            .map(|s| &s["f.push(".len()..s.len() - ");".len()])
+            .collect();
+        let list = format!("vec![{}]", opening.join(", "));
+        if lead == stmts.len() {
+            return Ok(wrap.replace("f)", &format!("{list})")));
+        }
+        let mut body = format!("let mut f: Vec<Field> = {list};\n");
+        for s in &stmts[lead..] {
+            let _ = writeln!(body, "    {s}");
+        }
+        let _ = write!(body, "    {wrap}");
+        Ok(body)
+    }
+
+    /// The decoder statements of an owner's fields, ending in its construction.
+    fn dec_body(&mut self, c: &Codec, o: &CodecOwner) -> Result<String, String> {
+        let mut body = String::new();
+        if let Some((_, hook, _, _)) = DECODE_CHECKS
+            .iter()
+            .find(|(k, _, when, _)| *k == o.key && *when == Check::Pre)
+        {
+            let _ = writeln!(body, "    {hook}(path, fields)?;");
+        }
+        let mut bound: Vec<String> = Vec::new();
+        for (i, fd) in o.fields.iter().enumerate() {
+            if fd.optionality == "hostOnly" {
+                continue;
+            }
+            let fresh: Vec<Member> = o.per_field[i]
+                .iter()
+                .filter(|m| !bound.contains(&m.ident))
+                .cloned()
+                .collect();
+            let folded = fresh.len() != o.per_field[i].len();
+            let uniform = if folded { None } else { c.dec_field(o, i) };
+            let stmt = match field_hook(DECODE_HOOKS, o, fd, &mut self.dec_used) {
+                Some((_, _, hook, kind, _)) => {
+                    if *kind == Hook::Shape && uniform.is_some() {
+                        return Err(format!(
+                            "dialect decode hook {}.{} is stale: the uniform rules now decode it; \
+                             delete the entry",
+                            o.key, fd.name
+                        ));
+                    }
+                    match fresh.len() {
+                        0 => format!("{hook}(path, fields)?;"),
+                        1 => format!("let {} = {hook}(path, fields)?;", bind(&fresh[0])),
+                        _ => format!("let ({}) = {hook}(path, fields)?;", args(&fresh)),
+                    }
+                }
+                None => uniform.unwrap_or_else(|| {
+                    self.missing.push(format!(
+                        "decode {}.{} ({})",
+                        o.key,
+                        fd.name,
+                        tys(&o.per_field[i])
+                    ));
+                    String::new()
+                }),
+            };
+            bound.extend(fresh.iter().map(|m| m.ident.clone()));
+            if !stmt.is_empty() {
+                let _ = writeln!(body, "    {stmt}");
+            }
+        }
+        let built = pattern(o);
+        match DECODE_CHECKS
+            .iter()
+            .find(|(k, _, when, _)| *k == o.key && *when == Check::Post)
+        {
+            Some((_, hook, _, _)) => {
+                let _ = write!(
+                    body,
+                    "    let v = {built};\n    {hook}(path, fields, &v)?;\n    Ok(v)"
+                );
+            }
+            None => {
+                let _ = write!(body, "    Ok({built})");
+            }
+        }
+        Ok(body)
+    }
+
+    /// A struct owner: one encoder, one decoder.
+    fn struct_owner(&mut self, c: &Codec, o: &CodecOwner, rust: &str) -> Result<(), String> {
+        let name = fn_name(rust);
+        let bind_all = if o.members.is_empty() {
+            "let _ = v;".to_string()
+        } else {
+            format!("let {} = v;", pattern(o))
+        };
+        let body = self.enc_body(c, o, "obj(f)")?;
+        let _ = writeln!(
+            self.enc,
+            "\npub(in super::super) fn {name}(v: &{rust}) -> String {{\n    {bind_all}\n    {body}\n}}"
+        );
+        let dec_name = if rust == "Node" {
+            "decode_node_ast".to_string()
+        } else {
+            format!("decode_{name}")
+        };
+        if let Some((_, hook, kind, _)) = owner_hook(DECODE_OWNERS, &o.key, &mut self.dec_owners) {
+            if *kind == Hook::Shape && (0..o.fields.len()).all(|i| c.dec_field(o, i).is_some()) {
+                return Err(format!(
+                    "dialect decode owner hook {} is stale: the uniform rules now decode every \
+                     field; delete the entry",
+                    o.key
+                ));
+            }
+            let _ = writeln!(
+                self.dec,
+                "\npub(in super::super) fn {dec_name}(path: &str, j: &JVal) -> DResult<{rust}> {{\n    {hook}(path, j)\n}}"
+            );
+            return Ok(());
+        }
+        let enter = DECODE_ENTER
+            .iter()
+            .find(|(k, _, _)| *k == o.key)
+            .map_or_else(String::new, |(_, hook, _)| {
+                format!("let _guard = {hook}(path)?;\n    ")
+            });
+        let pre = UNION_PRE.iter().find(|(k, _, _)| *k == o.key).map_or_else(
+            String::new,
+            |(_, hook, _)| {
+                format!("if let Some(r) = {hook}(path, j) {{\n        return r;\n    }}\n    ")
+            },
+        );
+        let body = self.dec_body(c, o)?;
+        let _ = writeln!(
+            self.dec,
+            "\npub(in super::super) fn {dec_name}(path: &str, j: &JVal) -> DResult<{rust}> {{\n    {enter}{pre}let fields = as_obj(path, j)?;\n{body}\n}}"
+        );
+        Ok(())
+    }
+
+    /// A union (or `TreeOp`): an encoder matching every case, and a decoder
+    /// dispatching on the discriminator to one function per case.
+    fn union_owner(
+        &mut self,
+        c: &Codec,
+        name: &str,
+        rust: &str,
+        tags_const: &str,
+        cases: &[CodecOwner],
+    ) -> Result<(), String> {
+        let f = fn_name(rust);
+        let transparent = c
+            .idl
+            .transparent
+            .iter()
+            .find(|(u, _)| u == name)
+            .map(|(_, case)| case.clone());
+        let transparent_value = |o: &CodecOwner| -> Option<(String, String)> {
+            if transparent.as_deref() != Some(case_tag(o).as_str())
+                || o.fields.len() != 1
+                || o.members.len() != 1
+            {
+                return None;
+            }
+            let m = &o.members[0];
+            Some((
+                c.enc_value(&o.fields[0].ty, &m.ty, &bind(m))?,
+                c.dec_value(&o.fields[0].ty, &m.ty)?,
+            ))
+        };
+        if owner_hook(ENCODE_OWNERS, name, &mut self.enc_owners).is_none() {
+            let mut arms = String::new();
+            for o in cases {
+                let tag = case_tag(o);
+                let body = match transparent_value(o) {
+                    // Rule: a transparent case is written as its bare value.
+                    Some((enc, _)) => enc,
+                    None => self.enc_body(c, o, &format!("case_obj(\"{tag}\", f)"))?,
+                };
+                let _ = writeln!(arms, "    {} => {{\n    {body}\n    }}", pattern(o));
+            }
+            let _ = writeln!(
+                self.enc,
+                "\npub(in super::super) fn {f}(v: &{rust}) -> String {{\n    match v {{\n{}    }}\n}}",
+                indent(&arms)
+            );
+        }
+        let dec_name = if rust == "TreeOp" {
+            "decode_tree_op_ast".to_string()
+        } else {
+            format!("decode_{f}")
+        };
+        if let Some((_, hook, _, _)) = owner_hook(DECODE_OWNERS, name, &mut self.dec_owners) {
+            // A union decoded by hand dispatches over this tag enum, so a case the
+            // IDL gains is a non-exhaustive match in the hand decoder.
+            let variants: Vec<String> = cases.iter().map(case_tag).collect();
+            let _ = writeln!(
+                self.dec,
+                "\n/// The discriminators of `{rust}`, for its hand decoder's exhaustive dispatch.\n#[derive(Clone, Copy)]\npub(in super::super) enum {rust}Tag {{\n{}}}\n\nimpl {rust}Tag {{\n    pub(in super::super) fn of(tag: &str) -> Option<Self> {{\n        match tag {{\n{}            _ => None,\n        }}\n    }}\n}}",
+                variants
+                    .iter()
+                    .map(|v| format!("    {v},\n"))
+                    .collect::<String>(),
+                variants
+                    .iter()
+                    .map(|v| format!("            \"{v}\" => Some(Self::{v}),\n"))
+                    .collect::<String>()
+            );
+            // An empty hook name: the hand decoder takes a context argument and is
+            // called by name from the hooks that supply it.
+            if !hook.is_empty() {
+                let _ = writeln!(
+                    self.dec,
+                    "\npub(in super::super) fn {dec_name}(path: &str, j: &JVal) -> DResult<{rust}> {{\n    {hook}(path, j)\n}}"
+                );
+            }
+            return Ok(());
+        }
+        let enter = DECODE_ENTER
+            .iter()
+            .find(|(k, _, _)| *k == name)
+            .map_or_else(String::new, |(_, hook, _)| {
+                format!("let _guard = {hook}(path)?;\n    ")
+            });
+        let mut pre = UNION_PRE.iter().find(|(k, _, _)| *k == name).map_or_else(
+            String::new,
+            |(_, hook, _)| {
+                format!("if let Some(r) = {hook}(path, j) {{\n        return r;\n    }}\n    ")
+            },
+        );
+        // Rule: a value that is not an object is the transparent case's bare
+        // spelling.
+        if let Some(o) = cases.iter().find(|o| transparent_value(o).is_some())
+            && let Some((_, dec)) = transparent_value(o)
+        {
+            let build = if o.positional() {
+                o.path.clone()
+            } else {
+                format!("|{}| {}", bind(&o.members[0]), pattern(o))
+            };
+            let _ = write!(
+                pre,
+                "if !matches!(j, JVal::Obj(_)) {{\n        return ({dec})(path, j).map({build});\n    }}\n    "
+            );
+        }
+        let mut dispatch = String::new();
+        let mut case_fns = String::new();
+        for o in cases {
+            let tag = case_tag(o);
+            let case_fn = format!("{dec_name}_{}", fn_name(&tag));
+            let _ = writeln!(dispatch, "        \"{tag}\" => {case_fn}(path, fields),");
+            let body = match owner_hook(DECODE_OWNERS, &o.key, &mut self.dec_owners) {
+                Some((_, hook, _, _)) => format!("    {hook}(path, fields)"),
+                None => self.dec_body(c, o)?,
+            };
+            // A case that reads nothing names its parameters unused.
+            let (p, fs) = if body.contains("path") {
+                ("path", "fields")
+            } else {
+                ("_path", "_fields")
+            };
+            let _ = writeln!(
+                case_fns,
+                "\npub(in super::super) fn {case_fn}({p}: &str, {fs}: &Fields) -> DResult<{rust}> {{\n{body}\n}}"
+            );
+        }
+        let _ = writeln!(
+            self.dec,
+            "\npub(in super::super) fn {dec_name}(path: &str, j: &JVal) -> DResult<{rust}> {{\n    {enter}{pre}let fields = as_obj(path, j)?;\n    match disc(path, fields)? {{\n{dispatch}        other => Err(unknown_du_case(path, other, {tags_const})),\n    }}\n}}\n{case_fns}"
+        );
+        Ok(())
+    }
+}
+
+/// The generated codec: `gen_encode` and `gen_decode`, appended to the module.
+fn write_codec(w: &mut String, idl: &Idl) -> Result<(), String> {
+    let g = containment(idl);
+    let c = Codec {
+        enums: wire_enums(idl).iter().map(|e| rust_type_name(e)).collect(),
+        idl,
+    };
+    let mut e = Emit {
+        missing: Vec::new(),
+        enc: String::new(),
+        dec: String::new(),
+        enc_used: HookUse::new(),
+        dec_used: HookUse::new(),
+        enc_owners: OwnerUse::new(),
+        dec_owners: OwnerUse::new(),
+    };
+    let hand =
+        |n: &str| INLINED.iter().any(|(i, _)| *i == n) || HAND_TYPES.iter().any(|(h, _)| *h == n);
+
+    // Kinds: each spec, then NodeKind over them.
+    let mut kind_arms = String::new();
+    let mut kind_dispatch = String::new();
+    let mut kind_fns = String::new();
+    for k in &idl.kinds {
+        let tag = &k.owner.name;
+        let variant_fn = format!("kind_{}", fn_name(tag));
+        if let Some((_, payload, _)) = KIND_PAYLOADS.iter().find(|(t, _, _)| t == tag) {
+            let mut hook = |table: &[OwnerHook], used: &mut OwnerUse, what: &str| {
+                owner_hook(table, tag, used).map_or_else(
+                    || {
+                        e.missing
+                            .push(format!("{what} owner {tag} (carries {payload})"));
+                        String::new()
+                    },
+                    |h| h.1.to_string(),
+                )
+            };
+            let enc_hook = hook(ENCODE_OWNERS, &mut e.enc_owners, "encode");
+            let dec_hook = hook(DECODE_OWNERS, &mut e.dec_owners, "decode");
+            let _ = writeln!(
+                kind_arms,
+                "        NodeKind::{tag}(m_0) => {enc_hook}(m_0),"
+            );
+            let _ = writeln!(
+                kind_fns,
+                "\nfn {variant_fn}(path: &str, j: &JVal) -> DResult<NodeKind> {{\n    Ok(NodeKind::{tag}({dec_hook}(path, j)?))\n}}"
+            );
+        } else {
+            let rust = kind_type_name(tag);
+            let o = codec_owner(
+                &g,
+                tag.clone(),
+                tag.clone(),
+                rust.clone(),
+                &rust,
+                k.owner.fields.iter().collect(),
+            )?;
+            e.struct_owner(&c, &o, &rust)?;
+            let _ = writeln!(
+                kind_arms,
+                "        NodeKind::{tag}(m_0) => case_obj_hoisted(\"{tag}\", {}(m_0)),",
+                fn_name(&rust)
+            );
+            let _ = writeln!(
+                kind_fns,
+                "\nfn {variant_fn}(path: &str, j: &JVal) -> DResult<NodeKind> {{\n    Ok(NodeKind::{tag}(decode_{}(path, j)?))\n}}",
+                fn_name(&rust)
+            );
+        }
+        let _ = writeln!(kind_dispatch, "        \"{tag}\" => {variant_fn}(path, j),");
+    }
+    let _ = writeln!(
+        e.enc,
+        "\npub(in super::super) fn node_kind(v: &NodeKind) -> String {{\n    match v {{\n{kind_arms}    }}\n}}"
+    );
+    let _ = writeln!(
+        e.dec,
+        "\n/// Each kind decodes in its own frame, so the dispatch's frame holds one result
+/// however many kinds there are (the §21 depth bound is measured on the stack).
+pub(in super::super) fn decode_node_kind(path: &str, j: &JVal) -> DResult<NodeKind> {{\n    let fields = as_obj(path, j)?;\n    match disc(path, fields)? {{\n{kind_dispatch}        other => Err(wrong_node_kind(path, other)),\n    }}\n}}\n{kind_fns}"
+    );
+
+    // Records.
+    for r in idl.records.iter().filter(|r| !hand(&r.name)) {
+        let rust = rust_type_name(&r.name);
+        let o = codec_owner(
+            &g,
+            r.name.clone(),
+            r.name.clone(),
+            rust.clone(),
+            &rust,
+            r.fields.iter().collect(),
+        )?;
+        e.struct_owner(&c, &o, &rust)?;
+    }
+
+    // Unions.
+    for u in idl.unions.iter().filter(|u| !hand(&u.name)) {
+        let rust = rust_type_name(&u.name);
+        let mut cases = Vec::new();
+        for case in &u.cases {
+            cases.push(codec_owner(
+                &g,
+                format!("{}.{}", u.name, case.name),
+                format!("{}{}", u.name, case.name),
+                format!("{rust}::{}", case.name),
+                &rust,
+                case.fields.iter().collect(),
+            )?);
+        }
+        let tags = if u.name == "FormFieldKind" {
+            "CANONICAL_FORM_FIELD_KINDS".to_string()
+        } else {
+            format!("{}_TAGS", screaming(&u.name))
+        };
+        e.union_owner(&c, &u.name, &rust, &tags, &cases)?;
+    }
+
+    // The node envelope: its identity and kind, then the IDL's node fields.
+    let id = Field {
+        name: "id".into(),
+        optionality: "required".into(),
+        ty: JVal::Obj(vec![("$type".into(), JVal::Str("str".into()))]),
+        default: None,
+    };
+    let kind = Field {
+        name: "kind".into(),
+        optionality: "required".into(),
+        ty: JVal::Obj(vec![("$type".into(), JVal::Str("kind".into()))]),
+        default: None,
+    };
+    let mut node_fields: Vec<&Field> = vec![&id, &kind];
+    node_fields.extend(idl.node_fields.iter());
+    let mut node = codec_owner(
+        &g,
+        "Node".into(),
+        String::new(),
+        "Node".into(),
+        "Node",
+        node_fields,
+    )?;
+    node.per_field[0] = vec![Member {
+        ident: "id".into(),
+        ty: "NodeId".into(),
+    }];
+    node.per_field[1] = vec![Member {
+        ident: "kind".into(),
+        ty: "NodeKind".into(),
+    }];
+    let mut members = vec![node.per_field[0][0].clone(), node.per_field[1][0].clone()];
+    members.extend(
+        node.members
+            .iter()
+            .filter(|m| m.ident != "id" && m.ident != "kind")
+            .cloned(),
+    );
+    node.members = members;
+    e.struct_owner(&c, &node, "Node")?;
+
+    // Tree ops.
+    let mut ops = Vec::new();
+    for o in &idl.ops {
+        ops.push(codec_owner(
+            &g,
+            format!("TreeOp.{}", o.name),
+            String::new(),
+            format!("TreeOp::{}", o.name),
+            "TreeOp",
+            o.fields.iter().collect(),
+        )?);
+    }
+    e.union_owner(&c, "TreeOp", "TreeOp", "TREE_OP_TAGS", &ops)?;
+
+    // Bare-string enum decoders, with their foreign spellings as data.
+    for name in &c.enums {
+        if owner_hook(DECODE_OWNERS, name, &mut e.dec_owners).is_some() {
+            continue;
+        }
+        let aliases = ENUM_ALIASES.iter().find(|(n, _, _)| n == name).map_or_else(
+            String::new,
+            |(_, a, _)| {
+                a.iter()
+                    .map(|(wire, case)| format!("(\"{wire}\", {name}::{case})"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        );
+        let _ = writeln!(
+            e.dec,
+            "\npub(in super::super) fn decode_{}(path: &str, j: &JVal) -> DResult<{name}> {{\n    decode_enum(path, j, \"{name}\", {name}::from_wire, {name}::WIRE_NAMES, &[{aliases}])\n}}",
+            fn_name(name)
+        );
+    }
+
+    if !e.missing.is_empty() {
+        return Err(format!(
+            "no uniform codec rule and no dialect hook for: {}",
+            e.missing.join("; ")
+        ));
+    }
+    check_codec_dialect(idl, &e)?;
+
+    let _ = writeln!(
+        w,
+        "
+// ─── The generated codec (Phase 2333) ────────────────────────────────────────
+//
+// The uniform half: one encoder and one decoder per owner, from the IDL type, the
+// optionality and the generated members. Policy is the hand hooks the dialect
+// names, in encode.rs and decode.rs.
+
+pub(super) mod gen_encode {{
+    use super::*;
+    use super::super::encode::*;
+{}}}
+
+pub(super) mod gen_decode {{
+    use super::*;
+    use super::super::decode::*;
+{}}}",
+        indent(&e.enc),
+        indent(&e.dec)
+    );
+    Ok(())
+}
+
+/// Every codec entry of the dialect names something the IDL defines, and was used.
+fn check_codec_dialect(idl: &Idl, e: &Emit) -> Result<(), String> {
+    for (owner, field, _, _, _) in ENCODE_HOOKS {
+        if !e
+            .enc_used
+            .contains(&((*owner).to_string(), (*field).to_string()))
+        {
+            return Err(format!(
+                "dialect encode hook {owner}.{field} names a field the IDL does not have; delete it"
+            ));
+        }
+    }
+    for (owner, field, _, _, _) in DECODE_HOOKS {
+        if !e
+            .dec_used
+            .contains(&((*owner).to_string(), (*field).to_string()))
+        {
+            return Err(format!(
+                "dialect decode hook {owner}.{field} names a field the IDL does not have; delete it"
+            ));
+        }
+    }
+    for (owner, _, _, _) in ENCODE_OWNERS {
+        if !e.enc_owners.contains(*owner) {
+            return Err(format!(
+                "dialect encode owner hook {owner} names nothing the IDL defines; delete it"
+            ));
+        }
+    }
+    for (owner, _, _, _) in DECODE_OWNERS {
+        if !e.dec_owners.contains(*owner) {
+            return Err(format!(
+                "dialect decode owner hook {owner} names nothing the IDL defines; delete it"
+            ));
+        }
+    }
+    for (owner, field, _, _) in DECODE_ALIASES {
+        if !owner_has_field(idl, owner, field) {
+            return Err(format!(
+                "dialect alias entry {owner}.{field} names a field the IDL does not have; delete it"
+            ));
+        }
+    }
+    for (owner, _, _, _) in DECODE_CHECKS {
+        if !owner_has_field(idl, owner, "") {
+            return Err(format!(
+                "dialect decode check {owner} names nothing the IDL defines; delete it"
+            ));
+        }
+    }
+    for (owner, _, _) in DECODE_ENTER.iter().chain(UNION_PRE) {
+        if !owner_has_field(idl, owner, "") {
+            return Err(format!(
+                "dialect decode entry {owner} names nothing the IDL defines; delete it"
+            ));
+        }
+    }
+    for (name, aliases, _) in ENUM_ALIASES {
+        let en = enum_by_name(idl, name)
+            .ok_or_else(|| format!("dialect enum alias entry {name} names no IDL enum"))?;
+        for (wire, case) in *aliases {
+            if en.cases.iter().any(|c| c == wire) {
+                return Err(format!(
+                    "dialect enum alias {name}.{wire} is stale: it is now a case; delete it"
+                ));
+            }
+            if !en.host_cases.iter().any(|h| case_ident(h) == *case) {
+                return Err(format!(
+                    "dialect enum alias {name}.{wire} maps to no case {case}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether an owner key (and, when `field` is non-empty, its field) names
+/// something the IDL defines.
+fn owner_has_field(idl: &Idl, owner: &str, field: &str) -> bool {
+    let has = |fs: &[Field]| field.is_empty() || fs.iter().any(|f| f.name == field);
+    if owner == "Node" {
+        return field.is_empty() || field == "id" || field == "kind" || has(&idl.node_fields);
+    }
+    if owner == "TreeOp" {
+        return field.is_empty();
+    }
+    if let Some((u, case)) = owner.split_once('.') {
+        if u == "TreeOp" {
+            return idl.ops.iter().any(|o| o.name == case && has(&o.fields));
+        }
+        return idl
+            .unions
+            .iter()
+            .any(|x| x.name == u && x.cases.iter().any(|c| c.name == case && has(&c.fields)));
+    }
+    idl.kinds
+        .iter()
+        .any(|k| k.owner.name == owner && has(&k.owner.fields))
+        || idl
+            .records
+            .iter()
+            .any(|r| r.name == owner && has(&r.fields))
+        || (field.is_empty() && idl.unions.iter().any(|u| u.name == owner))
+}
+
+fn indent(code: &str) -> String {
+    code.lines()
+        .map(|l| {
+            if l.is_empty() {
+                "\n".to_string()
+            } else {
+                format!("    {l}\n")
+            }
+        })
+        .collect()
 }

@@ -48,8 +48,31 @@ co-equal conformant host. Cross-repo development conventions (port allocation, f
   the IDL at generation, so a stale entry is refused rather than kept. Reading a data
   artefact with a host-owned generator is not a transpile, and no codec code is
   shared with any other host. **Behaviour stays hand-written** — the impls over the
-  types, decode policy and refusal wording, leniency, limit checks, the encoder,
-  rendering and the C ABI. No `build.rs`: the module is committed, the generator
+  types, decode policy and refusal wording, leniency, limit checks, rendering and
+  the C ABI.
+- **Amendment (2026-10-18, Phase 2333): the UNIFORM half of the codec is generated;
+  POLICY stays hand-written as dialect-declared hooks.** This amends the 2298 ruling,
+  which kept the whole codec hand-written; the operator ruled it when the phase was
+  dispatched (decode policy stays hand-written; the uniform half is generated and the
+  policy hooks are declared in the dialect). The boundary is DATA, in `dialect.rs`:
+  a field is uniform unless an entry says otherwise. Uniform means a per-type rule
+  the generator applies from the IDL type, the optionality and the generated Rust
+  member — required (always written, `MISSING_FIELD` when absent), optional (written
+  when `Some`), omit-at-default (omitted at the generated `defaults` constant or an
+  empty list, filled from it on decode), with every named type coded by its own
+  codec function. Policy — aliases, `StaticSlot` hints, leniency, folds, relational
+  checks, near-miss refusals — is a hook entry naming the hand function that
+  handles it: `ENCODE_HOOKS` / `DECODE_HOOKS` for one field, `ENCODE_OWNERS` /
+  `DECODE_OWNERS` for a whole owner, `DECODE_CHECKS` for an owner-level check, and
+  `DECODE_ALIASES` for a field's foreign spellings as data. A hook receives every
+  Rust member its field (or owner) carries, so a field the IDL gains is either
+  written by the generated encoder or changes a hook's arity: an unencoded field is
+  a build error, never an absence. Union tags dispatch over generated tag enums, so
+  a hand decoder meets a new case as a non-exhaustive `match`. The generator refuses
+  a hook naming a field the IDL does not have, and a `Shape` hook the uniform rules
+  now cover. The generated codec is in `generated.rs` beside the types (modules
+  `gen_encode` / `gen_decode`); `encode.rs` and `decode.rs` keep the helpers, the
+  hooks and nothing per field. No `build.rs`: the module is committed, the generator
   compiles only under the off-by-default `idl-codegen` feature the suite turns on,
   and `tests/conformance.rs` is both the drift check (red when `idl.json` moves and
   the module does not) and the regeneration
@@ -81,8 +104,8 @@ its arm lands.
 fuaran-rs/
 ├── src/lib.rs           # crate doc + VERSION
 ├── src/canonical/       # canonical-JSON layer — float.rs (number form) + json.rs (parser + canonical renderer)
-├── src/wire/            # model.rs (host-modelled types + behaviour impls) + decode.rs / encode.rs + the DecodeError envelope
-│                        #   + generated.rs (structural layer and wire types, from the corpus idl.json)
+├── src/wire/            # model.rs (host-modelled types + behaviour impls) + decode.rs / encode.rs (codec helpers + dialect-declared hooks) + the DecodeError envelope
+│                        #   + generated.rs (structural layer, wire types and the uniform codec, from the corpus idl.json)
 │                        #   + idl_codegen.rs (its generator) + dialect.rs (this host's declared departures)
 ├── src/ops/             # tree-op apply engine — total reducer + ApplyError envelope + can_apply dry-run
 │                        #   + placement.rs (the placement algebra: placed insert / move / nudge + clone verbs)

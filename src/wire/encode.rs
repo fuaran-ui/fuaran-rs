@@ -2,71 +2,72 @@
 //! form pinned by `WIRE_FORMAT.md` §2. Certified byte-for-byte against the
 //! shared conformance corpus by `tests/conformance.rs`.
 //!
-//! Every `match` over a wire DU here is compile-time exhaustive with no `_ =>`
-//! arm — a new kind cannot ship without its encoder arm building.
+//! Phase 2333: the per-owner encoders are GENERATED (`gen_encode` in
+//! `generated.rs`) from the IDL; this file keeps the canonical-JSON helpers they
+//! write through, the host-modelled types' encoders, the `FormFieldKind`
+//! encoder (it takes the enclosing control's auto-bind context), and the hooks
+//! `dialect.rs` declares. A hook takes every member its field or owner carries,
+//! and every `match` here is exhaustive with no `_ =>` arm, so a field or case
+//! the IDL gains is written by the generator or is a build error here, never
+//! silently absent from the canonical bytes.
 
 use crate::canonical::{JVal, escape_string, format_number, render_array, render_object};
 
+use std::collections::BTreeMap;
+
+use super::generated::gen_encode::*;
 use super::model::*;
 
-type Field = (String, String);
+pub(super) type Field = (String, String);
 
-const CLOSURE: &str = "\"<closure>\"";
-const OPAQUE: &str = "\"<opaque>\"";
+pub(super) const CLOSURE: &str = "\"<closure>\"";
+pub(super) const OPAQUE: &str = "\"<opaque>\"";
 
-fn s(v: &str) -> String {
+pub(super) fn s(v: &str) -> String {
     escape_string(v)
 }
 
-fn num(n: f64) -> String {
+pub(super) fn num(n: f64) -> String {
     format_number(n)
 }
 
-fn int(n: i64) -> String {
+pub(super) fn int(n: i64) -> String {
     n.to_string()
 }
 
-fn boolean(b: bool) -> String {
+pub(super) fn boolean(b: bool) -> String {
     if b { "true" } else { "false" }.to_string()
 }
 
-fn obj(fields: Vec<Field>) -> String {
+pub(super) fn obj(fields: Vec<Field>) -> String {
     let mut fields = fields;
     render_object(&mut fields)
 }
 
-fn arr(items: Vec<String>) -> String {
+pub(super) fn arr(items: Vec<String>) -> String {
     render_array(&items)
 }
 
-fn field(key: &str, value: String) -> Field {
+pub(super) fn field(key: &str, value: String) -> Field {
     (key.to_string(), value)
 }
 
 /// A `$type`-discriminated DU object (§2 rule 8).
-fn case_obj(discriminator: &str, mut fields: Vec<Field>) -> String {
+pub(super) fn case_obj(discriminator: &str, mut fields: Vec<Field>) -> String {
     fields.push(field("$type", s(discriminator)));
     obj(fields)
 }
 
 /// A structured `JVal` payload (rule 12) — rendered faithfully at any depth via
 /// the canonical renderer.
-fn json_value(v: &JVal) -> String {
+pub(super) fn json_value(v: &JVal) -> String {
     crate::canonical::render_canonical(v)
-}
-
-/// A structured-JSON map position (Custom props, `TextSource.I18n` args).
-fn json_map(entries: &[(String, JVal)]) -> String {
-    obj(entries
-        .iter()
-        .map(|(k, v)| (k.clone(), json_value(v)))
-        .collect())
 }
 
 /// Best-effort `obj`-typed payload (§2 rule 11): recognised JSON primitives
 /// encode natively; arrays / objects collapse to the `"<opaque>"` sentinel —
 /// the residual-opaque boundary (§5).
-fn obj_value(v: &JVal) -> String {
+pub(super) fn obj_value(v: &JVal) -> String {
     match v {
         JVal::Null => "null".to_string(),
         JVal::Str(x) => s(x),
@@ -76,34 +77,17 @@ fn obj_value(v: &JVal) -> String {
     }
 }
 
-// ─── Typed Static payloads (Phase 429) ───────────────────────────────────────
-
-fn select_option(o: &SelectOption) -> String {
-    obj(vec![
-        field("label", text_source(&o.label)),
-        field("value", s(&o.value)),
-    ])
-}
-
 /// fuaran#665 — one row object: Ordinal-sorted keys (via `obj`) over best-effort
 /// scalar cells. A `null` cell is OMITTED rather than emitted as `"k":null` —
 /// rule 4, absence is structural — and a nested array/object cell rides
 /// `obj_value`'s `"<opaque>"` sentinel, the residual boundary narrowed to the
 /// cell seam.
-fn row(r: &Row) -> String {
+pub(super) fn row(r: &Row) -> String {
     obj(r
         .iter()
         .filter(|(_, v)| !matches!(v, JVal::Null))
         .map(|(k, v)| field(k, obj_value(v)))
         .collect())
-}
-
-fn map_marker(m: &MapMarker) -> String {
-    obj(vec![
-        field("label", text_source(&m.label)),
-        field("latitude", num(m.latitude)),
-        field("longitude", num(m.longitude)),
-    ])
 }
 
 /// Phase 677 — absence is STRUCTURAL, never a value. These payloads carry no
@@ -116,14 +100,14 @@ fn map_marker(m: &MapMarker) -> String {
 /// function is no longer consulted there; it used to stand in for that fact and
 /// could not tell an undeclared default at a numeric or bool slot from a
 /// declared zero.
-fn static_is_absent(v: &StaticValue) -> bool {
+pub(super) fn static_is_absent(v: &StaticValue) -> bool {
     matches!(
         v,
         StaticValue::StringOpt(None) | StaticValue::Ast(JVal::Null)
     )
 }
 
-fn static_value(v: &StaticValue) -> String {
+pub(super) fn static_value(v: &StaticValue) -> String {
     match v {
         StaticValue::Ast(j) => obj_value(j),
         StaticValue::Options(options) => arr(options.iter().map(select_option).collect()),
@@ -148,7 +132,7 @@ fn static_value(v: &StaticValue) -> String {
 
 // ─── Compute layer ───────────────────────────────────────────────────────────
 
-fn cell_column_wire(ty: ColumnType, c: &Cell) -> String {
+pub(super) fn cell_column_wire(ty: ColumnType, c: &Cell) -> String {
     match c {
         Cell::Null => match ty {
             ColumnType::Bool => boolean(false),
@@ -168,7 +152,7 @@ fn cell_column_wire(ty: ColumnType, c: &Cell) -> String {
     }
 }
 
-fn data_column(c: &DataColumn) -> String {
+pub(super) fn data_column(c: &DataColumn) -> String {
     obj(vec![
         field(
             "values",
@@ -189,7 +173,7 @@ fn data_column(c: &DataColumn) -> String {
     ])
 }
 
-fn schema_json(schema: &[SchemaEntry]) -> String {
+pub(super) fn schema_json(schema: &[SchemaEntry]) -> String {
     arr(schema
         .iter()
         .map(|e| {
@@ -201,7 +185,7 @@ fn schema_json(schema: &[SchemaEntry]) -> String {
         .collect())
 }
 
-fn data_source(src: &DataSource) -> String {
+pub(super) fn data_source(src: &DataSource) -> String {
     match src {
         DataSource::Ref { name } => obj(vec![field("schema", arr(vec![])), field("ref", s(name))]),
         DataSource::Embedded { schema, columns } => {
@@ -228,7 +212,7 @@ fn data_source(src: &DataSource) -> String {
     }
 }
 
-fn cell_lit(c: &Cell) -> String {
+pub(super) fn cell_lit(c: &Cell) -> String {
     match c {
         Cell::Null => case_obj("Null", vec![]),
         Cell::Int(v) => case_obj("Int", vec![field("value", int(*v))]),
@@ -240,28 +224,7 @@ fn cell_lit(c: &Cell) -> String {
     }
 }
 
-/// The `params` field shared by `Binding::Transform` and `Binding::Expr`, or
-/// no field at all — §3.3 omits the slot when empty, and `Some(vec![])` is the
-/// same fact as `None` on the wire.
-fn binding_params_field(params: Option<&[TransformParam]>) -> Vec<Field> {
-    match params {
-        Some(params) if !params.is_empty() => vec![field(
-            "params",
-            arr(params
-                .iter()
-                .map(|p| {
-                    obj(vec![
-                        field("from", binding(&p.from)),
-                        field("name", s(&p.name)),
-                    ])
-                })
-                .collect()),
-        )],
-        _ => vec![],
-    }
-}
-
-fn col_expr(e: &ColExpr) -> String {
+pub(super) fn col_expr(e: &ColExpr) -> String {
     match e {
         ColExpr::Col { name } => case_obj("col", vec![field("name", s(name))]),
         ColExpr::Param { name } => case_obj("param", vec![field("name", s(name))]),
@@ -326,11 +289,11 @@ fn col_expr(e: &ColExpr) -> String {
     }
 }
 
-fn col_pair(p: &ColPair) -> String {
+pub(super) fn col_pair(p: &ColPair) -> String {
     obj(vec![field("a", s(&p.a)), field("b", s(&p.b))])
 }
 
-fn agg_json(a: &Agg) -> String {
+pub(super) fn agg_json(a: &Agg) -> String {
     obj(vec![
         field("name", s(&a.name)),
         field("fn", s(a.func.as_str())),
@@ -341,14 +304,14 @@ fn agg_json(a: &Agg) -> String {
 // 0.28.0 — the member is `column`, not `col`: a wire member whose only honest name is
 // "the column" is spelled out in full. `col` remains a decode alias and is never emitted.
 // The model field keeps its own name; this is a wire rename, not an API one.
-fn order_json(k: &SortKey) -> String {
+pub(super) fn order_json(k: &SortKey) -> String {
     obj(vec![
         field("column", s(&k.col)),
         field("dir", s(k.dir.as_str())),
     ])
 }
 
-fn transform_step(t: &TransformStep) -> String {
+pub(super) fn transform_step(t: &TransformStep) -> String {
     match t {
         TransformStep::Filter { pred } => case_obj("filter", vec![field("pred", col_expr(pred))]),
         TransformStep::Project { cols } => case_obj(
@@ -432,1085 +395,21 @@ fn transform_step(t: &TransformStep) -> String {
     }
 }
 
-fn invoke_args(args: &[InvokeArg]) -> String {
-    arr(args
-        .iter()
-        .map(|a| obj(vec![field("addr", s(&a.addr)), field("value", s(&a.value))]))
-        .collect())
-}
-
-// ─── Bindings / actions / text ───────────────────────────────────────────────
-
-fn flush_trigger(t: &LocalFlushTrigger) -> String {
-    match t {
-        LocalFlushTrigger::OnBlur => case_obj("OnBlur", vec![]),
-        LocalFlushTrigger::OnSubmit => case_obj("OnSubmit", vec![]),
-        LocalFlushTrigger::OnCommitAction => case_obj("OnCommitAction", vec![]),
-        LocalFlushTrigger::OnDebounce { milliseconds } => case_obj(
-            "OnDebounce",
-            vec![field("milliseconds", num(*milliseconds as f64))],
-        ),
-    }
-}
-
-fn binding(b: &Binding) -> String {
-    match b {
-        Binding::Static { value } => {
-            // Phase 677 — an absent payload omits the key; it never emits null.
-            let fields = if static_is_absent(value) {
-                vec![]
-            } else {
-                vec![field("value", static_value(value))]
-            };
-            case_obj("Static", fields)
-        }
-        // 0.2.0 — the no-information `accessor` closure sentinel is OFF the
-        // wire (no decoder ever read it); a decoded Query synthesises the
-        // identity projection.
-        Binding::Query { name, depends_on } => {
-            let mut fields = vec![field("name", s(name))];
-            if let Some(deps) = depends_on
-                && !deps.is_empty()
-            {
-                fields.push(field("dependsOn", arr(deps.iter().map(|d| s(d)).collect())));
-            }
-            case_obj("Query", fields)
-        }
-        Binding::Filter {
-            name,
-            default_value,
-        } => {
-            // 0.2.0 — `defaultValue` rides the wire when present (typed via
-            // the slot's static encoding); omitted when None so the minimal
-            // form stays byte-identical.
-            let mut fields = vec![];
-            if let Some(d) = default_value {
-                fields.push(field("defaultValue", static_value(d)));
-            }
-            fields.push(field("name", s(name)));
-            case_obj("Filter", fields)
-        }
-        Binding::Selection {
-            node_id,
-            default_value,
-            field: sel_field,
-        } => {
-            // 0.2.9 — `defaultValue` (the Filter.defaultValue convention);
-            // 0.2.10 — `field` (the declarative row-field projection). The
-            // accessor closure is off the wire (0.2.0 strand 5).
-            let mut fields = vec![];
-            if let Some(d) = default_value {
-                fields.push(field("defaultValue", static_value(d)));
-            }
-            if let Some(f) = sel_field {
-                fields.push(field("field", s(f)));
-            }
-            fields.push(field("nodeId", s(node_id)));
-            case_obj("Selection", fields)
-        }
-        Binding::State {
-            key,
-            default_value,
-            default_declared,
-        } => {
-            // §5's absent-default posture (Phase 1656; Phase 677's rule for
-            // `Static`, stated normatively for this position). The DECLARATION
-            // decides and nothing else: a typed slot's decoded default is the
-            // placeholder an unwritten key RESOLVES to, and emitting that would
-            // put a `defaultValue` on the wire the document never carried.
-            //
-            // `static_is_absent` is deliberately NOT consulted — it was the
-            // stand-in for the wire fact before Phase 1499 gave the case one of
-            // its own, and the decoder now clears the declaration for every
-            // absent spelling and for an unreadable value, so a declared
-            // default can no longer be an absent sentinel.
-            let mut fields = vec![];
-
-            if *default_declared {
-                fields.push(field("defaultValue", static_value(default_value)));
-            }
-
-            fields.push(field("key", s(key)));
-            case_obj("State", fields)
-        }
-        Binding::Computed => case_obj("Computed", vec![field("fn", CLOSURE.to_string())]),
-        // Phase 765 — the INSTANT is never on the wire. Phase 1533 — the
-        // declared GRAIN is, and only when it is not the `Second` default, so a
-        // grain-less `Now` is the same bytes it has always been.
-        Binding::Now { grain } => case_obj(
-            "Now",
-            grain
-                .map(|g| vec![field("grain", s(g.as_str()))])
-                .unwrap_or_default(),
-        ),
-        Binding::I18n { key, args } => {
-            let mut fields = vec![];
-            if let Some(args) = args {
-                fields.push(field(
-                    "args",
-                    obj(args.iter().map(|(k, v)| (k.clone(), binding(v))).collect()),
-                ));
-            }
-            fields.push(field("key", s(key)));
-            case_obj("I18n", fields)
-        }
-        // §3.3.3 — `codec` and `commitTo` are the wire-carried alternatives to
-        // the closures, each omitted when absent. `onCommit` is the one closure
-        // slot that OMITS rather than always emitting its sentinel, because it
-        // is mutually exclusive with `commitTo`: a document that declared the
-        // key must not re-encode carrying both.
-        Binding::Local {
-            codec,
-            commit_to,
-            flush_on,
-            initial_from,
-            on_commit,
-        } => {
-            let mut fields = vec![];
-            if let Some(codec) = codec {
-                fields.push(field("codec", format_intent(codec)));
-            }
-            if let Some(commit_to) = commit_to {
-                fields.push(field("commitTo", s(commit_to)));
-            }
-            fields.push(field("flushOn", flush_trigger(flush_on)));
-            fields.push(field("format", CLOSURE.to_string()));
-            fields.push(field("initialFrom", binding(initial_from)));
-            if on_commit.is_some() {
-                fields.push(field("onCommit", CLOSURE.to_string()));
-            }
-            fields.push(field("parse", CLOSURE.to_string()));
-            case_obj("Local", fields)
-        }
-        Binding::Format {
-            format,
-            locale,
-            source,
-        } => case_obj(
-            "Format",
-            vec![
-                field("format", format_intent(format)),
-                field("locale", locale_source(locale)),
-                field("source", binding(source)),
-            ],
-        ),
-        // Phase 1534 — the scalar expression rides the same `ColExpr` encoder a
-        // pipeline step uses, and `params` the same emitter as `Transform`'s.
-        Binding::Expr { expr, params } => {
-            let mut fields = vec![field("expr", col_expr(expr))];
-            fields.extend(binding_params_field(params.as_deref()));
-            case_obj("Expr", fields)
-        }
-        Binding::Transform {
-            params,
-            pipeline,
-            source,
-        } => {
-            let mut fields = binding_params_field(params.as_deref());
-            fields.push(field(
-                "pipeline",
-                arr(pipeline.iter().map(transform_step).collect()),
-            ));
-            // Phase 818 — a `Data` source keeps the columnar encoding
-            // byte-identical; a `Live` source re-encodes the preserved binding
-            // itself (one wire dialect — the State/Selection/Query-shaped
-            // source round-trips byte-for-byte; the derived `initial` snapshot
-            // is never encoded).
-            fields.push(field(
-                "source",
-                match source {
-                    TransformSource::Data(ds) => data_source(ds),
-                    TransformSource::Live { binding: b, .. } => binding(b),
-                },
-            ));
-            case_obj("Transform", fields)
-        }
-        Binding::Invoke {
-            capability_id,
-            args,
-        } => case_obj(
-            "Invoke",
-            vec![
-                field("args", invoke_args(args)),
-                field("capabilityId", s(capability_id)),
-            ],
-        ),
-    }
-}
-
-fn action(a: &Action) -> String {
-    match a {
-        // 0.2.0 — the `msg` sentinel is OFF the wire (pure token weight).
-        Action::Dispatch => case_obj("Dispatch", vec![]),
-        Action::Call {
-            endpoint,
-            into,
-            on_result,
-        } => {
-            let mut fields = vec![field("endpoint", s(endpoint))];
-            if let Some(target) = into {
-                let rendered = match target {
-                    CallResultTarget::State { key } => {
-                        case_obj("State", vec![field("key", s(key))])
-                    }
-                    CallResultTarget::Query { name } => {
-                        case_obj("Query", vec![field("name", s(name))])
-                    }
-                };
-                fields.push(field("into", rendered));
-            }
-            if on_result.is_some() {
-                fields.push(field("onResult", CLOSURE.to_string()));
-            }
-            case_obj("Call", fields)
-        }
-        Action::Notify { channel, payload } => case_obj(
-            "Notify",
-            vec![
-                field("channel", s(channel)),
-                field("payload", json_value(payload)),
-            ],
-        ),
-        // Phase 1536 — the route is a `TextSource` (the bare string being
-        // `Literal`'s canonical form), and `target` omits at `Self`, so a
-        // pre-1536 document re-encodes byte-identically.
-        Action::Navigate { route, target } => {
-            let mut fields = vec![field("route", text_source(route))];
-            if *target != defaults::ACTION_NAVIGATE_TARGET {
-                fields.push(field("target", s(target.as_str())));
-            }
-            case_obj("Navigate", fields)
-        }
-        // Phase 818 — `value` / `valueFrom` are XOR siblings; each is emitted
-        // only when present (keys sort, so field order stays alphabetical).
-        Action::SetState {
-            key,
-            value,
-            value_from,
-        } => {
-            let mut fields = vec![field("key", s(key))];
-            if let Some(v) = value {
-                fields.push(field("value", json_value(v)));
-            }
-            if let Some(b) = value_from {
-                fields.push(field("valueFrom", binding(b)));
-            }
-            case_obj("SetState", fields)
-        }
-        Action::AiTool { tool_name, args } => case_obj(
-            "AiTool",
-            vec![
-                field("args", json_value(args)),
-                field("toolName", s(tool_name)),
-            ],
-        ),
-        Action::Chain(actions) => case_obj(
-            "Chain",
-            vec![field("ops", arr(actions.iter().map(action).collect()))],
-        ),
-        Action::CommitLocal { node_id } => {
-            case_obj("CommitLocal", vec![field("nodeId", s(node_id))])
-        }
-        // Phase 1126 — the payload is a `TextSource`; `text_source` renders the
-        // `Literal` case as the bare string, which is the canonical spelling.
-        Action::WriteToClipboard { text } => {
-            case_obj("WriteToClipboard", vec![field("text", text_source(text))])
-        }
-        // Phase 1124 — the payload-free print: `$type` and nothing else.
-        Action::Print => case_obj("Print", vec![]),
-        // Phase 1537 — `onCancel` omits when absent (an author who declares no
-        // cancel branch means "nothing happens", which absence already says).
-        Action::Confirm {
-            prompt,
-            on_confirm,
-            on_cancel,
-        } => {
-            let mut fields = vec![];
-            if let Some(cancel) = on_cancel {
-                fields.push(field("onCancel", action(cancel)));
-            }
-            fields.push(field("onConfirm", action(on_confirm)));
-            fields.push(field("prompt", text_source(prompt)));
-            case_obj("Confirm", fields)
-        }
-        Action::Focus { node_id } => case_obj("Focus", vec![field("nodeId", s(node_id))]),
-        Action::ReadFileBody { file_ref, encoding } => case_obj(
-            "ReadFileBody",
-            vec![
-                field("encoding", s(encoding.as_str())),
-                field("fileRef", s(file_ref)),
-                field("onRead", CLOSURE.to_string()),
-            ],
-        ),
-        Action::Invoke {
-            capability_id,
-            args,
-        } => case_obj(
-            "Invoke",
-            vec![
-                field("args", invoke_args(args)),
-                field("capabilityId", s(capability_id)),
-            ],
-        ),
-    }
-}
-
 /// One `TextSource.I18n` argument (§5, Phase 1661). A LITERAL argument emits the
 /// BARE value through the faithful rule-12 renderer — that is the whole reason
 /// the widening moves no shipped byte — and a bound argument emits its own
 /// `$type` object, a valueless `Static` included, since absence is structural
 /// and has no bare spelling.
-fn i18n_arg(a: &I18nArg) -> String {
+pub(super) fn i18n_arg(a: &I18nArg) -> String {
     match a {
         I18nArg::Literal(v) => json_value(v),
         I18nArg::Bound(b) => binding(b),
     }
 }
 
-fn i18n_arg_map(entries: &[(String, I18nArg)]) -> String {
-    obj(entries
-        .iter()
-        .map(|(k, v)| (k.clone(), i18n_arg(v)))
-        .collect())
-}
+// ─── Controls (FormFieldKind, encoded in its auto-bind context) ───────────────
 
-fn text_source(t: &TextSource) -> String {
-    match t {
-        // 0.2.0 direction-flip: the bare JSON string IS the canonical Literal
-        // form; the `{"$type":"Literal","text":…}` envelope is decode-accepted
-        // and normalises down (§16).
-        TextSource::Literal(text) => s(text),
-        TextSource::Bound(b) => case_obj("Bound", vec![field("binding", binding(b))]),
-        TextSource::I18n { key, args } => case_obj(
-            "I18n",
-            vec![field("args", i18n_arg_map(args)), field("key", s(key))],
-        ),
-    }
-}
-
-fn cell_format(f: &CellFormat) -> String {
-    match f {
-        CellFormat::None => case_obj("None", vec![]),
-        CellFormat::Number { decimals } => case_obj(
-            "Number",
-            decimals
-                .map(|d| vec![field("decimals", num(d as f64))])
-                .unwrap_or_default(),
-        ),
-        CellFormat::Currency { code } => case_obj("Currency", vec![field("code", s(code))]),
-        CellFormat::Percent { decimals } => case_obj(
-            "Percent",
-            decimals
-                .map(|d| vec![field("decimals", num(d as f64))])
-                .unwrap_or_default(),
-        ),
-        CellFormat::SignificantDigits { digits } => case_obj(
-            "SignificantDigits",
-            vec![field("digits", num(*digits as f64))],
-        ),
-        CellFormat::DateTime { format } => case_obj("DateTime", vec![field("format", s(format))]),
-        // Phase 819 — canonical field order alphabetical: `style` before `unit`.
-        CellFormat::Duration { style, unit } => case_obj(
-            "Duration",
-            vec![
-                field("style", s(style.as_str())),
-                field("unit", s(unit.as_str())),
-            ],
-        ),
-        CellFormat::RelativeTime { unit } => {
-            case_obj("RelativeTime", vec![field("unit", s(unit.as_str()))])
-        }
-        CellFormat::Custom => case_obj("Custom", vec![field("fn", CLOSURE.to_string())]),
-    }
-}
-
-fn format_intent(f: &Format) -> String {
-    match f {
-        Format::Number { decimals } => case_obj(
-            "Number",
-            decimals
-                .map(|d| vec![field("decimals", num(d as f64))])
-                .unwrap_or_default(),
-        ),
-        Format::Currency { iso_code } => case_obj("Currency", vec![field("isoCode", s(iso_code))]),
-        Format::Percent { decimals } => case_obj(
-            "Percent",
-            decimals
-                .map(|d| vec![field("decimals", num(d as f64))])
-                .unwrap_or_default(),
-        ),
-        Format::DateTime {
-            date_style,
-            time_style,
-        } => {
-            // Phase 1810 — each style rides only when present; alphabetical field
-            // order (dateStyle before timeStyle), the canonical rule.
-            let mut fields = vec![];
-            if let Some(d) = date_style {
-                fields.push(field("dateStyle", s(d.as_str())));
-            }
-            if let Some(t) = time_style {
-                fields.push(field("timeStyle", s(t.as_str())));
-            }
-            case_obj("DateTime", fields)
-        }
-        Format::RelativeTime { unit } => {
-            case_obj("RelativeTime", vec![field("unit", s(unit.as_str()))])
-        }
-        // Phase 819 — canonical field order alphabetical: `style` before `unit`.
-        Format::Duration { style, unit } => case_obj(
-            "Duration",
-            vec![
-                field("style", s(style.as_str())),
-                field("unit", s(unit.as_str())),
-            ],
-        ),
-        // Phase 1533 — `unit` omitted when absent: its absence is the
-        // auto-selection request, not a default that could be spelled out.
-        Format::Since { unit } => case_obj(
-            "Since",
-            unit.map(|u| vec![field("unit", s(u.as_str()))])
-                .unwrap_or_default(),
-        ),
-    }
-}
-
-fn locale_source(l: &LocaleSource) -> String {
-    match l {
-        LocaleSource::Ambient => case_obj("Ambient", vec![]),
-        LocaleSource::Explicit { tag } => case_obj("Explicit", vec![field("tag", s(tag))]),
-    }
-}
-
-fn column_width(w: &ColumnWidth) -> String {
-    match w {
-        ColumnWidth::Auto => case_obj("Auto", vec![]),
-        ColumnWidth::Fixed { pixels } => {
-            case_obj("Fixed", vec![field("pixels", num(*pixels as f64))])
-        }
-        ColumnWidth::Flex { weight } => case_obj("Flex", vec![field("weight", num(*weight))]),
-    }
-}
-
-// ─── Display specs ───────────────────────────────────────────────────────────
-
-fn metric_spec(spec: &MetricSpec) -> String {
-    // Phase 460 — the stylistic fields are omitted-when-default on the wire
-    // (WIRE_FORMAT.md §3.6); a default-styled Metric round-trips minimal.
-    let mut fields = vec![
-        field("label", text_source(&spec.label)),
-        field("value", binding(&spec.value)),
-    ];
-    if spec.format != defaults::METRIC_FORMAT {
-        fields.push(field("format", cell_format(&spec.format)));
-    }
-    if spec.tone != defaults::METRIC_TONE {
-        fields.push(field("tone", s(spec.tone.as_str())));
-    }
-    if spec.weight != defaults::METRIC_WEIGHT {
-        fields.push(field("weight", s(spec.weight.as_str())));
-    }
-    if spec.emphasis != defaults::METRIC_EMPHASIS {
-        fields.push(field("emphasis", s(spec.emphasis.as_str())));
-    }
-    if let Some(trend) = &spec.trend {
-        fields.push(field("trend", binding(trend)));
-    }
-    if let Some(trend_format) = &spec.trend_format {
-        fields.push(field("trendFormat", cell_format(trend_format)));
-    }
-    // Phase 867 — omitted-when-`HigherIsBetter` (§3.6.1), which is what makes
-    // every pre-867 `Metric` byte-unchanged by construction rather than by
-    // inspection. Emitted independently of `trend`: a legal inert declaration
-    // round-trips rather than being silently dropped on re-encode.
-    if spec.trend_polarity != defaults::METRIC_TREND_POLARITY {
-        fields.push(field("trendPolarity", s(spec.trend_polarity.as_str())));
-    }
-    if let Some(icon) = &spec.icon {
-        fields.push(field("icon", s(icon)));
-    }
-    if let Some(subtext) = &spec.subtext {
-        fields.push(field("subtext", text_source(subtext)));
-    }
-    obj(fields)
-}
-
-fn heading_spec(spec: &HeadingSpec) -> String {
-    obj(vec![
-        field("level", num(spec.level as f64)),
-        field("text", text_source(&spec.text)),
-        field("variant", s(spec.variant.as_str())),
-    ])
-}
-
-fn label_value_row_spec(spec: &LabelValueRowSpec) -> String {
-    // Phase 460 — `format` omitted-when-default; the behavioural `emphasis`
-    // bool is omitted-when-false (0.2.2, aligning with Fact's identical flag).
-    let mut fields = vec![
-        field("label", text_source(&spec.label)),
-        field("value", binding(&spec.value)),
-    ];
-    if spec.emphasis != defaults::LABEL_VALUE_ROW_EMPHASIS {
-        fields.push(field("emphasis", boolean(spec.emphasis)));
-    }
-    if spec.format != defaults::LABEL_VALUE_ROW_FORMAT {
-        fields.push(field("format", cell_format(&spec.format)));
-    }
-    if let Some(help) = &spec.help {
-        fields.push(field("help", text_source(help)));
-    }
-    obj(fields)
-}
-
-fn fact_spec(spec: &FactSpec) -> String {
-    // The labeled TEXT fact. `emphasis` is the behavioural bool
-    // (omit-when-false); `tone` omit-when-default; `help` / `icon` optional.
-    let mut fields = vec![
-        field("label", text_source(&spec.label)),
-        field("value", text_source(&spec.value)),
-    ];
-    if spec.emphasis != defaults::FACT_EMPHASIS {
-        fields.push(field("emphasis", boolean(spec.emphasis)));
-    }
-    if spec.tone != defaults::FACT_TONE {
-        fields.push(field("tone", s(spec.tone.as_str())));
-    }
-    if let Some(help) = &spec.help {
-        fields.push(field("help", text_source(help)));
-    }
-    if let Some(icon) = &spec.icon {
-        fields.push(field("icon", s(icon)));
-    }
-    obj(fields)
-}
-
-fn markdown_spec(spec: &MarkdownSpec) -> String {
-    obj(vec![field("text", text_source(&spec.text))])
-}
-
-fn badge_spec(spec: &BadgeSpec) -> String {
-    obj(vec![
-        field("label", text_source(&spec.label)),
-        field("variant", s(spec.variant.as_str())),
-    ])
-}
-
-fn link_spec(spec: &LinkSpec) -> String {
-    let mut fields = vec![
-        field("href", binding(&spec.href)),
-        field("label", text_source(&spec.label)),
-        field("download", boolean(spec.download)),
-    ];
-    if let Some(rel) = &spec.rel {
-        fields.push(field("rel", s(rel)));
-    }
-    if let Some(target) = &spec.target {
-        fields.push(field("target", s(target)));
-    }
-    // Omitted when absent — byte parity with the reference encoder.
-    if let Some(protection) = spec.protection {
-        fields.push(field("protection", s(protection.as_str())));
-    }
-    obj(fields)
-}
-
-/// Phase 1080 — one `srcSet` candidate. `obj` sorts the members, so `src`
-/// precedes `width` on the wire whatever order they are pushed in here.
-fn src_set_entry(entry: &SrcSetEntry) -> String {
-    obj(vec![
-        field("src", binding(&entry.src)),
-        field("width", int(entry.width)),
-    ])
-}
-
-fn image_spec(spec: &ImageSpec) -> String {
-    let mut fields = vec![
-        field("alt", text_source(&spec.alt)),
-        field("src", binding(&spec.src)),
-        field("variant", s(spec.variant.as_str())),
-    ];
-    // Phase 1077 — omitted at the identity default. `Natural` / `Natural` /
-    // `Eager` ARE today's behaviour, so a default-presentation image emits
-    // exactly the pre-phase three fields.
-    if spec.fit != defaults::IMAGE_FIT {
-        fields.push(field("fit", s(spec.fit.as_str())));
-    }
-    if spec.aspect_ratio != defaults::IMAGE_ASPECT_RATIO {
-        fields.push(field("aspectRatio", s(spec.aspect_ratio.as_str())));
-    }
-    if spec.loading != defaults::IMAGE_LOADING {
-        fields.push(field("loading", s(spec.loading.as_str())));
-    }
-    // Phase 1078 — omitted when ABSENT (rule 4), not at a default. `obj` sorts,
-    // so the key lands in its canonical position wherever it is pushed.
-    if let Some(caption) = &spec.caption {
-        fields.push(field("caption", text_source(caption)));
-    }
-    // Phase 1080 — omitted when EMPTY, the encode half of the missing-list-field
-    // rule: an image with no alternate renditions and one with an empty list are
-    // the same document, so both emit no key. The candidate ORDER is the
-    // author's and is emitted verbatim — re-sorting here would make this encoder
-    // produce bytes it did not decode. Ascending-by-width is the RENDERER's
-    // canonicalisation.
-    if !spec.src_set.is_empty() {
-        fields.push(field(
-            "srcSet",
-            arr(spec.src_set.iter().map(src_set_entry).collect()),
-        ));
-    }
-    // Phase 1079 — omitted at `false`, the plainest instance of the same law:
-    // not declaring an expansion and declaring that there is none are the same
-    // document, so only `true` costs a key.
-    if spec.expandable != defaults::IMAGE_EXPANDABLE {
-        fields.push(field("expandable", boolean(spec.expandable)));
-    }
-    obj(fields)
-}
-
-/// Phase 1076 — the media variant. `Video`'s two slots take the two ordinary
-/// shapes: `autoplay` omitted at `false`, `poster` omitted when absent. `Audio`
-/// is the bare discriminator, and has no autoplay key to omit because the case
-/// declares no such slot.
-fn media_kind(kind: &MediaKind) -> String {
-    match kind {
-        MediaKind::Audio => case_obj("Audio", vec![]),
-        MediaKind::Video { autoplay, poster } => {
-            let mut fields = vec![];
-            if *autoplay != defaults::MEDIA_KIND_VIDEO_AUTOPLAY {
-                fields.push(field("autoplay", boolean(*autoplay)));
-            }
-            if let Some(poster) = poster {
-                fields.push(field("poster", binding(poster)));
-            }
-            case_obj("Video", fields)
-        }
-    }
-}
-
-/// Phase 1076 — the media spec, including the two OPPOSITE omit polarities:
-/// `controls` omits at TRUE (the accessible value is the free one), `loop` at
-/// `false`. `obj` sorts, so the keys land canonically wherever they are pushed.
-fn media_spec(spec: &MediaSpec) -> String {
-    let mut fields = vec![
-        field("kind", media_kind(&spec.kind)),
-        field("label", text_source(&spec.label)),
-        field("src", binding(&spec.src)),
-    ];
-    if spec.controls != defaults::MEDIA_CONTROLS {
-        fields.push(field("controls", boolean(spec.controls)));
-    }
-    if spec.r#loop != defaults::MEDIA_LOOP {
-        fields.push(field("loop", boolean(spec.r#loop)));
-    }
-    // Phase 1110 - omitted when EMPTY (an absent list and an empty one denote
-    // the same document), and emitted in the AUTHORED order the wire carried:
-    // a reader picks a track from a menu the user agent builds in document
-    // order, so sorting it would be rewriting somebody else's menu. This is the
-    // OPPOSITE of `srcSet`'s ascending-width rule, deliberately.
-    if !spec.tracks.is_empty() {
-        fields.push(field(
-            "tracks",
-            arr(spec.tracks.iter().map(track_entry).collect()),
-        ));
-    }
-    if let Some(transcript) = &spec.transcript {
-        fields.push(field("transcript", text_source(transcript)));
-    }
-    obj(fields)
-}
-
-/// Phase 1110 - one `TrackEntry`. `default` is the one omitted-at-`false` slot;
-/// the other four are always present.
-fn track_entry(t: &TrackEntry) -> String {
-    let mut fields = vec![
-        field("kind", s(t.kind.as_str())),
-        field("label", text_source(&t.label)),
-        field("src", binding(&t.src)),
-        field("srcLang", s(&t.src_lang)),
-    ];
-    if t.default != defaults::TRACK_ENTRY_DEFAULT {
-        fields.push(field("default", boolean(t.default)));
-    }
-    obj(fields)
-}
-
-/// Phase 1111 - `Embed`. `permissions` omits at the EMPTY list and `aspectRatio`
-/// at `Natural`, so the minimum embed carries `src` and `title` alone - and a
-/// host emitting `"permissions":[]` diverges on exactly that fixture.
-fn embed_spec(spec: &EmbedSpec) -> String {
-    let mut fields = vec![
-        field("src", binding(&spec.src)),
-        field("title", text_source(&spec.title)),
-    ];
-    if spec.aspect_ratio != defaults::EMBED_ASPECT_RATIO {
-        fields.push(field("aspectRatio", s(spec.aspect_ratio.as_str())));
-    }
-    if !spec.permissions.is_empty() {
-        fields.push(field(
-            "permissions",
-            arr(spec.permissions.iter().map(|p| s(p.as_str())).collect()),
-        ));
-    }
-    obj(fields)
-}
-
-/// Phase 1120 - `Tree`. Both State keys and the handler sentinel omit when
-/// absent; `items` is always present.
-fn tree_spec(spec: &TreeSpec) -> String {
-    let mut fields = vec![field(
-        "items",
-        arr(spec.items.iter().map(tree_item).collect()),
-    )];
-    if let Some(key) = &spec.expanded_state_key {
-        fields.push(field("expandedStateKey", s(key)));
-    }
-    if spec.on_select.is_some() {
-        fields.push(field("onSelect", CLOSURE.to_string()));
-    }
-    if let Some(key) = &spec.selection_state_key {
-        fields.push(field("selectionStateKey", s(key)));
-    }
-    obj(fields)
-}
-
-/// Phase 1120 - one `TreeItem`. `children` omits at the EMPTY LIST, so a leaf
-/// carries two keys and nothing else - which is most of a real hierarchy, and a
-/// host emitting `"children":[]` on a leaf produces different bytes for most of
-/// a file listing.
-fn tree_item(item: &TreeItem) -> String {
-    let mut fields = vec![
-        field("id", s(&item.id)),
-        field("label", text_source(&item.label)),
-    ];
-    if !item.children.is_empty() {
-        fields.push(field(
-            "children",
-            arr(item.children.iter().map(tree_item).collect()),
-        ));
-    }
-    if let Some(icon) = &item.icon {
-        fields.push(field("icon", s(icon)));
-    }
-    obj(fields)
-}
-
-fn list_spec(spec: &ListSpec) -> String {
-    obj(vec![
-        field("items", arr(spec.items.iter().map(text_source).collect())),
-        field("ordered", boolean(spec.ordered)),
-    ])
-}
-
-fn toast_spec(spec: &ToastSpec) -> String {
-    // Phase 460 — `tone` omitted-when-default. 0.2.0 — `dismissable` is
-    // omitted-when-TRUE (the one inverted default in §3.6's table).
-    let mut fields = vec![
-        field("message", text_source(&spec.message)),
-        field("open", binding(&spec.open)),
-    ];
-    if spec.dismissable != defaults::TOAST_DISMISSABLE {
-        fields.push(field("dismissable", boolean(spec.dismissable)));
-    }
-    if spec.tone != defaults::TOAST_TONE {
-        fields.push(field("tone", s(spec.tone.as_str())));
-    }
-    obj(fields)
-}
-
-fn code_block_spec(spec: &CodeBlockSpec) -> String {
-    obj(vec![
-        field("code", s(&spec.code)),
-        field("copyable", boolean(spec.copyable)),
-        field(
-            "highlightLines",
-            arr(spec.highlight_lines.iter().map(|&l| int(l)).collect()),
-        ),
-        field("language", s(&spec.language)),
-        field("lineNumbers", boolean(spec.line_numbers)),
-    ])
-}
-
-fn math_spec(spec: &MathSpec) -> String {
-    obj(vec![
-        field("display", s(spec.display.as_str())),
-        field("source", s(&spec.source)),
-    ])
-}
-
-fn sparkline_spec(spec: &SparklineSpec) -> String {
-    obj(vec![field("source", binding(&spec.source))])
-}
-
-fn skeleton_spec(spec: &SkeletonSpec) -> String {
-    obj(vec![field("rows", num(spec.rows as f64))])
-}
-
-// Phase 821 — the standalone icon-only display kind. `size`
-// omitted-when-`Medium`, `tone` omitted-when-`Default`, `label`
-// omitted-when-`None` (decorative). Canonical field order alphabetical:
-// icon, label, size, tone.
-fn icon_spec(spec: &IconSpec) -> String {
-    let mut fields = vec![field("icon", s(&spec.icon))];
-    if let Some(label) = &spec.label {
-        fields.push(field("label", s(label)));
-    }
-    if spec.size != defaults::ICON_SIZE {
-        fields.push(field("size", s(spec.size.as_str())));
-    }
-    if spec.tone != defaults::ICON_TONE {
-        fields.push(field("tone", s(spec.tone.as_str())));
-    }
-    obj(fields)
-}
-
-fn callout_spec(spec: &CalloutSpec) -> String {
-    // 0.2.0 — `dismissable` omitted-when-default (false).
-    let mut fields = vec![field("body", text_source(&spec.body))];
-    if spec.dismissable != defaults::CALLOUT_DISMISSABLE {
-        fields.push(field("dismissable", boolean(spec.dismissable)));
-    }
-    if spec.tone != defaults::CALLOUT_TONE {
-        fields.push(field("tone", s(spec.tone.as_str())));
-    }
-    if let Some(heading) = &spec.heading {
-        fields.push(field("heading", text_source(heading)));
-    }
-    if let Some(icon) = &spec.icon {
-        fields.push(field("icon", s(icon)));
-    }
-    obj(fields)
-}
-
-fn progress_spec(spec: &ProgressSpec) -> String {
-    // 0.2.0 — `indeterminate` omitted-when-default (false).
-    let mut fields = vec![field("fraction", binding(&spec.fraction))];
-    if spec.indeterminate != defaults::PROGRESS_INDETERMINATE {
-        fields.push(field("indeterminate", boolean(spec.indeterminate)));
-    }
-    if spec.tone != defaults::PROGRESS_TONE {
-        fields.push(field("tone", s(spec.tone.as_str())));
-    }
-    if let Some(label) = &spec.label {
-        fields.push(field("label", text_source(label)));
-    }
-    if let Some(caveat) = &spec.caveat {
-        fields.push(field("caveat", text_source(caveat)));
-    }
-    obj(fields)
-}
-
-// ─── Drawing specs (Phase 524) ───────────────────────────────────────────────
-
-fn view_box(vb: &ViewBox) -> String {
-    obj(vec![
-        field("height", num(vb.height)),
-        field("minX", num(vb.min_x)),
-        field("minY", num(vb.min_y)),
-        field("width", num(vb.width)),
-    ])
-}
-
-fn draw_point(p: &DrawPoint) -> String {
-    obj(vec![field("x", num(p.x)), field("y", num(p.y))])
-}
-
-fn draw_style(style: &DrawStyle) -> String {
-    // Every field optional; `obj` sorts keys, so push order is immaterial.
-    let mut fields = Vec::new();
-    if let Some(fill) = &style.fill {
-        fields.push(field("fill", binding(fill)));
-    }
-    if let Some(stroke) = &style.stroke {
-        fields.push(field("stroke", binding(stroke)));
-    }
-    if let Some(sw) = &style.stroke_width {
-        fields.push(field("strokeWidth", binding(sw)));
-    }
-    if let Some(op) = &style.opacity {
-        fields.push(field("opacity", binding(op)));
-    }
-    if let Some(ta) = &style.text_anchor {
-        fields.push(field("textAnchor", s(ta.as_str())));
-    }
-    if let Some(fs) = &style.font_size {
-        fields.push(field("fontSize", num(*fs)));
-    }
-    if let Some(em) = &style.emphasis {
-        fields.push(field("emphasis", s(em.as_str())));
-    }
-    if let Some(ff) = &style.font_family {
-        fields.push(field("fontFamily", s(ff)));
-    }
-    // Phase 642 — keyed mark identity; omitted-when-None (rule 4).
-    if let Some(m) = &style.mark_id {
-        fields.push(field("markId", s(m)));
-    }
-    // Phase 877 — Label text rotation (degrees); omitted-when-None (rule 4).
-    // `if let Some` on the Option, NOT a test on the value: `Some(0.0)` is a
-    // present value and a distinct wire shape from `None`.
-    if let Some(rot) = &style.rotation {
-        fields.push(field("rotation", num(*rot)));
-    }
-    // Phase 883 — the per-mark hover readout; omitted-when-None (rule 4). Same
-    // `if let Some` discipline: an explicitly EMPTY tip is a present value and
-    // a distinct wire shape from `None`.
-    if let Some(t) = &style.tip {
-        fields.push(field("tip", text_source(t)));
-    }
-    obj(fields)
-}
-
-fn curve_command(c: &CurveCommand) -> String {
-    match c {
-        CurveCommand::MoveTo(to) => case_obj("MoveTo", vec![field("to", draw_point(to))]),
-        CurveCommand::LineTo(to) => case_obj("LineTo", vec![field("to", draw_point(to))]),
-        CurveCommand::CubicTo {
-            control1,
-            control2,
-            to,
-        } => case_obj(
-            "CubicTo",
-            vec![
-                field("control1", draw_point(control1)),
-                field("control2", draw_point(control2)),
-                field("to", draw_point(to)),
-            ],
-        ),
-        CurveCommand::QuadraticTo { control, to } => case_obj(
-            "QuadraticTo",
-            vec![
-                field("control", draw_point(control)),
-                field("to", draw_point(to)),
-            ],
-        ),
-        CurveCommand::Close => case_obj("Close", vec![]),
-    }
-}
-
-fn shape(sh: &Shape) -> String {
-    match sh {
-        Shape::Group { children, style } => case_obj(
-            "Group",
-            vec![
-                field("children", arr(children.iter().map(shape).collect())),
-                field("style", draw_style(style)),
-            ],
-        ),
-        Shape::Rectangle {
-            x,
-            y,
-            width,
-            height,
-            corner_radius,
-            style,
-        } => {
-            let mut fields = vec![
-                field("height", num(*height)),
-                field("style", draw_style(style)),
-                field("width", num(*width)),
-                field("x", num(*x)),
-                field("y", num(*y)),
-            ];
-            if let Some(cr) = corner_radius {
-                fields.push(field("cornerRadius", num(*cr)));
-            }
-            case_obj("Rectangle", fields)
-        }
-        Shape::Line {
-            x1,
-            y1,
-            x2,
-            y2,
-            style,
-        } => case_obj(
-            "Line",
-            vec![
-                field("style", draw_style(style)),
-                field("x1", num(*x1)),
-                field("x2", num(*x2)),
-                field("y1", num(*y1)),
-                field("y2", num(*y2)),
-            ],
-        ),
-        Shape::Polyline { points, style } => case_obj(
-            "Polyline",
-            vec![
-                field("points", arr(points.iter().map(draw_point).collect())),
-                field("style", draw_style(style)),
-            ],
-        ),
-        Shape::Polygon { points, style } => case_obj(
-            "Polygon",
-            vec![
-                field("points", arr(points.iter().map(draw_point).collect())),
-                field("style", draw_style(style)),
-            ],
-        ),
-        Shape::Curve { commands, style } => case_obj(
-            "Curve",
-            vec![
-                field(
-                    "commands",
-                    arr(commands.iter().map(curve_command).collect()),
-                ),
-                field("style", draw_style(style)),
-            ],
-        ),
-        Shape::Circle { cx, cy, r, style } => case_obj(
-            "Circle",
-            vec![
-                field("cx", num(*cx)),
-                field("cy", num(*cy)),
-                field("r", num(*r)),
-                field("style", draw_style(style)),
-            ],
-        ),
-        Shape::Ellipse {
-            cx,
-            cy,
-            rx,
-            ry,
-            style,
-        } => case_obj(
-            "Ellipse",
-            vec![
-                field("cx", num(*cx)),
-                field("cy", num(*cy)),
-                field("rx", num(*rx)),
-                field("ry", num(*ry)),
-                field("style", draw_style(style)),
-            ],
-        ),
-        Shape::Label { x, y, text, style } => case_obj(
-            "Label",
-            vec![
-                field("style", draw_style(style)),
-                field("text", text_source(text)),
-                field("x", num(*x)),
-                field("y", num(*y)),
-            ],
-        ),
-    }
-}
-
-fn drawing_spec(spec: &DrawingSpec) -> String {
-    let mut fields = vec![
-        field("shapes", arr(spec.shapes.iter().map(shape).collect())),
-        field("style", draw_style(&spec.style)),
-        field("viewBox", view_box(&spec.view_box)),
-    ];
-    if let Some(title) = &spec.title {
-        fields.push(field("title", text_source(title)));
-    }
-    if let Some(desc) = &spec.description {
-        fields.push(field("description", text_source(desc)));
-    }
-    obj(fields)
-}
-
-// ─── Input specs ─────────────────────────────────────────────────────────────
-
-fn handler_field(name: &str, present: &Option<Closure>) -> Vec<Field> {
+pub(super) fn handler_field(name: &str, present: &Option<Closure>) -> Vec<Field> {
     if present.is_some() {
         vec![field(name, CLOSURE.to_string())]
     } else {
@@ -1524,14 +423,14 @@ fn handler_field(name: &str, present: &Option<Closure>) -> Vec<Field> {
 /// `State(field id, typed placeholder)` on a form field (0.2.1) — so the
 /// canonical minimal control carries no `value` key at all.
 #[derive(Clone, Copy)]
-enum ControlAutoBind<'a> {
+pub(super) enum ControlAutoBind<'a> {
     FilterChip(&'a str),
     FormFieldId(&'a str),
 }
 
 /// The typed auto-bind placeholders — must stay byte-identical to the decode
 /// side's `control_value_defaults`.
-mod control_value_defaults {
+pub(super) mod control_value_defaults {
     use super::*;
 
     pub fn text() -> StaticValue {
@@ -1568,7 +467,7 @@ mod control_value_defaults {
 
 /// The `value` field for a control slot: omitted when it is exactly the
 /// context's auto-binding; any other binding emits.
-fn control_value_field(
+pub(super) fn control_value_field(
     auto_bind: ControlAutoBind<'_>,
     placeholder: StaticValue,
     value: &Binding,
@@ -1601,7 +500,7 @@ fn control_value_field(
     }
 }
 
-fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String {
+pub(super) fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String {
     match k {
         FormFieldKind::Text { value, on_change } => {
             let mut fields = handler_field("onChange", on_change);
@@ -1919,982 +818,10 @@ fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind) -> String 
     }
 }
 
-fn compare_rule(c: &CompareRule) -> String {
-    obj(vec![
-        field("against", binding(&c.against)),
-        field("op", s(c.op.as_str())),
-    ])
-}
-
-fn field_rule(r: &FieldRule) -> String {
-    let mut fields = Vec::new();
-    if let Some(format) = &r.format {
-        fields.push(field("format", s(format.as_str())));
-    }
-    if let Some(pattern) = &r.pattern {
-        fields.push(field("pattern", s(pattern)));
-    }
-    if let Some(min) = r.min_length {
-        fields.push(field("minLength", int(min)));
-    }
-    if let Some(max) = r.max_length {
-        fields.push(field("maxLength", int(max)));
-    }
-    if let Some(compare) = &r.compare {
-        fields.push(field("compare", compare_rule(compare)));
-    }
-    if let Some(message) = &r.message {
-        fields.push(field("message", text_source(message)));
-    }
-    obj(fields)
-}
-
-fn form_field(f: &FormField) -> String {
-    let mut fields = vec![
-        field("id", s(&f.id)),
-        field(
-            "kind",
-            form_field_kind(ControlAutoBind::FormFieldId(&f.id), &f.kind),
-        ),
-        field("label", text_source(&f.label)),
-        field("required", boolean(f.required)),
-    ];
-    if let Some(help) = &f.help {
-        fields.push(field("help", text_source(help)));
-    }
-    if let Some(rule) = &f.rule {
-        fields.push(field("rule", field_rule(rule)));
-    }
-    obj(fields)
-}
-
-fn form_spec(spec: &FormSpec) -> String {
-    let mut fields = vec![
-        field("fields", arr(spec.fields.iter().map(form_field).collect())),
-        field("onSubmit", action(&spec.on_submit)),
-        field("submitLabel", text_source(&spec.submit_label)),
-    ];
-    if let Some(disabled) = &spec.disabled {
-        fields.push(field("disabled", binding(disabled)));
-    }
-    obj(fields)
-}
-
-fn filter_spec(spec: &FilterSpec) -> String {
-    // 0.2.0 filters-unification: the chip's control is an ordinary
-    // FormFieldKind; a `value` that is exactly the chip's auto binding
-    // (`Filter(name)`) is omitted.
-    obj(vec![
-        field(
-            "kind",
-            form_field_kind(ControlAutoBind::FilterChip(&spec.name), &spec.kind),
-        ),
-        field("label", text_source(&spec.label)),
-        field("name", s(&spec.name)),
-    ])
-}
-
-fn button_spec(spec: &ButtonSpec) -> String {
-    let mut fields = vec![
-        field("label", text_source(&spec.label)),
-        field("onClick", action(&spec.on_click)),
-        field("variant", s(spec.variant.as_str())),
-    ];
-    if let Some(icon) = &spec.icon {
-        fields.push(field("icon", s(icon)));
-    }
-    if let Some(disabled) = &spec.disabled {
-        fields.push(field("disabled", binding(disabled)));
-    }
-    obj(fields)
-}
-
-fn select_spec(spec: &SelectSpec) -> String {
-    let mut fields = vec![
-        field("label", text_source(&spec.label)),
-        field("source", binding(&spec.source)),
-        field("value", binding(&spec.value)),
-    ];
-    if spec.on_change.is_some() {
-        fields.push(field("onChange", CLOSURE.to_string()));
-    }
-    if let Some(placeholder) = &spec.placeholder {
-        fields.push(field("placeholder", text_source(placeholder)));
-    }
-    if let Some(disabled) = &spec.disabled {
-        fields.push(field("disabled", binding(disabled)));
-    }
-    if spec.multiple {
-        fields.push(field("multiple", boolean(true)));
-    }
-    if let Some(values) = &spec.values {
-        fields.push(field("values", binding(values)));
-    }
-    if spec.on_change_multi.is_some() {
-        fields.push(field("onChangeMulti", CLOSURE.to_string()));
-    }
-    obj(fields)
-}
-
-fn file_upload_spec(spec: &FileUploadSpec) -> String {
-    let mut fields = vec![
-        field("accept", arr(spec.accept.iter().map(|a| s(a)).collect())),
-        field("label", text_source(&spec.label)),
-        field("multiple", boolean(spec.multiple)),
-        field("onSelect", CLOSURE.to_string()),
-    ];
-    if let Some(disabled) = &spec.disabled {
-        fields.push(field("disabled", binding(disabled)));
-    }
-    // Phase 1115 - both omit at `false`. The SHORTEST upload document is the
-    // plain picker, which is exactly what every document written before this
-    // revision says, so a host emitting either member unconditionally diverges
-    // on every pre-1115 upload fixture.
-    if spec.accept_paste != defaults::FILE_UPLOAD_ACCEPT_PASTE {
-        fields.push(field("acceptPaste", boolean(spec.accept_paste)));
-    }
-    if spec.drop_target != defaults::FILE_UPLOAD_DROP_TARGET {
-        fields.push(field("dropTarget", boolean(spec.drop_target)));
-    }
-    // Phase 1116/1117 — both OPTIONAL and emitted only when declared, so a
-    // pre-1116 upload carries neither key and stays byte-identical.
-    if let Some(capture) = spec.capture {
-        fields.push(field("capture", s(capture.as_str())));
-    }
-    if let Some(destination) = &spec.destination {
-        fields.push(field("destination", s(destination)));
-    }
-    // Phase 1548 — the two declared ceilings, ordinary optionals on the same
-    // terms, so an upload declaring neither is byte-identical to what it always
-    // was.
-    if let Some(max_bytes) = spec.max_bytes {
-        fields.push(field("maxBytes", int(max_bytes)));
-    }
-    if let Some(max_files) = spec.max_files {
-        fields.push(field("maxFiles", int(max_files)));
-    }
-    obj(fields)
-}
-
-// ─── Visualisation specs ─────────────────────────────────────────────────────
-
-fn cell_kind_erased(k: &CellKindErased) -> String {
-    match k {
-        CellKindErased::Text => case_obj("Text", vec![]),
-        CellKindErased::Numeric => case_obj("Numeric", vec![]),
-        CellKindErased::Date => case_obj("Date", vec![]),
-        CellKindErased::Editable => {
-            case_obj("Editable", vec![field("onEdit", CLOSURE.to_string())])
-        }
-        CellKindErased::Checkbox => case_obj(
-            "Checkbox",
-            vec![
-                field("get", CLOSURE.to_string()),
-                field("onToggle", CLOSURE.to_string()),
-            ],
-        ),
-        CellKindErased::Button { label } => case_obj(
-            "Button",
-            vec![
-                field("label", text_source(label)),
-                field("onClick", CLOSURE.to_string()),
-            ],
-        ),
-        CellKindErased::ButtonGroup { labels } => case_obj(
-            "ButtonGroup",
-            vec![field(
-                "buttons",
-                arr(labels
-                    .iter()
-                    .map(|label| {
-                        obj(vec![
-                            field("label", text_source(label)),
-                            field("onClick", CLOSURE.to_string()),
-                        ])
-                    })
-                    .collect()),
-            )],
-        ),
-        CellKindErased::Link => case_obj(
-            "Link",
-            vec![
-                field("hrefFn", CLOSURE.to_string()),
-                field("labelFn", CLOSURE.to_string()),
-            ],
-        ),
-        CellKindErased::Pill => case_obj(
-            "Pill",
-            vec![
-                field("labelFn", CLOSURE.to_string()),
-                field("toneFn", CLOSURE.to_string()),
-            ],
-        ),
-        // Phase 750 — the declarative pill. `default` is omitted-when-`Default` (the
-        // Phase 460 discipline); `obj` Ordinal-sorts, so push order is irrelevant and
-        // the `BTreeMap`'s own ordering is a convenience rather than the contract.
-        CellKindErased::TonedPill {
-            field: row_field,
-            map,
-            default_tone,
-        } => {
-            let mut fields = vec![
-                field("field", s(row_field)),
-                field(
-                    "map",
-                    obj(map
-                        .iter()
-                        .map(|(value, tone)| field(value, s(tone.as_str())))
-                        .collect()),
-                ),
-            ];
-            if *default_tone != defaults::CELL_KIND_ERASED_TONED_PILL_DEFAULT {
-                fields.push(field("default", s(default_tone.as_str())));
-            }
-            case_obj("TonedPill", fields)
-        }
-        CellKindErased::Progress => case_obj(
-            "Progress",
-            vec![
-                field("fractionFn", CLOSURE.to_string()),
-                field("labelFn", CLOSURE.to_string()),
-            ],
-        ),
-        CellKindErased::Custom => case_obj("Custom", vec![field("fn", CLOSURE.to_string())]),
-    }
-}
-
-fn column_erased(c: &ColumnErased) -> String {
-    // Phase 460 — `format` / `width` omitted-when-default.
-    let mut fields = vec![
-        field("kind", cell_kind_erased(&c.kind)),
-        field("label", s(&c.label)),
-    ];
-    if c.format != defaults::COLUMN_ERASED_FORMAT {
-        fields.push(field("format", cell_format(&c.format)));
-    }
-    if c.width != defaults::COLUMN_ERASED_WIDTH {
-        fields.push(field("width", column_width(&c.width)));
-    }
-    if c.value.is_some() {
-        fields.push(field("value", CLOSURE.to_string()));
-    }
-    if let Some(f) = &c.field {
-        fields.push(field("field", s(f)));
-    }
-    // Phase 861 / 863 — the per-column narrowings, each emitted only when
-    // declared. NOT omitted-when-false: an explicit `false` IS the narrowing,
-    // and dropping it would silently widen the column back to the grid's flag.
-    if let Some(sortable) = c.sortable {
-        fields.push(field("sortable", boolean(sortable)));
-    }
-    if let Some(editable) = c.editable {
-        fields.push(field("editable", boolean(editable)));
-    }
-    obj(fields)
-}
-
-fn static_rows(rows: &StaticRows) -> String {
-    let mut fields = vec![
-        field(
-            "headers",
-            arr(rows.headers.iter().map(text_source).collect()),
-        ),
-        field(
-            "rows",
-            arr(rows
-                .rows
-                .iter()
-                .map(|row| arr(row.iter().map(text_source).collect()))
-                .collect()),
-        ),
-    ];
-    // Phase 801 — the declarative sort intent, each emitted only when declared, so
-    // a table saying nothing encodes exactly as it did before the fields existed.
-    if let Some(sortable) = rows.sortable {
-        fields.push(field("sortable", boolean(sortable)));
-    }
-    if let Some(ds) = &rows.default_sort {
-        fields.push(field("defaultSort", default_sort(ds)));
-    }
-    obj(fields)
-}
-
-/// Phase 801 / 861 — the `{column, direction}` initial-order declaration. ONE
-/// writer, shared by the `static_rows` spelling and the bound path, so the two
-/// positions cannot drift apart in what they emit.
-fn default_sort(ds: &DefaultSort) -> String {
-    obj(vec![
-        field("column", int(ds.column)),
-        field("direction", s(ds.direction.as_str())),
-    ])
-}
-
-fn grid_spec(spec: &GridSpec) -> String {
-    // 0.2.0 — `editable` omitted-when-default (false).
-    let mut fields = vec![
-        field(
-            "columns",
-            arr(spec.columns.iter().map(column_erased).collect()),
-        ),
-        field("source", binding(&spec.source)),
-    ];
-    if spec.editable != defaults::DATA_GRID_EDITABLE {
-        fields.push(field("editable", boolean(spec.editable)));
-    }
-    if spec.on_row_click.is_some() {
-        fields.push(field("onRowClick", CLOSURE.to_string()));
-    }
-    if spec.row_key.is_some() {
-        fields.push(field("rowKey", CLOSURE.to_string()));
-    }
-    if let Some(row_key_field) = &spec.row_key_field {
-        fields.push(field("rowKeyField", s(row_key_field)));
-    }
-    // Phase 818 — omitted when absent, so every pre-818 grid stays
-    // byte-identical.
-    if let Some(sort_state_key) = &spec.sort_state_key {
-        fields.push(field("sortStateKey", s(sort_state_key)));
-    }
-    // Phase 861 / 862 / 863 / 934 — each omitted when absent (and `reorderable`
-    // omitted-when-false), so every pre-861 grid stays byte-identical.
-    if let Some(ds) = &spec.default_sort {
-        fields.push(field("defaultSort", default_sort(ds)));
-    }
-    if let Some(page_size) = spec.page_size {
-        fields.push(field("pageSize", int(page_size)));
-    }
-    if let Some(page_state_key) = &spec.page_state_key {
-        fields.push(field("pageStateKey", s(page_state_key)));
-    }
-    if let Some(edit_state_key) = &spec.edit_state_key {
-        fields.push(field("editStateKey", s(edit_state_key)));
-    }
-    if spec.reorderable != defaults::DATA_GRID_REORDERABLE {
-        fields.push(field("reorderable", boolean(spec.reorderable)));
-    }
-    if let Some(rows) = &spec.static_rows {
-        fields.push(field("staticRows", static_rows(rows)));
-    }
-    // Phase 1473 — the DataGrid pair, omitted at `false` like the Box pair.
-    if spec.keep_rows_together != defaults::DATA_GRID_KEEP_ROWS_TOGETHER {
-        fields.push(field("keepRowsTogether", boolean(spec.keep_rows_together)));
-    }
-    if spec.repeat_header != defaults::DATA_GRID_REPEAT_HEADER {
-        fields.push(field("repeatHeader", boolean(spec.repeat_header)));
-    }
-    // Phase 1123 — omits at `false`; Phase 1125's pair omits at absence, and
-    // the `archive` fixture that declares `transferInKey` ALONE is what pins
-    // that polarity.
-    if spec.exportable != defaults::DATA_GRID_EXPORTABLE {
-        fields.push(field("exportable", boolean(spec.exportable)));
-    }
-    if let Some(key) = &spec.transfer_in_key {
-        fields.push(field("transferInKey", s(key)));
-    }
-    if let Some(key) = &spec.transfer_out_key {
-        fields.push(field("transferOutKey", s(key)));
-    }
-    // Phase 1892 — both omitted when absent, so every pre-1892 grid stays
-    // byte-identical.
-    if let Some(key) = &spec.window_state_key {
-        fields.push(field("windowStateKey", s(key)));
-    }
-    if let Some(total) = &spec.row_total {
-        fields.push(field("rowTotal", binding(total)));
-    }
-    obj(fields)
-}
-
-/// An annotation's x address (Phase 1491, §4l).
-fn chart_annotation_x(a: &ChartAnnotationX) -> String {
-    match a {
-        ChartAnnotationX::Category(key) => case_obj("Category", vec![field("key", s(key))]),
-        ChartAnnotationX::Date(iso) => case_obj("Date", vec![field("iso", s(iso))]),
-    }
-}
-
-/// A range band's pair (Phase 1492, §4l) — the case carries the AXIS.
-fn chart_annotation_range(r: &ChartAnnotationRange) -> String {
-    match r {
-        ChartAnnotationRange::ValueRange { from, to } => case_obj(
-            "ValueRange",
-            vec![field("from", num(*from)), field("to", num(*to))],
-        ),
-        ChartAnnotationRange::XRange { from, to } => case_obj(
-            "XRange",
-            vec![
-                field("from", chart_annotation_x(from)),
-                field("to", chart_annotation_x(to)),
-            ],
-        ),
-    }
-}
-
-/// A chart's data-addressed annotation (Phase 1490, §4l). An absent label omits
-/// its key; every label is carried unresolved, whichever arm it takes.
-fn chart_annotation(a: &ChartAnnotation) -> String {
-    let (tag, mut fields, label) = match a {
-        ChartAnnotation::ReferenceLine { value, label } => {
-            ("ReferenceLine", vec![field("value", num(*value))], label)
-        }
-        ChartAnnotation::EventMarker { at, label } => (
-            "EventMarker",
-            vec![field("at", chart_annotation_x(at))],
-            label,
-        ),
-        ChartAnnotation::RangeBand { range, label } => (
-            "RangeBand",
-            vec![field("range", chart_annotation_range(range))],
-            label,
-        ),
-    };
-    if let Some(t) = label {
-        fields.push(field("label", text_source(t)));
-    }
-    case_obj(tag, fields)
-}
-
-fn chart_spec(spec: &ChartSpec) -> String {
-    let mut fields = vec![
-        field("kind", s(spec.kind.as_str())),
-        field("source", binding(&spec.source)),
-        field("xField", s(&spec.x_field)),
-        field("yFields", arr(spec.y_fields.iter().map(|y| s(y)).collect())),
-    ];
-    // Phase 1585 — `stacked` is omitted-when-false. Every host's decoder already
-    // restored `false` on absence, so the omission is now the contract rather
-    // than a courtesy; an explicit `"stacked": false` on input still decodes and
-    // normalises to this form.
-    if spec.stacked != defaults::CHART_STACKED {
-        fields.push(field("stacked", boolean(spec.stacked)));
-    }
-    if let Some(title) = &spec.title {
-        fields.push(field("title", text_source(title)));
-    }
-    // Phase 876 — the value axis's declared number format (canonical key order).
-    if let Some(vf) = &spec.value_format {
-        fields.push(field("valueFormat", format_intent(vf)));
-    }
-    // Phase 878 — axis names + subtitle, each omitted when absent so every
-    // pre-878 chart stays byte-identical.
-    if let Some(x_title) = &spec.x_title {
-        fields.push(field("xTitle", text_source(x_title)));
-    }
-    if let Some(y_title) = &spec.y_title {
-        fields.push(field("yTitle", text_source(y_title)));
-    }
-    if let Some(subtitle) = &spec.subtitle {
-        fields.push(field("subtitle", text_source(subtitle)));
-    }
-    // Phase 880 — the legend's placement, omitted when absent (absence means the
-    // host default, so every pre-880 chart stays byte-identical).
-    if let Some(legend_position) = spec.legend_position {
-        fields.push(field("legendPosition", s(legend_position.as_str())));
-    }
-    // Phase 881 — whether the values are written onto the picture (canonical key
-    // order). Absent means `Off`, which is the default, so the key is omitted.
-    if let Some(data_labels) = spec.data_labels {
-        fields.push(field("dataLabels", s(data_labels.as_str())));
-    }
-    // Phase 882 — what the x column MEANS (canonical key order). Absent means
-    // `Category`, which is the default, so the key is OMITTED and every pre-882
-    // chart stays byte-identical.
-    if let Some(x_scale) = spec.x_scale {
-        fields.push(field("xScale", s(x_scale.as_str())));
-    }
-    // Phase 1490 — the data-addressed annotations (canonical key order). Absent
-    // OMITS, so every pre-1490 chart encodes to the same bytes it always did; an
-    // EMPTY list is a different document and round-trips as `[]`.
-    if let Some(annotations) = &spec.annotations {
-        fields.push(field(
-            "annotations",
-            arr(annotations.iter().map(chart_annotation).collect()),
-        ));
-    }
-    if spec.on_point_click.is_some() {
-        fields.push(field("onPointClick", CLOSURE.to_string()));
-    }
-    obj(fields)
-}
-
-fn map_spec(spec: &MapSpec) -> String {
-    let mut fields = vec![
-        field("centreLatitude", num(spec.centre_latitude)),
-        field("centreLongitude", num(spec.centre_longitude)),
-        field("source", binding(&spec.source)),
-        field("zoom", num(spec.zoom as f64)),
-    ];
-    if spec.on_marker_click.is_some() {
-        fields.push(field("onMarkerClick", CLOSURE.to_string()));
-    }
-    obj(fields)
-}
-
-// ─── Layout specs ────────────────────────────────────────────────────────────
-
-fn box_layout(l: &BoxLayout) -> String {
-    match l {
-        BoxLayout::Flex {
-            direction,
-            gap,
-            wrap,
-        } => {
-            let mut fields = vec![field("direction", s(direction.as_str()))];
-            if let Some(gap) = gap {
-                fields.push(field("gap", int(*gap)));
-            }
-            fields.push(field("wrap", boolean(*wrap)));
-            case_obj("Flex", fields)
-        }
-        BoxLayout::Grid {
-            cols,
-            gap,
-            template_columns,
-        } => {
-            let mut fields = vec![field("cols", int(*cols))];
-            if let Some(gap) = gap {
-                fields.push(field("gap", int(*gap)));
-            }
-            if let Some(template) = template_columns {
-                fields.push(field("templateColumns", s(template)));
-            }
-            case_obj("Grid", fields)
-        }
-        // §3.6.7 — ordinal key order cols < gap. No `templateColumns` twin.
-        BoxLayout::Masonry { cols, gap } => {
-            let mut fields = vec![field("cols", int(*cols))];
-            if let Some(gap) = gap {
-                fields.push(field("gap", int(*gap)));
-            }
-            case_obj("Masonry", fields)
-        }
-        BoxLayout::Auto => case_obj("Auto", vec![]),
-    }
-}
-
-fn box_spec(spec: &BoxSpec) -> String {
-    let mut fields = vec![field(
-        "children",
-        arr(spec.children.iter().map(node).collect()),
-    )];
-    if let Some(heading) = &spec.heading {
-        fields.push(field("heading", text_source(heading)));
-    }
-    fields.push(field("layout", box_layout(&spec.layout)));
-    fields.push(field("role", s(spec.role.as_str())));
-    // Phase 1473 — omitted at `false`, so a document that declares neither is
-    // byte-identical to every pre-1473 document.
-    if spec.keep_together != defaults::BOX_KEEP_TOGETHER {
-        fields.push(field("keepTogether", boolean(spec.keep_together)));
-    }
-    if spec.break_before != defaults::BOX_BREAK_BEFORE {
-        fields.push(field("breakBefore", boolean(spec.break_before)));
-    }
-    obj(fields)
-}
-
-fn split_panel_spec(spec: &SplitPanelSpec) -> String {
-    obj(vec![
-        field("children", arr(spec.children.iter().map(node).collect())),
-        field("weight", num(spec.weight)),
-    ])
-}
-
-fn tab_header(h: &TabHeader) -> String {
-    let mut fields = vec![field("label", text_source(&h.label))];
-    if let Some(icon) = &h.icon {
-        fields.push(field("icon", s(icon)));
-    }
-    if let Some(disabled) = &h.disabled {
-        fields.push(field("disabled", binding(disabled)));
-    }
-    obj(fields)
-}
-
-fn tabs_spec(spec: &TabsSpec) -> String {
-    // 0.2.0 — `orientation` omitted-when-default (Horizontal),
-    // encoder-symmetric (unlike SegmentedChoice, which always emits it).
-    let mut fields = vec![field(
-        "children",
-        arr(spec.children.iter().map(node).collect()),
-    )];
-    // Phase 1585 — `activeIndex` is omit-at-default at the identity `Static 0`.
-    // Every host's decoder restores it on absence, so a tab strip opening on its
-    // first tab pays no key for it. The test is on the CASE and its PAYLOAD,
-    // unlike `Chart.stacked`'s: the identity is one inhabitant of a union with
-    // an unbounded payload domain, so a `Static` carrying any other index still
-    // rides, and so does every `Query` / `Filter` / `Selection` / `State`
-    // binding — dropping on the tag alone would discard a document's authored
-    // tab, and for a writable binding its write-back destination with it.
-    // `*n == 0.0` rather than a bit comparison: `format_number(-0.0)` is `"0"`,
-    // so `-0.0` IS this identity on the wire and normalises to the same bytes.
-    let is_identity = matches!(
-        &spec.active_index,
-        Binding::Static {
-            value: StaticValue::Ast(JVal::Num(n)),
-        } if *n == 0.0
-    );
-    if !is_identity {
-        fields.push(field("activeIndex", binding(&spec.active_index)));
-    }
-    if spec.orientation != defaults::TABS_ORIENTATION {
-        fields.push(field("orientation", s(spec.orientation.as_str())));
-    }
-    if spec.on_select.is_some() {
-        fields.push(field("onSelect", CLOSURE.to_string()));
-    }
-    if let Some(headers) = &spec.tab_headers {
-        fields.push(field(
-            "tabHeaders",
-            arr(headers.iter().map(tab_header).collect()),
-        ));
-    }
-    if let Some(tags) = &spec.tab_tags {
-        fields.push(field("tabTags", arr(tags.iter().map(|t| s(t)).collect())));
-    }
-    if let Some(active_tag) = &spec.active_tag {
-        fields.push(field("activeTag", binding(active_tag)));
-    }
-    if spec.on_select_tag.is_some() {
-        fields.push(field("onSelectTag", CLOSURE.to_string()));
-    }
-    obj(fields)
-}
-
-fn stepper_spec(spec: &StepperSpec) -> String {
-    obj(vec![
-        field("activeStep", binding(&spec.active_step)),
-        field("children", arr(spec.children.iter().map(node).collect())),
-        field("onSelect", CLOSURE.to_string()),
-    ])
-}
-
-fn summary_list_spec(spec: &SummaryListSpec) -> String {
-    let mut fields = vec![field(
-        "children",
-        arr(spec.children.iter().map(node).collect()),
-    )];
-    if let Some(heading) = &spec.heading {
-        fields.push(field("heading", text_source(heading)));
-    }
-    obj(fields)
-}
-
-fn disclosure_spec(spec: &DisclosureSpec) -> String {
-    let mut fields = vec![
-        field("children", arr(spec.children.iter().map(node).collect())),
-        field("defaultOpen", boolean(spec.default_open)),
-        field("heading", text_source(&spec.heading)),
-        field("open", binding(&spec.open)),
-    ];
-    if spec.on_toggle.is_some() {
-        fields.push(field("onToggle", CLOSURE.to_string()));
-    }
-    obj(fields)
-}
-
-fn modal_spec(spec: &ModalSpec) -> String {
-    let mut fields = vec![
-        field("children", arr(spec.children.iter().map(node).collect())),
-        field("dismissable", boolean(spec.dismissable)),
-        field("open", binding(&spec.open)),
-    ];
-    if let Some(on_dismiss) = &spec.on_dismiss {
-        fields.push(field("onDismiss", action(on_dismiss)));
-    }
-    if let Some(heading) = &spec.heading {
-        fields.push(field("heading", text_source(heading)));
-    }
-    // WIRE_FORMAT.md 3.6.11 - omitted at `Modal`, so every pre-modality document
-    // re-encodes to the bytes it already had.
-    if spec.modality != defaults::MODAL_MODALITY {
-        fields.push(field("modality", s(spec.modality.as_str())));
-    }
-    if let Some(anchor) = &spec.anchor {
-        fields.push(field("anchor", s(anchor)));
-    }
-    obj(fields)
-}
-
-fn scroll_area_spec(spec: &ScrollAreaSpec) -> String {
-    let mut fields = vec![
-        field("children", arr(spec.children.iter().map(node).collect())),
-        field("orientation", s(spec.orientation.as_str())),
-    ];
-    if let Some(max_height) = spec.max_height {
-        fields.push(field("maxHeight", num(max_height as f64)));
-    }
-    if let Some(max_width) = spec.max_width {
-        fields.push(field("maxWidth", num(max_width as f64)));
-    }
-    obj(fields)
-}
-
-// ─── Fragments / Mount ───────────────────────────────────────────────────────
-
-fn fragment_scalar(scalar: &FragmentScalar) -> String {
-    match scalar {
-        FragmentScalar::Int(v) => case_obj("Int", vec![field("value", int(*v))]),
-        FragmentScalar::Float(v) => case_obj("Float", vec![field("value", num(*v))]),
-        FragmentScalar::Bool(v) => case_obj("Bool", vec![field("value", boolean(*v))]),
-        FragmentScalar::Str(v) => case_obj("Str", vec![field("value", s(v))]),
-    }
-}
-
-fn hole_value_space(space: &HoleValueSpace) -> String {
-    match space {
-        HoleValueSpace::IntRange { min, max } => case_obj(
-            "IntRange",
-            vec![field("max", int(*max)), field("min", int(*min))],
-        ),
-        HoleValueSpace::FloatRange { min, max } => case_obj(
-            "FloatRange",
-            vec![field("max", num(*max)), field("min", num(*min))],
-        ),
-        HoleValueSpace::StringLen { min_len, max_len } => case_obj(
-            "StringLen",
-            vec![
-                field("maxLen", int(*max_len)),
-                field("minLen", int(*min_len)),
-            ],
-        ),
-        HoleValueSpace::Enum { choices } => case_obj(
-            "Enum",
-            vec![field(
-                "choices",
-                arr(choices.iter().map(|c| s(c)).collect()),
-            )],
-        ),
-        HoleValueSpace::AnyString => case_obj("AnyString", vec![]),
-    }
-}
-
-fn hole_decl(h: &HoleDecl) -> String {
-    match h {
-        HoleDecl::Value {
-            name,
-            space,
-            default,
-        } => {
-            let mut fields = vec![
-                field("name", s(name)),
-                field("space", hole_value_space(space)),
-            ];
-            if let Some(default) = default {
-                fields.push(field("default", fragment_scalar(default)));
-            }
-            case_obj("Value", fields)
-        }
-        HoleDecl::Slot {
-            name,
-            kind_constraint,
-        } => {
-            let mut fields = vec![field("name", s(name))];
-            if let Some(constraint) = kind_constraint {
-                fields.push(field("kindConstraint", s(constraint)));
-            }
-            case_obj("Slot", fields)
-        }
-        HoleDecl::Repeat { name, count_space } => case_obj(
-            "Repeat",
-            vec![
-                field("countSpace", hole_value_space(count_space)),
-                field("name", s(name)),
-            ],
-        ),
-    }
-}
-
-fn effect_class(e: &EffectClass) -> String {
-    obj(vec![
-        field("determinism", s(e.determinism.as_str())),
-        field("hostEffect", s(e.host_effect.as_str())),
-    ])
-}
-
-fn fragment_arg(a: &FragmentArg) -> String {
+pub(super) fn fragment_arg(a: &FragmentArg) -> String {
     match a {
         FragmentArg::Value(scalar) => fragment_scalar(scalar),
         FragmentArg::Slot { tree } => case_obj("SlotArg", vec![field("tree", node(tree))]),
-    }
-}
-
-// ─── NodeKind / Node / StateBehaviour / Style / Accessibility ────────────────
-
-fn node_kind(k: &NodeKind) -> String {
-    match k {
-        // Layout
-        NodeKind::Box(spec) => case_obj_hoisted("Box", box_spec(spec)),
-        NodeKind::SplitPanel(spec) => case_obj_hoisted("SplitPanel", split_panel_spec(spec)),
-        NodeKind::Tabs(spec) => case_obj_hoisted("Tabs", tabs_spec(spec)),
-        NodeKind::Stepper(spec) => case_obj_hoisted("Stepper", stepper_spec(spec)),
-        NodeKind::SummaryList(spec) => case_obj_hoisted("SummaryList", summary_list_spec(spec)),
-        NodeKind::Disclosure(spec) => case_obj_hoisted("Disclosure", disclosure_spec(spec)),
-        NodeKind::Modal(spec) => case_obj_hoisted("Modal", modal_spec(spec)),
-        NodeKind::ScrollArea(spec) => case_obj_hoisted("ScrollArea", scroll_area_spec(spec)),
-        // Display
-        NodeKind::Heading(spec) => case_obj_hoisted("Heading", heading_spec(spec)),
-        NodeKind::Markdown(spec) => case_obj_hoisted("Markdown", markdown_spec(spec)),
-        NodeKind::Metric(spec) => case_obj_hoisted("Metric", metric_spec(spec)),
-        NodeKind::Badge(spec) => case_obj_hoisted("Badge", badge_spec(spec)),
-        NodeKind::Sparkline(spec) => case_obj_hoisted("Sparkline", sparkline_spec(spec)),
-        NodeKind::Callout(spec) => case_obj_hoisted("Callout", callout_spec(spec)),
-        NodeKind::Progress(spec) => case_obj_hoisted("Progress", progress_spec(spec)),
-        NodeKind::Skeleton(spec) => case_obj_hoisted("Skeleton", skeleton_spec(spec)),
-        NodeKind::Icon(spec) => case_obj_hoisted("Icon", icon_spec(spec)),
-        NodeKind::Fact(spec) => case_obj_hoisted("Fact", fact_spec(spec)),
-        NodeKind::LabelValueRow(spec) => {
-            case_obj_hoisted("LabelValueRow", label_value_row_spec(spec))
-        }
-        NodeKind::Link(spec) => case_obj_hoisted("Link", link_spec(spec)),
-        NodeKind::Image(spec) => case_obj_hoisted("Image", image_spec(spec)),
-        NodeKind::Media(spec) => case_obj_hoisted("Media", media_spec(spec)),
-        NodeKind::Embed(spec) => case_obj_hoisted("Embed", embed_spec(spec)),
-        NodeKind::Tree(spec) => case_obj_hoisted("Tree", tree_spec(spec)),
-        NodeKind::List(spec) => case_obj_hoisted("List", list_spec(spec)),
-        NodeKind::Toast(spec) => case_obj_hoisted("Toast", toast_spec(spec)),
-        NodeKind::CodeBlock(spec) => case_obj_hoisted("CodeBlock", code_block_spec(spec)),
-        NodeKind::Math(spec) => case_obj_hoisted("Math", math_spec(spec)),
-        NodeKind::Drawing(spec) => case_obj_hoisted("Drawing", drawing_spec(spec)),
-        // Input
-        NodeKind::Form(spec) => case_obj_hoisted("Form", form_spec(spec)),
-        NodeKind::Filters(specs) => case_obj(
-            "Filters",
-            vec![field("items", arr(specs.iter().map(filter_spec).collect()))],
-        ),
-        NodeKind::Button(spec) => case_obj_hoisted("Button", button_spec(spec)),
-        NodeKind::FileUpload(spec) => case_obj_hoisted("FileUpload", file_upload_spec(spec)),
-        NodeKind::Select(spec) => case_obj_hoisted("Select", select_spec(spec)),
-        // Visualisation
-        NodeKind::DataGrid(spec) => case_obj_hoisted("DataGrid", grid_spec(spec)),
-        NodeKind::Chart(spec) => case_obj_hoisted("Chart", chart_spec(spec)),
-        NodeKind::Map(spec) => case_obj_hoisted("Map", map_spec(spec)),
-        // Structural
-        NodeKind::Custom(spec) => {
-            let mut fields = vec![
-                field("componentId", s(&spec.component_id)),
-                field("moduleId", s(&spec.module_id)),
-                field("props", json_map(&spec.props)),
-            ];
-            if let Some(hash) = &spec.content_hash {
-                fields.push(field(
-                    "contentHash",
-                    obj(vec![
-                        field("algorithm", s(&hash.algorithm)),
-                        field("hash", s(&hash.hash)),
-                        field("strictness", s(hash.strictness.as_str())),
-                    ]),
-                ));
-            }
-            if !spec.exposed_node_ids.is_empty() {
-                fields.push(field(
-                    "exposedNodeIds",
-                    arr(spec.exposed_node_ids.iter().map(|id| s(id)).collect()),
-                ));
-            }
-            case_obj("Custom", fields)
-        }
-        NodeKind::ErrorBoundary(spec) => case_obj(
-            "ErrorBoundary",
-            vec![
-                field("child", node(&spec.child)),
-                field("fallback", node(&spec.fallback)),
-            ],
-        ),
-        NodeKind::Switch(spec) => {
-            let mut fields = vec![];
-            // Phase 1122 — omitted at absence, so a document that never
-            // declared it is byte-identical to what it was before the member
-            // existed.
-            if let Some(ms) = spec.auto_advance_ms {
-                fields.push(field("autoAdvanceMs", int(ms)));
-            }
-            fields.push(field(
-                "cases",
-                arr(spec
-                    .cases
-                    .iter()
-                    .map(|c| {
-                        // Phase 1535 — exactly one condition key rides, and
-                        // which one is the case's own discriminator.
-                        let condition = match &c.condition {
-                            SwitchCondition::Match(value) => field("match", s(value)),
-                            SwitchCondition::When(b) => field("when", binding(b)),
-                        };
-                        obj(vec![field("child", node(&c.child)), condition])
-                    })
-                    .collect()),
-            ));
-            fields.push(field("default", node(&spec.default)));
-            // Phase 768 collapse rule — the no-default State selector keeps
-            // the compact canonical `stateKey` spelling (existing fixtures stay
-            // byte-identical); any other selector encodes as `on`.
-            fields.push(match &spec.on {
-                Binding::State {
-                    key,
-                    default_declared: false,
-                    ..
-                } => field("stateKey", s(key)),
-                other => field("on", binding(other)),
-            });
-            case_obj("Switch", fields)
-        }
-        NodeKind::FragmentDecl(spec) => {
-            let mut fields = vec![
-                field("body", node(&spec.body)),
-                field("name", s(&spec.name)),
-            ];
-            if !spec.holes.is_empty() {
-                fields.push(field(
-                    "holes",
-                    arr(spec.holes.iter().map(hole_decl).collect()),
-                ));
-            }
-            if !spec.effect.is_pure_deterministic() {
-                fields.push(field("effect", effect_class(&spec.effect)));
-            }
-            case_obj("FragmentDecl", fields)
-        }
-        NodeKind::FragmentRef(spec) => {
-            let mut fields = vec![field("name", s(&spec.name))];
-            if !spec.args.is_empty() {
-                fields.push(field(
-                    "args",
-                    obj(spec
-                        .args
-                        .iter()
-                        .map(|(k, v)| (k.clone(), fragment_arg(v)))
-                        .collect()),
-                ));
-            }
-            case_obj("FragmentRef", fields)
-        }
-        NodeKind::Mount(spec) => {
-            let mut channel_fields = vec![field("direction", s(spec.channel.direction.as_str()))];
-            if let Some(shape) = &spec.channel.message_shape {
-                channel_fields.push(field("messageShape", s(shape)));
-            }
-            let mut fields = vec![
-                field(
-                    "capabilities",
-                    arr(spec.capabilities.iter().map(|c| s(c)).collect()),
-                ),
-                field("channel", obj(channel_fields)),
-                field("onBubble", CLOSURE.to_string()),
-                field("scopeId", s(&spec.scope_id)),
-            ];
-            if !spec.inputs.is_empty() {
-                fields.push(field(
-                    "inputs",
-                    obj(spec
-                        .inputs
-                        .iter()
-                        .map(|(k, v)| (k.clone(), fragment_arg(v)))
-                        .collect()),
-                ));
-            }
-            case_obj("Mount", fields)
-        }
     }
 }
 
@@ -2902,7 +829,7 @@ fn node_kind(k: &NodeKind) -> String {
 /// discriminator (§3.2) — realised here by adding `$type` to the spec's own
 /// field set before the canonical sort, which lands it first (`$` sorts before
 /// every lower-case field name).
-fn case_obj_hoisted(discriminator: &str, spec_json: String) -> String {
+pub(super) fn case_obj_hoisted(discriminator: &str, spec_json: String) -> String {
     // spec_json is "{…}" with Ordinal-sorted fields; splice "$type" in front.
     let head = format!("{{\"$type\":{}", s(discriminator));
     if spec_json.len() > 2 {
@@ -2912,216 +839,226 @@ fn case_obj_hoisted(discriminator: &str, spec_json: String) -> String {
     }
 }
 
-fn state_behaviour(state: &StateBehaviour) -> String {
-    let mut fields = vec![];
-    if let Some(on_loading) = &state.on_loading {
-        fields.push(field("onLoading", node(on_loading)));
+// ─── The generated codec's helpers ───────────────────────────────────────────
+
+/// A list position: each element through its own encoder, in order.
+pub(super) fn enc_list<T>(items: &[T], f: impl Fn(&T) -> String) -> String {
+    arr(items.iter().map(f).collect())
+}
+
+/// A map position (an ordered list of name-value pairs): `obj` sorts the keys.
+pub(super) fn enc_map<T>(entries: &[(String, T)], f: impl Fn(&T) -> String) -> String {
+    obj(entries.iter().map(|(k, v)| (k.clone(), f(v))).collect())
+}
+
+/// Phase 818 — a `Data` source keeps the columnar encoding byte-identical; a
+/// `Live` source re-encodes the preserved binding itself (one wire dialect — the
+/// State/Selection/Query-shaped source round-trips byte-for-byte; the derived
+/// `initial` snapshot is never encoded).
+pub(super) fn transform_source(source: &TransformSource) -> String {
+    match source {
+        TransformSource::Data(ds) => data_source(ds),
+        TransformSource::Live { binding: b, .. } => binding(b),
     }
-    if let Some(on_empty) = &state.on_empty {
-        fields.push(field("onEmpty", node(on_empty)));
-    }
-    if state.on_error.is_some() {
-        fields.push(field("onError", CLOSURE.to_string()));
+}
+
+// ─── Encode hooks (declared in dialect.rs) ───────────────────────────────────
+//
+// Each takes a reference to every Rust member its field maps to and returns the
+// field's wire value, or `None` to omit the key. An owner hook takes every member
+// of its owner and returns the owner's whole JSON.
+
+/// `Custom.exposedNodeIds` — an absent list decodes empty, so an empty one is not
+/// written.
+pub(super) fn encode_exposed_node_ids(ids: &[NodeId]) -> Option<String> {
+    (!ids.is_empty()).then(|| enc_list(ids, |id| s(id)))
+}
+
+/// `FragmentDecl.effect` — omitted at the pure deterministic class, the IDL's
+/// record default.
+pub(super) fn encode_fragment_effect(effect: &EffectClass) -> Option<String> {
+    (!effect.is_pure_deterministic()).then(|| effect_class(effect))
+}
+
+/// `FragmentRef.args` / `Mount.inputs` — an absent map decodes empty, so an empty
+/// one is not written.
+pub(super) fn encode_fragment_args(args: &[(String, FragmentArg)]) -> Option<String> {
+    (!args.is_empty()).then(|| enc_map(args, fragment_arg))
+}
+
+/// `Select.multiple` — an absent flag is `false`, so only `true` is written.
+pub(super) fn encode_select_multiple(multiple: &bool) -> Option<String> {
+    multiple.then(|| boolean(true))
+}
+
+/// `Tabs.activeIndex` — omitted at its default, the literal binding `0`, so a
+/// tabs node that starts on its first tab says nothing about it.
+pub(super) fn encode_tabs_active_index(active: &Binding) -> Option<String> {
+    let is_identity = matches!(
+        active,
+        Binding::Static {
+            value: StaticValue::Ast(JVal::Num(n)),
+        } if *n == 0.0
+    );
+    (!is_identity).then(|| binding(active))
+}
+
+/// `Accessibility.role` — the hosted ARIA role rides as its token string.
+pub(super) fn encode_aria_role(role: &Option<String>) -> Option<String> {
+    role.as_deref().map(s)
+}
+
+/// `SelectOption.label` / `MapMarker.label` — the host reads a full `TextSource`
+/// where the IDL types a string; a literal re-encodes as the bare string.
+pub(super) fn encode_text_label(label: &TextSource) -> Option<String> {
+    Some(text_source(label))
+}
+
+/// `Binding.Static.value` — Phase 677: absence is structural, never a value, so an
+/// absent payload omits the key rather than emitting `null`. A typed empty
+/// (`Options(vec![])`) is NOT absent.
+pub(super) fn encode_static_payload(value: &StaticValue) -> Option<String> {
+    (!static_is_absent(value)).then(|| static_value(value))
+}
+
+/// `Binding.State.defaultValue` — §5's absent-default posture (Phase 1656): the
+/// DECLARATION decides and nothing else. A typed slot's decoded default is the
+/// placeholder an unwritten key resolves to, and emitting it would put a
+/// `defaultValue` on the wire the document never carried.
+pub(super) fn encode_state_default(value: &StaticValue, declared: &bool) -> Option<String> {
+    declared.then(|| static_value(value))
+}
+
+/// `Binding.Query.dependsOn` — an empty list says nothing, so it is not written.
+pub(super) fn encode_depends_on(deps: &Option<Vec<String>>) -> Option<String> {
+    deps.as_deref()
+        .filter(|d| !d.is_empty())
+        .map(|d| enc_list(d, |x| s(x)))
+}
+
+/// `Binding.Expr.params` / `Binding.Transform.params` — §3.3 omits the slot when
+/// empty: `Some(vec![])` is the same fact as `None` on the wire.
+pub(super) fn encode_binding_params(params: &Option<Vec<TransformParam>>) -> Option<String> {
+    params
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .map(|p| enc_list(p, transform_param))
+}
+
+/// `CellKindErased.ButtonGroup.buttons` — each item is inlined to its label; its
+/// click handler is the closure sentinel.
+pub(super) fn encode_button_group(labels: &[TextSource]) -> Option<String> {
+    Some(enc_list(labels, |label| {
+        obj(vec![
+            field("label", text_source(label)),
+            field("onClick", CLOSURE.to_string()),
+        ])
+    }))
+}
+
+/// `CellKindErased.TonedPill.map` — the lookup table, as an object keyed by the
+/// row value (`obj` sorts, so the `BTreeMap`'s order is a convenience).
+pub(super) fn encode_tone_map(map: &BTreeMap<String, ToneVariant>) -> Option<String> {
+    Some(obj(map
+        .iter()
+        .map(|(value, tone)| field(value, s(tone.as_str())))
+        .collect()))
+}
+
+/// `Node.state` — an absent state is the empty behaviour, so only a non-empty one
+/// is written.
+pub(super) fn encode_node_state(state: &StateBehaviour) -> Option<String> {
+    (!state.is_empty()).then(|| state_behaviour(state))
+}
+
+/// `Node.style` — an absent style is the default style, so only a styled node
+/// writes one (and inside it, each member is omitted at its default).
+pub(super) fn encode_node_style(style: &SemanticStyle) -> Option<String> {
+    (!style.is_default()).then(|| semantic_style(style))
+}
+
+/// The `Filters` kind — its variant holds the `items` list directly.
+pub(super) fn encode_filters_kind(items: &[FilterSpec]) -> String {
+    case_obj(
+        "Filters",
+        vec![field("items", enc_list(items, filter_spec))],
+    )
+}
+
+/// `Switch` — `on` and `stateKey` fold into one binding: an undeclared-default
+/// `State` binding is written as the `stateKey` shorthand, anything else as `on`.
+pub(super) fn encode_switch_spec(
+    auto_advance_ms: &Option<i64>,
+    cases: &[SwitchCase],
+    default: &Node,
+    on: &Binding,
+) -> String {
+    let mut fields = vec![
+        field("cases", enc_list(cases, switch_case)),
+        field("default", node(default)),
+        match on {
+            Binding::State {
+                key,
+                default_declared: false,
+                ..
+            } => field("stateKey", s(key)),
+            other => field("on", binding(other)),
+        },
+    ];
+    if let Some(ms) = auto_advance_ms {
+        fields.push(field("autoAdvanceMs", int(*ms)));
     }
     obj(fields)
 }
 
-fn semantic_style(style: &SemanticStyle) -> String {
-    // Phase 460 — tone/weight/emphasis omitted-when-default (as role/voice).
-    let mut fields = vec![];
-    if style.tone != defaults::SEMANTIC_STYLE_TONE {
-        fields.push(field("tone", s(style.tone.as_str())));
+/// `SwitchCase` — `match` and `when` fold into one `SwitchCondition`.
+pub(super) fn encode_switch_case(child: &Node, condition: &SwitchCondition) -> String {
+    let condition = match condition {
+        SwitchCondition::Match(value) => field("match", s(value)),
+        SwitchCondition::When(b) => field("when", binding(b)),
+    };
+    obj(vec![field("child", node(child)), condition])
+}
+
+/// `FormField` — its control's `value` is omitted when it is the auto-binding the
+/// field id implies (see `form_field_kind`).
+pub(super) fn encode_form_field(
+    id: &str,
+    kind: &FormFieldKind,
+    label: &TextSource,
+    required: &bool,
+    help: &Option<TextSource>,
+    rule: &Option<FieldRule>,
+) -> String {
+    let mut fields = vec![
+        field("id", s(id)),
+        field(
+            "kind",
+            form_field_kind(ControlAutoBind::FormFieldId(id), kind),
+        ),
+        field("label", text_source(label)),
+        field("required", boolean(*required)),
+    ];
+    if let Some(help) = help {
+        fields.push(field("help", text_source(help)));
     }
-    if style.weight != defaults::SEMANTIC_STYLE_WEIGHT {
-        fields.push(field("weight", s(style.weight.as_str())));
-    }
-    if style.emphasis != defaults::SEMANTIC_STYLE_EMPHASIS {
-        fields.push(field("emphasis", s(style.emphasis.as_str())));
-    }
-    if style.role != defaults::SEMANTIC_STYLE_ROLE {
-        fields.push(field("role", s(style.role.as_str())));
-    }
-    if style.voice != defaults::SEMANTIC_STYLE_VOICE {
-        fields.push(field("voice", s(style.voice.as_str())));
-    }
-    // Phase 1472 - omitted at `Auto`. The whole `style` object is itself omitted
-    // when every member is at its default, so a pre-1472 document is byte-stable.
-    if style.direction != defaults::SEMANTIC_STYLE_DIRECTION {
-        fields.push(field("direction", s(style.direction.as_str())));
+    if let Some(rule) = rule {
+        fields.push(field("rule", field_rule(rule)));
     }
     obj(fields)
 }
 
-/// Phase 2291 — the `PatchStyle` payload: EVERY member the delta sets is
-/// emitted, a default token included (§3.6's omit-when-default rule does not
-/// apply inside a delta — absence there means "leave as it is").
-fn style_delta(delta: &StyleDelta) -> String {
-    let mut fields = vec![];
-    if let Some(v) = delta.direction {
-        fields.push(field("direction", s(v.as_str())));
-    }
-    if let Some(v) = delta.emphasis {
-        fields.push(field("emphasis", s(v.as_str())));
-    }
-    if let Some(v) = delta.role {
-        fields.push(field("role", s(v.as_str())));
-    }
-    if let Some(v) = delta.tone {
-        fields.push(field("tone", s(v.as_str())));
-    }
-    if let Some(v) = delta.voice {
-        fields.push(field("voice", s(v.as_str())));
-    }
-    if let Some(v) = delta.weight {
-        fields.push(field("weight", s(v.as_str())));
-    }
-    obj(fields)
-}
-
-fn accessibility(a: &Accessibility) -> String {
-    let mut fields = vec![];
-    if let Some(label) = &a.label {
-        fields.push(field("label", binding(label)));
-    }
-    if let Some(labelled_by) = &a.labelled_by {
-        fields.push(field("labelledBy", s(labelled_by)));
-    }
-    if let Some(described_by) = &a.described_by {
-        fields.push(field("describedBy", s(described_by)));
-    }
-    if let Some(role) = &a.role {
-        fields.push(field("role", s(role)));
-    }
-    if let Some(live_region) = &a.live_region {
-        fields.push(field("liveRegion", s(live_region.as_str())));
-    }
-    if let Some(hidden) = &a.hidden {
-        fields.push(field("hidden", binding(hidden)));
-    }
-    // Phase 1812 — the bare-string canonical form for a literal, as `tooltip`.
-    if let Some(speak) = &a.speak {
-        fields.push(field("speak", text_source(speak)));
-    }
-    obj(fields)
-}
-
-fn node(n: &Node) -> String {
-    let mut fields = vec![field("id", s(&n.id)), field("kind", node_kind(&n.kind))];
-    if !n.state.is_empty() {
-        fields.push(field("state", state_behaviour(&n.state)));
-    }
-    if !n.style.is_default() {
-        fields.push(field("style", semantic_style(&n.style)));
-    }
-    if let Some(a) = &n.accessibility {
-        fields.push(field("accessibility", accessibility(a)));
-    }
-    // Phase 1112 - the tooltip trait. The CANONICAL encoding of a literal hint
-    // is a BARE STRING, which `text_source` already produces: `Literal` is
-    // `TextSource`'s transparent case wherever it appears.
-    if let Some(t) = &n.tooltip {
-        fields.push(field("tooltip", text_source(t)));
-    }
-    // Phase 1535 — omitted when absent, so a document that never declared it is
-    // byte-identical to what it was before the trait existed.
-    if let Some(v) = &n.visible {
-        fields.push(field("visible", binding(v)));
-    }
-    // Phase 1812 — the author-declared fallback re-encodes byte-for-byte like
-    // any other envelope field; the canonical key order places it by name.
-    if let Some(f) = &n.fallback {
-        fields.push(field("fallback", node(f)));
-    }
-    obj(fields)
-}
-
-// ─── TreeOp ──────────────────────────────────────────────────────────────────
-
-fn tree_op(op: &TreeOp) -> String {
-    match op {
-        TreeOp::EditNode { target, new_kind } => case_obj(
-            "EditNode",
-            vec![
-                field("newKind", node_kind(new_kind)),
-                field("target", s(target)),
-            ],
+/// `FilterSpec` — its control's `value` is omitted when it is the auto-binding the
+/// chip name implies (see `form_field_kind`).
+pub(super) fn encode_filter_spec(kind: &FormFieldKind, label: &TextSource, name: &str) -> String {
+    obj(vec![
+        field(
+            "kind",
+            form_field_kind(ControlAutoBind::FilterChip(name), kind),
         ),
-        TreeOp::UpdateProp {
-            target,
-            path,
-            value,
-        } => case_obj(
-            "UpdateProp",
-            vec![
-                field("path", s(path)),
-                field("target", s(target)),
-                field("value", json_value(value)),
-            ],
-        ),
-        TreeOp::ReplaceBinding {
-            target,
-            slot,
-            binding: b,
-        } => case_obj(
-            "ReplaceBinding",
-            vec![
-                field("binding", binding(b)),
-                field("slot", s(slot)),
-                field("target", s(target)),
-            ],
-        ),
-        TreeOp::UpdateStyle { target, style } => case_obj(
-            "UpdateStyle",
-            vec![
-                field("style", semantic_style(style)),
-                field("target", s(target)),
-            ],
-        ),
-        TreeOp::PatchStyle { target, style } => case_obj(
-            "PatchStyle",
-            vec![
-                field("style", style_delta(style)),
-                field("target", s(target)),
-            ],
-        ),
-        TreeOp::UpdateState { target, state } => case_obj(
-            "UpdateState",
-            vec![
-                field("state", state_behaviour(state)),
-                field("target", s(target)),
-            ],
-        ),
-        TreeOp::InsertChild { parent_id, child } => case_obj(
-            "InsertChild",
-            vec![field("child", node(child)), field("parentId", s(parent_id))],
-        ),
-        TreeOp::RemoveNode { target } => case_obj("RemoveNode", vec![field("target", s(target))]),
-        TreeOp::MoveNode {
-            target,
-            new_parent_id,
-        } => case_obj(
-            "MoveNode",
-            vec![
-                field("newParentId", s(new_parent_id)),
-                field("target", s(target)),
-            ],
-        ),
-        TreeOp::ReorderChildren {
-            parent_id,
-            new_order,
-        } => case_obj(
-            "ReorderChildren",
-            vec![
-                field("newOrder", arr(new_order.iter().map(|id| s(id)).collect())),
-                field("parentId", s(parent_id)),
-            ],
-        ),
-        TreeOp::ReplaceRoot { node: n } => case_obj("ReplaceRoot", vec![field("node", node(n))]),
-        TreeOp::Batch(ops) => case_obj(
-            "Batch",
-            vec![field("ops", arr(ops.iter().map(tree_op).collect()))],
-        ),
-    }
+        field("label", text_source(label)),
+        field("name", s(name)),
+    ])
 }
 
 // ─── Public surface ──────────────────────────────────────────────────────────

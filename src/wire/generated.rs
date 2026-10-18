@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "78d050701b82fe3475e0925f2d617689daa1ea786eda74084a8343ea9889b9cd";
+pub const IDL_SHA256: &str = "857888fc68ecc881b6a11e7f141e32f04ba07fd5d21d6ff47ed16538bad2d2d2";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -2394,6 +2394,3701 @@ pub(crate) mod defaults {
     pub(crate) const FORM_FIELD_KIND_RATING_ALLOW_HALF: bool = false;
     pub(crate) const FORM_FIELD_KIND_TOKENS_ALLOW_FREE_TEXT: bool = true;
     pub(crate) const MEDIA_KIND_VIDEO_AUTOPLAY: bool = false;
+}
+
+// ─── The generated codec (Phase 2333) ────────────────────────────────────────
+//
+// The uniform half: one encoder and one decoder per owner, from the IDL type, the
+// optionality and the generated members. Policy is the hand hooks the dialect
+// names, in encode.rs and decode.rs.
+
+pub(super) mod gen_encode {
+    use super::*;
+    use super::super::encode::*;
+
+    pub(in super::super) fn badge_spec(v: &BadgeSpec) -> String {
+        let BadgeSpec { label: m_label, variant: m_variant } = v;
+        obj(vec![field("label", text_source(m_label)), field("variant", s(m_variant.as_str()))])
+    }
+
+    pub(in super::super) fn box_spec(v: &BoxSpec) -> String {
+        let BoxSpec { children: m_children, heading: m_heading, layout: m_layout, role: m_role, keep_together: m_keep_together, break_before: m_break_before } = v;
+        let mut f: Vec<Field> = vec![field("children", enc_list(m_children, node))];
+        if let Some(x) = m_heading {
+            f.push(field("heading", text_source(x)));
+        }
+        f.push(field("layout", box_layout(m_layout)));
+        f.push(field("role", s(m_role.as_str())));
+        if *m_keep_together != defaults::BOX_KEEP_TOGETHER {
+            f.push(field("keepTogether", boolean(*m_keep_together)));
+        }
+        if *m_break_before != defaults::BOX_BREAK_BEFORE {
+            f.push(field("breakBefore", boolean(*m_break_before)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn button_spec(v: &ButtonSpec) -> String {
+        let ButtonSpec { label: m_label, on_click: m_on_click, variant: m_variant, icon: m_icon, disabled: m_disabled } = v;
+        let mut f: Vec<Field> = vec![field("label", text_source(m_label)), field("onClick", action(m_on_click)), field("variant", s(m_variant.as_str()))];
+        if let Some(x) = m_icon {
+            f.push(field("icon", s(x)));
+        }
+        if let Some(x) = m_disabled {
+            f.push(field("disabled", binding(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn callout_spec(v: &CalloutSpec) -> String {
+        let CalloutSpec { body: m_body, dismissable: m_dismissable, tone: m_tone, heading: m_heading, icon: m_icon } = v;
+        let mut f: Vec<Field> = vec![field("body", text_source(m_body))];
+        if *m_dismissable != defaults::CALLOUT_DISMISSABLE {
+            f.push(field("dismissable", boolean(*m_dismissable)));
+        }
+        if *m_tone != defaults::CALLOUT_TONE {
+            f.push(field("tone", s(m_tone.as_str())));
+        }
+        if let Some(x) = m_heading {
+            f.push(field("heading", text_source(x)));
+        }
+        if let Some(x) = m_icon {
+            f.push(field("icon", s(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn chart_spec(v: &ChartSpec) -> String {
+        let ChartSpec { kind: m_kind, source: m_source, stacked: m_stacked, x_field: m_x_field, y_fields: m_y_fields, title: m_title, value_format: m_value_format, x_title: m_x_title, y_title: m_y_title, subtitle: m_subtitle, legend_position: m_legend_position, data_labels: m_data_labels, x_scale: m_x_scale, annotations: m_annotations, on_point_click: m_on_point_click } = v;
+        let mut f: Vec<Field> = vec![field("kind", s(m_kind.as_str())), field("source", binding(m_source))];
+        if *m_stacked != defaults::CHART_STACKED {
+            f.push(field("stacked", boolean(*m_stacked)));
+        }
+        f.push(field("xField", s(m_x_field)));
+        f.push(field("yFields", enc_list(m_y_fields, |v| s(v))));
+        if let Some(x) = m_title {
+            f.push(field("title", text_source(x)));
+        }
+        if let Some(x) = m_value_format {
+            f.push(field("valueFormat", format(x)));
+        }
+        if let Some(x) = m_x_title {
+            f.push(field("xTitle", text_source(x)));
+        }
+        if let Some(x) = m_y_title {
+            f.push(field("yTitle", text_source(x)));
+        }
+        if let Some(x) = m_subtitle {
+            f.push(field("subtitle", text_source(x)));
+        }
+        if let Some(x) = m_legend_position {
+            f.push(field("legendPosition", s(x.as_str())));
+        }
+        if let Some(x) = m_data_labels {
+            f.push(field("dataLabels", s(x.as_str())));
+        }
+        if let Some(x) = m_x_scale {
+            f.push(field("xScale", s(x.as_str())));
+        }
+        if let Some(x) = m_annotations {
+            f.push(field("annotations", enc_list(x, chart_annotation)));
+        }
+        if m_on_point_click.is_some() {
+            f.push(field("onPointClick", CLOSURE.to_string()));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn code_block_spec(v: &CodeBlockSpec) -> String {
+        let CodeBlockSpec { code: m_code, copyable: m_copyable, highlight_lines: m_highlight_lines, language: m_language, line_numbers: m_line_numbers } = v;
+        obj(vec![field("code", s(m_code)), field("copyable", boolean(*m_copyable)), field("highlightLines", enc_list(m_highlight_lines, |v| int(*v))), field("language", s(m_language)), field("lineNumbers", boolean(*m_line_numbers))])
+    }
+
+    pub(in super::super) fn custom_spec(v: &CustomSpec) -> String {
+        let CustomSpec { module_id: m_module_id, component_id: m_component_id, props: m_props, content_hash: m_content_hash, exposed_node_ids: m_exposed_node_ids } = v;
+        let mut f: Vec<Field> = vec![field("moduleId", s(m_module_id)), field("componentId", s(m_component_id)), field("props", enc_map(m_props, json_value))];
+        if let Some(x) = m_content_hash {
+            f.push(field("contentHash", content_hash(x)));
+        }
+        if let Some(j) = encode_exposed_node_ids(m_exposed_node_ids) {
+            f.push(field("exposedNodeIds", j));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn grid_spec(v: &GridSpec) -> String {
+        let GridSpec { columns: m_columns, editable: m_editable, row_key: m_row_key, row_key_field: m_row_key_field, sort_state_key: m_sort_state_key, page_size: m_page_size, page_state_key: m_page_state_key, default_sort: m_default_sort, edit_state_key: m_edit_state_key, reorderable: m_reorderable, transfer_in_key: m_transfer_in_key, transfer_out_key: m_transfer_out_key, keep_rows_together: m_keep_rows_together, repeat_header: m_repeat_header, exportable: m_exportable, window_state_key: m_window_state_key, row_total: m_row_total, source: m_source, static_rows: m_static_rows, on_row_click: m_on_row_click } = v;
+        let mut f: Vec<Field> = vec![field("columns", enc_list(m_columns, column_erased))];
+        if *m_editable != defaults::DATA_GRID_EDITABLE {
+            f.push(field("editable", boolean(*m_editable)));
+        }
+        if m_row_key.is_some() {
+            f.push(field("rowKey", CLOSURE.to_string()));
+        }
+        if let Some(x) = m_row_key_field {
+            f.push(field("rowKeyField", s(x)));
+        }
+        if let Some(x) = m_sort_state_key {
+            f.push(field("sortStateKey", s(x)));
+        }
+        if let Some(x) = m_page_size {
+            f.push(field("pageSize", int(*x)));
+        }
+        if let Some(x) = m_page_state_key {
+            f.push(field("pageStateKey", s(x)));
+        }
+        if let Some(x) = m_default_sort {
+            f.push(field("defaultSort", default_sort(x)));
+        }
+        if let Some(x) = m_edit_state_key {
+            f.push(field("editStateKey", s(x)));
+        }
+        if *m_reorderable != defaults::DATA_GRID_REORDERABLE {
+            f.push(field("reorderable", boolean(*m_reorderable)));
+        }
+        if let Some(x) = m_transfer_in_key {
+            f.push(field("transferInKey", s(x)));
+        }
+        if let Some(x) = m_transfer_out_key {
+            f.push(field("transferOutKey", s(x)));
+        }
+        if *m_keep_rows_together != defaults::DATA_GRID_KEEP_ROWS_TOGETHER {
+            f.push(field("keepRowsTogether", boolean(*m_keep_rows_together)));
+        }
+        if *m_repeat_header != defaults::DATA_GRID_REPEAT_HEADER {
+            f.push(field("repeatHeader", boolean(*m_repeat_header)));
+        }
+        if *m_exportable != defaults::DATA_GRID_EXPORTABLE {
+            f.push(field("exportable", boolean(*m_exportable)));
+        }
+        if let Some(x) = m_window_state_key {
+            f.push(field("windowStateKey", s(x)));
+        }
+        if let Some(x) = m_row_total {
+            f.push(field("rowTotal", binding(x)));
+        }
+        f.push(field("source", binding(m_source)));
+        if let Some(x) = m_static_rows {
+            f.push(field("staticRows", static_rows(x)));
+        }
+        if m_on_row_click.is_some() {
+            f.push(field("onRowClick", CLOSURE.to_string()));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn disclosure_spec(v: &DisclosureSpec) -> String {
+        let DisclosureSpec { children: m_children, default_open: m_default_open, heading: m_heading, on_toggle: m_on_toggle, open: m_open } = v;
+        let mut f: Vec<Field> = vec![field("children", enc_list(m_children, node)), field("defaultOpen", boolean(*m_default_open)), field("heading", text_source(m_heading))];
+        if m_on_toggle.is_some() {
+            f.push(field("onToggle", CLOSURE.to_string()));
+        }
+        f.push(field("open", binding(m_open)));
+        obj(f)
+    }
+
+    pub(in super::super) fn drawing_spec(v: &DrawingSpec) -> String {
+        let DrawingSpec { description: m_description, shapes: m_shapes, style: m_style, title: m_title, view_box: m_view_box } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(x) = m_description {
+            f.push(field("description", text_source(x)));
+        }
+        f.push(field("shapes", enc_list(m_shapes, shape)));
+        f.push(field("style", draw_style(m_style)));
+        if let Some(x) = m_title {
+            f.push(field("title", text_source(x)));
+        }
+        f.push(field("viewBox", view_box(m_view_box)));
+        obj(f)
+    }
+
+    pub(in super::super) fn embed_spec(v: &EmbedSpec) -> String {
+        let EmbedSpec { aspect_ratio: m_aspect_ratio, permissions: m_permissions, src: m_src, title: m_title } = v;
+        let mut f: Vec<Field> = vec![];
+        if *m_aspect_ratio != defaults::EMBED_ASPECT_RATIO {
+            f.push(field("aspectRatio", s(m_aspect_ratio.as_str())));
+        }
+        if !m_permissions.is_empty() {
+            f.push(field("permissions", enc_list(m_permissions, |v| s(v.as_str()))));
+        }
+        f.push(field("src", binding(m_src)));
+        f.push(field("title", text_source(m_title)));
+        obj(f)
+    }
+
+    pub(in super::super) fn error_boundary_spec(v: &ErrorBoundarySpec) -> String {
+        let ErrorBoundarySpec { child: m_child, fallback: m_fallback } = v;
+        obj(vec![field("child", node(m_child)), field("fallback", node(m_fallback))])
+    }
+
+    pub(in super::super) fn fact_spec(v: &FactSpec) -> String {
+        let FactSpec { emphasis: m_emphasis, help: m_help, icon: m_icon, label: m_label, tone: m_tone, value: m_value } = v;
+        let mut f: Vec<Field> = vec![];
+        if *m_emphasis != defaults::FACT_EMPHASIS {
+            f.push(field("emphasis", boolean(*m_emphasis)));
+        }
+        if let Some(x) = m_help {
+            f.push(field("help", text_source(x)));
+        }
+        if let Some(x) = m_icon {
+            f.push(field("icon", s(x)));
+        }
+        f.push(field("label", text_source(m_label)));
+        if *m_tone != defaults::FACT_TONE {
+            f.push(field("tone", s(m_tone.as_str())));
+        }
+        f.push(field("value", text_source(m_value)));
+        obj(f)
+    }
+
+    pub(in super::super) fn file_upload_spec(v: &FileUploadSpec) -> String {
+        let FileUploadSpec { accept: m_accept, label: m_label, multiple: m_multiple, disabled: m_disabled, accept_paste: m_accept_paste, drop_target: m_drop_target, capture: m_capture, destination: m_destination, max_bytes: m_max_bytes, max_files: m_max_files } = v;
+        let mut f: Vec<Field> = vec![field("accept", enc_list(m_accept, |v| s(v))), field("label", text_source(m_label)), field("multiple", boolean(*m_multiple)), field("onSelect", CLOSURE.to_string())];
+        if let Some(x) = m_disabled {
+            f.push(field("disabled", binding(x)));
+        }
+        if *m_accept_paste != defaults::FILE_UPLOAD_ACCEPT_PASTE {
+            f.push(field("acceptPaste", boolean(*m_accept_paste)));
+        }
+        if *m_drop_target != defaults::FILE_UPLOAD_DROP_TARGET {
+            f.push(field("dropTarget", boolean(*m_drop_target)));
+        }
+        if let Some(x) = m_capture {
+            f.push(field("capture", s(x.as_str())));
+        }
+        if let Some(x) = m_destination {
+            f.push(field("destination", s(x)));
+        }
+        if let Some(x) = m_max_bytes {
+            f.push(field("maxBytes", int(*x)));
+        }
+        if let Some(x) = m_max_files {
+            f.push(field("maxFiles", int(*x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn form_spec(v: &FormSpec) -> String {
+        let FormSpec { fields: m_fields, on_submit: m_on_submit, submit_label: m_submit_label, disabled: m_disabled } = v;
+        let mut f: Vec<Field> = vec![field("fields", enc_list(m_fields, form_field)), field("onSubmit", action(m_on_submit)), field("submitLabel", text_source(m_submit_label))];
+        if let Some(x) = m_disabled {
+            f.push(field("disabled", binding(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn fragment_decl_spec(v: &FragmentDeclSpec) -> String {
+        let FragmentDeclSpec { body: m_body, name: m_name, holes: m_holes, effect: m_effect } = v;
+        let mut f: Vec<Field> = vec![field("body", node(m_body)), field("name", s(m_name))];
+        if !m_holes.is_empty() {
+            f.push(field("holes", enc_list(m_holes, hole_decl)));
+        }
+        if let Some(j) = encode_fragment_effect(m_effect) {
+            f.push(field("effect", j));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn fragment_ref_spec(v: &FragmentRefSpec) -> String {
+        let FragmentRefSpec { name: m_name, args: m_args } = v;
+        let mut f: Vec<Field> = vec![field("name", s(m_name))];
+        if let Some(j) = encode_fragment_args(m_args) {
+            f.push(field("args", j));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn heading_spec(v: &HeadingSpec) -> String {
+        let HeadingSpec { level: m_level, text: m_text, variant: m_variant } = v;
+        obj(vec![field("level", int(*m_level)), field("text", text_source(m_text)), field("variant", s(m_variant.as_str()))])
+    }
+
+    pub(in super::super) fn icon_spec(v: &IconSpec) -> String {
+        let IconSpec { icon: m_icon, size: m_size, tone: m_tone, label: m_label } = v;
+        let mut f: Vec<Field> = vec![field("icon", s(m_icon))];
+        if *m_size != defaults::ICON_SIZE {
+            f.push(field("size", s(m_size.as_str())));
+        }
+        if *m_tone != defaults::ICON_TONE {
+            f.push(field("tone", s(m_tone.as_str())));
+        }
+        if let Some(x) = m_label {
+            f.push(field("label", s(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn image_spec(v: &ImageSpec) -> String {
+        let ImageSpec { alt: m_alt, src: m_src, variant: m_variant, fit: m_fit, aspect_ratio: m_aspect_ratio, loading: m_loading, src_set: m_src_set, expandable: m_expandable, caption: m_caption } = v;
+        let mut f: Vec<Field> = vec![field("alt", text_source(m_alt)), field("src", binding(m_src)), field("variant", s(m_variant.as_str()))];
+        if *m_fit != defaults::IMAGE_FIT {
+            f.push(field("fit", s(m_fit.as_str())));
+        }
+        if *m_aspect_ratio != defaults::IMAGE_ASPECT_RATIO {
+            f.push(field("aspectRatio", s(m_aspect_ratio.as_str())));
+        }
+        if *m_loading != defaults::IMAGE_LOADING {
+            f.push(field("loading", s(m_loading.as_str())));
+        }
+        if !m_src_set.is_empty() {
+            f.push(field("srcSet", enc_list(m_src_set, src_set_entry)));
+        }
+        if *m_expandable != defaults::IMAGE_EXPANDABLE {
+            f.push(field("expandable", boolean(*m_expandable)));
+        }
+        if let Some(x) = m_caption {
+            f.push(field("caption", text_source(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn label_value_row_spec(v: &LabelValueRowSpec) -> String {
+        let LabelValueRowSpec { emphasis: m_emphasis, format: m_format, label: m_label, value: m_value, help: m_help } = v;
+        let mut f: Vec<Field> = vec![];
+        if *m_emphasis != defaults::LABEL_VALUE_ROW_EMPHASIS {
+            f.push(field("emphasis", boolean(*m_emphasis)));
+        }
+        if *m_format != defaults::LABEL_VALUE_ROW_FORMAT {
+            f.push(field("format", cell_format(m_format)));
+        }
+        f.push(field("label", text_source(m_label)));
+        f.push(field("value", binding(m_value)));
+        if let Some(x) = m_help {
+            f.push(field("help", text_source(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn link_spec(v: &LinkSpec) -> String {
+        let LinkSpec { href: m_href, label: m_label, download: m_download, rel: m_rel, target: m_target, protection: m_protection } = v;
+        let mut f: Vec<Field> = vec![field("href", binding(m_href)), field("label", text_source(m_label)), field("download", boolean(*m_download))];
+        if let Some(x) = m_rel {
+            f.push(field("rel", s(x)));
+        }
+        if let Some(x) = m_target {
+            f.push(field("target", s(x)));
+        }
+        if let Some(x) = m_protection {
+            f.push(field("protection", s(x.as_str())));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn list_spec(v: &ListSpec) -> String {
+        let ListSpec { items: m_items, ordered: m_ordered } = v;
+        obj(vec![field("items", enc_list(m_items, text_source)), field("ordered", boolean(*m_ordered))])
+    }
+
+    pub(in super::super) fn map_spec(v: &MapSpec) -> String {
+        let MapSpec { centre_latitude: m_centre_latitude, centre_longitude: m_centre_longitude, source: m_source, zoom: m_zoom, on_marker_click: m_on_marker_click } = v;
+        let mut f: Vec<Field> = vec![field("centreLatitude", num(*m_centre_latitude)), field("centreLongitude", num(*m_centre_longitude)), field("source", binding(m_source)), field("zoom", int(*m_zoom))];
+        if m_on_marker_click.is_some() {
+            f.push(field("onMarkerClick", CLOSURE.to_string()));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn markdown_spec(v: &MarkdownSpec) -> String {
+        let MarkdownSpec { text: m_text } = v;
+        obj(vec![field("text", text_source(m_text))])
+    }
+
+    pub(in super::super) fn math_spec(v: &MathSpec) -> String {
+        let MathSpec { source: m_source, display: m_display } = v;
+        obj(vec![field("source", s(m_source)), field("display", s(m_display.as_str()))])
+    }
+
+    pub(in super::super) fn media_spec(v: &MediaSpec) -> String {
+        let MediaSpec { controls: m_controls, kind: m_kind, label: m_label, r#loop: m_loop, src: m_src, tracks: m_tracks, transcript: m_transcript } = v;
+        let mut f: Vec<Field> = vec![];
+        if *m_controls != defaults::MEDIA_CONTROLS {
+            f.push(field("controls", boolean(*m_controls)));
+        }
+        f.push(field("kind", media_kind(m_kind)));
+        f.push(field("label", text_source(m_label)));
+        if *m_loop != defaults::MEDIA_LOOP {
+            f.push(field("loop", boolean(*m_loop)));
+        }
+        f.push(field("src", binding(m_src)));
+        if !m_tracks.is_empty() {
+            f.push(field("tracks", enc_list(m_tracks, track_entry)));
+        }
+        if let Some(x) = m_transcript {
+            f.push(field("transcript", text_source(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn metric_spec(v: &MetricSpec) -> String {
+        let MetricSpec { label: m_label, value: m_value, format: m_format, tone: m_tone, weight: m_weight, emphasis: m_emphasis, trend: m_trend, trend_format: m_trend_format, trend_polarity: m_trend_polarity, icon: m_icon, subtext: m_subtext } = v;
+        let mut f: Vec<Field> = vec![field("label", text_source(m_label)), field("value", binding(m_value))];
+        if *m_format != defaults::METRIC_FORMAT {
+            f.push(field("format", cell_format(m_format)));
+        }
+        if *m_tone != defaults::METRIC_TONE {
+            f.push(field("tone", s(m_tone.as_str())));
+        }
+        if *m_weight != defaults::METRIC_WEIGHT {
+            f.push(field("weight", s(m_weight.as_str())));
+        }
+        if *m_emphasis != defaults::METRIC_EMPHASIS {
+            f.push(field("emphasis", s(m_emphasis.as_str())));
+        }
+        if let Some(x) = m_trend {
+            f.push(field("trend", binding(x)));
+        }
+        if let Some(x) = m_trend_format {
+            f.push(field("trendFormat", cell_format(x)));
+        }
+        if *m_trend_polarity != defaults::METRIC_TREND_POLARITY {
+            f.push(field("trendPolarity", s(m_trend_polarity.as_str())));
+        }
+        if let Some(x) = m_icon {
+            f.push(field("icon", s(x)));
+        }
+        if let Some(x) = m_subtext {
+            f.push(field("subtext", text_source(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn modal_spec(v: &ModalSpec) -> String {
+        let ModalSpec { children: m_children, dismissable: m_dismissable, on_dismiss: m_on_dismiss, open: m_open, heading: m_heading, modality: m_modality, anchor: m_anchor } = v;
+        let mut f: Vec<Field> = vec![field("children", enc_list(m_children, node)), field("dismissable", boolean(*m_dismissable))];
+        if let Some(x) = m_on_dismiss {
+            f.push(field("onDismiss", action(x)));
+        }
+        f.push(field("open", binding(m_open)));
+        if let Some(x) = m_heading {
+            f.push(field("heading", text_source(x)));
+        }
+        if *m_modality != defaults::MODAL_MODALITY {
+            f.push(field("modality", s(m_modality.as_str())));
+        }
+        if let Some(x) = m_anchor {
+            f.push(field("anchor", s(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn mount_spec(v: &MountSpec) -> String {
+        let MountSpec { capabilities: m_capabilities, channel: m_channel, inputs: m_inputs, scope_id: m_scope_id } = v;
+        let mut f: Vec<Field> = vec![field("capabilities", enc_list(m_capabilities, |v| s(v))), field("channel", mount_channel(m_channel))];
+        if let Some(j) = encode_fragment_args(m_inputs) {
+            f.push(field("inputs", j));
+        }
+        f.push(field("onBubble", CLOSURE.to_string()));
+        f.push(field("scopeId", s(m_scope_id)));
+        obj(f)
+    }
+
+    pub(in super::super) fn progress_spec(v: &ProgressSpec) -> String {
+        let ProgressSpec { fraction: m_fraction, indeterminate: m_indeterminate, tone: m_tone, label: m_label, caveat: m_caveat } = v;
+        let mut f: Vec<Field> = vec![field("fraction", binding(m_fraction))];
+        if *m_indeterminate != defaults::PROGRESS_INDETERMINATE {
+            f.push(field("indeterminate", boolean(*m_indeterminate)));
+        }
+        if *m_tone != defaults::PROGRESS_TONE {
+            f.push(field("tone", s(m_tone.as_str())));
+        }
+        if let Some(x) = m_label {
+            f.push(field("label", text_source(x)));
+        }
+        if let Some(x) = m_caveat {
+            f.push(field("caveat", text_source(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn scroll_area_spec(v: &ScrollAreaSpec) -> String {
+        let ScrollAreaSpec { children: m_children, orientation: m_orientation, max_height: m_max_height, max_width: m_max_width } = v;
+        let mut f: Vec<Field> = vec![field("children", enc_list(m_children, node)), field("orientation", s(m_orientation.as_str()))];
+        if let Some(x) = m_max_height {
+            f.push(field("maxHeight", int(*x)));
+        }
+        if let Some(x) = m_max_width {
+            f.push(field("maxWidth", int(*x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn select_spec(v: &SelectSpec) -> String {
+        let SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values } = v;
+        let mut f: Vec<Field> = vec![field("label", text_source(m_label))];
+        if m_on_change.is_some() {
+            f.push(field("onChange", CLOSURE.to_string()));
+        }
+        if m_on_change_multi.is_some() {
+            f.push(field("onChangeMulti", CLOSURE.to_string()));
+        }
+        f.push(field("source", binding(m_source)));
+        f.push(field("value", binding(m_value)));
+        if let Some(x) = m_placeholder {
+            f.push(field("placeholder", text_source(x)));
+        }
+        if let Some(x) = m_disabled {
+            f.push(field("disabled", binding(x)));
+        }
+        if let Some(j) = encode_select_multiple(m_multiple) {
+            f.push(field("multiple", j));
+        }
+        if let Some(x) = m_values {
+            f.push(field("values", binding(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn skeleton_spec(v: &SkeletonSpec) -> String {
+        let SkeletonSpec { rows: m_rows } = v;
+        obj(vec![field("rows", int(*m_rows))])
+    }
+
+    pub(in super::super) fn sparkline_spec(v: &SparklineSpec) -> String {
+        let SparklineSpec { source: m_source } = v;
+        obj(vec![field("source", binding(m_source))])
+    }
+
+    pub(in super::super) fn split_panel_spec(v: &SplitPanelSpec) -> String {
+        let SplitPanelSpec { children: m_children, weight: m_weight } = v;
+        obj(vec![field("children", enc_list(m_children, node)), field("weight", num(*m_weight))])
+    }
+
+    pub(in super::super) fn stepper_spec(v: &StepperSpec) -> String {
+        let StepperSpec { active_step: m_active_step, children: m_children } = v;
+        obj(vec![field("activeStep", binding(m_active_step)), field("children", enc_list(m_children, node)), field("onSelect", CLOSURE.to_string())])
+    }
+
+    pub(in super::super) fn summary_list_spec(v: &SummaryListSpec) -> String {
+        let SummaryListSpec { children: m_children, heading: m_heading } = v;
+        let mut f: Vec<Field> = vec![field("children", enc_list(m_children, node))];
+        if let Some(x) = m_heading {
+            f.push(field("heading", text_source(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn switch_spec(v: &SwitchSpec) -> String {
+        let SwitchSpec { auto_advance_ms: m_auto_advance_ms, cases: m_cases, default: m_default, on: m_on } = v;
+        encode_switch_spec(m_auto_advance_ms, m_cases, m_default, m_on)
+    }
+
+    pub(in super::super) fn tabs_spec(v: &TabsSpec) -> String {
+        let TabsSpec { active_index: m_active_index, children: m_children, orientation: m_orientation, on_select: m_on_select, on_select_tag: m_on_select_tag, tab_headers: m_tab_headers, tab_tags: m_tab_tags, active_tag: m_active_tag } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(j) = encode_tabs_active_index(m_active_index) {
+            f.push(field("activeIndex", j));
+        }
+        f.push(field("children", enc_list(m_children, node)));
+        if *m_orientation != defaults::TABS_ORIENTATION {
+            f.push(field("orientation", s(m_orientation.as_str())));
+        }
+        if m_on_select.is_some() {
+            f.push(field("onSelect", CLOSURE.to_string()));
+        }
+        if m_on_select_tag.is_some() {
+            f.push(field("onSelectTag", CLOSURE.to_string()));
+        }
+        if let Some(x) = m_tab_headers {
+            f.push(field("tabHeaders", enc_list(x, tab_header)));
+        }
+        if let Some(x) = m_tab_tags {
+            f.push(field("tabTags", enc_list(x, |v| s(v))));
+        }
+        if let Some(x) = m_active_tag {
+            f.push(field("activeTag", binding(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn toast_spec(v: &ToastSpec) -> String {
+        let ToastSpec { dismissable: m_dismissable, message: m_message, open: m_open, tone: m_tone } = v;
+        let mut f: Vec<Field> = vec![];
+        if *m_dismissable != defaults::TOAST_DISMISSABLE {
+            f.push(field("dismissable", boolean(*m_dismissable)));
+        }
+        f.push(field("message", text_source(m_message)));
+        f.push(field("open", binding(m_open)));
+        if *m_tone != defaults::TOAST_TONE {
+            f.push(field("tone", s(m_tone.as_str())));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn tree_spec(v: &TreeSpec) -> String {
+        let TreeSpec { expanded_state_key: m_expanded_state_key, items: m_items, on_select: m_on_select, selection_state_key: m_selection_state_key } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(x) = m_expanded_state_key {
+            f.push(field("expandedStateKey", s(x)));
+        }
+        f.push(field("items", enc_list(m_items, tree_item)));
+        if m_on_select.is_some() {
+            f.push(field("onSelect", CLOSURE.to_string()));
+        }
+        if let Some(x) = m_selection_state_key {
+            f.push(field("selectionStateKey", s(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn node_kind(v: &NodeKind) -> String {
+        match v {
+            NodeKind::Badge(m_0) => case_obj_hoisted("Badge", badge_spec(m_0)),
+            NodeKind::Box(m_0) => case_obj_hoisted("Box", box_spec(m_0)),
+            NodeKind::Button(m_0) => case_obj_hoisted("Button", button_spec(m_0)),
+            NodeKind::Callout(m_0) => case_obj_hoisted("Callout", callout_spec(m_0)),
+            NodeKind::Chart(m_0) => case_obj_hoisted("Chart", chart_spec(m_0)),
+            NodeKind::CodeBlock(m_0) => case_obj_hoisted("CodeBlock", code_block_spec(m_0)),
+            NodeKind::Custom(m_0) => case_obj_hoisted("Custom", custom_spec(m_0)),
+            NodeKind::DataGrid(m_0) => case_obj_hoisted("DataGrid", grid_spec(m_0)),
+            NodeKind::Disclosure(m_0) => case_obj_hoisted("Disclosure", disclosure_spec(m_0)),
+            NodeKind::Drawing(m_0) => case_obj_hoisted("Drawing", drawing_spec(m_0)),
+            NodeKind::Embed(m_0) => case_obj_hoisted("Embed", embed_spec(m_0)),
+            NodeKind::ErrorBoundary(m_0) => case_obj_hoisted("ErrorBoundary", error_boundary_spec(m_0)),
+            NodeKind::Fact(m_0) => case_obj_hoisted("Fact", fact_spec(m_0)),
+            NodeKind::FileUpload(m_0) => case_obj_hoisted("FileUpload", file_upload_spec(m_0)),
+            NodeKind::Filters(m_0) => encode_filters_kind(m_0),
+            NodeKind::Form(m_0) => case_obj_hoisted("Form", form_spec(m_0)),
+            NodeKind::FragmentDecl(m_0) => case_obj_hoisted("FragmentDecl", fragment_decl_spec(m_0)),
+            NodeKind::FragmentRef(m_0) => case_obj_hoisted("FragmentRef", fragment_ref_spec(m_0)),
+            NodeKind::Heading(m_0) => case_obj_hoisted("Heading", heading_spec(m_0)),
+            NodeKind::Icon(m_0) => case_obj_hoisted("Icon", icon_spec(m_0)),
+            NodeKind::Image(m_0) => case_obj_hoisted("Image", image_spec(m_0)),
+            NodeKind::LabelValueRow(m_0) => case_obj_hoisted("LabelValueRow", label_value_row_spec(m_0)),
+            NodeKind::Link(m_0) => case_obj_hoisted("Link", link_spec(m_0)),
+            NodeKind::List(m_0) => case_obj_hoisted("List", list_spec(m_0)),
+            NodeKind::Map(m_0) => case_obj_hoisted("Map", map_spec(m_0)),
+            NodeKind::Markdown(m_0) => case_obj_hoisted("Markdown", markdown_spec(m_0)),
+            NodeKind::Math(m_0) => case_obj_hoisted("Math", math_spec(m_0)),
+            NodeKind::Media(m_0) => case_obj_hoisted("Media", media_spec(m_0)),
+            NodeKind::Metric(m_0) => case_obj_hoisted("Metric", metric_spec(m_0)),
+            NodeKind::Modal(m_0) => case_obj_hoisted("Modal", modal_spec(m_0)),
+            NodeKind::Mount(m_0) => case_obj_hoisted("Mount", mount_spec(m_0)),
+            NodeKind::Progress(m_0) => case_obj_hoisted("Progress", progress_spec(m_0)),
+            NodeKind::ScrollArea(m_0) => case_obj_hoisted("ScrollArea", scroll_area_spec(m_0)),
+            NodeKind::Select(m_0) => case_obj_hoisted("Select", select_spec(m_0)),
+            NodeKind::Skeleton(m_0) => case_obj_hoisted("Skeleton", skeleton_spec(m_0)),
+            NodeKind::Sparkline(m_0) => case_obj_hoisted("Sparkline", sparkline_spec(m_0)),
+            NodeKind::SplitPanel(m_0) => case_obj_hoisted("SplitPanel", split_panel_spec(m_0)),
+            NodeKind::Stepper(m_0) => case_obj_hoisted("Stepper", stepper_spec(m_0)),
+            NodeKind::SummaryList(m_0) => case_obj_hoisted("SummaryList", summary_list_spec(m_0)),
+            NodeKind::Switch(m_0) => case_obj_hoisted("Switch", switch_spec(m_0)),
+            NodeKind::Tabs(m_0) => case_obj_hoisted("Tabs", tabs_spec(m_0)),
+            NodeKind::Toast(m_0) => case_obj_hoisted("Toast", toast_spec(m_0)),
+            NodeKind::Tree(m_0) => case_obj_hoisted("Tree", tree_spec(m_0)),
+        }
+    }
+
+    pub(in super::super) fn accessibility(v: &Accessibility) -> String {
+        let Accessibility { described_by: m_described_by, hidden: m_hidden, label: m_label, labelled_by: m_labelled_by, live_region: m_live_region, role: m_role, speak: m_speak } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(x) = m_described_by {
+            f.push(field("describedBy", s(x)));
+        }
+        if let Some(x) = m_hidden {
+            f.push(field("hidden", binding(x)));
+        }
+        if let Some(x) = m_label {
+            f.push(field("label", binding(x)));
+        }
+        if let Some(x) = m_labelled_by {
+            f.push(field("labelledBy", s(x)));
+        }
+        if let Some(x) = m_live_region {
+            f.push(field("liveRegion", s(x.as_str())));
+        }
+        if let Some(j) = encode_aria_role(m_role) {
+            f.push(field("role", j));
+        }
+        if let Some(x) = m_speak {
+            f.push(field("speak", text_source(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn column_erased(v: &ColumnErased) -> String {
+        let ColumnErased { field: m_field, sortable: m_sortable, editable: m_editable, format: m_format, kind: m_kind, label: m_label, value: m_value, width: m_width } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(x) = m_field {
+            f.push(field("field", s(x)));
+        }
+        if let Some(x) = m_sortable {
+            f.push(field("sortable", boolean(*x)));
+        }
+        if let Some(x) = m_editable {
+            f.push(field("editable", boolean(*x)));
+        }
+        if *m_format != defaults::COLUMN_ERASED_FORMAT {
+            f.push(field("format", cell_format(m_format)));
+        }
+        f.push(field("kind", cell_kind_erased(m_kind)));
+        f.push(field("label", s(m_label)));
+        if m_value.is_some() {
+            f.push(field("value", CLOSURE.to_string()));
+        }
+        if *m_width != defaults::COLUMN_ERASED_WIDTH {
+            f.push(field("width", column_width(m_width)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn compare_rule(v: &CompareRule) -> String {
+        let CompareRule { against: m_against, op: m_op } = v;
+        obj(vec![field("against", binding(m_against)), field("op", s(m_op.as_str()))])
+    }
+
+    pub(in super::super) fn content_hash(v: &ContentHash) -> String {
+        let ContentHash { algorithm: m_algorithm, hash: m_hash, strictness: m_strictness } = v;
+        obj(vec![field("algorithm", s(m_algorithm)), field("hash", s(m_hash)), field("strictness", s(m_strictness.as_str()))])
+    }
+
+    pub(in super::super) fn default_sort(v: &DefaultSort) -> String {
+        let DefaultSort { column: m_column, direction: m_direction } = v;
+        obj(vec![field("column", int(*m_column)), field("direction", s(m_direction.as_str()))])
+    }
+
+    pub(in super::super) fn draw_point(v: &DrawPoint) -> String {
+        let DrawPoint { x: m_x, y: m_y } = v;
+        obj(vec![field("x", num(*m_x)), field("y", num(*m_y))])
+    }
+
+    pub(in super::super) fn draw_style(v: &DrawStyle) -> String {
+        let DrawStyle { emphasis: m_emphasis, fill: m_fill, font_family: m_font_family, font_size: m_font_size, mark_id: m_mark_id, opacity: m_opacity, rotation: m_rotation, stroke: m_stroke, stroke_width: m_stroke_width, text_anchor: m_text_anchor, tip: m_tip } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(x) = m_emphasis {
+            f.push(field("emphasis", s(x.as_str())));
+        }
+        if let Some(x) = m_fill {
+            f.push(field("fill", binding(x)));
+        }
+        if let Some(x) = m_font_family {
+            f.push(field("fontFamily", s(x)));
+        }
+        if let Some(x) = m_font_size {
+            f.push(field("fontSize", num(*x)));
+        }
+        if let Some(x) = m_mark_id {
+            f.push(field("markId", s(x)));
+        }
+        if let Some(x) = m_opacity {
+            f.push(field("opacity", binding(x)));
+        }
+        if let Some(x) = m_rotation {
+            f.push(field("rotation", num(*x)));
+        }
+        if let Some(x) = m_stroke {
+            f.push(field("stroke", binding(x)));
+        }
+        if let Some(x) = m_stroke_width {
+            f.push(field("strokeWidth", binding(x)));
+        }
+        if let Some(x) = m_text_anchor {
+            f.push(field("textAnchor", s(x.as_str())));
+        }
+        if let Some(x) = m_tip {
+            f.push(field("tip", text_source(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn effect_class(v: &EffectClass) -> String {
+        let EffectClass { determinism: m_determinism, host_effect: m_host_effect } = v;
+        obj(vec![field("determinism", s(m_determinism.as_str())), field("hostEffect", s(m_host_effect.as_str()))])
+    }
+
+    pub(in super::super) fn field_rule(v: &FieldRule) -> String {
+        let FieldRule { compare: m_compare, format: m_format, max_length: m_max_length, message: m_message, min_length: m_min_length, pattern: m_pattern } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(x) = m_compare {
+            f.push(field("compare", compare_rule(x)));
+        }
+        if let Some(x) = m_format {
+            f.push(field("format", s(x.as_str())));
+        }
+        if let Some(x) = m_max_length {
+            f.push(field("maxLength", int(*x)));
+        }
+        if let Some(x) = m_message {
+            f.push(field("message", text_source(x)));
+        }
+        if let Some(x) = m_min_length {
+            f.push(field("minLength", int(*x)));
+        }
+        if let Some(x) = m_pattern {
+            f.push(field("pattern", s(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn filter_spec(v: &FilterSpec) -> String {
+        let FilterSpec { kind: m_kind, label: m_label, name: m_name } = v;
+        encode_filter_spec(m_kind, m_label, m_name)
+    }
+
+    pub(in super::super) fn form_field(v: &FormField) -> String {
+        let FormField { id: m_id, kind: m_kind, label: m_label, required: m_required, help: m_help, rule: m_rule } = v;
+        encode_form_field(m_id, m_kind, m_label, m_required, m_help, m_rule)
+    }
+
+    pub(in super::super) fn mount_channel(v: &MountChannel) -> String {
+        let MountChannel { direction: m_direction, message_shape: m_message_shape } = v;
+        let mut f: Vec<Field> = vec![field("direction", s(m_direction.as_str()))];
+        if let Some(x) = m_message_shape {
+            f.push(field("messageShape", s(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn invoke_arg(v: &InvokeArg) -> String {
+        let InvokeArg { addr: m_addr, value: m_value } = v;
+        obj(vec![field("addr", s(m_addr)), field("value", s(m_value))])
+    }
+
+    pub(in super::super) fn map_marker(v: &MapMarker) -> String {
+        let MapMarker { label: m_label, latitude: m_latitude, longitude: m_longitude } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(j) = encode_text_label(m_label) {
+            f.push(field("label", j));
+        }
+        f.push(field("latitude", num(*m_latitude)));
+        f.push(field("longitude", num(*m_longitude)));
+        obj(f)
+    }
+
+    pub(in super::super) fn select_option(v: &SelectOption) -> String {
+        let SelectOption { label: m_label, value: m_value } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(j) = encode_text_label(m_label) {
+            f.push(field("label", j));
+        }
+        f.push(field("value", s(m_value)));
+        obj(f)
+    }
+
+    pub(in super::super) fn semantic_style(v: &SemanticStyle) -> String {
+        let SemanticStyle { direction: m_direction, emphasis: m_emphasis, role: m_role, tone: m_tone, voice: m_voice, weight: m_weight } = v;
+        let mut f: Vec<Field> = vec![];
+        if *m_direction != defaults::SEMANTIC_STYLE_DIRECTION {
+            f.push(field("direction", s(m_direction.as_str())));
+        }
+        if *m_emphasis != defaults::SEMANTIC_STYLE_EMPHASIS {
+            f.push(field("emphasis", s(m_emphasis.as_str())));
+        }
+        if *m_role != defaults::SEMANTIC_STYLE_ROLE {
+            f.push(field("role", s(m_role.as_str())));
+        }
+        if *m_tone != defaults::SEMANTIC_STYLE_TONE {
+            f.push(field("tone", s(m_tone.as_str())));
+        }
+        if *m_voice != defaults::SEMANTIC_STYLE_VOICE {
+            f.push(field("voice", s(m_voice.as_str())));
+        }
+        if *m_weight != defaults::SEMANTIC_STYLE_WEIGHT {
+            f.push(field("weight", s(m_weight.as_str())));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn src_set_entry(v: &SrcSetEntry) -> String {
+        let SrcSetEntry { src: m_src, width: m_width } = v;
+        obj(vec![field("src", binding(m_src)), field("width", int(*m_width))])
+    }
+
+    pub(in super::super) fn state_behaviour(v: &StateBehaviour) -> String {
+        let StateBehaviour { on_empty: m_on_empty, on_error: m_on_error, on_loading: m_on_loading } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(x) = m_on_empty {
+            f.push(field("onEmpty", node(x)));
+        }
+        if m_on_error.is_some() {
+            f.push(field("onError", CLOSURE.to_string()));
+        }
+        if let Some(x) = m_on_loading {
+            f.push(field("onLoading", node(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn static_rows(v: &StaticRows) -> String {
+        let StaticRows { default_sort: m_default_sort, headers: m_headers, rows: m_rows, sortable: m_sortable } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(x) = m_default_sort {
+            f.push(field("defaultSort", default_sort(x)));
+        }
+        f.push(field("headers", enc_list(m_headers, text_source)));
+        f.push(field("rows", enc_list(m_rows, |v| enc_list(v, text_source))));
+        if let Some(x) = m_sortable {
+            f.push(field("sortable", boolean(*x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn style_delta(v: &StyleDelta) -> String {
+        let StyleDelta { direction: m_direction, emphasis: m_emphasis, role: m_role, tone: m_tone, voice: m_voice, weight: m_weight } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(x) = m_direction {
+            f.push(field("direction", s(x.as_str())));
+        }
+        if let Some(x) = m_emphasis {
+            f.push(field("emphasis", s(x.as_str())));
+        }
+        if let Some(x) = m_role {
+            f.push(field("role", s(x.as_str())));
+        }
+        if let Some(x) = m_tone {
+            f.push(field("tone", s(x.as_str())));
+        }
+        if let Some(x) = m_voice {
+            f.push(field("voice", s(x.as_str())));
+        }
+        if let Some(x) = m_weight {
+            f.push(field("weight", s(x.as_str())));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn switch_case(v: &SwitchCase) -> String {
+        let SwitchCase { child: m_child, condition: m_condition } = v;
+        encode_switch_case(m_child, m_condition)
+    }
+
+    pub(in super::super) fn tab_header(v: &TabHeader) -> String {
+        let TabHeader { label: m_label, icon: m_icon, disabled: m_disabled } = v;
+        let mut f: Vec<Field> = vec![field("label", text_source(m_label))];
+        if let Some(x) = m_icon {
+            f.push(field("icon", s(x)));
+        }
+        if let Some(x) = m_disabled {
+            f.push(field("disabled", binding(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn track_entry(v: &TrackEntry) -> String {
+        let TrackEntry { default: m_default, kind: m_kind, label: m_label, src: m_src, src_lang: m_src_lang } = v;
+        let mut f: Vec<Field> = vec![];
+        if *m_default != defaults::TRACK_ENTRY_DEFAULT {
+            f.push(field("default", boolean(*m_default)));
+        }
+        f.push(field("kind", s(m_kind.as_str())));
+        f.push(field("label", text_source(m_label)));
+        f.push(field("src", binding(m_src)));
+        f.push(field("srcLang", s(m_src_lang)));
+        obj(f)
+    }
+
+    pub(in super::super) fn transform_param(v: &TransformParam) -> String {
+        let TransformParam { from: m_from, name: m_name } = v;
+        obj(vec![field("from", binding(m_from)), field("name", s(m_name))])
+    }
+
+    pub(in super::super) fn tree_item(v: &TreeItem) -> String {
+        let TreeItem { children: m_children, icon: m_icon, id: m_id, label: m_label } = v;
+        let mut f: Vec<Field> = vec![];
+        if !m_children.is_empty() {
+            f.push(field("children", enc_list(m_children, tree_item)));
+        }
+        if let Some(x) = m_icon {
+            f.push(field("icon", s(x)));
+        }
+        f.push(field("id", s(m_id)));
+        f.push(field("label", text_source(m_label)));
+        obj(f)
+    }
+
+    pub(in super::super) fn view_box(v: &ViewBox) -> String {
+        let ViewBox { height: m_height, min_x: m_min_x, min_y: m_min_y, width: m_width } = v;
+        obj(vec![field("height", num(*m_height)), field("minX", num(*m_min_x)), field("minY", num(*m_min_y)), field("width", num(*m_width))])
+    }
+
+    pub(in super::super) fn action(v: &Action) -> String {
+        match v {
+            Action::Chain(m_0) => {
+            case_obj("Chain", vec![field("ops", enc_list(m_0, action))])
+            }
+            Action::WriteToClipboard { text: m_text } => {
+            case_obj("WriteToClipboard", vec![field("text", text_source(m_text))])
+            }
+            Action::Dispatch => {
+            case_obj("Dispatch", vec![])
+            }
+            Action::Invoke { capability_id: m_capability_id, args: m_args } => {
+            case_obj("Invoke", vec![field("capabilityId", s(m_capability_id)), field("args", enc_list(m_args, invoke_arg))])
+            }
+            Action::ReadFileBody { file_ref: m_file_ref, encoding: m_encoding } => {
+            case_obj("ReadFileBody", vec![field("fileRef", s(m_file_ref)), field("encoding", s(m_encoding.as_str())), field("onRead", CLOSURE.to_string())])
+            }
+            Action::Call { endpoint: m_endpoint, on_result: m_on_result, into: m_into } => {
+            let mut f: Vec<Field> = vec![field("endpoint", s(m_endpoint))];
+            if m_on_result.is_some() {
+                f.push(field("onResult", CLOSURE.to_string()));
+            }
+            if let Some(x) = m_into {
+                f.push(field("into", call_result_target(x)));
+            }
+            case_obj("Call", f)
+            }
+            Action::Navigate { route: m_route, target: m_target } => {
+            let mut f: Vec<Field> = vec![field("route", text_source(m_route))];
+            if *m_target != defaults::ACTION_NAVIGATE_TARGET {
+                f.push(field("target", s(m_target.as_str())));
+            }
+            case_obj("Navigate", f)
+            }
+            Action::CommitLocal { node_id: m_node_id } => {
+            case_obj("CommitLocal", vec![field("nodeId", s(m_node_id))])
+            }
+            Action::Notify { channel: m_channel, payload: m_payload } => {
+            case_obj("Notify", vec![field("channel", s(m_channel)), field("payload", json_value(m_payload))])
+            }
+            Action::SetState { key: m_key, value: m_value, value_from: m_value_from } => {
+            let mut f: Vec<Field> = vec![field("key", s(m_key))];
+            if let Some(x) = m_value {
+                f.push(field("value", json_value(x)));
+            }
+            if let Some(x) = m_value_from {
+                f.push(field("valueFrom", binding(x)));
+            }
+            case_obj("SetState", f)
+            }
+            Action::AiTool { tool_name: m_tool_name, args: m_args } => {
+            case_obj("AiTool", vec![field("toolName", s(m_tool_name)), field("args", json_value(m_args))])
+            }
+            Action::Print => {
+            case_obj("Print", vec![])
+            }
+            Action::Confirm { prompt: m_prompt, on_confirm: m_on_confirm, on_cancel: m_on_cancel } => {
+            let mut f: Vec<Field> = vec![field("prompt", text_source(m_prompt)), field("onConfirm", action(m_on_confirm))];
+            if let Some(x) = m_on_cancel {
+                f.push(field("onCancel", action(x)));
+            }
+            case_obj("Confirm", f)
+            }
+            Action::Focus { node_id: m_node_id } => {
+            case_obj("Focus", vec![field("nodeId", s(m_node_id))])
+            }
+        }
+    }
+
+    pub(in super::super) fn binding(v: &Binding) -> String {
+        match v {
+            Binding::Static { value: m_value } => {
+            let mut f: Vec<Field> = vec![];
+            if let Some(j) = encode_static_payload(m_value) {
+                f.push(field("value", j));
+            }
+            case_obj("Static", f)
+            }
+            Binding::Query { name: m_name, depends_on: m_depends_on } => {
+            let mut f: Vec<Field> = vec![field("name", s(m_name))];
+            if let Some(j) = encode_depends_on(m_depends_on) {
+                f.push(field("dependsOn", j));
+            }
+            case_obj("Query", f)
+            }
+            Binding::Filter { name: m_name, default_value: m_default_value } => {
+            let mut f: Vec<Field> = vec![field("name", s(m_name))];
+            if let Some(x) = m_default_value {
+                f.push(field("defaultValue", static_value(x)));
+            }
+            case_obj("Filter", f)
+            }
+            Binding::Selection { node_id: m_node_id, default_value: m_default_value, field: m_field } => {
+            let mut f: Vec<Field> = vec![field("nodeId", s(m_node_id))];
+            if let Some(x) = m_default_value {
+                f.push(field("defaultValue", static_value(x)));
+            }
+            if let Some(x) = m_field {
+                f.push(field("field", s(x)));
+            }
+            case_obj("Selection", f)
+            }
+            Binding::State { key: m_key, default_value: m_default_value, default_declared: m_default_declared } => {
+            let mut f: Vec<Field> = vec![field("key", s(m_key))];
+            if let Some(j) = encode_state_default(m_default_value, m_default_declared) {
+                f.push(field("defaultValue", j));
+            }
+            case_obj("State", f)
+            }
+            Binding::Now { grain: m_grain } => {
+            let mut f: Vec<Field> = vec![];
+            if let Some(x) = m_grain {
+                f.push(field("grain", s(x.as_str())));
+            }
+            case_obj("Now", f)
+            }
+            Binding::Computed => {
+            case_obj("Computed", vec![field("fn", CLOSURE.to_string())])
+            }
+            Binding::Local { flush_on: m_flush_on, initial_from: m_initial_from, on_commit: m_on_commit, codec: m_codec, commit_to: m_commit_to } => {
+            let mut f: Vec<Field> = vec![field("flushOn", local_flush_trigger(m_flush_on)), field("format", CLOSURE.to_string()), field("initialFrom", binding(m_initial_from))];
+            if m_on_commit.is_some() {
+                f.push(field("onCommit", CLOSURE.to_string()));
+            }
+            f.push(field("parse", CLOSURE.to_string()));
+            if let Some(x) = m_codec {
+                f.push(field("codec", format(x)));
+            }
+            if let Some(x) = m_commit_to {
+                f.push(field("commitTo", s(x)));
+            }
+            case_obj("Local", f)
+            }
+            Binding::Format { source: m_source, format: m_format, locale: m_locale } => {
+            case_obj("Format", vec![field("source", binding(m_source)), field("format", format(m_format)), field("locale", locale_source(m_locale))])
+            }
+            Binding::I18n { key: m_key, args: m_args } => {
+            let mut f: Vec<Field> = vec![field("key", s(m_key))];
+            if let Some(x) = m_args {
+                f.push(field("args", enc_map(x, binding)));
+            }
+            case_obj("I18n", f)
+            }
+            Binding::Transform { source: m_source, pipeline: m_pipeline, params: m_params } => {
+            let mut f: Vec<Field> = vec![field("source", transform_source(m_source)), field("pipeline", enc_list(m_pipeline, transform_step))];
+            if let Some(j) = encode_binding_params(m_params) {
+                f.push(field("params", j));
+            }
+            case_obj("Transform", f)
+            }
+            Binding::Expr { expr: m_expr, params: m_params } => {
+            let mut f: Vec<Field> = vec![field("expr", col_expr(m_expr))];
+            if let Some(j) = encode_binding_params(m_params) {
+                f.push(field("params", j));
+            }
+            case_obj("Expr", f)
+            }
+            Binding::Invoke { capability_id: m_capability_id, args: m_args } => {
+            case_obj("Invoke", vec![field("capabilityId", s(m_capability_id)), field("args", enc_list(m_args, invoke_arg))])
+            }
+        }
+    }
+
+    pub(in super::super) fn box_layout(v: &BoxLayout) -> String {
+        match v {
+            BoxLayout::Auto => {
+            case_obj("Auto", vec![])
+            }
+            BoxLayout::Flex { direction: m_direction, wrap: m_wrap, gap: m_gap } => {
+            let mut f: Vec<Field> = vec![field("direction", s(m_direction.as_str())), field("wrap", boolean(*m_wrap))];
+            if let Some(x) = m_gap {
+                f.push(field("gap", int(*x)));
+            }
+            case_obj("Flex", f)
+            }
+            BoxLayout::Grid { cols: m_cols, template_columns: m_template_columns, gap: m_gap } => {
+            let mut f: Vec<Field> = vec![field("cols", int(*m_cols))];
+            if let Some(x) = m_template_columns {
+                f.push(field("templateColumns", s(x)));
+            }
+            if let Some(x) = m_gap {
+                f.push(field("gap", int(*x)));
+            }
+            case_obj("Grid", f)
+            }
+            BoxLayout::Masonry { cols: m_cols, gap: m_gap } => {
+            let mut f: Vec<Field> = vec![field("cols", int(*m_cols))];
+            if let Some(x) = m_gap {
+                f.push(field("gap", int(*x)));
+            }
+            case_obj("Masonry", f)
+            }
+        }
+    }
+
+    pub(in super::super) fn call_result_target(v: &CallResultTarget) -> String {
+        match v {
+            CallResultTarget::State { key: m_key } => {
+            case_obj("State", vec![field("key", s(m_key))])
+            }
+            CallResultTarget::Query { name: m_name } => {
+            case_obj("Query", vec![field("name", s(m_name))])
+            }
+        }
+    }
+
+    pub(in super::super) fn cell_format(v: &CellFormat) -> String {
+        match v {
+            CellFormat::None => {
+            case_obj("None", vec![])
+            }
+            CellFormat::Number { decimals: m_decimals } => {
+            let mut f: Vec<Field> = vec![];
+            if let Some(x) = m_decimals {
+                f.push(field("decimals", int(*x)));
+            }
+            case_obj("Number", f)
+            }
+            CellFormat::Currency { code: m_code } => {
+            case_obj("Currency", vec![field("code", s(m_code))])
+            }
+            CellFormat::Percent { decimals: m_decimals } => {
+            let mut f: Vec<Field> = vec![];
+            if let Some(x) = m_decimals {
+                f.push(field("decimals", int(*x)));
+            }
+            case_obj("Percent", f)
+            }
+            CellFormat::SignificantDigits { digits: m_digits } => {
+            case_obj("SignificantDigits", vec![field("digits", int(*m_digits))])
+            }
+            CellFormat::DateTime { format: m_format } => {
+            case_obj("DateTime", vec![field("format", s(m_format))])
+            }
+            CellFormat::Duration { unit: m_unit, style: m_style } => {
+            case_obj("Duration", vec![field("unit", s(m_unit.as_str())), field("style", s(m_style.as_str()))])
+            }
+            CellFormat::RelativeTime { unit: m_unit } => {
+            case_obj("RelativeTime", vec![field("unit", s(m_unit.as_str()))])
+            }
+            CellFormat::Custom => {
+            case_obj("Custom", vec![field("fn", CLOSURE.to_string())])
+            }
+        }
+    }
+
+    pub(in super::super) fn cell_kind_erased(v: &CellKindErased) -> String {
+        match v {
+            CellKindErased::Text => {
+            case_obj("Text", vec![])
+            }
+            CellKindErased::Numeric => {
+            case_obj("Numeric", vec![])
+            }
+            CellKindErased::Date => {
+            case_obj("Date", vec![])
+            }
+            CellKindErased::Editable => {
+            case_obj("Editable", vec![field("onEdit", CLOSURE.to_string())])
+            }
+            CellKindErased::Checkbox => {
+            case_obj("Checkbox", vec![field("get", CLOSURE.to_string()), field("onToggle", CLOSURE.to_string())])
+            }
+            CellKindErased::Button { label: m_label } => {
+            case_obj("Button", vec![field("label", text_source(m_label)), field("onClick", CLOSURE.to_string())])
+            }
+            CellKindErased::ButtonGroup { labels: m_labels } => {
+            let mut f: Vec<Field> = vec![];
+            if let Some(j) = encode_button_group(m_labels) {
+                f.push(field("buttons", j));
+            }
+            case_obj("ButtonGroup", f)
+            }
+            CellKindErased::Link => {
+            case_obj("Link", vec![field("hrefFn", CLOSURE.to_string()), field("labelFn", CLOSURE.to_string())])
+            }
+            CellKindErased::Pill => {
+            case_obj("Pill", vec![field("labelFn", CLOSURE.to_string()), field("toneFn", CLOSURE.to_string())])
+            }
+            CellKindErased::TonedPill { field: m_field, map: m_map, default_tone: m_default_tone } => {
+            let mut f: Vec<Field> = vec![field("field", s(m_field))];
+            if let Some(j) = encode_tone_map(m_map) {
+                f.push(field("map", j));
+            }
+            if *m_default_tone != defaults::CELL_KIND_ERASED_TONED_PILL_DEFAULT {
+                f.push(field("default", s(m_default_tone.as_str())));
+            }
+            case_obj("TonedPill", f)
+            }
+            CellKindErased::Progress => {
+            case_obj("Progress", vec![field("fractionFn", CLOSURE.to_string()), field("labelFn", CLOSURE.to_string())])
+            }
+            CellKindErased::Custom => {
+            case_obj("Custom", vec![field("fn", CLOSURE.to_string())])
+            }
+        }
+    }
+
+    pub(in super::super) fn chart_annotation(v: &ChartAnnotation) -> String {
+        match v {
+            ChartAnnotation::ReferenceLine { value: m_value, label: m_label } => {
+            let mut f: Vec<Field> = vec![field("value", num(*m_value))];
+            if let Some(x) = m_label {
+                f.push(field("label", text_source(x)));
+            }
+            case_obj("ReferenceLine", f)
+            }
+            ChartAnnotation::EventMarker { at: m_at, label: m_label } => {
+            let mut f: Vec<Field> = vec![field("at", chart_annotation_x(m_at))];
+            if let Some(x) = m_label {
+                f.push(field("label", text_source(x)));
+            }
+            case_obj("EventMarker", f)
+            }
+            ChartAnnotation::RangeBand { range: m_range, label: m_label } => {
+            let mut f: Vec<Field> = vec![field("range", chart_annotation_range(m_range))];
+            if let Some(x) = m_label {
+                f.push(field("label", text_source(x)));
+            }
+            case_obj("RangeBand", f)
+            }
+        }
+    }
+
+    pub(in super::super) fn chart_annotation_range(v: &ChartAnnotationRange) -> String {
+        match v {
+            ChartAnnotationRange::ValueRange { from: m_from, to: m_to } => {
+            case_obj("ValueRange", vec![field("from", num(*m_from)), field("to", num(*m_to))])
+            }
+            ChartAnnotationRange::XRange { from: m_from, to: m_to } => {
+            case_obj("XRange", vec![field("from", chart_annotation_x(m_from)), field("to", chart_annotation_x(m_to))])
+            }
+        }
+    }
+
+    pub(in super::super) fn chart_annotation_x(v: &ChartAnnotationX) -> String {
+        match v {
+            ChartAnnotationX::Category(m_0) => {
+            case_obj("Category", vec![field("key", s(m_0))])
+            }
+            ChartAnnotationX::Date(m_0) => {
+            case_obj("Date", vec![field("iso", s(m_0))])
+            }
+        }
+    }
+
+    pub(in super::super) fn column_width(v: &ColumnWidth) -> String {
+        match v {
+            ColumnWidth::Auto => {
+            case_obj("Auto", vec![])
+            }
+            ColumnWidth::Fixed { pixels: m_pixels } => {
+            case_obj("Fixed", vec![field("pixels", int(*m_pixels))])
+            }
+            ColumnWidth::Flex { weight: m_weight } => {
+            case_obj("Flex", vec![field("weight", num(*m_weight))])
+            }
+        }
+    }
+
+    pub(in super::super) fn curve_command(v: &CurveCommand) -> String {
+        match v {
+            CurveCommand::MoveTo(m_0) => {
+            case_obj("MoveTo", vec![field("to", draw_point(m_0))])
+            }
+            CurveCommand::LineTo(m_0) => {
+            case_obj("LineTo", vec![field("to", draw_point(m_0))])
+            }
+            CurveCommand::CubicTo { control1: m_control1, control2: m_control2, to: m_to } => {
+            case_obj("CubicTo", vec![field("control1", draw_point(m_control1)), field("control2", draw_point(m_control2)), field("to", draw_point(m_to))])
+            }
+            CurveCommand::QuadraticTo { control: m_control, to: m_to } => {
+            case_obj("QuadraticTo", vec![field("control", draw_point(m_control)), field("to", draw_point(m_to))])
+            }
+            CurveCommand::Close => {
+            case_obj("Close", vec![])
+            }
+        }
+    }
+
+    pub(in super::super) fn format(v: &Format) -> String {
+        match v {
+            Format::Number { decimals: m_decimals } => {
+            let mut f: Vec<Field> = vec![];
+            if let Some(x) = m_decimals {
+                f.push(field("decimals", int(*x)));
+            }
+            case_obj("Number", f)
+            }
+            Format::Currency { iso_code: m_iso_code } => {
+            case_obj("Currency", vec![field("isoCode", s(m_iso_code))])
+            }
+            Format::Percent { decimals: m_decimals } => {
+            let mut f: Vec<Field> = vec![];
+            if let Some(x) = m_decimals {
+                f.push(field("decimals", int(*x)));
+            }
+            case_obj("Percent", f)
+            }
+            Format::DateTime { date_style: m_date_style, time_style: m_time_style } => {
+            let mut f: Vec<Field> = vec![];
+            if let Some(x) = m_date_style {
+                f.push(field("dateStyle", s(x.as_str())));
+            }
+            if let Some(x) = m_time_style {
+                f.push(field("timeStyle", s(x.as_str())));
+            }
+            case_obj("DateTime", f)
+            }
+            Format::RelativeTime { unit: m_unit } => {
+            case_obj("RelativeTime", vec![field("unit", s(m_unit.as_str()))])
+            }
+            Format::Duration { unit: m_unit, style: m_style } => {
+            case_obj("Duration", vec![field("unit", s(m_unit.as_str())), field("style", s(m_style.as_str()))])
+            }
+            Format::Since { unit: m_unit } => {
+            let mut f: Vec<Field> = vec![];
+            if let Some(x) = m_unit {
+                f.push(field("unit", s(x.as_str())));
+            }
+            case_obj("Since", f)
+            }
+        }
+    }
+
+    pub(in super::super) fn hole_decl(v: &HoleDecl) -> String {
+        match v {
+            HoleDecl::Value { name: m_name, space: m_space, default: m_default } => {
+            let mut f: Vec<Field> = vec![field("name", s(m_name)), field("space", hole_value_space(m_space))];
+            if let Some(x) = m_default {
+                f.push(field("default", fragment_scalar(x)));
+            }
+            case_obj("Value", f)
+            }
+            HoleDecl::Slot { name: m_name, kind_constraint: m_kind_constraint } => {
+            let mut f: Vec<Field> = vec![field("name", s(m_name))];
+            if let Some(x) = m_kind_constraint {
+                f.push(field("kindConstraint", s(x)));
+            }
+            case_obj("Slot", f)
+            }
+            HoleDecl::Repeat { name: m_name, count_space: m_count_space } => {
+            case_obj("Repeat", vec![field("name", s(m_name)), field("countSpace", hole_value_space(m_count_space))])
+            }
+        }
+    }
+
+    pub(in super::super) fn hole_value_space(v: &HoleValueSpace) -> String {
+        match v {
+            HoleValueSpace::IntRange { min: m_min, max: m_max } => {
+            case_obj("IntRange", vec![field("min", int(*m_min)), field("max", int(*m_max))])
+            }
+            HoleValueSpace::FloatRange { min: m_min, max: m_max } => {
+            case_obj("FloatRange", vec![field("min", num(*m_min)), field("max", num(*m_max))])
+            }
+            HoleValueSpace::StringLen { min_len: m_min_len, max_len: m_max_len } => {
+            case_obj("StringLen", vec![field("minLen", int(*m_min_len)), field("maxLen", int(*m_max_len))])
+            }
+            HoleValueSpace::Enum { choices: m_choices } => {
+            case_obj("Enum", vec![field("choices", enc_list(m_choices, |v| s(v)))])
+            }
+            HoleValueSpace::AnyString => {
+            case_obj("AnyString", vec![])
+            }
+        }
+    }
+
+    pub(in super::super) fn local_flush_trigger(v: &LocalFlushTrigger) -> String {
+        match v {
+            LocalFlushTrigger::OnBlur => {
+            case_obj("OnBlur", vec![])
+            }
+            LocalFlushTrigger::OnSubmit => {
+            case_obj("OnSubmit", vec![])
+            }
+            LocalFlushTrigger::OnDebounce { milliseconds: m_milliseconds } => {
+            case_obj("OnDebounce", vec![field("milliseconds", int(*m_milliseconds))])
+            }
+            LocalFlushTrigger::OnCommitAction => {
+            case_obj("OnCommitAction", vec![])
+            }
+        }
+    }
+
+    pub(in super::super) fn locale_source(v: &LocaleSource) -> String {
+        match v {
+            LocaleSource::Ambient => {
+            case_obj("Ambient", vec![])
+            }
+            LocaleSource::Explicit { tag: m_tag } => {
+            case_obj("Explicit", vec![field("tag", s(m_tag))])
+            }
+        }
+    }
+
+    pub(in super::super) fn media_kind(v: &MediaKind) -> String {
+        match v {
+            MediaKind::Video { autoplay: m_autoplay, poster: m_poster } => {
+            let mut f: Vec<Field> = vec![];
+            if *m_autoplay != defaults::MEDIA_KIND_VIDEO_AUTOPLAY {
+                f.push(field("autoplay", boolean(*m_autoplay)));
+            }
+            if let Some(x) = m_poster {
+                f.push(field("poster", binding(x)));
+            }
+            case_obj("Video", f)
+            }
+            MediaKind::Audio => {
+            case_obj("Audio", vec![])
+            }
+        }
+    }
+
+    pub(in super::super) fn fragment_scalar(v: &FragmentScalar) -> String {
+        match v {
+            FragmentScalar::Int(m_0) => {
+            case_obj("Int", vec![field("value", int(*m_0))])
+            }
+            FragmentScalar::Float(m_0) => {
+            case_obj("Float", vec![field("value", num(*m_0))])
+            }
+            FragmentScalar::Bool(m_0) => {
+            case_obj("Bool", vec![field("value", boolean(*m_0))])
+            }
+            FragmentScalar::Str(m_0) => {
+            case_obj("Str", vec![field("value", s(m_0))])
+            }
+        }
+    }
+
+    pub(in super::super) fn shape(v: &Shape) -> String {
+        match v {
+            Shape::Group { children: m_children, style: m_style } => {
+            case_obj("Group", vec![field("children", enc_list(m_children, shape)), field("style", draw_style(m_style))])
+            }
+            Shape::Rectangle { x: m_x, y: m_y, width: m_width, height: m_height, corner_radius: m_corner_radius, style: m_style } => {
+            let mut f: Vec<Field> = vec![field("x", num(*m_x)), field("y", num(*m_y)), field("width", num(*m_width)), field("height", num(*m_height))];
+            if let Some(x) = m_corner_radius {
+                f.push(field("cornerRadius", num(*x)));
+            }
+            f.push(field("style", draw_style(m_style)));
+            case_obj("Rectangle", f)
+            }
+            Shape::Line { x1: m_x1, y1: m_y1, x2: m_x2, y2: m_y2, style: m_style } => {
+            case_obj("Line", vec![field("x1", num(*m_x1)), field("y1", num(*m_y1)), field("x2", num(*m_x2)), field("y2", num(*m_y2)), field("style", draw_style(m_style))])
+            }
+            Shape::Polyline { points: m_points, style: m_style } => {
+            case_obj("Polyline", vec![field("points", enc_list(m_points, draw_point)), field("style", draw_style(m_style))])
+            }
+            Shape::Polygon { points: m_points, style: m_style } => {
+            case_obj("Polygon", vec![field("points", enc_list(m_points, draw_point)), field("style", draw_style(m_style))])
+            }
+            Shape::Curve { commands: m_commands, style: m_style } => {
+            case_obj("Curve", vec![field("commands", enc_list(m_commands, curve_command)), field("style", draw_style(m_style))])
+            }
+            Shape::Circle { cx: m_cx, cy: m_cy, r: m_r, style: m_style } => {
+            case_obj("Circle", vec![field("cx", num(*m_cx)), field("cy", num(*m_cy)), field("r", num(*m_r)), field("style", draw_style(m_style))])
+            }
+            Shape::Ellipse { cx: m_cx, cy: m_cy, rx: m_rx, ry: m_ry, style: m_style } => {
+            case_obj("Ellipse", vec![field("cx", num(*m_cx)), field("cy", num(*m_cy)), field("rx", num(*m_rx)), field("ry", num(*m_ry)), field("style", draw_style(m_style))])
+            }
+            Shape::Label { x: m_x, y: m_y, text: m_text, style: m_style } => {
+            case_obj("Label", vec![field("x", num(*m_x)), field("y", num(*m_y)), field("text", text_source(m_text)), field("style", draw_style(m_style))])
+            }
+        }
+    }
+
+    pub(in super::super) fn text_source(v: &TextSource) -> String {
+        match v {
+            TextSource::Literal(m_0) => {
+            s(m_0)
+            }
+            TextSource::Bound(m_0) => {
+            case_obj("Bound", vec![field("binding", binding(m_0))])
+            }
+            TextSource::I18n { key: m_key, args: m_args } => {
+            case_obj("I18n", vec![field("key", s(m_key)), field("args", enc_map(m_args, i18n_arg))])
+            }
+        }
+    }
+
+    pub(in super::super) fn node(v: &Node) -> String {
+        let Node { id: m_id, kind: m_kind, accessibility: m_accessibility, fallback: m_fallback, state: m_state, style: m_style, tooltip: m_tooltip, visible: m_visible } = v;
+        let mut f: Vec<Field> = vec![field("id", s(m_id)), field("kind", node_kind(m_kind))];
+        if let Some(x) = m_accessibility {
+            f.push(field("accessibility", accessibility(x)));
+        }
+        if let Some(x) = m_fallback {
+            f.push(field("fallback", node(x)));
+        }
+        if let Some(j) = encode_node_state(m_state) {
+            f.push(field("state", j));
+        }
+        if let Some(j) = encode_node_style(m_style) {
+            f.push(field("style", j));
+        }
+        if let Some(x) = m_tooltip {
+            f.push(field("tooltip", text_source(x)));
+        }
+        if let Some(x) = m_visible {
+            f.push(field("visible", binding(x)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn tree_op(v: &TreeOp) -> String {
+        match v {
+            TreeOp::Batch(m_0) => {
+            case_obj("Batch", vec![field("ops", enc_list(m_0, tree_op))])
+            }
+            TreeOp::EditNode { new_kind: m_new_kind, target: m_target } => {
+            case_obj("EditNode", vec![field("newKind", node_kind(m_new_kind)), field("target", s(m_target))])
+            }
+            TreeOp::InsertChild { child: m_child, parent_id: m_parent_id } => {
+            case_obj("InsertChild", vec![field("child", node(m_child)), field("parentId", s(m_parent_id))])
+            }
+            TreeOp::MoveNode { new_parent_id: m_new_parent_id, target: m_target } => {
+            case_obj("MoveNode", vec![field("newParentId", s(m_new_parent_id)), field("target", s(m_target))])
+            }
+            TreeOp::PatchStyle { style: m_style, target: m_target } => {
+            case_obj("PatchStyle", vec![field("style", style_delta(m_style)), field("target", s(m_target))])
+            }
+            TreeOp::RemoveNode { target: m_target } => {
+            case_obj("RemoveNode", vec![field("target", s(m_target))])
+            }
+            TreeOp::ReorderChildren { new_order: m_new_order, parent_id: m_parent_id } => {
+            case_obj("ReorderChildren", vec![field("newOrder", enc_list(m_new_order, |v| s(v))), field("parentId", s(m_parent_id))])
+            }
+            TreeOp::ReplaceBinding { binding: m_binding, slot: m_slot, target: m_target } => {
+            case_obj("ReplaceBinding", vec![field("binding", binding(m_binding)), field("slot", s(m_slot)), field("target", s(m_target))])
+            }
+            TreeOp::ReplaceRoot { node: m_node } => {
+            case_obj("ReplaceRoot", vec![field("node", node(m_node))])
+            }
+            TreeOp::UpdateProp { path: m_path, target: m_target, value: m_value } => {
+            case_obj("UpdateProp", vec![field("path", s(m_path)), field("target", s(m_target)), field("value", json_value(m_value))])
+            }
+            TreeOp::UpdateState { state: m_state, target: m_target } => {
+            case_obj("UpdateState", vec![field("state", state_behaviour(m_state)), field("target", s(m_target))])
+            }
+            TreeOp::UpdateStyle { style: m_style, target: m_target } => {
+            case_obj("UpdateStyle", vec![field("style", semantic_style(m_style)), field("target", s(m_target))])
+            }
+        }
+    }
+}
+
+pub(super) mod gen_decode {
+    use super::*;
+    use super::super::decode::*;
+
+    pub(in super::super) fn decode_badge_spec(path: &str, j: &JVal) -> DResult<BadgeSpec> {
+        let fields = as_obj(path, j)?;
+        let m_label = field_req(path, fields, "label", &[], "Badge.label: TextSource", decode_text_source)?;
+        let m_variant = field_req(path, fields, "variant", &[], "Badge.variant: BadgeVariant", decode_badge_variant)?;
+        Ok(BadgeSpec { label: m_label, variant: m_variant })
+    }
+
+    pub(in super::super) fn decode_box_spec(path: &str, j: &JVal) -> DResult<BoxSpec> {
+        let fields = as_obj(path, j)?;
+        let m_children = field_req(path, fields, "children", &[], "Box.children: list of Node", |p, j| dec_list(p, j, decode_node_ast))?;
+        let m_heading = field_opt(path, fields, "heading", &["title"], decode_text_source)?;
+        let m_layout = field_req(path, fields, "layout", &[], "Box.layout: BoxLayout", decode_box_layout)?;
+        let m_role = field_req(path, fields, "role", &[], "Box.role: BoxRole", decode_box_role)?;
+        let m_keep_together = field_or(path, fields, "keepTogether", &[], defaults::BOX_KEEP_TOGETHER, as_bool)?;
+        let m_break_before = field_or(path, fields, "breakBefore", &[], defaults::BOX_BREAK_BEFORE, as_bool)?;
+        Ok(BoxSpec { children: m_children, heading: m_heading, layout: m_layout, role: m_role, keep_together: m_keep_together, break_before: m_break_before })
+    }
+
+    pub(in super::super) fn decode_button_spec(path: &str, j: &JVal) -> DResult<ButtonSpec> {
+        let fields = as_obj(path, j)?;
+        let m_label = field_req(path, fields, "label", &[], "Button.label: TextSource", decode_text_source)?;
+        let m_on_click = field_req(path, fields, "onClick", &[], "Button.onClick: Action", decode_action)?;
+        let m_variant = field_req(path, fields, "variant", &[], "Button.variant: ButtonVariant", decode_button_variant)?;
+        let m_icon = field_opt(path, fields, "icon", &[], dec_string)?;
+        let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
+        Ok(ButtonSpec { label: m_label, on_click: m_on_click, variant: m_variant, icon: m_icon, disabled: m_disabled })
+    }
+
+    pub(in super::super) fn decode_callout_spec(path: &str, j: &JVal) -> DResult<CalloutSpec> {
+        let fields = as_obj(path, j)?;
+        let m_body = field_req(path, fields, "body", &[], "Callout.body: TextSource", decode_text_source)?;
+        let m_dismissable = field_or(path, fields, "dismissable", &[], defaults::CALLOUT_DISMISSABLE, as_bool)?;
+        let m_tone = field_or(path, fields, "tone", &[], defaults::CALLOUT_TONE, decode_tone_variant)?;
+        let m_heading = field_opt(path, fields, "heading", &["title"], decode_text_source)?;
+        let m_icon = field_opt(path, fields, "icon", &[], dec_string)?;
+        Ok(CalloutSpec { body: m_body, dismissable: m_dismissable, tone: m_tone, heading: m_heading, icon: m_icon })
+    }
+
+    pub(in super::super) fn decode_chart_spec(path: &str, j: &JVal) -> DResult<ChartSpec> {
+        let fields = as_obj(path, j)?;
+        let m_kind = field_req(path, fields, "kind", &[], "Chart.kind: ChartKind", decode_chart_kind)?;
+        let m_source = decode_chart_source(path, fields)?;
+        let m_stacked = field_or(path, fields, "stacked", &[], defaults::CHART_STACKED, as_bool)?;
+        let m_x_field = field_req(path, fields, "xField", &[], "Chart.xField: string", dec_string)?;
+        let m_y_fields = field_req(path, fields, "yFields", &[], "Chart.yFields: list of string", |p, j| dec_list(p, j, dec_string))?;
+        let m_title = field_opt(path, fields, "title", &[], decode_text_source)?;
+        let m_value_format = field_opt(path, fields, "valueFormat", &[], decode_format)?;
+        let m_x_title = field_opt(path, fields, "xTitle", &[], decode_text_source)?;
+        let m_y_title = field_opt(path, fields, "yTitle", &[], decode_text_source)?;
+        let m_subtitle = field_opt(path, fields, "subtitle", &[], decode_text_source)?;
+        let m_legend_position = field_opt(path, fields, "legendPosition", &[], decode_chart_legend_position)?;
+        let m_data_labels = field_opt(path, fields, "dataLabels", &[], decode_chart_data_labels)?;
+        let m_x_scale = field_opt(path, fields, "xScale", &[], decode_chart_x_scale)?;
+        let m_annotations = field_opt(path, fields, "annotations", &[], |p, j| dec_list(p, j, decode_chart_annotation))?;
+        let m_on_point_click = field_opt(path, fields, "onPointClick", &[], dec_closure)?;
+        Ok(ChartSpec { kind: m_kind, source: m_source, stacked: m_stacked, x_field: m_x_field, y_fields: m_y_fields, title: m_title, value_format: m_value_format, x_title: m_x_title, y_title: m_y_title, subtitle: m_subtitle, legend_position: m_legend_position, data_labels: m_data_labels, x_scale: m_x_scale, annotations: m_annotations, on_point_click: m_on_point_click })
+    }
+
+    pub(in super::super) fn decode_code_block_spec(path: &str, j: &JVal) -> DResult<CodeBlockSpec> {
+        let fields = as_obj(path, j)?;
+        let m_code = field_req(path, fields, "code", &[], "CodeBlock.code: string", dec_string)?;
+        let m_copyable = field_req(path, fields, "copyable", &[], "CodeBlock.copyable: boolean", as_bool)?;
+        let m_highlight_lines = field_req(path, fields, "highlightLines", &[], "CodeBlock.highlightLines: list of integer", |p, j| dec_list(p, j, as_int))?;
+        let m_language = field_req(path, fields, "language", &[], "CodeBlock.language: string", dec_string)?;
+        let m_line_numbers = field_req(path, fields, "lineNumbers", &[], "CodeBlock.lineNumbers: boolean", as_bool)?;
+        Ok(CodeBlockSpec { code: m_code, copyable: m_copyable, highlight_lines: m_highlight_lines, language: m_language, line_numbers: m_line_numbers })
+    }
+
+    pub(in super::super) fn decode_custom_spec(path: &str, j: &JVal) -> DResult<CustomSpec> {
+        let fields = as_obj(path, j)?;
+        let m_module_id = field_req(path, fields, "moduleId", &[], "Custom.moduleId: string", dec_string)?;
+        let m_component_id = field_req(path, fields, "componentId", &[], "Custom.componentId: string", dec_string)?;
+        let m_props = field_req(path, fields, "props", &[], "Custom.props: map of JSON value", |p, j| dec_map(p, j, decode_jval))?;
+        let m_content_hash = field_opt(path, fields, "contentHash", &[], decode_content_hash)?;
+        let m_exposed_node_ids = decode_exposed_node_ids(path, fields)?;
+        Ok(CustomSpec { module_id: m_module_id, component_id: m_component_id, props: m_props, content_hash: m_content_hash, exposed_node_ids: m_exposed_node_ids })
+    }
+
+    pub(in super::super) fn decode_grid_spec(path: &str, j: &JVal) -> DResult<GridSpec> {
+        let fields = as_obj(path, j)?;
+        check_grid_near_misses(path, fields)?;
+        let m_columns = field_req(path, fields, "columns", &[], "DataGrid.columns: list of ColumnErased", |p, j| dec_list(p, j, decode_column_erased))?;
+        let m_editable = field_or(path, fields, "editable", &[], defaults::DATA_GRID_EDITABLE, as_bool)?;
+        let m_row_key = field_opt(path, fields, "rowKey", &[], dec_closure)?;
+        let m_row_key_field = field_opt(path, fields, "rowKeyField", &[], dec_string)?;
+        let m_sort_state_key = field_opt(path, fields, "sortStateKey", &[], dec_string)?;
+        let m_page_size = field_opt(path, fields, "pageSize", &[], as_int)?;
+        let m_page_state_key = field_opt(path, fields, "pageStateKey", &[], dec_string)?;
+        let m_default_sort = field_opt(path, fields, "defaultSort", &[], decode_default_sort)?;
+        let m_edit_state_key = field_opt(path, fields, "editStateKey", &[], dec_string)?;
+        let m_reorderable = field_or(path, fields, "reorderable", &[], defaults::DATA_GRID_REORDERABLE, as_bool)?;
+        let m_transfer_in_key = field_opt(path, fields, "transferInKey", &[], dec_string)?;
+        let m_transfer_out_key = field_opt(path, fields, "transferOutKey", &[], dec_string)?;
+        let m_keep_rows_together = field_or(path, fields, "keepRowsTogether", &[], defaults::DATA_GRID_KEEP_ROWS_TOGETHER, as_bool)?;
+        let m_repeat_header = field_or(path, fields, "repeatHeader", &[], defaults::DATA_GRID_REPEAT_HEADER, as_bool)?;
+        let m_exportable = field_or(path, fields, "exportable", &[], defaults::DATA_GRID_EXPORTABLE, as_bool)?;
+        let m_window_state_key = field_opt(path, fields, "windowStateKey", &[], dec_string)?;
+        let m_row_total = field_opt(path, fields, "rowTotal", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Int))?;
+        let m_source = decode_grid_source(path, fields)?;
+        let m_static_rows = field_opt(path, fields, "staticRows", &[], decode_static_rows)?;
+        let m_on_row_click = field_opt(path, fields, "onRowClick", &[], dec_closure)?;
+        let v = GridSpec { columns: m_columns, editable: m_editable, row_key: m_row_key, row_key_field: m_row_key_field, sort_state_key: m_sort_state_key, page_size: m_page_size, page_state_key: m_page_state_key, default_sort: m_default_sort, edit_state_key: m_edit_state_key, reorderable: m_reorderable, transfer_in_key: m_transfer_in_key, transfer_out_key: m_transfer_out_key, keep_rows_together: m_keep_rows_together, repeat_header: m_repeat_header, exportable: m_exportable, window_state_key: m_window_state_key, row_total: m_row_total, source: m_source, static_rows: m_static_rows, on_row_click: m_on_row_click };
+        check_grid(path, fields, &v)?;
+        Ok(v)
+    }
+
+    pub(in super::super) fn decode_disclosure_spec(path: &str, j: &JVal) -> DResult<DisclosureSpec> {
+        let fields = as_obj(path, j)?;
+        let m_children = field_req(path, fields, "children", &[], "Disclosure.children: list of Node", |p, j| dec_list(p, j, decode_node_ast))?;
+        let m_default_open = field_req(path, fields, "defaultOpen", &[], "Disclosure.defaultOpen: boolean", as_bool)?;
+        let m_heading = field_req(path, fields, "heading", &["title"], "Disclosure.heading: TextSource", decode_text_source)?;
+        let m_on_toggle = field_opt(path, fields, "onToggle", &[], dec_closure)?;
+        let m_open = field_req(path, fields, "open", &[], "Disclosure.open: Binding<boolean>", |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
+        Ok(DisclosureSpec { children: m_children, default_open: m_default_open, heading: m_heading, on_toggle: m_on_toggle, open: m_open })
+    }
+
+    pub(in super::super) fn decode_drawing_spec(path: &str, j: &JVal) -> DResult<DrawingSpec> {
+        let fields = as_obj(path, j)?;
+        let m_description = field_opt(path, fields, "description", &[], decode_text_source)?;
+        let m_shapes = field_req(path, fields, "shapes", &[], "Drawing.shapes: list of Shape", |p, j| dec_list(p, j, decode_shape))?;
+        let m_style = decode_style_or_default(path, fields)?;
+        let m_title = field_opt(path, fields, "title", &[], decode_text_source)?;
+        let m_view_box = field_req(path, fields, "viewBox", &[], "Drawing.viewBox: ViewBox", decode_view_box)?;
+        Ok(DrawingSpec { description: m_description, shapes: m_shapes, style: m_style, title: m_title, view_box: m_view_box })
+    }
+
+    pub(in super::super) fn decode_embed_spec(path: &str, j: &JVal) -> DResult<EmbedSpec> {
+        let fields = as_obj(path, j)?;
+        let m_aspect_ratio = field_or(path, fields, "aspectRatio", &[], defaults::EMBED_ASPECT_RATIO, decode_image_aspect)?;
+        let m_permissions = field_or(path, fields, "permissions", &[], Vec::new(), |p, j| dec_list(p, j, decode_embed_permission))?;
+        let m_src = field_req(path, fields, "src", &[], "Embed.src: Binding<string>", |p, j| decode_binding_slot(p, j, StaticSlot::Str))?;
+        let m_title = field_req(path, fields, "title", &[], "Embed.title: TextSource", decode_text_source)?;
+        Ok(EmbedSpec { aspect_ratio: m_aspect_ratio, permissions: m_permissions, src: m_src, title: m_title })
+    }
+
+    pub(in super::super) fn decode_error_boundary_spec(path: &str, j: &JVal) -> DResult<ErrorBoundarySpec> {
+        let fields = as_obj(path, j)?;
+        let m_child = field_req(path, fields, "child", &[], "ErrorBoundary.child: Node", |p, j| (decode_node_ast)(p, j).map(Box::new))?;
+        let m_fallback = field_req(path, fields, "fallback", &[], "ErrorBoundary.fallback: Node", |p, j| (decode_node_ast)(p, j).map(Box::new))?;
+        Ok(ErrorBoundarySpec { child: m_child, fallback: m_fallback })
+    }
+
+    pub(in super::super) fn decode_fact_spec(path: &str, j: &JVal) -> DResult<FactSpec> {
+        let fields = as_obj(path, j)?;
+        let m_emphasis = decode_fact_emphasis(path, fields)?;
+        let m_help = field_opt(path, fields, "help", &[], decode_text_source)?;
+        let m_icon = field_opt(path, fields, "icon", &[], dec_string)?;
+        let m_label = field_req(path, fields, "label", &[], "Fact.label: TextSource", decode_text_source)?;
+        let m_tone = field_or(path, fields, "tone", &[], defaults::FACT_TONE, decode_tone_variant)?;
+        let m_value = field_req(path, fields, "value", &[], "Fact.value: TextSource", decode_text_source)?;
+        Ok(FactSpec { emphasis: m_emphasis, help: m_help, icon: m_icon, label: m_label, tone: m_tone, value: m_value })
+    }
+
+    pub(in super::super) fn decode_file_upload_spec(path: &str, j: &JVal) -> DResult<FileUploadSpec> {
+        let fields = as_obj(path, j)?;
+        let m_accept = field_req(path, fields, "accept", &[], "FileUpload.accept: list of string", |p, j| dec_list(p, j, dec_string))?;
+        let m_label = field_req(path, fields, "label", &[], "FileUpload.label: TextSource", decode_text_source)?;
+        let m_multiple = field_req(path, fields, "multiple", &[], "FileUpload.multiple: boolean", as_bool)?;
+        let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
+        let m_accept_paste = field_or(path, fields, "acceptPaste", &[], defaults::FILE_UPLOAD_ACCEPT_PASTE, as_bool)?;
+        let m_drop_target = field_or(path, fields, "dropTarget", &[], defaults::FILE_UPLOAD_DROP_TARGET, as_bool)?;
+        let m_capture = field_opt(path, fields, "capture", &[], decode_capture_source)?;
+        let m_destination = field_opt(path, fields, "destination", &[], dec_string)?;
+        let m_max_bytes = field_opt(path, fields, "maxBytes", &[], as_int)?;
+        let m_max_files = field_opt(path, fields, "maxFiles", &[], as_int)?;
+        let v = FileUploadSpec { accept: m_accept, label: m_label, multiple: m_multiple, disabled: m_disabled, accept_paste: m_accept_paste, drop_target: m_drop_target, capture: m_capture, destination: m_destination, max_bytes: m_max_bytes, max_files: m_max_files };
+        check_file_upload(path, fields, &v)?;
+        Ok(v)
+    }
+
+    pub(in super::super) fn decode_form_spec(path: &str, j: &JVal) -> DResult<FormSpec> {
+        let fields = as_obj(path, j)?;
+        let m_fields = field_req(path, fields, "fields", &[], "Form.fields: list of FormField", |p, j| dec_list(p, j, decode_form_field))?;
+        let m_on_submit = field_req(path, fields, "onSubmit", &[], "Form.onSubmit: Action", decode_action)?;
+        let m_submit_label = field_req(path, fields, "submitLabel", &[], "Form.submitLabel: TextSource", decode_text_source)?;
+        let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
+        Ok(FormSpec { fields: m_fields, on_submit: m_on_submit, submit_label: m_submit_label, disabled: m_disabled })
+    }
+
+    pub(in super::super) fn decode_fragment_decl_spec(path: &str, j: &JVal) -> DResult<FragmentDeclSpec> {
+        let fields = as_obj(path, j)?;
+        let m_body = field_req(path, fields, "body", &[], "FragmentDecl.body: Node", |p, j| (decode_node_ast)(p, j).map(Box::new))?;
+        let m_name = field_req(path, fields, "name", &[], "FragmentDecl.name: string", dec_string)?;
+        let m_holes = field_or(path, fields, "holes", &[], Vec::new(), |p, j| dec_list(p, j, decode_hole_decl))?;
+        let m_effect = decode_fragment_effect(path, fields)?;
+        Ok(FragmentDeclSpec { body: m_body, name: m_name, holes: m_holes, effect: m_effect })
+    }
+
+    pub(in super::super) fn decode_fragment_ref_spec(path: &str, j: &JVal) -> DResult<FragmentRefSpec> {
+        let fields = as_obj(path, j)?;
+        let m_name = field_req(path, fields, "name", &[], "FragmentRef.name: string", dec_string)?;
+        let m_args = decode_fragment_ref_args(path, fields)?;
+        Ok(FragmentRefSpec { name: m_name, args: m_args })
+    }
+
+    pub(in super::super) fn decode_heading_spec(path: &str, j: &JVal) -> DResult<HeadingSpec> {
+        let fields = as_obj(path, j)?;
+        let m_level = field_req(path, fields, "level", &[], "Heading.level: integer", as_int)?;
+        let m_text = field_req(path, fields, "text", &[], "Heading.text: TextSource", decode_text_source)?;
+        let m_variant = field_req(path, fields, "variant", &[], "Heading.variant: HeadingVariant", decode_heading_variant)?;
+        Ok(HeadingSpec { level: m_level, text: m_text, variant: m_variant })
+    }
+
+    pub(in super::super) fn decode_icon_spec(path: &str, j: &JVal) -> DResult<IconSpec> {
+        let fields = as_obj(path, j)?;
+        let m_icon = field_req(path, fields, "icon", &[], "Icon.icon: string", dec_string)?;
+        let m_size = field_or(path, fields, "size", &[], defaults::ICON_SIZE, decode_icon_size)?;
+        let m_tone = field_or(path, fields, "tone", &[], defaults::ICON_TONE, decode_tone_variant)?;
+        let m_label = field_opt(path, fields, "label", &[], dec_string)?;
+        Ok(IconSpec { icon: m_icon, size: m_size, tone: m_tone, label: m_label })
+    }
+
+    pub(in super::super) fn decode_image_spec(path: &str, j: &JVal) -> DResult<ImageSpec> {
+        let fields = as_obj(path, j)?;
+        let m_alt = field_req(path, fields, "alt", &[], "Image.alt: TextSource", decode_text_source)?;
+        let m_src = field_req(path, fields, "src", &[], "Image.src: Binding<string>", |p, j| decode_binding_slot(p, j, StaticSlot::Str))?;
+        let m_variant = field_req(path, fields, "variant", &[], "Image.variant: ImageVariant", decode_image_variant)?;
+        let m_fit = field_or(path, fields, "fit", &[], defaults::IMAGE_FIT, decode_image_fit)?;
+        let m_aspect_ratio = field_or(path, fields, "aspectRatio", &[], defaults::IMAGE_ASPECT_RATIO, decode_image_aspect)?;
+        let m_loading = field_or(path, fields, "loading", &[], defaults::IMAGE_LOADING, decode_image_loading)?;
+        let m_src_set = field_or(path, fields, "srcSet", &[], Vec::new(), |p, j| dec_list(p, j, decode_src_set_entry))?;
+        let m_expandable = field_or(path, fields, "expandable", &[], defaults::IMAGE_EXPANDABLE, as_bool)?;
+        let m_caption = field_opt(path, fields, "caption", &[], decode_text_source)?;
+        Ok(ImageSpec { alt: m_alt, src: m_src, variant: m_variant, fit: m_fit, aspect_ratio: m_aspect_ratio, loading: m_loading, src_set: m_src_set, expandable: m_expandable, caption: m_caption })
+    }
+
+    pub(in super::super) fn decode_label_value_row_spec(path: &str, j: &JVal) -> DResult<LabelValueRowSpec> {
+        let fields = as_obj(path, j)?;
+        let m_emphasis = decode_row_emphasis(path, fields)?;
+        let m_format = field_or(path, fields, "format", &[], defaults::LABEL_VALUE_ROW_FORMAT, decode_cell_format)?;
+        let m_label = field_req(path, fields, "label", &[], "LabelValueRow.label: TextSource", decode_text_source)?;
+        let m_value = field_req(path, fields, "value", &["data"], "LabelValueRow.value: Binding<number>", |p, j| decode_binding_slot(p, j, StaticSlot::Float))?;
+        let m_help = field_opt(path, fields, "help", &[], decode_text_source)?;
+        Ok(LabelValueRowSpec { emphasis: m_emphasis, format: m_format, label: m_label, value: m_value, help: m_help })
+    }
+
+    pub(in super::super) fn decode_link_spec(path: &str, j: &JVal) -> DResult<LinkSpec> {
+        let fields = as_obj(path, j)?;
+        let m_href = field_req(path, fields, "href", &[], "Link.href: Binding<string>", |p, j| decode_binding_slot(p, j, StaticSlot::Str))?;
+        let m_label = field_req(path, fields, "label", &[], "Link.label: TextSource", decode_text_source)?;
+        let m_download = field_req(path, fields, "download", &[], "Link.download: boolean", as_bool)?;
+        let m_rel = field_opt(path, fields, "rel", &[], dec_string)?;
+        let m_target = field_opt(path, fields, "target", &[], dec_string)?;
+        let m_protection = field_opt(path, fields, "protection", &[], decode_link_protection)?;
+        Ok(LinkSpec { href: m_href, label: m_label, download: m_download, rel: m_rel, target: m_target, protection: m_protection })
+    }
+
+    pub(in super::super) fn decode_list_spec(path: &str, j: &JVal) -> DResult<ListSpec> {
+        let fields = as_obj(path, j)?;
+        let m_items = field_req(path, fields, "items", &[], "List.items: list of TextSource", |p, j| dec_list(p, j, decode_text_source))?;
+        let m_ordered = field_req(path, fields, "ordered", &[], "List.ordered: boolean", as_bool)?;
+        Ok(ListSpec { items: m_items, ordered: m_ordered })
+    }
+
+    pub(in super::super) fn decode_map_spec(path: &str, j: &JVal) -> DResult<MapSpec> {
+        let fields = as_obj(path, j)?;
+        let m_centre_latitude = field_req(path, fields, "centreLatitude", &[], "Map.centreLatitude: number", as_float)?;
+        let m_centre_longitude = field_req(path, fields, "centreLongitude", &[], "Map.centreLongitude: number", as_float)?;
+        let m_source = field_req(path, fields, "source", &["data", "markers"], "Map.source: Binding<list of MapMarker>", |p, j| decode_binding_slot(p, j, StaticSlot::Markers))?;
+        let m_zoom = field_req(path, fields, "zoom", &[], "Map.zoom: integer", as_int)?;
+        let m_on_marker_click = field_opt(path, fields, "onMarkerClick", &[], dec_closure)?;
+        Ok(MapSpec { centre_latitude: m_centre_latitude, centre_longitude: m_centre_longitude, source: m_source, zoom: m_zoom, on_marker_click: m_on_marker_click })
+    }
+
+    pub(in super::super) fn decode_markdown_spec(path: &str, j: &JVal) -> DResult<MarkdownSpec> {
+        let fields = as_obj(path, j)?;
+        let m_text = field_req(path, fields, "text", &[], "Markdown.text: TextSource", decode_text_source)?;
+        Ok(MarkdownSpec { text: m_text })
+    }
+
+    pub(in super::super) fn decode_math_spec(path: &str, j: &JVal) -> DResult<MathSpec> {
+        let fields = as_obj(path, j)?;
+        let m_source = field_req(path, fields, "source", &[], "Math.source: string", dec_string)?;
+        let m_display = field_req(path, fields, "display", &[], "Math.display: MathDisplay", decode_math_display)?;
+        Ok(MathSpec { source: m_source, display: m_display })
+    }
+
+    pub(in super::super) fn decode_media_spec(path: &str, j: &JVal) -> DResult<MediaSpec> {
+        let fields = as_obj(path, j)?;
+        let m_controls = field_or(path, fields, "controls", &[], defaults::MEDIA_CONTROLS, as_bool)?;
+        let m_kind = field_req(path, fields, "kind", &[], "Media.kind: MediaKind", decode_media_kind)?;
+        let m_label = field_req(path, fields, "label", &[], "Media.label: TextSource", decode_text_source)?;
+        let m_loop = field_or(path, fields, "loop", &[], defaults::MEDIA_LOOP, as_bool)?;
+        let m_src = field_req(path, fields, "src", &[], "Media.src: Binding<string>", |p, j| decode_binding_slot(p, j, StaticSlot::Str))?;
+        let m_tracks = field_or(path, fields, "tracks", &[], Vec::new(), |p, j| dec_list(p, j, decode_track_entry))?;
+        let m_transcript = field_opt(path, fields, "transcript", &[], decode_text_source)?;
+        Ok(MediaSpec { controls: m_controls, kind: m_kind, label: m_label, r#loop: m_loop, src: m_src, tracks: m_tracks, transcript: m_transcript })
+    }
+
+    pub(in super::super) fn decode_metric_spec(path: &str, j: &JVal) -> DResult<MetricSpec> {
+        let fields = as_obj(path, j)?;
+        let m_label = field_req(path, fields, "label", &[], "Metric.label: TextSource", decode_text_source)?;
+        let m_value = field_req(path, fields, "value", &["data"], "Metric.value: Binding<number>", |p, j| decode_binding_slot(p, j, StaticSlot::Float))?;
+        let m_format = field_or(path, fields, "format", &[], defaults::METRIC_FORMAT, decode_cell_format)?;
+        let m_tone = field_or(path, fields, "tone", &[], defaults::METRIC_TONE, decode_tone_variant)?;
+        let m_weight = field_or(path, fields, "weight", &[], defaults::METRIC_WEIGHT, decode_style_weight)?;
+        let m_emphasis = field_or(path, fields, "emphasis", &[], defaults::METRIC_EMPHASIS, decode_emphasis)?;
+        let m_trend = field_opt(path, fields, "trend", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Float))?;
+        let m_trend_format = field_opt(path, fields, "trendFormat", &[], decode_cell_format)?;
+        let m_trend_polarity = field_or(path, fields, "trendPolarity", &[], defaults::METRIC_TREND_POLARITY, decode_trend_polarity)?;
+        let m_icon = field_opt(path, fields, "icon", &[], dec_string)?;
+        let m_subtext = field_opt(path, fields, "subtext", &[], decode_text_source)?;
+        Ok(MetricSpec { label: m_label, value: m_value, format: m_format, tone: m_tone, weight: m_weight, emphasis: m_emphasis, trend: m_trend, trend_format: m_trend_format, trend_polarity: m_trend_polarity, icon: m_icon, subtext: m_subtext })
+    }
+
+    pub(in super::super) fn decode_modal_spec(path: &str, j: &JVal) -> DResult<ModalSpec> {
+        let fields = as_obj(path, j)?;
+        let m_children = field_req(path, fields, "children", &[], "Modal.children: list of Node", |p, j| dec_list(p, j, decode_node_ast))?;
+        let m_dismissable = field_req(path, fields, "dismissable", &[], "Modal.dismissable: boolean", as_bool)?;
+        let m_on_dismiss = field_opt(path, fields, "onDismiss", &[], decode_action)?;
+        let m_open = field_req(path, fields, "open", &[], "Modal.open: Binding<boolean>", |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
+        let m_heading = field_opt(path, fields, "heading", &["title"], decode_text_source)?;
+        let m_modality = field_or(path, fields, "modality", &[], defaults::MODAL_MODALITY, decode_modality_kind)?;
+        let m_anchor = field_opt(path, fields, "anchor", &[], dec_string)?;
+        Ok(ModalSpec { children: m_children, dismissable: m_dismissable, on_dismiss: m_on_dismiss, open: m_open, heading: m_heading, modality: m_modality, anchor: m_anchor })
+    }
+
+    pub(in super::super) fn decode_mount_spec(path: &str, j: &JVal) -> DResult<MountSpec> {
+        let fields = as_obj(path, j)?;
+        let m_capabilities = field_req(path, fields, "capabilities", &[], "Mount.capabilities: list of string", |p, j| dec_list(p, j, dec_string))?;
+        let m_channel = field_req(path, fields, "channel", &[], "Mount.channel: GuestChannel", decode_mount_channel)?;
+        let m_inputs = decode_mount_inputs(path, fields)?;
+        let m_scope_id = field_req(path, fields, "scopeId", &[], "Mount.scopeId: string", dec_string)?;
+        Ok(MountSpec { capabilities: m_capabilities, channel: m_channel, inputs: m_inputs, scope_id: m_scope_id })
+    }
+
+    pub(in super::super) fn decode_progress_spec(path: &str, j: &JVal) -> DResult<ProgressSpec> {
+        let fields = as_obj(path, j)?;
+        let m_fraction = field_req(path, fields, "fraction", &[], "Progress.fraction: Binding<number>", |p, j| decode_binding_slot(p, j, StaticSlot::Float))?;
+        let m_indeterminate = field_or(path, fields, "indeterminate", &[], defaults::PROGRESS_INDETERMINATE, as_bool)?;
+        let m_tone = field_or(path, fields, "tone", &[], defaults::PROGRESS_TONE, decode_tone_variant)?;
+        let m_label = field_opt(path, fields, "label", &[], decode_text_source)?;
+        let m_caveat = field_opt(path, fields, "caveat", &[], decode_text_source)?;
+        Ok(ProgressSpec { fraction: m_fraction, indeterminate: m_indeterminate, tone: m_tone, label: m_label, caveat: m_caveat })
+    }
+
+    pub(in super::super) fn decode_scroll_area_spec(path: &str, j: &JVal) -> DResult<ScrollAreaSpec> {
+        let fields = as_obj(path, j)?;
+        let m_children = field_req(path, fields, "children", &[], "ScrollArea.children: list of Node", |p, j| dec_list(p, j, decode_node_ast))?;
+        let m_orientation = field_req(path, fields, "orientation", &[], "ScrollArea.orientation: ScrollOrientation", decode_scroll_orientation)?;
+        let m_max_height = field_opt(path, fields, "maxHeight", &[], as_int)?;
+        let m_max_width = field_opt(path, fields, "maxWidth", &[], as_int)?;
+        Ok(ScrollAreaSpec { children: m_children, orientation: m_orientation, max_height: m_max_height, max_width: m_max_width })
+    }
+
+    pub(in super::super) fn decode_select_spec(path: &str, j: &JVal) -> DResult<SelectSpec> {
+        let fields = as_obj(path, j)?;
+        let m_label = field_req(path, fields, "label", &[], "Select.label: TextSource", decode_text_source)?;
+        let m_on_change = field_opt(path, fields, "onChange", &[], dec_closure)?;
+        let m_on_change_multi = field_opt(path, fields, "onChangeMulti", &[], dec_closure)?;
+        let m_source = field_req(path, fields, "source", &["options", "data"], "Select.source: Binding<list of SelectOption>", |p, j| decode_binding_slot(p, j, StaticSlot::Options))?;
+        let m_value = decode_select_value(path, fields)?;
+        let m_placeholder = field_opt(path, fields, "placeholder", &[], decode_text_source)?;
+        let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
+        let m_multiple = decode_select_multiple(path, fields)?;
+        let m_values = field_opt(path, fields, "values", &[], |p, j| decode_binding_slot(p, j, StaticSlot::StringList))?;
+        Ok(SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values })
+    }
+
+    pub(in super::super) fn decode_skeleton_spec(path: &str, j: &JVal) -> DResult<SkeletonSpec> {
+        let fields = as_obj(path, j)?;
+        let m_rows = field_req(path, fields, "rows", &[], "Skeleton.rows: integer", as_int)?;
+        let v = SkeletonSpec { rows: m_rows };
+        check_skeleton(path, fields, &v)?;
+        Ok(v)
+    }
+
+    pub(in super::super) fn decode_sparkline_spec(path: &str, j: &JVal) -> DResult<SparklineSpec> {
+        let fields = as_obj(path, j)?;
+        let m_source = field_req(path, fields, "source", &["data"], "Sparkline.source: Binding<list of number>", |p, j| decode_binding_slot(p, j, StaticSlot::FloatSeq))?;
+        Ok(SparklineSpec { source: m_source })
+    }
+
+    pub(in super::super) fn decode_split_panel_spec(path: &str, j: &JVal) -> DResult<SplitPanelSpec> {
+        let fields = as_obj(path, j)?;
+        let m_children = field_req(path, fields, "children", &[], "SplitPanel.children: list of Node", |p, j| dec_list(p, j, decode_node_ast))?;
+        let m_weight = field_req(path, fields, "weight", &[], "SplitPanel.weight: number", as_float)?;
+        Ok(SplitPanelSpec { children: m_children, weight: m_weight })
+    }
+
+    pub(in super::super) fn decode_stepper_spec(path: &str, j: &JVal) -> DResult<StepperSpec> {
+        let fields = as_obj(path, j)?;
+        let m_active_step = field_req(path, fields, "activeStep", &[], "Stepper.activeStep: Binding<integer>", |p, j| decode_binding_slot(p, j, StaticSlot::Int))?;
+        let m_children = field_req(path, fields, "children", &[], "Stepper.children: list of Node", |p, j| dec_list(p, j, decode_node_ast))?;
+        Ok(StepperSpec { active_step: m_active_step, children: m_children })
+    }
+
+    pub(in super::super) fn decode_summary_list_spec(path: &str, j: &JVal) -> DResult<SummaryListSpec> {
+        let fields = as_obj(path, j)?;
+        let m_children = field_req(path, fields, "children", &[], "SummaryList.children: list of Node", |p, j| dec_list(p, j, decode_node_ast))?;
+        let m_heading = field_opt(path, fields, "heading", &["title"], decode_text_source)?;
+        Ok(SummaryListSpec { children: m_children, heading: m_heading })
+    }
+
+    pub(in super::super) fn decode_switch_spec(path: &str, j: &JVal) -> DResult<SwitchSpec> {
+        let fields = as_obj(path, j)?;
+        let m_auto_advance_ms = field_opt(path, fields, "autoAdvanceMs", &[], as_int)?;
+        let m_cases = field_req(path, fields, "cases", &[], "Switch.cases: list of SwitchCase", |p, j| dec_list(p, j, decode_switch_case))?;
+        let m_default = field_req(path, fields, "default", &[], "Switch.default: Node", |p, j| (decode_node_ast)(p, j).map(Box::new))?;
+        let m_on = decode_switch_on(path, fields)?;
+        decode_switch_state_key(path, fields)?;
+        let v = SwitchSpec { auto_advance_ms: m_auto_advance_ms, cases: m_cases, default: m_default, on: m_on };
+        check_switch(path, fields, &v)?;
+        Ok(v)
+    }
+
+    pub(in super::super) fn decode_tabs_spec(path: &str, j: &JVal) -> DResult<TabsSpec> {
+        let fields = as_obj(path, j)?;
+        let m_active_index = decode_tabs_active_index(path, fields)?;
+        let m_children = field_req(path, fields, "children", &[], "Tabs.children: list of Node", |p, j| dec_list(p, j, decode_node_ast))?;
+        let m_orientation = field_or(path, fields, "orientation", &[], defaults::TABS_ORIENTATION, decode_orientation)?;
+        let m_on_select = field_opt(path, fields, "onSelect", &[], dec_closure)?;
+        let m_on_select_tag = field_opt(path, fields, "onSelectTag", &[], dec_closure)?;
+        let m_tab_headers = field_opt(path, fields, "tabHeaders", &[], |p, j| dec_list(p, j, decode_tab_header))?;
+        let m_tab_tags = field_opt(path, fields, "tabTags", &[], |p, j| dec_list(p, j, dec_string))?;
+        let m_active_tag = field_opt(path, fields, "activeTag", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Str))?;
+        Ok(TabsSpec { active_index: m_active_index, children: m_children, orientation: m_orientation, on_select: m_on_select, on_select_tag: m_on_select_tag, tab_headers: m_tab_headers, tab_tags: m_tab_tags, active_tag: m_active_tag })
+    }
+
+    pub(in super::super) fn decode_toast_spec(path: &str, j: &JVal) -> DResult<ToastSpec> {
+        let fields = as_obj(path, j)?;
+        let m_dismissable = field_or(path, fields, "dismissable", &[], defaults::TOAST_DISMISSABLE, as_bool)?;
+        let m_message = field_req(path, fields, "message", &[], "Toast.message: TextSource", decode_text_source)?;
+        let m_open = field_req(path, fields, "open", &[], "Toast.open: Binding<boolean>", |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
+        let m_tone = field_or(path, fields, "tone", &[], defaults::TOAST_TONE, decode_tone_variant)?;
+        Ok(ToastSpec { dismissable: m_dismissable, message: m_message, open: m_open, tone: m_tone })
+    }
+
+    pub(in super::super) fn decode_tree_spec(path: &str, j: &JVal) -> DResult<TreeSpec> {
+        let fields = as_obj(path, j)?;
+        let m_expanded_state_key = field_opt(path, fields, "expandedStateKey", &[], dec_string)?;
+        let m_items = field_req(path, fields, "items", &[], "Tree.items: list of TreeItem", |p, j| dec_list(p, j, decode_tree_item))?;
+        let m_on_select = field_opt(path, fields, "onSelect", &[], dec_closure)?;
+        let m_selection_state_key = field_opt(path, fields, "selectionStateKey", &[], dec_string)?;
+        Ok(TreeSpec { expanded_state_key: m_expanded_state_key, items: m_items, on_select: m_on_select, selection_state_key: m_selection_state_key })
+    }
+
+    /// Each kind decodes in its own frame, so the dispatch's frame holds one result
+    /// however many kinds there are (the §21 depth bound is measured on the stack).
+    pub(in super::super) fn decode_node_kind(path: &str, j: &JVal) -> DResult<NodeKind> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Badge" => kind_badge(path, j),
+            "Box" => kind_box(path, j),
+            "Button" => kind_button(path, j),
+            "Callout" => kind_callout(path, j),
+            "Chart" => kind_chart(path, j),
+            "CodeBlock" => kind_code_block(path, j),
+            "Custom" => kind_custom(path, j),
+            "DataGrid" => kind_data_grid(path, j),
+            "Disclosure" => kind_disclosure(path, j),
+            "Drawing" => kind_drawing(path, j),
+            "Embed" => kind_embed(path, j),
+            "ErrorBoundary" => kind_error_boundary(path, j),
+            "Fact" => kind_fact(path, j),
+            "FileUpload" => kind_file_upload(path, j),
+            "Filters" => kind_filters(path, j),
+            "Form" => kind_form(path, j),
+            "FragmentDecl" => kind_fragment_decl(path, j),
+            "FragmentRef" => kind_fragment_ref(path, j),
+            "Heading" => kind_heading(path, j),
+            "Icon" => kind_icon(path, j),
+            "Image" => kind_image(path, j),
+            "LabelValueRow" => kind_label_value_row(path, j),
+            "Link" => kind_link(path, j),
+            "List" => kind_list(path, j),
+            "Map" => kind_map(path, j),
+            "Markdown" => kind_markdown(path, j),
+            "Math" => kind_math(path, j),
+            "Media" => kind_media(path, j),
+            "Metric" => kind_metric(path, j),
+            "Modal" => kind_modal(path, j),
+            "Mount" => kind_mount(path, j),
+            "Progress" => kind_progress(path, j),
+            "ScrollArea" => kind_scroll_area(path, j),
+            "Select" => kind_select(path, j),
+            "Skeleton" => kind_skeleton(path, j),
+            "Sparkline" => kind_sparkline(path, j),
+            "SplitPanel" => kind_split_panel(path, j),
+            "Stepper" => kind_stepper(path, j),
+            "SummaryList" => kind_summary_list(path, j),
+            "Switch" => kind_switch(path, j),
+            "Tabs" => kind_tabs(path, j),
+            "Toast" => kind_toast(path, j),
+            "Tree" => kind_tree(path, j),
+            other => Err(wrong_node_kind(path, other)),
+        }
+    }
+
+    fn kind_badge(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Badge(decode_badge_spec(path, j)?))
+    }
+
+    fn kind_box(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Box(decode_box_spec(path, j)?))
+    }
+
+    fn kind_button(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Button(decode_button_spec(path, j)?))
+    }
+
+    fn kind_callout(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Callout(decode_callout_spec(path, j)?))
+    }
+
+    fn kind_chart(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Chart(decode_chart_spec(path, j)?))
+    }
+
+    fn kind_code_block(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::CodeBlock(decode_code_block_spec(path, j)?))
+    }
+
+    fn kind_custom(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Custom(decode_custom_spec(path, j)?))
+    }
+
+    fn kind_data_grid(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::DataGrid(decode_grid_spec(path, j)?))
+    }
+
+    fn kind_disclosure(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Disclosure(decode_disclosure_spec(path, j)?))
+    }
+
+    fn kind_drawing(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Drawing(decode_drawing_spec(path, j)?))
+    }
+
+    fn kind_embed(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Embed(decode_embed_spec(path, j)?))
+    }
+
+    fn kind_error_boundary(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::ErrorBoundary(decode_error_boundary_spec(path, j)?))
+    }
+
+    fn kind_fact(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Fact(decode_fact_spec(path, j)?))
+    }
+
+    fn kind_file_upload(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::FileUpload(decode_file_upload_spec(path, j)?))
+    }
+
+    fn kind_filters(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Filters(decode_filters_kind(path, j)?))
+    }
+
+    fn kind_form(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Form(decode_form_spec(path, j)?))
+    }
+
+    fn kind_fragment_decl(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::FragmentDecl(decode_fragment_decl_spec(path, j)?))
+    }
+
+    fn kind_fragment_ref(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::FragmentRef(decode_fragment_ref_spec(path, j)?))
+    }
+
+    fn kind_heading(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Heading(decode_heading_spec(path, j)?))
+    }
+
+    fn kind_icon(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Icon(decode_icon_spec(path, j)?))
+    }
+
+    fn kind_image(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Image(decode_image_spec(path, j)?))
+    }
+
+    fn kind_label_value_row(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::LabelValueRow(decode_label_value_row_spec(path, j)?))
+    }
+
+    fn kind_link(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Link(decode_link_spec(path, j)?))
+    }
+
+    fn kind_list(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::List(decode_list_spec(path, j)?))
+    }
+
+    fn kind_map(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Map(decode_map_spec(path, j)?))
+    }
+
+    fn kind_markdown(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Markdown(decode_markdown_spec(path, j)?))
+    }
+
+    fn kind_math(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Math(decode_math_spec(path, j)?))
+    }
+
+    fn kind_media(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Media(decode_media_spec(path, j)?))
+    }
+
+    fn kind_metric(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Metric(decode_metric_spec(path, j)?))
+    }
+
+    fn kind_modal(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Modal(decode_modal_spec(path, j)?))
+    }
+
+    fn kind_mount(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Mount(decode_mount_spec(path, j)?))
+    }
+
+    fn kind_progress(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Progress(decode_progress_spec(path, j)?))
+    }
+
+    fn kind_scroll_area(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::ScrollArea(decode_scroll_area_spec(path, j)?))
+    }
+
+    fn kind_select(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Select(decode_select_spec(path, j)?))
+    }
+
+    fn kind_skeleton(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Skeleton(decode_skeleton_spec(path, j)?))
+    }
+
+    fn kind_sparkline(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Sparkline(decode_sparkline_spec(path, j)?))
+    }
+
+    fn kind_split_panel(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::SplitPanel(decode_split_panel_spec(path, j)?))
+    }
+
+    fn kind_stepper(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Stepper(decode_stepper_spec(path, j)?))
+    }
+
+    fn kind_summary_list(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::SummaryList(decode_summary_list_spec(path, j)?))
+    }
+
+    fn kind_switch(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Switch(decode_switch_spec(path, j)?))
+    }
+
+    fn kind_tabs(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Tabs(decode_tabs_spec(path, j)?))
+    }
+
+    fn kind_toast(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Toast(decode_toast_spec(path, j)?))
+    }
+
+    fn kind_tree(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Tree(decode_tree_spec(path, j)?))
+    }
+
+
+    pub(in super::super) fn decode_accessibility(path: &str, j: &JVal) -> DResult<Accessibility> {
+        let fields = as_obj(path, j)?;
+        check_a11y_near_misses(path, fields)?;
+        let m_described_by = field_opt(path, fields, "describedBy", &[], dec_string)?;
+        let m_hidden = field_opt(path, fields, "hidden", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
+        let m_label = field_opt(path, fields, "label", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Str))?;
+        let m_labelled_by = field_opt(path, fields, "labelledBy", &[], dec_string)?;
+        let m_live_region = field_opt(path, fields, "liveRegion", &[], decode_live_region_kind)?;
+        let m_role = decode_aria_role(path, fields)?;
+        let m_speak = field_opt(path, fields, "speak", &[], decode_text_source)?;
+        Ok(Accessibility { described_by: m_described_by, hidden: m_hidden, label: m_label, labelled_by: m_labelled_by, live_region: m_live_region, role: m_role, speak: m_speak })
+    }
+
+    pub(in super::super) fn decode_column_erased(path: &str, j: &JVal) -> DResult<ColumnErased> {
+        let fields = as_obj(path, j)?;
+        check_column_near_misses(path, fields)?;
+        let m_field = field_opt(path, fields, "field", &[], dec_string)?;
+        let m_sortable = field_opt(path, fields, "sortable", &[], as_bool)?;
+        let m_editable = field_opt(path, fields, "editable", &[], as_bool)?;
+        let m_format = field_or(path, fields, "format", &[], defaults::COLUMN_ERASED_FORMAT, decode_cell_format)?;
+        let m_kind = field_req(path, fields, "kind", &["type"], "ColumnErased.kind: CellKindErased", decode_cell_kind_erased)?;
+        let m_label = field_req(path, fields, "label", &["header", "title"], "ColumnErased.label: string", dec_string)?;
+        let m_value = field_opt(path, fields, "value", &[], dec_closure)?;
+        let m_width = field_or(path, fields, "width", &[], defaults::COLUMN_ERASED_WIDTH, decode_column_width)?;
+        Ok(ColumnErased { field: m_field, sortable: m_sortable, editable: m_editable, format: m_format, kind: m_kind, label: m_label, value: m_value, width: m_width })
+    }
+
+    pub(in super::super) fn decode_compare_rule(path: &str, j: &JVal) -> DResult<CompareRule> {
+        let fields = as_obj(path, j)?;
+        let m_against = field_req(path, fields, "against", &[], "CompareRule.against: Binding<JSON value>", decode_binding)?;
+        let m_op = field_req(path, fields, "op", &[], "CompareRule.op: CompareOp", decode_compare_op)?;
+        Ok(CompareRule { against: m_against, op: m_op })
+    }
+
+    pub(in super::super) fn decode_content_hash(path: &str, j: &JVal) -> DResult<ContentHash> {
+        let fields = as_obj(path, j)?;
+        let m_algorithm = field_req(path, fields, "algorithm", &[], "ContentHash.algorithm: string", dec_string)?;
+        let m_hash = field_req(path, fields, "hash", &[], "ContentHash.hash: string", dec_string)?;
+        let m_strictness = field_req(path, fields, "strictness", &[], "ContentHash.strictness: HashStrictness", decode_hash_strictness)?;
+        Ok(ContentHash { algorithm: m_algorithm, hash: m_hash, strictness: m_strictness })
+    }
+
+    pub(in super::super) fn decode_default_sort(path: &str, j: &JVal) -> DResult<DefaultSort> {
+        let fields = as_obj(path, j)?;
+        let m_column = field_req(path, fields, "column", &[], "DefaultSort.column: integer", as_int)?;
+        let m_direction = field_req(path, fields, "direction", &[], "DefaultSort.direction: SortDirection", decode_sort_direction)?;
+        let v = DefaultSort { column: m_column, direction: m_direction };
+        check_default_sort(path, fields, &v)?;
+        Ok(v)
+    }
+
+    pub(in super::super) fn decode_draw_point(path: &str, j: &JVal) -> DResult<DrawPoint> {
+        let fields = as_obj(path, j)?;
+        let m_x = field_req(path, fields, "x", &[], "DrawPoint.x: number", as_float)?;
+        let m_y = field_req(path, fields, "y", &[], "DrawPoint.y: number", as_float)?;
+        Ok(DrawPoint { x: m_x, y: m_y })
+    }
+
+    pub(in super::super) fn decode_draw_style(path: &str, j: &JVal) -> DResult<DrawStyle> {
+        let fields = as_obj(path, j)?;
+        let m_emphasis = field_opt(path, fields, "emphasis", &[], decode_emphasis)?;
+        let m_fill = field_opt(path, fields, "fill", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Str))?;
+        let m_font_family = field_opt(path, fields, "fontFamily", &[], dec_string)?;
+        let m_font_size = field_opt(path, fields, "fontSize", &[], as_float)?;
+        let m_mark_id = field_opt(path, fields, "markId", &[], dec_string)?;
+        let m_opacity = field_opt(path, fields, "opacity", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Float))?;
+        let m_rotation = field_opt(path, fields, "rotation", &[], as_float)?;
+        let m_stroke = field_opt(path, fields, "stroke", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Str))?;
+        let m_stroke_width = field_opt(path, fields, "strokeWidth", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Float))?;
+        let m_text_anchor = field_opt(path, fields, "textAnchor", &[], decode_text_anchor)?;
+        let m_tip = field_opt(path, fields, "tip", &[], decode_text_source)?;
+        Ok(DrawStyle { emphasis: m_emphasis, fill: m_fill, font_family: m_font_family, font_size: m_font_size, mark_id: m_mark_id, opacity: m_opacity, rotation: m_rotation, stroke: m_stroke, stroke_width: m_stroke_width, text_anchor: m_text_anchor, tip: m_tip })
+    }
+
+    pub(in super::super) fn decode_effect_class(path: &str, j: &JVal) -> DResult<EffectClass> {
+        let fields = as_obj(path, j)?;
+        let m_determinism = field_req(path, fields, "determinism", &[], "EffectClass.determinism: DeterminismSource", decode_determinism_source)?;
+        let m_host_effect = field_req(path, fields, "hostEffect", &[], "EffectClass.hostEffect: HostEffect", decode_host_effect)?;
+        Ok(EffectClass { determinism: m_determinism, host_effect: m_host_effect })
+    }
+
+    pub(in super::super) fn decode_field_rule(path: &str, j: &JVal) -> DResult<FieldRule> {
+        let fields = as_obj(path, j)?;
+        let m_compare = field_opt(path, fields, "compare", &[], decode_compare_rule)?;
+        let m_format = field_opt(path, fields, "format", &[], decode_text_format)?;
+        let m_max_length = field_opt(path, fields, "maxLength", &[], as_int)?;
+        let m_message = field_opt(path, fields, "message", &[], decode_text_source)?;
+        let m_min_length = field_opt(path, fields, "minLength", &[], as_int)?;
+        let m_pattern = field_opt(path, fields, "pattern", &[], dec_string)?;
+        let v = FieldRule { compare: m_compare, format: m_format, max_length: m_max_length, message: m_message, min_length: m_min_length, pattern: m_pattern };
+        check_field_rule(path, fields, &v)?;
+        Ok(v)
+    }
+
+    pub(in super::super) fn decode_filter_spec(path: &str, j: &JVal) -> DResult<FilterSpec> {
+        let fields = as_obj(path, j)?;
+        let m_kind = decode_filter_control(path, fields)?;
+        let m_label = field_req(path, fields, "label", &[], "FilterSpec.label: TextSource", decode_text_source)?;
+        let m_name = field_req(path, fields, "name", &[], "FilterSpec.name: string", dec_string)?;
+        Ok(FilterSpec { kind: m_kind, label: m_label, name: m_name })
+    }
+
+    pub(in super::super) fn decode_form_field(path: &str, j: &JVal) -> DResult<FormField> {
+        let fields = as_obj(path, j)?;
+        check_form_field_near_misses(path, fields)?;
+        let m_id = field_req(path, fields, "id", &["name"], "FormField.id: string", dec_string)?;
+        let m_kind = decode_form_field_control(path, fields)?;
+        let m_label = field_req(path, fields, "label", &[], "FormField.label: TextSource", decode_text_source)?;
+        let m_required = field_req(path, fields, "required", &[], "FormField.required: boolean", as_bool)?;
+        let m_help = field_opt(path, fields, "help", &[], decode_text_source)?;
+        let m_rule = field_opt(path, fields, "rule", &[], decode_field_rule)?;
+        Ok(FormField { id: m_id, kind: m_kind, label: m_label, required: m_required, help: m_help, rule: m_rule })
+    }
+
+    pub(in super::super) fn decode_mount_channel(path: &str, j: &JVal) -> DResult<MountChannel> {
+        let fields = as_obj(path, j)?;
+        let m_direction = field_req(path, fields, "direction", &[], "GuestChannel.direction: ChannelDirection", decode_channel_direction)?;
+        let m_message_shape = field_opt(path, fields, "messageShape", &[], dec_string)?;
+        Ok(MountChannel { direction: m_direction, message_shape: m_message_shape })
+    }
+
+    pub(in super::super) fn decode_invoke_arg(path: &str, j: &JVal) -> DResult<InvokeArg> {
+        let fields = as_obj(path, j)?;
+        let m_addr = field_req(path, fields, "addr", &[], "InvokeArg.addr: string", dec_string)?;
+        let m_value = field_req(path, fields, "value", &[], "InvokeArg.value: string", dec_string)?;
+        Ok(InvokeArg { addr: m_addr, value: m_value })
+    }
+
+    pub(in super::super) fn decode_map_marker(path: &str, j: &JVal) -> DResult<MapMarker> {
+        let fields = as_obj(path, j)?;
+        let m_label = decode_text_label(path, fields)?;
+        let m_latitude = field_req(path, fields, "latitude", &[], "MapMarker.latitude: number", as_float)?;
+        let m_longitude = field_req(path, fields, "longitude", &[], "MapMarker.longitude: number", as_float)?;
+        Ok(MapMarker { label: m_label, latitude: m_latitude, longitude: m_longitude })
+    }
+
+    pub(in super::super) fn decode_select_option(path: &str, j: &JVal) -> DResult<SelectOption> {
+        if let Some(r) = select_option_shorthand(path, j) {
+            return r;
+        }
+        let fields = as_obj(path, j)?;
+        let m_label = decode_text_label(path, fields)?;
+        let m_value = field_req(path, fields, "value", &[], "SelectOption.value: string", dec_string)?;
+        Ok(SelectOption { label: m_label, value: m_value })
+    }
+
+    pub(in super::super) fn decode_semantic_style(path: &str, j: &JVal) -> DResult<SemanticStyle> {
+        let fields = as_obj(path, j)?;
+        let m_direction = field_or(path, fields, "direction", &[], defaults::SEMANTIC_STYLE_DIRECTION, decode_text_direction)?;
+        let m_emphasis = field_or(path, fields, "emphasis", &[], defaults::SEMANTIC_STYLE_EMPHASIS, decode_emphasis)?;
+        let m_role = field_or(path, fields, "role", &[], defaults::SEMANTIC_STYLE_ROLE, decode_style_role)?;
+        let m_tone = field_or(path, fields, "tone", &[], defaults::SEMANTIC_STYLE_TONE, decode_tone_variant)?;
+        let m_voice = field_or(path, fields, "voice", &[], defaults::SEMANTIC_STYLE_VOICE, decode_font_voice)?;
+        let m_weight = field_or(path, fields, "weight", &[], defaults::SEMANTIC_STYLE_WEIGHT, decode_style_weight)?;
+        Ok(SemanticStyle { direction: m_direction, emphasis: m_emphasis, role: m_role, tone: m_tone, voice: m_voice, weight: m_weight })
+    }
+
+    pub(in super::super) fn decode_src_set_entry(path: &str, j: &JVal) -> DResult<SrcSetEntry> {
+        let fields = as_obj(path, j)?;
+        let m_src = field_req(path, fields, "src", &[], "SrcSetEntry.src: Binding<string>", |p, j| decode_binding_slot(p, j, StaticSlot::Str))?;
+        let m_width = decode_src_set_width(path, fields)?;
+        Ok(SrcSetEntry { src: m_src, width: m_width })
+    }
+
+    pub(in super::super) fn decode_state_behaviour(path: &str, j: &JVal) -> DResult<StateBehaviour> {
+        let fields = as_obj(path, j)?;
+        let m_on_empty = field_opt(path, fields, "onEmpty", &[], |p, j| (decode_node_ast)(p, j).map(Box::new))?;
+        let m_on_error = field_opt(path, fields, "onError", &[], dec_closure)?;
+        let m_on_loading = field_opt(path, fields, "onLoading", &[], |p, j| (decode_node_ast)(p, j).map(Box::new))?;
+        Ok(StateBehaviour { on_empty: m_on_empty, on_error: m_on_error, on_loading: m_on_loading })
+    }
+
+    pub(in super::super) fn decode_static_rows(path: &str, j: &JVal) -> DResult<StaticRows> {
+        let fields = as_obj(path, j)?;
+        let m_default_sort = field_opt(path, fields, "defaultSort", &[], decode_default_sort)?;
+        let m_headers = field_req(path, fields, "headers", &[], "StaticRows.headers: list of TextSource", |p, j| dec_list(p, j, decode_text_source))?;
+        let m_rows = field_req(path, fields, "rows", &[], "StaticRows.rows: list of list of TextSource", |p, j| dec_list(p, j, |p, j| dec_list(p, j, decode_text_source)))?;
+        let m_sortable = field_opt(path, fields, "sortable", &[], as_bool)?;
+        Ok(StaticRows { default_sort: m_default_sort, headers: m_headers, rows: m_rows, sortable: m_sortable })
+    }
+
+    pub(in super::super) fn decode_style_delta(path: &str, j: &JVal) -> DResult<StyleDelta> {
+        let fields = as_obj(path, j)?;
+        let m_direction = field_opt(path, fields, "direction", &[], decode_text_direction)?;
+        let m_emphasis = field_opt(path, fields, "emphasis", &[], decode_emphasis)?;
+        let m_role = field_opt(path, fields, "role", &[], decode_style_role)?;
+        let m_tone = field_opt(path, fields, "tone", &[], decode_tone_variant)?;
+        let m_voice = field_opt(path, fields, "voice", &[], decode_font_voice)?;
+        let m_weight = field_opt(path, fields, "weight", &[], decode_style_weight)?;
+        let v = StyleDelta { direction: m_direction, emphasis: m_emphasis, role: m_role, tone: m_tone, voice: m_voice, weight: m_weight };
+        check_style_delta(path, fields, &v)?;
+        Ok(v)
+    }
+
+    pub(in super::super) fn decode_switch_case(path: &str, j: &JVal) -> DResult<SwitchCase> {
+        decode_switch_case_folded(path, j)
+    }
+
+    pub(in super::super) fn decode_tab_header(path: &str, j: &JVal) -> DResult<TabHeader> {
+        let fields = as_obj(path, j)?;
+        let m_label = field_req(path, fields, "label", &[], "TabHeader.label: TextSource", decode_text_source)?;
+        let m_icon = field_opt(path, fields, "icon", &[], dec_string)?;
+        let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
+        Ok(TabHeader { label: m_label, icon: m_icon, disabled: m_disabled })
+    }
+
+    pub(in super::super) fn decode_track_entry(path: &str, j: &JVal) -> DResult<TrackEntry> {
+        let fields = as_obj(path, j)?;
+        let m_default = field_or(path, fields, "default", &[], defaults::TRACK_ENTRY_DEFAULT, as_bool)?;
+        let m_kind = field_req(path, fields, "kind", &[], "TrackEntry.kind: TrackKind", decode_track_kind)?;
+        let m_label = field_req(path, fields, "label", &[], "TrackEntry.label: TextSource", decode_text_source)?;
+        let m_src = field_req(path, fields, "src", &[], "TrackEntry.src: Binding<string>", |p, j| decode_binding_slot(p, j, StaticSlot::Str))?;
+        let m_src_lang = field_req(path, fields, "srcLang", &[], "TrackEntry.srcLang: string", dec_string)?;
+        Ok(TrackEntry { default: m_default, kind: m_kind, label: m_label, src: m_src, src_lang: m_src_lang })
+    }
+
+    pub(in super::super) fn decode_transform_param(path: &str, j: &JVal) -> DResult<TransformParam> {
+        let fields = as_obj(path, j)?;
+        let m_from = field_req(path, fields, "from", &[], "TransformParam.from: Binding<JSON value>", decode_binding)?;
+        let m_name = field_req(path, fields, "name", &[], "TransformParam.name: string", dec_string)?;
+        Ok(TransformParam { from: m_from, name: m_name })
+    }
+
+    pub(in super::super) fn decode_tree_item(path: &str, j: &JVal) -> DResult<TreeItem> {
+        let _guard = enter_tree_item(path)?;
+        let fields = as_obj(path, j)?;
+        let m_children = field_or(path, fields, "children", &[], Vec::new(), |p, j| dec_list(p, j, decode_tree_item))?;
+        let m_icon = field_opt(path, fields, "icon", &[], dec_string)?;
+        let m_id = field_req(path, fields, "id", &[], "TreeItem.id: string", dec_string)?;
+        let m_label = field_req(path, fields, "label", &[], "TreeItem.label: TextSource", decode_text_source)?;
+        Ok(TreeItem { children: m_children, icon: m_icon, id: m_id, label: m_label })
+    }
+
+    pub(in super::super) fn decode_view_box(path: &str, j: &JVal) -> DResult<ViewBox> {
+        let fields = as_obj(path, j)?;
+        let m_height = field_req(path, fields, "height", &[], "ViewBox.height: number", as_float)?;
+        let m_min_x = field_req(path, fields, "minX", &[], "ViewBox.minX: number", as_float)?;
+        let m_min_y = field_req(path, fields, "minY", &[], "ViewBox.minY: number", as_float)?;
+        let m_width = field_req(path, fields, "width", &[], "ViewBox.width: number", as_float)?;
+        Ok(ViewBox { height: m_height, min_x: m_min_x, min_y: m_min_y, width: m_width })
+    }
+
+    pub(in super::super) fn decode_action(path: &str, j: &JVal) -> DResult<Action> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Chain" => decode_action_chain(path, fields),
+            "WriteToClipboard" => decode_action_write_to_clipboard(path, fields),
+            "Dispatch" => decode_action_dispatch(path, fields),
+            "Invoke" => decode_action_invoke(path, fields),
+            "ReadFileBody" => decode_action_read_file_body(path, fields),
+            "Call" => decode_action_call(path, fields),
+            "Navigate" => decode_action_navigate(path, fields),
+            "CommitLocal" => decode_action_commit_local(path, fields),
+            "Notify" => decode_action_notify(path, fields),
+            "SetState" => decode_action_set_state(path, fields),
+            "AiTool" => decode_action_ai_tool(path, fields),
+            "Print" => decode_action_print(path, fields),
+            "Confirm" => decode_action_confirm(path, fields),
+            "Focus" => decode_action_focus(path, fields),
+            other => Err(unknown_du_case(path, other, ACTION_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_action_chain(path: &str, fields: &Fields) -> DResult<Action> {
+        let m_0 = field_req(path, fields, "ops", &[], "Action.Chain.ops: list of Action", |p, j| dec_list(p, j, decode_action))?;
+        Ok(Action::Chain(m_0))
+    }
+
+    pub(in super::super) fn decode_action_write_to_clipboard(path: &str, fields: &Fields) -> DResult<Action> {
+        let m_text = field_req(path, fields, "text", &[], "Action.WriteToClipboard.text: TextSource", decode_text_source)?;
+        Ok(Action::WriteToClipboard { text: m_text })
+    }
+
+    pub(in super::super) fn decode_action_dispatch(_path: &str, _fields: &Fields) -> DResult<Action> {
+        Ok(Action::Dispatch)
+    }
+
+    pub(in super::super) fn decode_action_invoke(path: &str, fields: &Fields) -> DResult<Action> {
+        let m_capability_id = field_req(path, fields, "capabilityId", &[], "Action.Invoke.capabilityId: string", dec_string)?;
+        let m_args = field_req(path, fields, "args", &[], "Action.Invoke.args: list of InvokeArg", |p, j| dec_list(p, j, decode_invoke_arg))?;
+        Ok(Action::Invoke { capability_id: m_capability_id, args: m_args })
+    }
+
+    pub(in super::super) fn decode_action_read_file_body(path: &str, fields: &Fields) -> DResult<Action> {
+        let m_file_ref = field_req(path, fields, "fileRef", &[], "Action.ReadFileBody.fileRef: string", dec_string)?;
+        let m_encoding = field_req(path, fields, "encoding", &[], "Action.ReadFileBody.encoding: FileReadEncoding", decode_file_read_encoding)?;
+        Ok(Action::ReadFileBody { file_ref: m_file_ref, encoding: m_encoding })
+    }
+
+    pub(in super::super) fn decode_action_call(path: &str, fields: &Fields) -> DResult<Action> {
+        let m_endpoint = field_req(path, fields, "endpoint", &["url"], "Action.Call.endpoint: string", dec_string)?;
+        let m_on_result = field_opt(path, fields, "onResult", &[], dec_closure)?;
+        let m_into = field_opt(path, fields, "into", &[], decode_call_result_target)?;
+        Ok(Action::Call { endpoint: m_endpoint, on_result: m_on_result, into: m_into })
+    }
+
+    pub(in super::super) fn decode_action_navigate(path: &str, fields: &Fields) -> DResult<Action> {
+        let m_route = field_req(path, fields, "route", &["href", "url", "to"], "Action.Navigate.route: TextSource", decode_text_source)?;
+        let m_target = field_or(path, fields, "target", &[], defaults::ACTION_NAVIGATE_TARGET, decode_navigate_target)?;
+        Ok(Action::Navigate { route: m_route, target: m_target })
+    }
+
+    pub(in super::super) fn decode_action_commit_local(path: &str, fields: &Fields) -> DResult<Action> {
+        let m_node_id = field_req(path, fields, "nodeId", &[], "Action.CommitLocal.nodeId: string", dec_string)?;
+        Ok(Action::CommitLocal { node_id: m_node_id })
+    }
+
+    pub(in super::super) fn decode_action_notify(path: &str, fields: &Fields) -> DResult<Action> {
+        let m_channel = field_req(path, fields, "channel", &[], "Action.Notify.channel: string", dec_string)?;
+        let m_payload = field_req(path, fields, "payload", &[], "Action.Notify.payload: JSON value", decode_jval)?;
+        Ok(Action::Notify { channel: m_channel, payload: m_payload })
+    }
+
+    pub(in super::super) fn decode_action_set_state(path: &str, fields: &Fields) -> DResult<Action> {
+        decode_set_state(path, fields)
+    }
+
+    pub(in super::super) fn decode_action_ai_tool(path: &str, fields: &Fields) -> DResult<Action> {
+        let m_tool_name = field_req(path, fields, "toolName", &[], "Action.AiTool.toolName: string", dec_string)?;
+        let m_args = field_req(path, fields, "args", &[], "Action.AiTool.args: JSON value", decode_jval)?;
+        Ok(Action::AiTool { tool_name: m_tool_name, args: m_args })
+    }
+
+    pub(in super::super) fn decode_action_print(path: &str, fields: &Fields) -> DResult<Action> {
+        decode_print(path, fields)
+    }
+
+    pub(in super::super) fn decode_action_confirm(path: &str, fields: &Fields) -> DResult<Action> {
+        let m_prompt = field_req(path, fields, "prompt", &[], "Action.Confirm.prompt: TextSource", decode_text_source)?;
+        let m_on_confirm = field_req(path, fields, "onConfirm", &[], "Action.Confirm.onConfirm: Action", |p, j| (decode_action)(p, j).map(Box::new))?;
+        let m_on_cancel = field_opt(path, fields, "onCancel", &[], |p, j| (decode_action)(p, j).map(Box::new))?;
+        let v = Action::Confirm { prompt: m_prompt, on_confirm: m_on_confirm, on_cancel: m_on_cancel };
+        check_confirm(path, fields, &v)?;
+        Ok(v)
+    }
+
+    pub(in super::super) fn decode_action_focus(path: &str, fields: &Fields) -> DResult<Action> {
+        let m_node_id = field_req(path, fields, "nodeId", &[], "Action.Focus.nodeId: string", dec_string)?;
+        Ok(Action::Focus { node_id: m_node_id })
+    }
+
+
+    /// The discriminators of `Binding`, for its hand decoder's exhaustive dispatch.
+    #[derive(Clone, Copy)]
+    pub(in super::super) enum BindingTag {
+        Static,
+        Query,
+        Filter,
+        Selection,
+        State,
+        Now,
+        Computed,
+        Local,
+        Format,
+        I18n,
+        Transform,
+        Expr,
+        Invoke,
+    }
+
+    impl BindingTag {
+        pub(in super::super) fn of(tag: &str) -> Option<Self> {
+            match tag {
+                "Static" => Some(Self::Static),
+                "Query" => Some(Self::Query),
+                "Filter" => Some(Self::Filter),
+                "Selection" => Some(Self::Selection),
+                "State" => Some(Self::State),
+                "Now" => Some(Self::Now),
+                "Computed" => Some(Self::Computed),
+                "Local" => Some(Self::Local),
+                "Format" => Some(Self::Format),
+                "I18n" => Some(Self::I18n),
+                "Transform" => Some(Self::Transform),
+                "Expr" => Some(Self::Expr),
+                "Invoke" => Some(Self::Invoke),
+                _ => None,
+            }
+        }
+    }
+
+    pub(in super::super) fn decode_box_layout(path: &str, j: &JVal) -> DResult<BoxLayout> {
+        if let Some(r) = grid_without_columns(path, j) {
+            return r;
+        }
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Auto" => decode_box_layout_auto(path, fields),
+            "Flex" => decode_box_layout_flex(path, fields),
+            "Grid" => decode_box_layout_grid(path, fields),
+            "Masonry" => decode_box_layout_masonry(path, fields),
+            other => Err(unknown_du_case(path, other, BOX_LAYOUT_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_box_layout_auto(_path: &str, _fields: &Fields) -> DResult<BoxLayout> {
+        Ok(BoxLayout::Auto)
+    }
+
+    pub(in super::super) fn decode_box_layout_flex(path: &str, fields: &Fields) -> DResult<BoxLayout> {
+        let m_direction = field_req(path, fields, "direction", &[], "BoxLayout.Flex.direction: Orientation", decode_orientation)?;
+        let m_wrap = field_req(path, fields, "wrap", &[], "BoxLayout.Flex.wrap: boolean", as_bool)?;
+        let m_gap = field_opt(path, fields, "gap", &[], as_int)?;
+        Ok(BoxLayout::Flex { direction: m_direction, wrap: m_wrap, gap: m_gap })
+    }
+
+    pub(in super::super) fn decode_box_layout_grid(path: &str, fields: &Fields) -> DResult<BoxLayout> {
+        let m_cols = decode_grid_cols(path, fields)?;
+        let m_template_columns = field_opt(path, fields, "templateColumns", &[], dec_string)?;
+        let m_gap = field_opt(path, fields, "gap", &[], as_int)?;
+        Ok(BoxLayout::Grid { cols: m_cols, template_columns: m_template_columns, gap: m_gap })
+    }
+
+    pub(in super::super) fn decode_box_layout_masonry(path: &str, fields: &Fields) -> DResult<BoxLayout> {
+        let m_cols = field_req(path, fields, "cols", &["columns"], "BoxLayout.Masonry.cols: integer", as_int)?;
+        let m_gap = field_opt(path, fields, "gap", &[], as_int)?;
+        let v = BoxLayout::Masonry { cols: m_cols, gap: m_gap };
+        check_masonry(path, fields, &v)?;
+        Ok(v)
+    }
+
+
+    pub(in super::super) fn decode_call_result_target(path: &str, j: &JVal) -> DResult<CallResultTarget> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "State" => decode_call_result_target_state(path, fields),
+            "Query" => decode_call_result_target_query(path, fields),
+            other => Err(unknown_du_case(path, other, CALL_RESULT_TARGET_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_call_result_target_state(path: &str, fields: &Fields) -> DResult<CallResultTarget> {
+        let m_key = field_req(path, fields, "key", &[], "CallResultTarget.State.key: string", dec_string)?;
+        Ok(CallResultTarget::State { key: m_key })
+    }
+
+    pub(in super::super) fn decode_call_result_target_query(path: &str, fields: &Fields) -> DResult<CallResultTarget> {
+        let m_name = field_req(path, fields, "name", &[], "CallResultTarget.Query.name: string", dec_string)?;
+        Ok(CallResultTarget::Query { name: m_name })
+    }
+
+
+    pub(in super::super) fn decode_cell_format(path: &str, j: &JVal) -> DResult<CellFormat> {
+        if let Some(r) = cell_format_date_alias(path, j) {
+            return r;
+        }
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "None" => decode_cell_format_none(path, fields),
+            "Number" => decode_cell_format_number(path, fields),
+            "Currency" => decode_cell_format_currency(path, fields),
+            "Percent" => decode_cell_format_percent(path, fields),
+            "SignificantDigits" => decode_cell_format_significant_digits(path, fields),
+            "DateTime" => decode_cell_format_date_time(path, fields),
+            "Duration" => decode_cell_format_duration(path, fields),
+            "RelativeTime" => decode_cell_format_relative_time(path, fields),
+            "Custom" => decode_cell_format_custom(path, fields),
+            other => Err(unknown_du_case(path, other, CELL_FORMAT_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_cell_format_none(_path: &str, _fields: &Fields) -> DResult<CellFormat> {
+        Ok(CellFormat::None)
+    }
+
+    pub(in super::super) fn decode_cell_format_number(path: &str, fields: &Fields) -> DResult<CellFormat> {
+        let m_decimals = field_opt(path, fields, "decimals", &[], as_int)?;
+        Ok(CellFormat::Number { decimals: m_decimals })
+    }
+
+    pub(in super::super) fn decode_cell_format_currency(path: &str, fields: &Fields) -> DResult<CellFormat> {
+        let m_code = field_req(path, fields, "code", &[], "CellFormat.Currency.code: string", dec_string)?;
+        Ok(CellFormat::Currency { code: m_code })
+    }
+
+    pub(in super::super) fn decode_cell_format_percent(path: &str, fields: &Fields) -> DResult<CellFormat> {
+        let m_decimals = field_opt(path, fields, "decimals", &[], as_int)?;
+        Ok(CellFormat::Percent { decimals: m_decimals })
+    }
+
+    pub(in super::super) fn decode_cell_format_significant_digits(path: &str, fields: &Fields) -> DResult<CellFormat> {
+        let m_digits = field_req(path, fields, "digits", &[], "CellFormat.SignificantDigits.digits: integer", as_int)?;
+        Ok(CellFormat::SignificantDigits { digits: m_digits })
+    }
+
+    pub(in super::super) fn decode_cell_format_date_time(path: &str, fields: &Fields) -> DResult<CellFormat> {
+        let m_format = field_req(path, fields, "format", &[], "CellFormat.DateTime.format: string", dec_string)?;
+        Ok(CellFormat::DateTime { format: m_format })
+    }
+
+    pub(in super::super) fn decode_cell_format_duration(path: &str, fields: &Fields) -> DResult<CellFormat> {
+        let m_unit = field_req(path, fields, "unit", &[], "CellFormat.Duration.unit: DurationUnit", decode_duration_unit)?;
+        let m_style = field_req(path, fields, "style", &[], "CellFormat.Duration.style: DurationStyle", decode_duration_style)?;
+        Ok(CellFormat::Duration { unit: m_unit, style: m_style })
+    }
+
+    pub(in super::super) fn decode_cell_format_relative_time(path: &str, fields: &Fields) -> DResult<CellFormat> {
+        let m_unit = field_req(path, fields, "unit", &[], "CellFormat.RelativeTime.unit: RelativeTimeUnit", decode_relative_time_unit)?;
+        Ok(CellFormat::RelativeTime { unit: m_unit })
+    }
+
+    pub(in super::super) fn decode_cell_format_custom(_path: &str, _fields: &Fields) -> DResult<CellFormat> {
+        Ok(CellFormat::Custom)
+    }
+
+
+    pub(in super::super) fn decode_cell_kind_erased(path: &str, j: &JVal) -> DResult<CellKindErased> {
+        if let Some(r) = pill_with_tone_map(path, j) {
+            return r;
+        }
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Text" => decode_cell_kind_erased_text(path, fields),
+            "Numeric" => decode_cell_kind_erased_numeric(path, fields),
+            "Date" => decode_cell_kind_erased_date(path, fields),
+            "Editable" => decode_cell_kind_erased_editable(path, fields),
+            "Checkbox" => decode_cell_kind_erased_checkbox(path, fields),
+            "Button" => decode_cell_kind_erased_button(path, fields),
+            "ButtonGroup" => decode_cell_kind_erased_button_group(path, fields),
+            "Link" => decode_cell_kind_erased_link(path, fields),
+            "Pill" => decode_cell_kind_erased_pill(path, fields),
+            "TonedPill" => decode_cell_kind_erased_toned_pill(path, fields),
+            "Progress" => decode_cell_kind_erased_progress(path, fields),
+            "Custom" => decode_cell_kind_erased_custom(path, fields),
+            other => Err(unknown_du_case(path, other, CELL_KIND_ERASED_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_cell_kind_erased_text(_path: &str, _fields: &Fields) -> DResult<CellKindErased> {
+        Ok(CellKindErased::Text)
+    }
+
+    pub(in super::super) fn decode_cell_kind_erased_numeric(_path: &str, _fields: &Fields) -> DResult<CellKindErased> {
+        Ok(CellKindErased::Numeric)
+    }
+
+    pub(in super::super) fn decode_cell_kind_erased_date(_path: &str, _fields: &Fields) -> DResult<CellKindErased> {
+        Ok(CellKindErased::Date)
+    }
+
+    pub(in super::super) fn decode_cell_kind_erased_editable(_path: &str, _fields: &Fields) -> DResult<CellKindErased> {
+        Ok(CellKindErased::Editable)
+    }
+
+    pub(in super::super) fn decode_cell_kind_erased_checkbox(_path: &str, _fields: &Fields) -> DResult<CellKindErased> {
+        Ok(CellKindErased::Checkbox)
+    }
+
+    pub(in super::super) fn decode_cell_kind_erased_button(path: &str, fields: &Fields) -> DResult<CellKindErased> {
+        let m_label = field_req(path, fields, "label", &[], "CellKindErased.Button.label: TextSource", decode_text_source)?;
+        Ok(CellKindErased::Button { label: m_label })
+    }
+
+    pub(in super::super) fn decode_cell_kind_erased_button_group(path: &str, fields: &Fields) -> DResult<CellKindErased> {
+        let m_labels = decode_button_group(path, fields)?;
+        Ok(CellKindErased::ButtonGroup { labels: m_labels })
+    }
+
+    pub(in super::super) fn decode_cell_kind_erased_link(_path: &str, _fields: &Fields) -> DResult<CellKindErased> {
+        Ok(CellKindErased::Link)
+    }
+
+    pub(in super::super) fn decode_cell_kind_erased_pill(_path: &str, _fields: &Fields) -> DResult<CellKindErased> {
+        Ok(CellKindErased::Pill)
+    }
+
+    pub(in super::super) fn decode_cell_kind_erased_toned_pill(path: &str, fields: &Fields) -> DResult<CellKindErased> {
+        let m_field = field_req(path, fields, "field", &[], "CellKindErased.TonedPill.field: string", dec_string)?;
+        let m_map = decode_toned_pill_map(path, fields)?;
+        let m_default_tone = field_or(path, fields, "default", &[], defaults::CELL_KIND_ERASED_TONED_PILL_DEFAULT, decode_tone_variant)?;
+        Ok(CellKindErased::TonedPill { field: m_field, map: m_map, default_tone: m_default_tone })
+    }
+
+    pub(in super::super) fn decode_cell_kind_erased_progress(_path: &str, _fields: &Fields) -> DResult<CellKindErased> {
+        Ok(CellKindErased::Progress)
+    }
+
+    pub(in super::super) fn decode_cell_kind_erased_custom(_path: &str, _fields: &Fields) -> DResult<CellKindErased> {
+        Ok(CellKindErased::Custom)
+    }
+
+
+    pub(in super::super) fn decode_chart_annotation(path: &str, j: &JVal) -> DResult<ChartAnnotation> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "ReferenceLine" => decode_chart_annotation_reference_line(path, fields),
+            "EventMarker" => decode_chart_annotation_event_marker(path, fields),
+            "RangeBand" => decode_chart_annotation_range_band(path, fields),
+            other => Err(unknown_du_case(path, other, CHART_ANNOTATION_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_chart_annotation_reference_line(path: &str, fields: &Fields) -> DResult<ChartAnnotation> {
+        let m_value = field_req(path, fields, "value", &[], "ChartAnnotation.ReferenceLine.value: number", as_float)?;
+        let m_label = field_opt(path, fields, "label", &[], decode_text_source)?;
+        let v = ChartAnnotation::ReferenceLine { value: m_value, label: m_label };
+        check_reference_line(path, fields, &v)?;
+        Ok(v)
+    }
+
+    pub(in super::super) fn decode_chart_annotation_event_marker(path: &str, fields: &Fields) -> DResult<ChartAnnotation> {
+        let m_at = field_req(path, fields, "at", &[], "ChartAnnotation.EventMarker.at: ChartAnnotationX", decode_chart_annotation_x)?;
+        let m_label = field_opt(path, fields, "label", &[], decode_text_source)?;
+        Ok(ChartAnnotation::EventMarker { at: m_at, label: m_label })
+    }
+
+    pub(in super::super) fn decode_chart_annotation_range_band(path: &str, fields: &Fields) -> DResult<ChartAnnotation> {
+        let m_range = field_req(path, fields, "range", &[], "ChartAnnotation.RangeBand.range: ChartAnnotationRange", decode_chart_annotation_range)?;
+        let m_label = field_opt(path, fields, "label", &[], decode_text_source)?;
+        Ok(ChartAnnotation::RangeBand { range: m_range, label: m_label })
+    }
+
+
+    pub(in super::super) fn decode_chart_annotation_range(path: &str, j: &JVal) -> DResult<ChartAnnotationRange> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "ValueRange" => decode_chart_annotation_range_value_range(path, fields),
+            "XRange" => decode_chart_annotation_range_x_range(path, fields),
+            other => Err(unknown_du_case(path, other, CHART_ANNOTATION_RANGE_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_chart_annotation_range_value_range(path: &str, fields: &Fields) -> DResult<ChartAnnotationRange> {
+        let m_from = field_req(path, fields, "from", &[], "ChartAnnotationRange.ValueRange.from: number", as_float)?;
+        let m_to = field_req(path, fields, "to", &[], "ChartAnnotationRange.ValueRange.to: number", as_float)?;
+        let v = ChartAnnotationRange::ValueRange { from: m_from, to: m_to };
+        check_value_range(path, fields, &v)?;
+        Ok(v)
+    }
+
+    pub(in super::super) fn decode_chart_annotation_range_x_range(path: &str, fields: &Fields) -> DResult<ChartAnnotationRange> {
+        let m_from = field_req(path, fields, "from", &[], "ChartAnnotationRange.XRange.from: ChartAnnotationX", decode_chart_annotation_x)?;
+        let m_to = field_req(path, fields, "to", &[], "ChartAnnotationRange.XRange.to: ChartAnnotationX", decode_chart_annotation_x)?;
+        let v = ChartAnnotationRange::XRange { from: m_from, to: m_to };
+        check_x_range(path, fields, &v)?;
+        Ok(v)
+    }
+
+
+    pub(in super::super) fn decode_chart_annotation_x(path: &str, j: &JVal) -> DResult<ChartAnnotationX> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Category" => decode_chart_annotation_x_category(path, fields),
+            "Date" => decode_chart_annotation_x_date(path, fields),
+            other => Err(unknown_du_case(path, other, CHART_ANNOTATION_X_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_chart_annotation_x_category(path: &str, fields: &Fields) -> DResult<ChartAnnotationX> {
+        let m_0 = field_req(path, fields, "key", &[], "ChartAnnotationX.Category.key: string", dec_string)?;
+        Ok(ChartAnnotationX::Category(m_0))
+    }
+
+    pub(in super::super) fn decode_chart_annotation_x_date(path: &str, fields: &Fields) -> DResult<ChartAnnotationX> {
+        let m_0 = field_req(path, fields, "iso", &[], "ChartAnnotationX.Date.iso: string", dec_string)?;
+        let v = ChartAnnotationX::Date(m_0);
+        check_annotation_date(path, fields, &v)?;
+        Ok(v)
+    }
+
+
+    pub(in super::super) fn decode_column_width(path: &str, j: &JVal) -> DResult<ColumnWidth> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Auto" => decode_column_width_auto(path, fields),
+            "Fixed" => decode_column_width_fixed(path, fields),
+            "Flex" => decode_column_width_flex(path, fields),
+            other => Err(unknown_du_case(path, other, COLUMN_WIDTH_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_column_width_auto(_path: &str, _fields: &Fields) -> DResult<ColumnWidth> {
+        Ok(ColumnWidth::Auto)
+    }
+
+    pub(in super::super) fn decode_column_width_fixed(path: &str, fields: &Fields) -> DResult<ColumnWidth> {
+        let m_pixels = field_req(path, fields, "pixels", &[], "ColumnWidth.Fixed.pixels: integer", as_int)?;
+        Ok(ColumnWidth::Fixed { pixels: m_pixels })
+    }
+
+    pub(in super::super) fn decode_column_width_flex(path: &str, fields: &Fields) -> DResult<ColumnWidth> {
+        let m_weight = field_req(path, fields, "weight", &[], "ColumnWidth.Flex.weight: number", as_float)?;
+        Ok(ColumnWidth::Flex { weight: m_weight })
+    }
+
+
+    pub(in super::super) fn decode_curve_command(path: &str, j: &JVal) -> DResult<CurveCommand> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "MoveTo" => decode_curve_command_move_to(path, fields),
+            "LineTo" => decode_curve_command_line_to(path, fields),
+            "CubicTo" => decode_curve_command_cubic_to(path, fields),
+            "QuadraticTo" => decode_curve_command_quadratic_to(path, fields),
+            "Close" => decode_curve_command_close(path, fields),
+            other => Err(unknown_du_case(path, other, CURVE_COMMAND_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_curve_command_move_to(path: &str, fields: &Fields) -> DResult<CurveCommand> {
+        let m_0 = field_req(path, fields, "to", &[], "CurveCommand.MoveTo.to: DrawPoint", decode_draw_point)?;
+        Ok(CurveCommand::MoveTo(m_0))
+    }
+
+    pub(in super::super) fn decode_curve_command_line_to(path: &str, fields: &Fields) -> DResult<CurveCommand> {
+        let m_0 = field_req(path, fields, "to", &[], "CurveCommand.LineTo.to: DrawPoint", decode_draw_point)?;
+        Ok(CurveCommand::LineTo(m_0))
+    }
+
+    pub(in super::super) fn decode_curve_command_cubic_to(path: &str, fields: &Fields) -> DResult<CurveCommand> {
+        let m_control1 = field_req(path, fields, "control1", &[], "CurveCommand.CubicTo.control1: DrawPoint", decode_draw_point)?;
+        let m_control2 = field_req(path, fields, "control2", &[], "CurveCommand.CubicTo.control2: DrawPoint", decode_draw_point)?;
+        let m_to = field_req(path, fields, "to", &[], "CurveCommand.CubicTo.to: DrawPoint", decode_draw_point)?;
+        Ok(CurveCommand::CubicTo { control1: m_control1, control2: m_control2, to: m_to })
+    }
+
+    pub(in super::super) fn decode_curve_command_quadratic_to(path: &str, fields: &Fields) -> DResult<CurveCommand> {
+        let m_control = field_req(path, fields, "control", &[], "CurveCommand.QuadraticTo.control: DrawPoint", decode_draw_point)?;
+        let m_to = field_req(path, fields, "to", &[], "CurveCommand.QuadraticTo.to: DrawPoint", decode_draw_point)?;
+        Ok(CurveCommand::QuadraticTo { control: m_control, to: m_to })
+    }
+
+    pub(in super::super) fn decode_curve_command_close(_path: &str, _fields: &Fields) -> DResult<CurveCommand> {
+        Ok(CurveCommand::Close)
+    }
+
+
+    /// The discriminators of `FormFieldKind`, for its hand decoder's exhaustive dispatch.
+    #[derive(Clone, Copy)]
+    pub(in super::super) enum FormFieldKindTag {
+        Text,
+        Number,
+        Checkbox,
+        Toggle,
+        Choice,
+        TextArea,
+        RangedNumber,
+        Range,
+        SegmentedChoice,
+        DateTime,
+        DateTimeRange,
+        Combobox,
+        Rating,
+        Color,
+        Tokens,
+    }
+
+    impl FormFieldKindTag {
+        pub(in super::super) fn of(tag: &str) -> Option<Self> {
+            match tag {
+                "Text" => Some(Self::Text),
+                "Number" => Some(Self::Number),
+                "Checkbox" => Some(Self::Checkbox),
+                "Toggle" => Some(Self::Toggle),
+                "Choice" => Some(Self::Choice),
+                "TextArea" => Some(Self::TextArea),
+                "RangedNumber" => Some(Self::RangedNumber),
+                "Range" => Some(Self::Range),
+                "SegmentedChoice" => Some(Self::SegmentedChoice),
+                "DateTime" => Some(Self::DateTime),
+                "DateTimeRange" => Some(Self::DateTimeRange),
+                "Combobox" => Some(Self::Combobox),
+                "Rating" => Some(Self::Rating),
+                "Color" => Some(Self::Color),
+                "Tokens" => Some(Self::Tokens),
+                _ => None,
+            }
+        }
+    }
+
+    pub(in super::super) fn decode_format(path: &str, j: &JVal) -> DResult<Format> {
+        if let Some(r) = format_date_alias(path, j) {
+            return r;
+        }
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Number" => decode_format_number(path, fields),
+            "Currency" => decode_format_currency(path, fields),
+            "Percent" => decode_format_percent(path, fields),
+            "DateTime" => decode_format_date_time(path, fields),
+            "RelativeTime" => decode_format_relative_time(path, fields),
+            "Duration" => decode_format_duration(path, fields),
+            "Since" => decode_format_since(path, fields),
+            other => Err(unknown_du_case(path, other, FORMAT_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_format_number(path: &str, fields: &Fields) -> DResult<Format> {
+        let m_decimals = field_opt(path, fields, "decimals", &[], as_int)?;
+        Ok(Format::Number { decimals: m_decimals })
+    }
+
+    pub(in super::super) fn decode_format_currency(path: &str, fields: &Fields) -> DResult<Format> {
+        let m_iso_code = field_req(path, fields, "isoCode", &[], "Format.Currency.isoCode: string", dec_string)?;
+        Ok(Format::Currency { iso_code: m_iso_code })
+    }
+
+    pub(in super::super) fn decode_format_percent(path: &str, fields: &Fields) -> DResult<Format> {
+        let m_decimals = field_opt(path, fields, "decimals", &[], as_int)?;
+        Ok(Format::Percent { decimals: m_decimals })
+    }
+
+    pub(in super::super) fn decode_format_date_time(path: &str, fields: &Fields) -> DResult<Format> {
+        let m_date_style = field_opt(path, fields, "dateStyle", &[], decode_date_style)?;
+        let m_time_style = field_opt(path, fields, "timeStyle", &[], decode_time_style)?;
+        Ok(Format::DateTime { date_style: m_date_style, time_style: m_time_style })
+    }
+
+    pub(in super::super) fn decode_format_relative_time(path: &str, fields: &Fields) -> DResult<Format> {
+        let m_unit = field_req(path, fields, "unit", &[], "Format.RelativeTime.unit: RelativeTimeUnit", decode_relative_time_unit)?;
+        Ok(Format::RelativeTime { unit: m_unit })
+    }
+
+    pub(in super::super) fn decode_format_duration(path: &str, fields: &Fields) -> DResult<Format> {
+        let m_unit = field_req(path, fields, "unit", &[], "Format.Duration.unit: DurationUnit", decode_duration_unit)?;
+        let m_style = field_req(path, fields, "style", &[], "Format.Duration.style: DurationStyle", decode_duration_style)?;
+        Ok(Format::Duration { unit: m_unit, style: m_style })
+    }
+
+    pub(in super::super) fn decode_format_since(path: &str, fields: &Fields) -> DResult<Format> {
+        let m_unit = field_opt(path, fields, "unit", &[], decode_relative_time_unit)?;
+        Ok(Format::Since { unit: m_unit })
+    }
+
+
+    pub(in super::super) fn decode_hole_decl(path: &str, j: &JVal) -> DResult<HoleDecl> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Value" => decode_hole_decl_value(path, fields),
+            "Slot" => decode_hole_decl_slot(path, fields),
+            "Repeat" => decode_hole_decl_repeat(path, fields),
+            other => Err(unknown_du_case(path, other, HOLE_DECL_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_hole_decl_value(path: &str, fields: &Fields) -> DResult<HoleDecl> {
+        let m_name = field_req(path, fields, "name", &[], "HoleDecl.Value.name: string", dec_string)?;
+        let m_space = field_req(path, fields, "space", &[], "HoleDecl.Value.space: HoleValueSpace", decode_hole_value_space)?;
+        let m_default = field_opt(path, fields, "default", &[], decode_fragment_scalar)?;
+        Ok(HoleDecl::Value { name: m_name, space: m_space, default: m_default })
+    }
+
+    pub(in super::super) fn decode_hole_decl_slot(path: &str, fields: &Fields) -> DResult<HoleDecl> {
+        let m_name = field_req(path, fields, "name", &[], "HoleDecl.Slot.name: string", dec_string)?;
+        let m_kind_constraint = field_opt(path, fields, "kindConstraint", &[], dec_string)?;
+        Ok(HoleDecl::Slot { name: m_name, kind_constraint: m_kind_constraint })
+    }
+
+    pub(in super::super) fn decode_hole_decl_repeat(path: &str, fields: &Fields) -> DResult<HoleDecl> {
+        let m_name = field_req(path, fields, "name", &[], "HoleDecl.Repeat.name: string", dec_string)?;
+        let m_count_space = field_req(path, fields, "countSpace", &[], "HoleDecl.Repeat.countSpace: HoleValueSpace", decode_hole_value_space)?;
+        Ok(HoleDecl::Repeat { name: m_name, count_space: m_count_space })
+    }
+
+
+    pub(in super::super) fn decode_hole_value_space(path: &str, j: &JVal) -> DResult<HoleValueSpace> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "IntRange" => decode_hole_value_space_int_range(path, fields),
+            "FloatRange" => decode_hole_value_space_float_range(path, fields),
+            "StringLen" => decode_hole_value_space_string_len(path, fields),
+            "Enum" => decode_hole_value_space_enum(path, fields),
+            "AnyString" => decode_hole_value_space_any_string(path, fields),
+            other => Err(unknown_du_case(path, other, HOLE_VALUE_SPACE_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_hole_value_space_int_range(path: &str, fields: &Fields) -> DResult<HoleValueSpace> {
+        let m_min = field_req(path, fields, "min", &[], "HoleValueSpace.IntRange.min: integer", as_int)?;
+        let m_max = field_req(path, fields, "max", &[], "HoleValueSpace.IntRange.max: integer", as_int)?;
+        Ok(HoleValueSpace::IntRange { min: m_min, max: m_max })
+    }
+
+    pub(in super::super) fn decode_hole_value_space_float_range(path: &str, fields: &Fields) -> DResult<HoleValueSpace> {
+        let m_min = field_req(path, fields, "min", &[], "HoleValueSpace.FloatRange.min: number", as_float)?;
+        let m_max = field_req(path, fields, "max", &[], "HoleValueSpace.FloatRange.max: number", as_float)?;
+        Ok(HoleValueSpace::FloatRange { min: m_min, max: m_max })
+    }
+
+    pub(in super::super) fn decode_hole_value_space_string_len(path: &str, fields: &Fields) -> DResult<HoleValueSpace> {
+        let m_min_len = field_req(path, fields, "minLen", &[], "HoleValueSpace.StringLen.minLen: integer", as_int)?;
+        let m_max_len = field_req(path, fields, "maxLen", &[], "HoleValueSpace.StringLen.maxLen: integer", as_int)?;
+        Ok(HoleValueSpace::StringLen { min_len: m_min_len, max_len: m_max_len })
+    }
+
+    pub(in super::super) fn decode_hole_value_space_enum(path: &str, fields: &Fields) -> DResult<HoleValueSpace> {
+        let m_choices = field_req(path, fields, "choices", &[], "HoleValueSpace.Enum.choices: list of string", |p, j| dec_list(p, j, dec_string))?;
+        Ok(HoleValueSpace::Enum { choices: m_choices })
+    }
+
+    pub(in super::super) fn decode_hole_value_space_any_string(_path: &str, _fields: &Fields) -> DResult<HoleValueSpace> {
+        Ok(HoleValueSpace::AnyString)
+    }
+
+
+    pub(in super::super) fn decode_local_flush_trigger(path: &str, j: &JVal) -> DResult<LocalFlushTrigger> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "OnBlur" => decode_local_flush_trigger_on_blur(path, fields),
+            "OnSubmit" => decode_local_flush_trigger_on_submit(path, fields),
+            "OnDebounce" => decode_local_flush_trigger_on_debounce(path, fields),
+            "OnCommitAction" => decode_local_flush_trigger_on_commit_action(path, fields),
+            other => Err(unknown_du_case(path, other, LOCAL_FLUSH_TRIGGER_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_local_flush_trigger_on_blur(_path: &str, _fields: &Fields) -> DResult<LocalFlushTrigger> {
+        Ok(LocalFlushTrigger::OnBlur)
+    }
+
+    pub(in super::super) fn decode_local_flush_trigger_on_submit(_path: &str, _fields: &Fields) -> DResult<LocalFlushTrigger> {
+        Ok(LocalFlushTrigger::OnSubmit)
+    }
+
+    pub(in super::super) fn decode_local_flush_trigger_on_debounce(path: &str, fields: &Fields) -> DResult<LocalFlushTrigger> {
+        let m_milliseconds = field_req(path, fields, "milliseconds", &[], "LocalFlushTrigger.OnDebounce.milliseconds: integer", as_int)?;
+        Ok(LocalFlushTrigger::OnDebounce { milliseconds: m_milliseconds })
+    }
+
+    pub(in super::super) fn decode_local_flush_trigger_on_commit_action(_path: &str, _fields: &Fields) -> DResult<LocalFlushTrigger> {
+        Ok(LocalFlushTrigger::OnCommitAction)
+    }
+
+
+    pub(in super::super) fn decode_locale_source(path: &str, j: &JVal) -> DResult<LocaleSource> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Ambient" => decode_locale_source_ambient(path, fields),
+            "Explicit" => decode_locale_source_explicit(path, fields),
+            other => Err(unknown_du_case(path, other, LOCALE_SOURCE_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_locale_source_ambient(_path: &str, _fields: &Fields) -> DResult<LocaleSource> {
+        Ok(LocaleSource::Ambient)
+    }
+
+    pub(in super::super) fn decode_locale_source_explicit(path: &str, fields: &Fields) -> DResult<LocaleSource> {
+        let m_tag = field_req(path, fields, "tag", &[], "LocaleSource.Explicit.tag: string", dec_string)?;
+        Ok(LocaleSource::Explicit { tag: m_tag })
+    }
+
+
+    pub(in super::super) fn decode_media_kind(path: &str, j: &JVal) -> DResult<MediaKind> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Video" => decode_media_kind_video(path, fields),
+            "Audio" => decode_media_kind_audio(path, fields),
+            other => Err(unknown_du_case(path, other, MEDIA_KIND_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_media_kind_video(path: &str, fields: &Fields) -> DResult<MediaKind> {
+        let m_autoplay = field_or(path, fields, "autoplay", &[], defaults::MEDIA_KIND_VIDEO_AUTOPLAY, as_bool)?;
+        let m_poster = field_opt(path, fields, "poster", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Str))?;
+        Ok(MediaKind::Video { autoplay: m_autoplay, poster: m_poster })
+    }
+
+    pub(in super::super) fn decode_media_kind_audio(_path: &str, _fields: &Fields) -> DResult<MediaKind> {
+        Ok(MediaKind::Audio)
+    }
+
+
+    pub(in super::super) fn decode_fragment_scalar(path: &str, j: &JVal) -> DResult<FragmentScalar> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Int" => decode_fragment_scalar_int(path, fields),
+            "Float" => decode_fragment_scalar_float(path, fields),
+            "Bool" => decode_fragment_scalar_bool(path, fields),
+            "Str" => decode_fragment_scalar_str(path, fields),
+            other => Err(unknown_du_case(path, other, SCALAR_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_fragment_scalar_int(path: &str, fields: &Fields) -> DResult<FragmentScalar> {
+        let m_0 = field_req(path, fields, "value", &[], "Scalar.Int.value: integer", as_int)?;
+        Ok(FragmentScalar::Int(m_0))
+    }
+
+    pub(in super::super) fn decode_fragment_scalar_float(path: &str, fields: &Fields) -> DResult<FragmentScalar> {
+        let m_0 = field_req(path, fields, "value", &[], "Scalar.Float.value: number", as_float)?;
+        Ok(FragmentScalar::Float(m_0))
+    }
+
+    pub(in super::super) fn decode_fragment_scalar_bool(path: &str, fields: &Fields) -> DResult<FragmentScalar> {
+        let m_0 = field_req(path, fields, "value", &[], "Scalar.Bool.value: boolean", as_bool)?;
+        Ok(FragmentScalar::Bool(m_0))
+    }
+
+    pub(in super::super) fn decode_fragment_scalar_str(path: &str, fields: &Fields) -> DResult<FragmentScalar> {
+        let m_0 = field_req(path, fields, "value", &[], "Scalar.Str.value: string", dec_string)?;
+        Ok(FragmentScalar::Str(m_0))
+    }
+
+
+    pub(in super::super) fn decode_shape(path: &str, j: &JVal) -> DResult<Shape> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Group" => decode_shape_group(path, fields),
+            "Rectangle" => decode_shape_rectangle(path, fields),
+            "Line" => decode_shape_line(path, fields),
+            "Polyline" => decode_shape_polyline(path, fields),
+            "Polygon" => decode_shape_polygon(path, fields),
+            "Curve" => decode_shape_curve(path, fields),
+            "Circle" => decode_shape_circle(path, fields),
+            "Ellipse" => decode_shape_ellipse(path, fields),
+            "Label" => decode_shape_label(path, fields),
+            other => Err(unknown_du_case(path, other, SHAPE_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_shape_group(path: &str, fields: &Fields) -> DResult<Shape> {
+        let m_children = field_req(path, fields, "children", &[], "Shape.Group.children: list of Shape", |p, j| dec_list(p, j, decode_shape))?;
+        let m_style = decode_style_or_default(path, fields)?;
+        Ok(Shape::Group { children: m_children, style: m_style })
+    }
+
+    pub(in super::super) fn decode_shape_rectangle(path: &str, fields: &Fields) -> DResult<Shape> {
+        let m_x = field_req(path, fields, "x", &[], "Shape.Rectangle.x: number", as_float)?;
+        let m_y = field_req(path, fields, "y", &[], "Shape.Rectangle.y: number", as_float)?;
+        let m_width = field_req(path, fields, "width", &[], "Shape.Rectangle.width: number", as_float)?;
+        let m_height = field_req(path, fields, "height", &[], "Shape.Rectangle.height: number", as_float)?;
+        let m_corner_radius = field_opt(path, fields, "cornerRadius", &[], as_float)?;
+        let m_style = decode_style_or_default(path, fields)?;
+        Ok(Shape::Rectangle { x: m_x, y: m_y, width: m_width, height: m_height, corner_radius: m_corner_radius, style: m_style })
+    }
+
+    pub(in super::super) fn decode_shape_line(path: &str, fields: &Fields) -> DResult<Shape> {
+        let m_x1 = field_req(path, fields, "x1", &[], "Shape.Line.x1: number", as_float)?;
+        let m_y1 = field_req(path, fields, "y1", &[], "Shape.Line.y1: number", as_float)?;
+        let m_x2 = field_req(path, fields, "x2", &[], "Shape.Line.x2: number", as_float)?;
+        let m_y2 = field_req(path, fields, "y2", &[], "Shape.Line.y2: number", as_float)?;
+        let m_style = decode_style_or_default(path, fields)?;
+        Ok(Shape::Line { x1: m_x1, y1: m_y1, x2: m_x2, y2: m_y2, style: m_style })
+    }
+
+    pub(in super::super) fn decode_shape_polyline(path: &str, fields: &Fields) -> DResult<Shape> {
+        let m_points = field_req(path, fields, "points", &[], "Shape.Polyline.points: list of DrawPoint", |p, j| dec_list(p, j, decode_draw_point))?;
+        let m_style = decode_style_or_default(path, fields)?;
+        Ok(Shape::Polyline { points: m_points, style: m_style })
+    }
+
+    pub(in super::super) fn decode_shape_polygon(path: &str, fields: &Fields) -> DResult<Shape> {
+        let m_points = field_req(path, fields, "points", &[], "Shape.Polygon.points: list of DrawPoint", |p, j| dec_list(p, j, decode_draw_point))?;
+        let m_style = decode_style_or_default(path, fields)?;
+        Ok(Shape::Polygon { points: m_points, style: m_style })
+    }
+
+    pub(in super::super) fn decode_shape_curve(path: &str, fields: &Fields) -> DResult<Shape> {
+        let m_commands = field_req(path, fields, "commands", &[], "Shape.Curve.commands: list of CurveCommand", |p, j| dec_list(p, j, decode_curve_command))?;
+        let m_style = decode_style_or_default(path, fields)?;
+        Ok(Shape::Curve { commands: m_commands, style: m_style })
+    }
+
+    pub(in super::super) fn decode_shape_circle(path: &str, fields: &Fields) -> DResult<Shape> {
+        let m_cx = field_req(path, fields, "cx", &[], "Shape.Circle.cx: number", as_float)?;
+        let m_cy = field_req(path, fields, "cy", &[], "Shape.Circle.cy: number", as_float)?;
+        let m_r = field_req(path, fields, "r", &[], "Shape.Circle.r: number", as_float)?;
+        let m_style = decode_style_or_default(path, fields)?;
+        Ok(Shape::Circle { cx: m_cx, cy: m_cy, r: m_r, style: m_style })
+    }
+
+    pub(in super::super) fn decode_shape_ellipse(path: &str, fields: &Fields) -> DResult<Shape> {
+        let m_cx = field_req(path, fields, "cx", &[], "Shape.Ellipse.cx: number", as_float)?;
+        let m_cy = field_req(path, fields, "cy", &[], "Shape.Ellipse.cy: number", as_float)?;
+        let m_rx = field_req(path, fields, "rx", &[], "Shape.Ellipse.rx: number", as_float)?;
+        let m_ry = field_req(path, fields, "ry", &[], "Shape.Ellipse.ry: number", as_float)?;
+        let m_style = decode_style_or_default(path, fields)?;
+        Ok(Shape::Ellipse { cx: m_cx, cy: m_cy, rx: m_rx, ry: m_ry, style: m_style })
+    }
+
+    pub(in super::super) fn decode_shape_label(path: &str, fields: &Fields) -> DResult<Shape> {
+        let m_x = field_req(path, fields, "x", &[], "Shape.Label.x: number", as_float)?;
+        let m_y = field_req(path, fields, "y", &[], "Shape.Label.y: number", as_float)?;
+        let m_text = field_req(path, fields, "text", &[], "Shape.Label.text: TextSource", decode_text_source)?;
+        let m_style = decode_style_or_default(path, fields)?;
+        Ok(Shape::Label { x: m_x, y: m_y, text: m_text, style: m_style })
+    }
+
+
+    pub(in super::super) fn decode_text_source(path: &str, j: &JVal) -> DResult<TextSource> {
+        if !matches!(j, JVal::Obj(_)) {
+            return (dec_string)(path, j).map(TextSource::Literal);
+        }
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Literal" => decode_text_source_literal(path, fields),
+            "Bound" => decode_text_source_bound(path, fields),
+            "I18n" => decode_text_source_i18n(path, fields),
+            other => Err(unknown_du_case(path, other, TEXT_SOURCE_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_text_source_literal(path: &str, fields: &Fields) -> DResult<TextSource> {
+        let m_0 = field_req(path, fields, "text", &[], "TextSource.Literal.text: string", dec_string)?;
+        Ok(TextSource::Literal(m_0))
+    }
+
+    pub(in super::super) fn decode_text_source_bound(path: &str, fields: &Fields) -> DResult<TextSource> {
+        let m_0 = decode_text_bound(path, fields)?;
+        Ok(TextSource::Bound(m_0))
+    }
+
+    pub(in super::super) fn decode_text_source_i18n(path: &str, fields: &Fields) -> DResult<TextSource> {
+        let m_key = field_req(path, fields, "key", &[], "TextSource.I18n.key: string", dec_string)?;
+        let m_args = decode_text_i18n_args(path, fields)?;
+        Ok(TextSource::I18n { key: m_key, args: m_args })
+    }
+
+
+    pub(in super::super) fn decode_node_ast(path: &str, j: &JVal) -> DResult<Node> {
+        let _guard = enter_node(path)?;
+        let fields = as_obj(path, j)?;
+        let m_id = decode_node_id(path, fields)?;
+        let m_kind = field_req(path, fields, "kind", &[], "Node.kind: NodeKind", decode_node_kind)?;
+        let m_accessibility = field_opt(path, fields, "accessibility", &[], decode_accessibility)?;
+        let m_fallback = field_opt(path, fields, "fallback", &[], |p, j| (decode_node_ast)(p, j).map(Box::new))?;
+        let m_state = decode_node_state(path, fields)?;
+        let m_style = decode_node_style(path, fields)?;
+        let m_tooltip = field_opt(path, fields, "tooltip", &[], decode_text_source)?;
+        let m_visible = field_opt(path, fields, "visible", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
+        Ok(Node { id: m_id, kind: m_kind, accessibility: m_accessibility, fallback: m_fallback, state: m_state, style: m_style, tooltip: m_tooltip, visible: m_visible })
+    }
+
+    pub(in super::super) fn decode_tree_op_ast(path: &str, j: &JVal) -> DResult<TreeOp> {
+        let _guard = enter_op(path)?;
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Batch" => decode_tree_op_ast_batch(path, fields),
+            "EditNode" => decode_tree_op_ast_edit_node(path, fields),
+            "InsertChild" => decode_tree_op_ast_insert_child(path, fields),
+            "MoveNode" => decode_tree_op_ast_move_node(path, fields),
+            "PatchStyle" => decode_tree_op_ast_patch_style(path, fields),
+            "RemoveNode" => decode_tree_op_ast_remove_node(path, fields),
+            "ReorderChildren" => decode_tree_op_ast_reorder_children(path, fields),
+            "ReplaceBinding" => decode_tree_op_ast_replace_binding(path, fields),
+            "ReplaceRoot" => decode_tree_op_ast_replace_root(path, fields),
+            "UpdateProp" => decode_tree_op_ast_update_prop(path, fields),
+            "UpdateState" => decode_tree_op_ast_update_state(path, fields),
+            "UpdateStyle" => decode_tree_op_ast_update_style(path, fields),
+            other => Err(unknown_du_case(path, other, TREE_OP_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_tree_op_ast_batch(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        let m_0 = field_req(path, fields, "ops", &[], "TreeOp.Batch.ops: list of TreeOp", |p, j| dec_list(p, j, decode_tree_op_ast))?;
+        Ok(TreeOp::Batch(m_0))
+    }
+
+    pub(in super::super) fn decode_tree_op_ast_edit_node(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        let m_new_kind = field_req(path, fields, "newKind", &[], "TreeOp.EditNode.newKind: NodeKind", decode_node_kind)?;
+        let m_target = field_req(path, fields, "target", &[], "TreeOp.EditNode.target: string", dec_string)?;
+        Ok(TreeOp::EditNode { new_kind: m_new_kind, target: m_target })
+    }
+
+    pub(in super::super) fn decode_tree_op_ast_insert_child(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        check_insert_child(path, fields)?;
+        let m_child = field_req(path, fields, "child", &[], "TreeOp.InsertChild.child: Node", decode_node_ast)?;
+        let m_parent_id = field_req(path, fields, "parentId", &[], "TreeOp.InsertChild.parentId: string", dec_string)?;
+        Ok(TreeOp::InsertChild { child: m_child, parent_id: m_parent_id })
+    }
+
+    pub(in super::super) fn decode_tree_op_ast_move_node(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        check_move_node(path, fields)?;
+        let m_new_parent_id = field_req(path, fields, "newParentId", &[], "TreeOp.MoveNode.newParentId: string", dec_string)?;
+        let m_target = field_req(path, fields, "target", &[], "TreeOp.MoveNode.target: string", dec_string)?;
+        Ok(TreeOp::MoveNode { new_parent_id: m_new_parent_id, target: m_target })
+    }
+
+    pub(in super::super) fn decode_tree_op_ast_patch_style(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        let m_style = field_req(path, fields, "style", &[], "TreeOp.PatchStyle.style: StyleDelta", decode_style_delta)?;
+        let m_target = field_req(path, fields, "target", &[], "TreeOp.PatchStyle.target: string", dec_string)?;
+        Ok(TreeOp::PatchStyle { style: m_style, target: m_target })
+    }
+
+    pub(in super::super) fn decode_tree_op_ast_remove_node(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        let m_target = field_req(path, fields, "target", &[], "TreeOp.RemoveNode.target: string", dec_string)?;
+        Ok(TreeOp::RemoveNode { target: m_target })
+    }
+
+    pub(in super::super) fn decode_tree_op_ast_reorder_children(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        let m_new_order = field_req(path, fields, "newOrder", &[], "TreeOp.ReorderChildren.newOrder: list of string", |p, j| dec_list(p, j, dec_string))?;
+        let m_parent_id = field_req(path, fields, "parentId", &[], "TreeOp.ReorderChildren.parentId: string", dec_string)?;
+        Ok(TreeOp::ReorderChildren { new_order: m_new_order, parent_id: m_parent_id })
+    }
+
+    pub(in super::super) fn decode_tree_op_ast_replace_binding(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        let m_binding = field_req(path, fields, "binding", &[], "TreeOp.ReplaceBinding.binding: Binding<JSON value>", decode_binding)?;
+        let m_slot = field_req(path, fields, "slot", &[], "TreeOp.ReplaceBinding.slot: string", dec_string)?;
+        let m_target = field_req(path, fields, "target", &[], "TreeOp.ReplaceBinding.target: string", dec_string)?;
+        Ok(TreeOp::ReplaceBinding { binding: m_binding, slot: m_slot, target: m_target })
+    }
+
+    pub(in super::super) fn decode_tree_op_ast_replace_root(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        let m_node = field_req(path, fields, "node", &[], "TreeOp.ReplaceRoot.node: Node", decode_node_ast)?;
+        Ok(TreeOp::ReplaceRoot { node: m_node })
+    }
+
+    pub(in super::super) fn decode_tree_op_ast_update_prop(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        let m_path = field_req(path, fields, "path", &[], "TreeOp.UpdateProp.path: string", dec_string)?;
+        let m_target = field_req(path, fields, "target", &[], "TreeOp.UpdateProp.target: string", dec_string)?;
+        let m_value = field_req(path, fields, "value", &[], "TreeOp.UpdateProp.value: JSON value", decode_jval)?;
+        Ok(TreeOp::UpdateProp { path: m_path, target: m_target, value: m_value })
+    }
+
+    pub(in super::super) fn decode_tree_op_ast_update_state(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        let m_state = field_req(path, fields, "state", &[], "TreeOp.UpdateState.state: StateBehaviour", decode_state_behaviour)?;
+        let m_target = field_req(path, fields, "target", &[], "TreeOp.UpdateState.target: string", dec_string)?;
+        Ok(TreeOp::UpdateState { state: m_state, target: m_target })
+    }
+
+    pub(in super::super) fn decode_tree_op_ast_update_style(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        let m_style = field_req(path, fields, "style", &[], "TreeOp.UpdateStyle.style: SemanticStyle", decode_semantic_style)?;
+        let m_target = field_req(path, fields, "target", &[], "TreeOp.UpdateStyle.target: string", dec_string)?;
+        Ok(TreeOp::UpdateStyle { style: m_style, target: m_target })
+    }
+
+
+    pub(in super::super) fn decode_badge_variant(path: &str, j: &JVal) -> DResult<BadgeVariant> {
+        decode_enum(path, j, "BadgeVariant", BadgeVariant::from_wire, BadgeVariant::WIRE_NAMES, &[("Default", BadgeVariant::Neutral), ("Danger", BadgeVariant::Critical)])
+    }
+
+    pub(in super::super) fn decode_button_variant(path: &str, j: &JVal) -> DResult<ButtonVariant> {
+        decode_enum(path, j, "ButtonVariant", ButtonVariant::from_wire, ButtonVariant::WIRE_NAMES, &[("Danger", ButtonVariant::Destructive)])
+    }
+
+    pub(in super::super) fn decode_capture_source(path: &str, j: &JVal) -> DResult<CaptureSource> {
+        decode_enum(path, j, "CaptureSource", CaptureSource::from_wire, CaptureSource::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_chart_data_labels(path: &str, j: &JVal) -> DResult<ChartDataLabels> {
+        decode_enum(path, j, "ChartDataLabels", ChartDataLabels::from_wire, ChartDataLabels::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_chart_kind(path: &str, j: &JVal) -> DResult<ChartKind> {
+        decode_enum(path, j, "ChartKind", ChartKind::from_wire, ChartKind::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_chart_legend_position(path: &str, j: &JVal) -> DResult<ChartLegendPosition> {
+        decode_enum(path, j, "ChartLegendPosition", ChartLegendPosition::from_wire, ChartLegendPosition::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_chart_x_scale(path: &str, j: &JVal) -> DResult<ChartXScale> {
+        decode_enum(path, j, "ChartXScale", ChartXScale::from_wire, ChartXScale::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_compare_op(path: &str, j: &JVal) -> DResult<CompareOp> {
+        decode_enum(path, j, "CompareOp", CompareOp::from_wire, CompareOp::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_date_style(path: &str, j: &JVal) -> DResult<DateStyle> {
+        decode_enum(path, j, "DateStyle", DateStyle::from_wire, DateStyle::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_date_time_variant(path: &str, j: &JVal) -> DResult<DateTimeVariant> {
+        decode_enum(path, j, "DateTimeVariant", DateTimeVariant::from_wire, DateTimeVariant::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_duration_style(path: &str, j: &JVal) -> DResult<DurationStyle> {
+        decode_enum(path, j, "DurationStyle", DurationStyle::from_wire, DurationStyle::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_duration_unit(path: &str, j: &JVal) -> DResult<DurationUnit> {
+        decode_enum(path, j, "DurationUnit", DurationUnit::from_wire, DurationUnit::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_embed_permission(path: &str, j: &JVal) -> DResult<EmbedPermission> {
+        decode_enum(path, j, "EmbedPermission", EmbedPermission::from_wire, EmbedPermission::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_file_read_encoding(path: &str, j: &JVal) -> DResult<FileReadEncoding> {
+        decode_enum(path, j, "FileReadEncoding", FileReadEncoding::from_wire, FileReadEncoding::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_font_voice(path: &str, j: &JVal) -> DResult<FontVoice> {
+        decode_enum(path, j, "FontVoice", FontVoice::from_wire, FontVoice::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_heading_variant(path: &str, j: &JVal) -> DResult<HeadingVariant> {
+        decode_enum(path, j, "HeadingVariant", HeadingVariant::from_wire, HeadingVariant::WIRE_NAMES, &[("Default", HeadingVariant::Standard)])
+    }
+
+    pub(in super::super) fn decode_icon_size(path: &str, j: &JVal) -> DResult<IconSize> {
+        decode_enum(path, j, "IconSize", IconSize::from_wire, IconSize::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_image_aspect(path: &str, j: &JVal) -> DResult<ImageAspect> {
+        decode_enum(path, j, "ImageAspect", ImageAspect::from_wire, ImageAspect::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_image_fit(path: &str, j: &JVal) -> DResult<ImageFit> {
+        decode_enum(path, j, "ImageFit", ImageFit::from_wire, ImageFit::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_image_loading(path: &str, j: &JVal) -> DResult<ImageLoading> {
+        decode_enum(path, j, "ImageLoading", ImageLoading::from_wire, ImageLoading::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_image_variant(path: &str, j: &JVal) -> DResult<ImageVariant> {
+        decode_enum(path, j, "ImageVariant", ImageVariant::from_wire, ImageVariant::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_link_protection(path: &str, j: &JVal) -> DResult<LinkProtection> {
+        decode_enum(path, j, "LinkProtection", LinkProtection::from_wire, LinkProtection::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_live_region_kind(path: &str, j: &JVal) -> DResult<LiveRegionKind> {
+        decode_enum(path, j, "LiveRegionKind", LiveRegionKind::from_wire, LiveRegionKind::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_math_display(path: &str, j: &JVal) -> DResult<MathDisplay> {
+        decode_enum(path, j, "MathDisplay", MathDisplay::from_wire, MathDisplay::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_modality_kind(path: &str, j: &JVal) -> DResult<ModalityKind> {
+        decode_enum(path, j, "ModalityKind", ModalityKind::from_wire, ModalityKind::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_navigate_target(path: &str, j: &JVal) -> DResult<NavigateTarget> {
+        decode_enum(path, j, "NavigateTarget", NavigateTarget::from_wire, NavigateTarget::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_orientation(path: &str, j: &JVal) -> DResult<Orientation> {
+        decode_enum(path, j, "Orientation", Orientation::from_wire, Orientation::WIRE_NAMES, &[("Row", Orientation::Horizontal), ("row", Orientation::Horizontal), ("Column", Orientation::Vertical), ("column", Orientation::Vertical)])
+    }
+
+    pub(in super::super) fn decode_relative_time_unit(path: &str, j: &JVal) -> DResult<RelativeTimeUnit> {
+        decode_enum(path, j, "RelativeTimeUnit", RelativeTimeUnit::from_wire, RelativeTimeUnit::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_scroll_orientation(path: &str, j: &JVal) -> DResult<ScrollOrientation> {
+        decode_enum(path, j, "ScrollOrientation", ScrollOrientation::from_wire, ScrollOrientation::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_sort_direction(path: &str, j: &JVal) -> DResult<SortDirection> {
+        decode_enum(path, j, "SortDirection", SortDirection::from_wire, SortDirection::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_style_role(path: &str, j: &JVal) -> DResult<StyleRole> {
+        decode_enum(path, j, "StyleRole", StyleRole::from_wire, StyleRole::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_style_weight(path: &str, j: &JVal) -> DResult<StyleWeight> {
+        decode_enum(path, j, "StyleWeight", StyleWeight::from_wire, StyleWeight::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_text_anchor(path: &str, j: &JVal) -> DResult<TextAnchor> {
+        decode_enum(path, j, "TextAnchor", TextAnchor::from_wire, TextAnchor::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_text_direction(path: &str, j: &JVal) -> DResult<TextDirection> {
+        decode_enum(path, j, "TextDirection", TextDirection::from_wire, TextDirection::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_text_format(path: &str, j: &JVal) -> DResult<TextFormat> {
+        decode_enum(path, j, "TextFormat", TextFormat::from_wire, TextFormat::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_time_grain(path: &str, j: &JVal) -> DResult<TimeGrain> {
+        decode_enum(path, j, "TimeGrain", TimeGrain::from_wire, TimeGrain::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_time_style(path: &str, j: &JVal) -> DResult<TimeStyle> {
+        decode_enum(path, j, "TimeStyle", TimeStyle::from_wire, TimeStyle::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_tone_variant(path: &str, j: &JVal) -> DResult<ToneVariant> {
+        decode_enum(path, j, "ToneVariant", ToneVariant::from_wire, ToneVariant::WIRE_NAMES, &[("Positive", ToneVariant::Success), ("Danger", ToneVariant::Critical), ("Negative", ToneVariant::Critical), ("Neutral", ToneVariant::Default)])
+    }
+
+    pub(in super::super) fn decode_track_kind(path: &str, j: &JVal) -> DResult<TrackKind> {
+        decode_enum(path, j, "TrackKind", TrackKind::from_wire, TrackKind::WIRE_NAMES, &[])
+    }
+
+    pub(in super::super) fn decode_trend_polarity(path: &str, j: &JVal) -> DResult<TrendPolarity> {
+        decode_enum(path, j, "TrendPolarity", TrendPolarity::from_wire, TrendPolarity::WIRE_NAMES, &[])
+    }
 }
 
 // ─── Node-bearing slots ─────────────────────────────────────────────────────
