@@ -1020,7 +1020,9 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
     ("envelope-round-trip", FamilyAnswer::Covered),
     (
         "formatting",
-        FamilyAnswer::Pending("this host's suite does not yet run the number-formatting vectors"),
+        FamilyAnswer::Pending(
+            "the host formatter is not yet certified against the golden; carried by fuaran#2328",
+        ),
     ),
     ("laws/capabilityLaws", FamilyAnswer::Pending(LAW_UNRUN)),
     ("laws/dataframeParity", FamilyAnswer::Covered),
