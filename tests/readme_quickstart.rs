@@ -88,8 +88,8 @@ fn the_quick_start_encodes_the_tree_it_documents() {
         wire,
         concat!(
             r#"{"id":"root","kind":{"$type":"Box","children":[{"id":"title","#,
-            r#""kind":{"$type":"Heading","level":2,"text":"Channel performance","#,
-            r#""variant":"Standard"}}],"layout":{"$type":"Auto"},"role":"Dashboard"}}"#
+            r#""kind":{"$type":"Heading","level":2,"text":"Channel performance"}}],"#,
+            r#""layout":{"$type":"Auto"},"role":"Dashboard"}}"#
         ),
         "the documented quick-start no longer encodes to the canonical bytes"
     );
