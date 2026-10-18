@@ -44,6 +44,21 @@ name = "fuaran-ui"
 # (checked by a rustdoc-JSON surface diff). One observable change: a generated
 # struct declares its fields in IDL order, so Debug output and rustdoc list
 # fields in that order. No field set moved.
+#
+# Phase 2001 rides it, BREAKING (the class the draft already carries): closed
+# public enums of the dataframe model gain cases — `Cell::Decimal` (canonical
+# decimal TEXT), `ColumnType::Decimal`, `AggFn::CountDistinct`,
+# `ColExpr::Quotient` / `ColExpr::Rounded` (with the new `Rounding`,
+# `RoundingScale` and seven-case `RoundingMode`), and `TransformStep::Intersect`
+# / `TransformStep::Except` — so every exhaustive match over them breaks.
+# BEHAVIOUR changes ride with it: a derived or unpivoted column is now typed by
+# its expression wherever the schema decides it (an all-null `v / 0` derive is
+# `float`, an empty-frame derive takes its expression's type), the cells decide
+# otherwise by the widening join, and a float beside a decimal, or two types no
+# column holds together, is refused; NaN orders above every float; a union
+# column takes the join of its two sides' types. New public items:
+# `transform::decimal`, `transform::aggregate`, `transform::cell_token`,
+# `transform::validate_table`.
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"

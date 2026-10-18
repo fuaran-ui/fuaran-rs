@@ -414,6 +414,7 @@ fn type_wire(t: ColumnType) -> &'static str {
         ColumnType::Str => "string",
         ColumnType::Date => "date",
         ColumnType::Timestamp => "timestamp",
+        ColumnType::Decimal => "decimal",
     }
 }
 
@@ -440,7 +441,7 @@ fn column_json(cells: &[Cell]) -> String {
                 validity.push("true".to_string());
                 values.push(b.to_string());
             }
-            Cell::Str(s) | Cell::Date(s) | Cell::Timestamp(s) => {
+            Cell::Str(s) | Cell::Date(s) | Cell::Timestamp(s) | Cell::Decimal(s) => {
                 validity.push("true".to_string());
                 values.push(format!("{s:?}"));
             }

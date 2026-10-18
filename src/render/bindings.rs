@@ -562,7 +562,11 @@ fn cell_to_jval(c: &Cell) -> JVal {
         Cell::Int(v) => JVal::Num(*v as f64),
         Cell::Float(v) => JVal::Num(*v),
         Cell::Bool(b) => JVal::Bool(*b),
-        Cell::Str(s) | Cell::Date(s) | Cell::Timestamp(s) => JVal::Str(s.clone()),
+        // A decimal rides as its canonical TEXT, as the column wire carries it —
+        // a number here would have been through a float.
+        Cell::Str(s) | Cell::Date(s) | Cell::Timestamp(s) | Cell::Decimal(s) => {
+            JVal::Str(s.clone())
+        }
     }
 }
 
@@ -602,6 +606,11 @@ fn cell_to_float(c: &Cell) -> Result<f64, String> {
     match c {
         Cell::Int(v) => Ok(*v as f64),
         Cell::Float(v) => Ok(*v),
+        // A numeric slot displays a number: a decimal at its nearest double, and
+        // one past the float range refused rather than shown as an infinity.
+        Cell::Decimal(s) => transform::decimal::try_to_float(s).ok_or_else(|| {
+            format!("Transform yielded a decimal ('{s}') past the float range in a numeric slot")
+        }),
         Cell::Str(s) => Err(format!(
             "Transform yielded a text cell ('{s}') in a numeric slot — project a numeric column, or aggregate with count / sum / mean"
         )),
