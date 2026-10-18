@@ -36,6 +36,7 @@
 
 mod common;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use fuaran_rs::canonical::{JVal, parse};
@@ -45,6 +46,7 @@ use fuaran_rs::elicitation::{
 use fuaran_rs::envelope::{decode_envelope, encode_envelope};
 use fuaran_rs::wire::{decode_node, decode_op, encode_node, encode_op};
 
+#[derive(Clone)]
 struct Fixture {
     id: String,
     kind: String,
@@ -959,12 +961,14 @@ fn corpus_rule_marked_twins_decide_as_declared() {
 // and the corpus no longer has, fails. `host-capability-manifest.json` at the
 // repository root publishes it, generated here; regenerate it with
 // `FUARAN_MANIFEST_REGENERATE=1 cargo test --test conformance host_capability_manifest_is_current`.
+// Its token claim (§27.3, Phase 2332) is the generated layer's
+// `CONSTRUCT_TOKENS`, read back against the corpus below ("The token claim").
 
 const NO_CARD_CODEC: &str =
     "this host has no contract-card codec (§25) for the card fixtures to run against yet";
 const TELEPORT_UNRUN: &str = "the teleport module is unit-tested by hand; this suite does not yet run the corpus teleport/ fixtures";
 const LAW_UNRUN: &str = "this host's suite does not yet run this law family's vectors";
-const NO_TOKEN_DERIVER: &str = "this host has no generator deriving construct tokens from its type model yet, so it makes no claim in this family (§27.1)";
+const HOSTED_OPAQUE: &str = "this host's generated type model carries each hosted slot opaquely, so it holds no enumeration of the discriminators inside one (§27.5) and this host makes no claim in this family";
 
 /// One host answer for a corpus family (§27.7).
 #[derive(Clone, Copy)]
@@ -1174,9 +1178,16 @@ fn host_capability_manifest() -> String {
     ));
     out.push_str("  \"families\": {\n");
     for (i, f) in token_families.iter().enumerate() {
+        let claim = if DERIVED_FAMILIES.contains(f) {
+            "\"covered\": true".to_string()
+        } else {
+            format!(
+                "\"covered\": false,\n      \"reason\": {}",
+                json_string(HOSTED_OPAQUE)
+            )
+        };
         out.push_str(&format!(
-            "    \"{f}\": {{\n      \"covered\": false,\n      \"reason\": {}\n    }}{}\n",
-            json_string(NO_TOKEN_DERIVER),
+            "    \"{f}\": {{\n      {claim}\n    }}{}\n",
             if i + 1 == token_families.len() {
                 ""
             } else {
@@ -1207,7 +1218,18 @@ fn host_capability_manifest() -> String {
         ));
     }
     out.push_str("  },\n");
-    out.push_str("  \"tokens\": []\n}\n");
+    let tokens: Vec<String> = fuaran_rs::wire::CONSTRUCT_TOKENS
+        .iter()
+        .map(|t| format!("    {}", json_string(t)))
+        .collect();
+    if tokens.is_empty() {
+        out.push_str("  \"tokens\": []\n}\n");
+    } else {
+        out.push_str(&format!(
+            "  \"tokens\": [\n{}\n  ]\n}}\n",
+            tokens.join(",\n")
+        ));
+    }
     out
 }
 
@@ -1231,6 +1253,423 @@ fn host_capability_manifest_is_current() {
         got == want,
         "host-capability-manifest.json is not what this host's declaration renders — regenerate it \
          with FUARAN_MANIFEST_REGENERATE=1 cargo test --test conformance host_capability_manifest_is_current"
+    );
+}
+
+// ── The token claim (WIRE_FORMAT §27.1–27.4, Phase 2332) ─────────────────────
+//
+// The claim is `fuaran_rs::wire::CONSTRUCT_TOKENS`, which the host's generator
+// writes into the generated layer beside the wire types it projects from
+// `idl.json` — never a list written here. `hostedCases` stays not covered: the
+// generated layer types each hosted slot opaquely, so it holds no enumeration
+// of the discriminators inside one (§27.5).
+
+/// The token families `CONSTRUCT_TOKENS` carries; the sixth, `hostedCases`, is
+/// declared not covered.
+const DERIVED_FAMILIES: &[&str] = &[
+    "caseFields",
+    "kindFields",
+    "kinds",
+    "recordFields",
+    "unionCases",
+];
+
+/// The §27.3 token family a token belongs to, read from the §27.2 grammar alone.
+fn token_family(token: &str) -> &'static str {
+    let segments: Vec<&str> = token.split('.').collect();
+    match (segments[0], segments.len()) {
+        ("Kind", 2) => "kinds",
+        ("Kind", _) => "kindFields",
+        (_, 3) => "caseFields",
+        _ if segments[1].starts_with(|c: char| c.is_ascii_uppercase()) => "unionCases",
+        _ => "recordFields",
+    }
+}
+
+#[test]
+fn every_claimed_token_lies_in_a_covered_family() {
+    let outside: Vec<&str> = fuaran_rs::wire::CONSTRUCT_TOKENS
+        .iter()
+        .copied()
+        .filter(|t| !DERIVED_FAMILIES.contains(&token_family(t)))
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "tokens outside the covered families: {outside:?}"
+    );
+}
+
+/// The tokens a module generated from `idl` would claim, less those of the
+/// unmodified corpus IDL: what removing a construct from the model removes.
+fn removed_by(idl: &str, edit: impl Fn(&mut JVal)) -> Vec<String> {
+    let before = fuaran_rs::wire::idl_codegen::construct_tokens(idl).expect("the corpus IDL reads");
+    let mut doc = parse(idl).expect("idl.json parses");
+    edit(&mut doc);
+    let edited = fuaran_rs::canonical::render_canonical(&doc);
+    let after =
+        fuaran_rs::wire::idl_codegen::construct_tokens(&edited).expect("the edited IDL reads");
+    before.into_iter().filter(|t| !after.contains(t)).collect()
+}
+
+fn rows_mut<'a>(doc: &'a mut JVal, key: &str) -> &'a mut Vec<JVal> {
+    let JVal::Obj(members) = doc else {
+        panic!("idl.json is an object")
+    };
+    match members.iter_mut().find(|(k, _)| k == key) {
+        Some((_, JVal::Arr(rows))) => rows,
+        _ => panic!("idl.json has no {key} array"),
+    }
+}
+
+#[test]
+fn removing_a_kind_removes_exactly_its_tokens() {
+    let idl = corpus_idl(&common::corpus_root());
+    let removed = removed_by(&idl, |doc| {
+        rows_mut(doc, "kinds").retain(|k| str_field(k, "tag").as_deref() != Some("Badge"));
+    });
+    assert_eq!(
+        removed,
+        ["Kind.Badge", "Kind.Badge.label", "Kind.Badge.variant"]
+    );
+}
+
+#[test]
+fn removing_a_union_case_removes_exactly_its_tokens() {
+    let idl = corpus_idl(&common::corpus_root());
+    let removed = removed_by(&idl, |doc| {
+        for union in rows_mut(doc, "unions").iter_mut() {
+            if str_field(union, "name").as_deref() == Some("Binding") {
+                rows_mut(union, "cases")
+                    .retain(|c| str_field(c, "tag").as_deref() != Some("Static"));
+            }
+        }
+    });
+    assert_eq!(removed, ["Binding.Static", "Binding.Static.value"]);
+}
+
+#[test]
+fn a_host_only_row_is_no_token() {
+    let claimed = fuaran_rs::wire::CONSTRUCT_TOKENS;
+    assert!(claimed.contains(&"Action.Dispatch"));
+    assert!(
+        !claimed.contains(&"Action.Dispatch.msg"),
+        "a hostOnly row never reaches the wire"
+    );
+}
+
+// ── Reading the claim back against the corpus ───────────────────────────────
+//
+// Every fixture of the round-trip families is walked against the corpus's OWN
+// idl.json — never this host's generated layer, so the claim is checked against
+// the oracle rather than against itself — for the construct tokens it
+// exercises (§27.4). A token the corpus exercises and this host does not claim
+// fails by name; so does a claimed token carried by a fixture this host does
+// not round-trip.
+
+/// The families whose canonical documents are wire trees a host decodes and
+/// re-encodes.
+const EXERCISING_FAMILIES: &[&str] = &["node-round-trip", "op-round-trip", "lenient-accept"];
+
+/// The corpus IDL, indexed for the walk.
+struct Vocabulary {
+    kinds: BTreeMap<String, JVal>,
+    ops: BTreeMap<String, JVal>,
+    records: BTreeMap<String, JVal>,
+    unions: BTreeMap<String, BTreeMap<String, JVal>>,
+    transparent: BTreeMap<String, String>,
+    node_fields: JVal,
+}
+
+fn arr(v: Option<&JVal>) -> &[JVal] {
+    match v {
+        Some(JVal::Arr(items)) => items,
+        _ => &[],
+    }
+}
+
+fn fields_of(row: &JVal) -> JVal {
+    row.field("fields").cloned().unwrap_or(JVal::Arr(vec![]))
+}
+
+impl Vocabulary {
+    fn read(idl: &str) -> Self {
+        let doc = parse(idl).expect("idl.json parses");
+        let by = |key: &str, id: &str| -> BTreeMap<String, JVal> {
+            arr(doc.field(key))
+                .iter()
+                .map(|r| (str_field(r, id).expect("a row id"), fields_of(r)))
+                .collect()
+        };
+        let unions = arr(doc.field("unions"))
+            .iter()
+            .map(|u| {
+                let cases = arr(u.field("cases"))
+                    .iter()
+                    .map(|c| (str_field(c, "tag").expect("a case tag"), fields_of(c)))
+                    .collect();
+                (str_field(u, "name").expect("a union name"), cases)
+            })
+            .collect();
+        let transparent = arr(doc
+            .field("harden")
+            .and_then(|h| h.field("transparentUnions")))
+        .iter()
+        .map(|t| {
+            (
+                str_field(t, "union").expect("union"),
+                str_field(t, "case").expect("case"),
+            )
+        })
+        .collect();
+        Vocabulary {
+            kinds: by("kinds", "tag"),
+            ops: by("ops", "tag"),
+            records: by("records", "name"),
+            unions,
+            transparent,
+            node_fields: doc
+                .field("nodeFields")
+                .cloned()
+                .unwrap_or(JVal::Arr(vec![])),
+        }
+    }
+
+    fn members(
+        &self,
+        v: &JVal,
+        fields: &JVal,
+        owner: Option<&str>,
+        arg: Option<&JVal>,
+        out: &mut BTreeSet<String>,
+    ) {
+        if !matches!(v, JVal::Obj(_)) {
+            return;
+        }
+        for f in arr(Some(fields)) {
+            let name = str_field(f, "name").expect("a field name");
+            let Some(value) = v.field(&name) else {
+                continue;
+            };
+            if let Some(owner) = owner {
+                out.insert(format!("{owner}.{name}"));
+            }
+            let ty = f.field("type").expect("a field type");
+            let ty = match (str_field(ty, "$type").as_deref(), arg) {
+                (Some("var"), Some(bound)) => bound,
+                _ => ty,
+            };
+            self.walk(value, ty, out);
+        }
+    }
+
+    fn walk(&self, v: &JVal, ty: &JVal, out: &mut BTreeSet<String>) {
+        let tag = str_field(v, "$type");
+        match str_field(ty, "$type").as_deref() {
+            Some("node") => {
+                if let Some(kind) = v.field("kind") {
+                    self.walk(
+                        kind,
+                        &JVal::Obj(vec![("$type".into(), JVal::Str("kind".into()))]),
+                        out,
+                    );
+                }
+                self.members(v, &self.node_fields, None, None, out);
+            }
+            Some("kind") => {
+                if let Some(tag) = tag {
+                    let owner = format!("Kind.{tag}");
+                    out.insert(owner.clone());
+                    if let Some(fields) = self.kinds.get(&tag) {
+                        self.members(v, fields, Some(&owner), None, out);
+                    }
+                }
+            }
+            Some("op") => {
+                if let Some(fields) = tag.and_then(|t| self.ops.get(&t)) {
+                    self.members(v, fields, None, None, out);
+                }
+            }
+            Some("union") => {
+                let name = str_field(ty, "name").expect("a union type names its union");
+                if let Some(tag) = tag {
+                    let owner = format!("{name}.{tag}");
+                    out.insert(owner.clone());
+                    let arg = arr(ty.field("args")).first();
+                    if let Some(fields) = self.unions.get(&name).and_then(|cases| cases.get(&tag)) {
+                        self.members(v, fields, Some(&owner), arg, out);
+                    }
+                } else if let Some(case) = self.transparent.get(&name) {
+                    out.insert(format!("{name}.{case}"));
+                }
+            }
+            Some("record") => {
+                let name = str_field(ty, "name").expect("a record type names its record");
+                if let Some(fields) = self.records.get(&name) {
+                    self.members(v, fields, Some(&name), None, out);
+                }
+            }
+            // A hosted slot whose wire type the IDL declares is walked through
+            // it; one carried as bare JSON is opaque here, as it is to the IDL.
+            Some("hosted") => {
+                if let Some(wire @ JVal::Obj(_)) = ty.field("wire") {
+                    self.walk(v, wire, out);
+                }
+            }
+            Some("list") => {
+                if let JVal::Arr(items) = v {
+                    for (i, item) in items.iter().enumerate() {
+                        let of = ty.field("of").or_else(|| arr(ty.field("items")).get(i));
+                        if let Some(of) = of {
+                            self.walk(item, of, out);
+                        }
+                    }
+                }
+            }
+            Some("map") => {
+                if let (JVal::Obj(entries), Some(values)) = (v, ty.field("values")) {
+                    for (_, item) in entries {
+                        self.walk(item, values, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Each token the corpus exercises, with the ids of the round-trip fixtures
+/// that carry it.
+fn exercised_tokens(corpus: &Path) -> BTreeMap<String, Vec<Fixture>> {
+    let vocabulary = Vocabulary::read(&corpus_idl(corpus));
+    let mut by_token: BTreeMap<String, Vec<Fixture>> = BTreeMap::new();
+    for fixture in load_manifest(corpus) {
+        if !EXERCISING_FAMILIES.contains(&fixture.kind.as_str()) {
+            continue;
+        }
+        let expected = fixture
+            .expected_file
+            .as_deref()
+            .unwrap_or(&fixture.input_file);
+        let doc = parse(&read_fixture(corpus, expected)).expect("a canonical document parses");
+        let mut found = BTreeSet::new();
+        let root = JVal::Obj(vec![("$type".into(), JVal::Str(fixture.decoder.clone()))]);
+        vocabulary.walk(&doc, &root, &mut found);
+        for token in found {
+            by_token.entry(token).or_default().push(fixture.clone());
+        }
+    }
+    by_token
+}
+
+/// This host decodes a fixture's canonical document and re-encodes it
+/// byte-identically.
+fn round_trips(corpus: &Path) -> impl Fn(&Fixture) -> bool + '_ {
+    move |fixture| {
+        let expected = read_fixture(
+            corpus,
+            fixture
+                .expected_file
+                .as_deref()
+                .unwrap_or(&fixture.input_file),
+        );
+        let got = if fixture.decoder == "op" {
+            decode_op(&expected).map(|op| encode_op(&op))
+        } else {
+            decode_node(&expected).map(|n| encode_node(&n))
+        };
+        got.is_ok_and(|g| g == expected)
+    }
+}
+
+/// Every way the claim and the corpus disagree, one finding per token, in token
+/// order.
+fn claim_findings(
+    claim: &[&str],
+    by_token: &BTreeMap<String, Vec<Fixture>>,
+    run: impl Fn(&Fixture) -> bool,
+) -> Vec<String> {
+    let mut verdicts: BTreeMap<String, bool> = BTreeMap::new();
+    let mut findings = vec![];
+    for (token, fixtures) in by_token {
+        if !claim.contains(&token.as_str()) {
+            findings.push(format!(
+                "{token}: the corpus exercises it ({}) and this host does not claim it",
+                fixtures[0].id
+            ));
+            continue;
+        }
+        let red: Vec<&str> = fixtures
+            .iter()
+            .filter(|f| !*verdicts.entry(f.id.clone()).or_insert_with(|| run(f)))
+            .map(|f| f.id.as_str())
+            .collect();
+        if !red.is_empty() {
+            findings.push(format!(
+                "{token}: claimed, and this host does not round-trip {}",
+                red.join(", ")
+            ));
+        }
+    }
+    findings
+}
+
+#[test]
+fn the_claim_reads_back_against_the_corpus() {
+    let corpus = common::corpus_root();
+    let by_token = exercised_tokens(&corpus);
+    let reached: BTreeSet<&str> = by_token.keys().map(|t| token_family(t)).collect();
+    assert_eq!(
+        reached.into_iter().collect::<Vec<_>>(),
+        DERIVED_FAMILIES,
+        "the corpus walk must reach every derived family, or the read-back checks nothing there"
+    );
+    let findings = claim_findings(
+        fuaran_rs::wire::CONSTRUCT_TOKENS,
+        &by_token,
+        round_trips(&corpus),
+    );
+    assert!(
+        findings.is_empty(),
+        "the claim and the corpus disagree:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn an_omitted_token_the_corpus_exercises_fails_by_name() {
+    let corpus = common::corpus_root();
+    let claim: Vec<&str> = fuaran_rs::wire::CONSTRUCT_TOKENS
+        .iter()
+        .copied()
+        .filter(|t| *t != "Kind.Badge")
+        .collect();
+    let findings = claim_findings(&claim, &exercised_tokens(&corpus), round_trips(&corpus));
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(
+        findings[0].starts_with("Kind.Badge: the corpus exercises it ("),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn a_claimed_token_this_host_does_not_round_trip_fails_by_name() {
+    let corpus = common::corpus_root();
+    let by_token = exercised_tokens(&corpus);
+    let victim = by_token
+        .get("Kind.Badge")
+        .and_then(|fs| fs.first())
+        .map(|f| f.id.clone())
+        .expect("a fixture exercises Kind.Badge, or this falsifier tests nothing");
+    let findings = claim_findings(fuaran_rs::wire::CONSTRUCT_TOKENS, &by_token, |f| {
+        f.id != victim
+    });
+    assert!(!findings.is_empty());
+    assert!(findings.iter().all(|f| f.contains(&victim)), "{findings:?}");
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.starts_with("Kind.Badge: claimed")),
+        "{findings:?}"
     );
 }
 

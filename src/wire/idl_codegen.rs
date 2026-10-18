@@ -20,7 +20,11 @@
 //!   (`dialect.rs`) declares a departure;
 //! - the omit-at-default table as typed constants (`defaults`), which the decoder
 //!   fills absent fields from and the encoder omits by;
-//! - the node-bearing slot enumeration a walk over a wire tree descends through.
+//! - the node-bearing slot enumeration a walk over a wire tree descends through;
+//! - the construct tokens (WIRE_FORMAT §27.2) the wire types author,
+//!   `CONSTRUCT_TOKENS`, which the host capability manifest publishes as its
+//!   token claim (Phase 2332), so the claim grows and shrinks with the types by
+//!   regeneration alone.
 //!
 //! **The dialect is checked, so it cannot become a mirror.** It lists only the
 //! positions the rules map differently from this host's public types, each with
@@ -937,6 +941,50 @@ fn str_list(items: &[String]) -> String {
     out
 }
 
+/// The construct tokens (WIRE_FORMAT §27.2) the generated wire types author:
+/// every kind, every union case, and every wire member of a kind, a union case
+/// or a record, sorted. A `hostOnly` row never reaches the wire, so it is no
+/// token. The dialect changes how a member is REPRESENTED, never whether its key
+/// is written: a closure member with no Rust member is written as the sentinel,
+/// and a folded field is written from the member it folds into, so every other
+/// row is authored. The host's conformance leg reads this claim back against
+/// the corpus fixtures, which is what would catch a row the codec drops.
+fn tokens_of(idl: &Idl) -> Vec<String> {
+    let mut found = std::collections::BTreeSet::new();
+    let members = |found: &mut std::collections::BTreeSet<String>, owner: &str, o: &Owner| {
+        for f in o.fields.iter().filter(|f| f.optionality != "hostOnly") {
+            found.insert(format!("{owner}.{}", f.name));
+        }
+    };
+    for k in &idl.kinds {
+        let owner = format!("Kind.{}", k.owner.name);
+        found.insert(owner.clone());
+        members(&mut found, &owner, &k.owner);
+    }
+    for u in &idl.unions {
+        for c in &u.cases {
+            let owner = format!("{}.{}", u.name, c.name);
+            found.insert(owner.clone());
+            members(&mut found, &owner, c);
+        }
+    }
+    for r in &idl.records {
+        members(&mut found, &r.name, r);
+    }
+    found.into_iter().collect()
+}
+
+/// The construct tokens a module generated from these `idl.json` bytes carries
+/// as `CONSTRUCT_TOKENS` — the projection, exposed so a test can hand it an IDL
+/// with one construct removed and see exactly that construct's tokens go.
+///
+/// # Errors
+///
+/// A message naming the IDL position the generator cannot read.
+pub fn construct_tokens(idl_text: &str) -> Result<Vec<String>, String> {
+    Ok(tokens_of(&read_idl(idl_text)?))
+}
+
 /// Generate `src/wire/generated.rs` from the bytes of `idl.json`.
 ///
 /// # Errors
@@ -1199,6 +1247,17 @@ pub const NODE_SLOTS: &[&str] = {};
 pub const NODE_RECORD_SLOTS: &[&str] = {};",
         str_list(&node_slots),
         str_list(&record_slots)
+    );
+    let _ = writeln!(
+        w,
+        "
+// ─── Construct tokens (WIRE_FORMAT §27.2) ───────────────────────────────────
+
+/// Every construct token the wire types above author: every kind, every union
+/// case, and every wire member of a kind, a union case or a record, sorted. The
+/// host capability manifest publishes it as this host's token claim.
+pub const CONSTRUCT_TOKENS: &[&str] = {};",
+        str_list(&tokens_of(&idl))
     );
     // The imports the wire types need, and only those: a dialect entry that
     // stops naming a map type must not leave an unused import behind.

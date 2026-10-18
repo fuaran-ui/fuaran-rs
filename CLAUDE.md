@@ -81,6 +81,18 @@ co-equal conformant host. Cross-repo development conventions (port allocation, f
   encode / decode byte-identically against the shared corpus and surface the
   canonical reject code + `$`-rooted path for every malformed fixture — certified the
   same way the F#, TypeScript, Python, and Go hosts are.
+- **The capability manifest's token families are generated from the type model,
+  never authored (Phase 2332).** The generator (`src/wire/idl_codegen.rs`) writes
+  `CONSTRUCT_TOKENS` into the generated layer beside the wire types: every kind,
+  union case, and wire member of a kind, case or record (WIRE_FORMAT §27.2), a
+  `hostOnly` row being no token. `tests/conformance.rs` publishes it as the
+  `kinds`, `kindFields`, `unionCases`, `caseFields` and `recordFields` claim, so a
+  vocabulary change grows or shrinks the claim by regeneration alone and no token
+  list is ever written by hand. `hostedCases` is declared not covered: the
+  generated layer types each hosted slot opaquely, so it holds no enumeration to
+  project (§27.5). The same test reads the claim back against the corpus fixtures
+  and fails, by token, on a construct the corpus exercises and the claim omits, or
+  a claimed one this host does not round-trip.
 - **Dependency-light.** The runtime host uses the Rust standard library only. Rust's
   stdlib has no JSON, so the canonical JSON layer is hand-written (needed for
   byte-exact canonical output anyway); third-party crates appear only as dev tooling
