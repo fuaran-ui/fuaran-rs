@@ -996,6 +996,14 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
         FamilyAnswer::NotApplicable("this host's decoder offers no §23 kind admission policy"),
     ),
     (
+        "design-seam-reject",
+        FamilyAnswer::Pending("this host has no design-provider seam codec yet (Phase 2295)"),
+    ),
+    (
+        "design-seam-round-trip",
+        FamilyAnswer::Pending("this host has no design-provider seam codec yet (Phase 2295)"),
+    ),
+    (
         "devtools-relay",
         FamilyAnswer::NotApplicable("this host ships no devtools relay endpoint"),
     ),
