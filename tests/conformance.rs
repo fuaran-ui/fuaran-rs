@@ -1018,6 +1018,10 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
     ("elicitation-round-trip", FamilyAnswer::Covered),
     ("envelope-reject", FamilyAnswer::Covered),
     ("envelope-round-trip", FamilyAnswer::Covered),
+    (
+        "formatting",
+        FamilyAnswer::Pending("this host's suite does not yet run the number-formatting vectors"),
+    ),
     ("laws/capabilityLaws", FamilyAnswer::Pending(LAW_UNRUN)),
     ("laws/dataframeParity", FamilyAnswer::Covered),
     ("laws/decimal", FamilyAnswer::Pending(LAW_UNRUN)),

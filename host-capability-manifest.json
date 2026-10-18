@@ -58,6 +58,9 @@
     "elicitation-round-trip": "covered",
     "envelope-reject": "covered",
     "envelope-round-trip": "covered",
+    "formatting": {
+      "pending": "this host's suite does not yet run the number-formatting vectors"
+    },
     "laws/capabilityLaws": {
       "pending": "this host's suite does not yet run this law family's vectors"
     },
