@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "857888fc68ecc881b6a11e7f141e32f04ba07fd5d21d6ff47ed16538bad2d2d2";
+pub const IDL_SHA256: &str = "e9ff0a22d727111d3d847a689655149081bdd1203f66ea2417905e13cd1791c7";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -713,6 +713,7 @@ pub struct FileUploadSpec {
     pub accept: Vec<String>,
     pub label: TextSource,
     pub multiple: bool,
+    pub on_select: Option<Closure>,
     pub disabled: Option<Binding>,
     /// Phase 1115 - the paste ingress route. Same polarity, same reason.
     pub accept_paste: bool,
@@ -993,11 +994,11 @@ pub struct SelectSpec {
     pub on_change: Option<Closure>,
     pub on_change_multi: Option<Closure>,
     pub source: Binding,
-    pub value: Binding,
+    pub value: Option<Binding>,
     pub placeholder: Option<TextSource>,
     pub disabled: Option<Binding>,
     /// Emitted only when `true` (Phase 291), so single-select stays byte-identical.
-    pub multiple: bool,
+    pub multiple: Option<bool>,
     pub values: Option<Binding>,
 }
 
@@ -1021,6 +1022,7 @@ pub struct SplitPanelSpec {
 pub struct StepperSpec {
     pub active_step: Binding,
     pub children: Vec<Node>,
+    pub on_select: Option<Closure>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2343,11 +2345,15 @@ pub enum TreeOp {
 /// that are an empty list or a record stay as the codec's structural checks.
 pub(crate) mod defaults {
     use super::*;
+    pub(crate) const BADGE_VARIANT: BadgeVariant = BadgeVariant::Neutral;
     pub(crate) const BOX_KEEP_TOGETHER: bool = false;
     pub(crate) const BOX_BREAK_BEFORE: bool = false;
+    pub(crate) const BUTTON_VARIANT: ButtonVariant = ButtonVariant::Secondary;
     pub(crate) const CALLOUT_DISMISSABLE: bool = false;
     pub(crate) const CALLOUT_TONE: ToneVariant = ToneVariant::Default;
     pub(crate) const CHART_STACKED: bool = false;
+    pub(crate) const CODE_BLOCK_COPYABLE: bool = true;
+    pub(crate) const CODE_BLOCK_LINE_NUMBERS: bool = false;
     pub(crate) const DATA_GRID_EDITABLE: bool = false;
     pub(crate) const DATA_GRID_REORDERABLE: bool = false;
     pub(crate) const DATA_GRID_KEEP_ROWS_TOGETHER: bool = false;
@@ -2356,16 +2362,21 @@ pub(crate) mod defaults {
     pub(crate) const EMBED_ASPECT_RATIO: ImageAspect = ImageAspect::Natural;
     pub(crate) const FACT_EMPHASIS: bool = false;
     pub(crate) const FACT_TONE: ToneVariant = ToneVariant::Default;
+    pub(crate) const FILE_UPLOAD_MULTIPLE: bool = false;
     pub(crate) const FILE_UPLOAD_ACCEPT_PASTE: bool = false;
     pub(crate) const FILE_UPLOAD_DROP_TARGET: bool = false;
+    pub(crate) const HEADING_VARIANT: HeadingVariant = HeadingVariant::Standard;
     pub(crate) const ICON_SIZE: IconSize = IconSize::Medium;
     pub(crate) const ICON_TONE: ToneVariant = ToneVariant::Default;
+    pub(crate) const IMAGE_VARIANT: ImageVariant = ImageVariant::Default;
     pub(crate) const IMAGE_FIT: ImageFit = ImageFit::Natural;
     pub(crate) const IMAGE_ASPECT_RATIO: ImageAspect = ImageAspect::Natural;
     pub(crate) const IMAGE_LOADING: ImageLoading = ImageLoading::Eager;
     pub(crate) const IMAGE_EXPANDABLE: bool = false;
     pub(crate) const LABEL_VALUE_ROW_EMPHASIS: bool = false;
     pub(crate) const LABEL_VALUE_ROW_FORMAT: CellFormat = CellFormat::None;
+    pub(crate) const LINK_DOWNLOAD: bool = false;
+    pub(crate) const LIST_ORDERED: bool = false;
     pub(crate) const MEDIA_CONTROLS: bool = true;
     pub(crate) const MEDIA_LOOP: bool = false;
     pub(crate) const METRIC_FORMAT: CellFormat = CellFormat::None;
@@ -2373,6 +2384,7 @@ pub(crate) mod defaults {
     pub(crate) const METRIC_WEIGHT: StyleWeight = StyleWeight::Standard;
     pub(crate) const METRIC_EMPHASIS: Emphasis = Emphasis::Normal;
     pub(crate) const METRIC_TREND_POLARITY: TrendPolarity = TrendPolarity::HigherIsBetter;
+    pub(crate) const MODAL_DISMISSABLE: bool = true;
     pub(crate) const MODAL_MODALITY: ModalityKind = ModalityKind::Modal;
     pub(crate) const PROGRESS_INDETERMINATE: bool = false;
     pub(crate) const PROGRESS_TONE: ToneVariant = ToneVariant::Default;
@@ -2381,6 +2393,7 @@ pub(crate) mod defaults {
     pub(crate) const TOAST_TONE: ToneVariant = ToneVariant::Default;
     pub(crate) const COLUMN_ERASED_FORMAT: CellFormat = CellFormat::None;
     pub(crate) const COLUMN_ERASED_WIDTH: ColumnWidth = ColumnWidth::Auto;
+    pub(crate) const FORM_FIELD_REQUIRED: bool = false;
     pub(crate) const SEMANTIC_STYLE_DIRECTION: TextDirection = TextDirection::Auto;
     pub(crate) const SEMANTIC_STYLE_EMPHASIS: Emphasis = Emphasis::Normal;
     pub(crate) const SEMANTIC_STYLE_ROLE: StyleRole = StyleRole::None;
@@ -2389,7 +2402,9 @@ pub(crate) mod defaults {
     pub(crate) const SEMANTIC_STYLE_WEIGHT: StyleWeight = StyleWeight::Standard;
     pub(crate) const TRACK_ENTRY_DEFAULT: bool = false;
     pub(crate) const ACTION_NAVIGATE_TARGET: NavigateTarget = NavigateTarget::Self_;
+    pub(crate) const BOX_LAYOUT_FLEX_WRAP: bool = false;
     pub(crate) const CELL_KIND_ERASED_TONED_PILL_DEFAULT: ToneVariant = ToneVariant::Default;
+    pub(crate) const FORM_FIELD_KIND_SEGMENTED_CHOICE_ORIENTATION: Orientation = Orientation::Horizontal;
     pub(crate) const FORM_FIELD_KIND_COMBOBOX_ALLOW_FREE_TEXT: bool = false;
     pub(crate) const FORM_FIELD_KIND_RATING_ALLOW_HALF: bool = false;
     pub(crate) const FORM_FIELD_KIND_TOKENS_ALLOW_FREE_TEXT: bool = true;
@@ -2408,7 +2423,11 @@ pub(super) mod gen_encode {
 
     pub(in super::super) fn badge_spec(v: &BadgeSpec) -> String {
         let BadgeSpec { label: m_label, variant: m_variant } = v;
-        obj(vec![field("label", text_source(m_label)), field("variant", s(m_variant.as_str()))])
+        let mut f: Vec<Field> = vec![field("label", text_source(m_label))];
+        if *m_variant != defaults::BADGE_VARIANT {
+            f.push(field("variant", s(m_variant.as_str())));
+        }
+        obj(f)
     }
 
     pub(in super::super) fn box_spec(v: &BoxSpec) -> String {
@@ -2430,7 +2449,10 @@ pub(super) mod gen_encode {
 
     pub(in super::super) fn button_spec(v: &ButtonSpec) -> String {
         let ButtonSpec { label: m_label, on_click: m_on_click, variant: m_variant, icon: m_icon, disabled: m_disabled } = v;
-        let mut f: Vec<Field> = vec![field("label", text_source(m_label)), field("onClick", action(m_on_click)), field("variant", s(m_variant.as_str()))];
+        let mut f: Vec<Field> = vec![field("label", text_source(m_label)), field("onClick", action(m_on_click))];
+        if *m_variant != defaults::BUTTON_VARIANT {
+            f.push(field("variant", s(m_variant.as_str())));
+        }
         if let Some(x) = m_icon {
             f.push(field("icon", s(x)));
         }
@@ -2501,7 +2523,18 @@ pub(super) mod gen_encode {
 
     pub(in super::super) fn code_block_spec(v: &CodeBlockSpec) -> String {
         let CodeBlockSpec { code: m_code, copyable: m_copyable, highlight_lines: m_highlight_lines, language: m_language, line_numbers: m_line_numbers } = v;
-        obj(vec![field("code", s(m_code)), field("copyable", boolean(*m_copyable)), field("highlightLines", enc_list(m_highlight_lines, |v| int(*v))), field("language", s(m_language)), field("lineNumbers", boolean(*m_line_numbers))])
+        let mut f: Vec<Field> = vec![field("code", s(m_code))];
+        if *m_copyable != defaults::CODE_BLOCK_COPYABLE {
+            f.push(field("copyable", boolean(*m_copyable)));
+        }
+        if !m_highlight_lines.is_empty() {
+            f.push(field("highlightLines", enc_list(m_highlight_lines, |v| int(*v))));
+        }
+        f.push(field("language", s(m_language)));
+        if *m_line_numbers != defaults::CODE_BLOCK_LINE_NUMBERS {
+            f.push(field("lineNumbers", boolean(*m_line_numbers)));
+        }
+        obj(f)
     }
 
     pub(in super::super) fn custom_spec(v: &CustomSpec) -> String {
@@ -2642,8 +2675,14 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn file_upload_spec(v: &FileUploadSpec) -> String {
-        let FileUploadSpec { accept: m_accept, label: m_label, multiple: m_multiple, disabled: m_disabled, accept_paste: m_accept_paste, drop_target: m_drop_target, capture: m_capture, destination: m_destination, max_bytes: m_max_bytes, max_files: m_max_files } = v;
-        let mut f: Vec<Field> = vec![field("accept", enc_list(m_accept, |v| s(v))), field("label", text_source(m_label)), field("multiple", boolean(*m_multiple)), field("onSelect", CLOSURE.to_string())];
+        let FileUploadSpec { accept: m_accept, label: m_label, multiple: m_multiple, on_select: m_on_select, disabled: m_disabled, accept_paste: m_accept_paste, drop_target: m_drop_target, capture: m_capture, destination: m_destination, max_bytes: m_max_bytes, max_files: m_max_files } = v;
+        let mut f: Vec<Field> = vec![field("accept", enc_list(m_accept, |v| s(v))), field("label", text_source(m_label))];
+        if *m_multiple != defaults::FILE_UPLOAD_MULTIPLE {
+            f.push(field("multiple", boolean(*m_multiple)));
+        }
+        if m_on_select.is_some() {
+            f.push(field("onSelect", CLOSURE.to_string()));
+        }
         if let Some(x) = m_disabled {
             f.push(field("disabled", binding(x)));
         }
@@ -2700,7 +2739,11 @@ pub(super) mod gen_encode {
 
     pub(in super::super) fn heading_spec(v: &HeadingSpec) -> String {
         let HeadingSpec { level: m_level, text: m_text, variant: m_variant } = v;
-        obj(vec![field("level", int(*m_level)), field("text", text_source(m_text)), field("variant", s(m_variant.as_str()))])
+        let mut f: Vec<Field> = vec![field("level", int(*m_level)), field("text", text_source(m_text))];
+        if *m_variant != defaults::HEADING_VARIANT {
+            f.push(field("variant", s(m_variant.as_str())));
+        }
+        obj(f)
     }
 
     pub(in super::super) fn icon_spec(v: &IconSpec) -> String {
@@ -2720,7 +2763,10 @@ pub(super) mod gen_encode {
 
     pub(in super::super) fn image_spec(v: &ImageSpec) -> String {
         let ImageSpec { alt: m_alt, src: m_src, variant: m_variant, fit: m_fit, aspect_ratio: m_aspect_ratio, loading: m_loading, src_set: m_src_set, expandable: m_expandable, caption: m_caption } = v;
-        let mut f: Vec<Field> = vec![field("alt", text_source(m_alt)), field("src", binding(m_src)), field("variant", s(m_variant.as_str()))];
+        let mut f: Vec<Field> = vec![field("alt", text_source(m_alt)), field("src", binding(m_src))];
+        if *m_variant != defaults::IMAGE_VARIANT {
+            f.push(field("variant", s(m_variant.as_str())));
+        }
         if *m_fit != defaults::IMAGE_FIT {
             f.push(field("fit", s(m_fit.as_str())));
         }
@@ -2761,7 +2807,10 @@ pub(super) mod gen_encode {
 
     pub(in super::super) fn link_spec(v: &LinkSpec) -> String {
         let LinkSpec { href: m_href, label: m_label, download: m_download, rel: m_rel, target: m_target, protection: m_protection } = v;
-        let mut f: Vec<Field> = vec![field("href", binding(m_href)), field("label", text_source(m_label)), field("download", boolean(*m_download))];
+        let mut f: Vec<Field> = vec![field("href", binding(m_href)), field("label", text_source(m_label))];
+        if *m_download != defaults::LINK_DOWNLOAD {
+            f.push(field("download", boolean(*m_download)));
+        }
         if let Some(x) = m_rel {
             f.push(field("rel", s(x)));
         }
@@ -2776,7 +2825,11 @@ pub(super) mod gen_encode {
 
     pub(in super::super) fn list_spec(v: &ListSpec) -> String {
         let ListSpec { items: m_items, ordered: m_ordered } = v;
-        obj(vec![field("items", enc_list(m_items, text_source)), field("ordered", boolean(*m_ordered))])
+        let mut f: Vec<Field> = vec![field("items", enc_list(m_items, text_source))];
+        if *m_ordered != defaults::LIST_ORDERED {
+            f.push(field("ordered", boolean(*m_ordered)));
+        }
+        obj(f)
     }
 
     pub(in super::super) fn map_spec(v: &MapSpec) -> String {
@@ -2854,7 +2907,10 @@ pub(super) mod gen_encode {
 
     pub(in super::super) fn modal_spec(v: &ModalSpec) -> String {
         let ModalSpec { children: m_children, dismissable: m_dismissable, on_dismiss: m_on_dismiss, open: m_open, heading: m_heading, modality: m_modality, anchor: m_anchor } = v;
-        let mut f: Vec<Field> = vec![field("children", enc_list(m_children, node)), field("dismissable", boolean(*m_dismissable))];
+        let mut f: Vec<Field> = vec![field("children", enc_list(m_children, node))];
+        if *m_dismissable != defaults::MODAL_DISMISSABLE {
+            f.push(field("dismissable", boolean(*m_dismissable)));
+        }
         if let Some(x) = m_on_dismiss {
             f.push(field("onDismiss", action(x)));
         }
@@ -2922,15 +2978,17 @@ pub(super) mod gen_encode {
             f.push(field("onChangeMulti", CLOSURE.to_string()));
         }
         f.push(field("source", binding(m_source)));
-        f.push(field("value", binding(m_value)));
+        if let Some(x) = m_value {
+            f.push(field("value", binding(x)));
+        }
         if let Some(x) = m_placeholder {
             f.push(field("placeholder", text_source(x)));
         }
         if let Some(x) = m_disabled {
             f.push(field("disabled", binding(x)));
         }
-        if let Some(j) = encode_select_multiple(m_multiple) {
-            f.push(field("multiple", j));
+        if let Some(x) = m_multiple {
+            f.push(field("multiple", boolean(*x)));
         }
         if let Some(x) = m_values {
             f.push(field("values", binding(x)));
@@ -2954,8 +3012,16 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn stepper_spec(v: &StepperSpec) -> String {
-        let StepperSpec { active_step: m_active_step, children: m_children } = v;
-        obj(vec![field("activeStep", binding(m_active_step)), field("children", enc_list(m_children, node)), field("onSelect", CLOSURE.to_string())])
+        let StepperSpec { active_step: m_active_step, children: m_children, on_select: m_on_select } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(j) = encode_stepper_active_step(m_active_step) {
+            f.push(field("activeStep", j));
+        }
+        f.push(field("children", enc_list(m_children, node)));
+        if m_on_select.is_some() {
+            f.push(field("onSelect", CLOSURE.to_string()));
+        }
+        obj(f)
     }
 
     pub(in super::super) fn summary_list_spec(v: &SummaryListSpec) -> String {
@@ -3569,7 +3635,10 @@ pub(super) mod gen_encode {
             case_obj("Auto", vec![])
             }
             BoxLayout::Flex { direction: m_direction, wrap: m_wrap, gap: m_gap } => {
-            let mut f: Vec<Field> = vec![field("direction", s(m_direction.as_str())), field("wrap", boolean(*m_wrap))];
+            let mut f: Vec<Field> = vec![field("direction", s(m_direction.as_str()))];
+            if *m_wrap != defaults::BOX_LAYOUT_FLEX_WRAP {
+                f.push(field("wrap", boolean(*m_wrap)));
+            }
             if let Some(x) = m_gap {
                 f.push(field("gap", int(*x)));
             }
@@ -4054,7 +4123,7 @@ pub(super) mod gen_decode {
     pub(in super::super) fn decode_badge_spec(path: &str, j: &JVal) -> DResult<BadgeSpec> {
         let fields = as_obj(path, j)?;
         let m_label = field_req(path, fields, "label", &[], "Badge.label: TextSource", decode_text_source)?;
-        let m_variant = field_req(path, fields, "variant", &[], "Badge.variant: BadgeVariant", decode_badge_variant)?;
+        let m_variant = field_or(path, fields, "variant", &[], defaults::BADGE_VARIANT, decode_badge_variant)?;
         Ok(BadgeSpec { label: m_label, variant: m_variant })
     }
 
@@ -4073,7 +4142,7 @@ pub(super) mod gen_decode {
         let fields = as_obj(path, j)?;
         let m_label = field_req(path, fields, "label", &[], "Button.label: TextSource", decode_text_source)?;
         let m_on_click = field_req(path, fields, "onClick", &[], "Button.onClick: Action", decode_action)?;
-        let m_variant = field_req(path, fields, "variant", &[], "Button.variant: ButtonVariant", decode_button_variant)?;
+        let m_variant = field_or(path, fields, "variant", &[], defaults::BUTTON_VARIANT, decode_button_variant)?;
         let m_icon = field_opt(path, fields, "icon", &[], dec_string)?;
         let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
         Ok(ButtonSpec { label: m_label, on_click: m_on_click, variant: m_variant, icon: m_icon, disabled: m_disabled })
@@ -4112,10 +4181,10 @@ pub(super) mod gen_decode {
     pub(in super::super) fn decode_code_block_spec(path: &str, j: &JVal) -> DResult<CodeBlockSpec> {
         let fields = as_obj(path, j)?;
         let m_code = field_req(path, fields, "code", &[], "CodeBlock.code: string", dec_string)?;
-        let m_copyable = field_req(path, fields, "copyable", &[], "CodeBlock.copyable: boolean", as_bool)?;
-        let m_highlight_lines = field_req(path, fields, "highlightLines", &[], "CodeBlock.highlightLines: list of integer", |p, j| dec_list(p, j, as_int))?;
+        let m_copyable = field_or(path, fields, "copyable", &[], defaults::CODE_BLOCK_COPYABLE, as_bool)?;
+        let m_highlight_lines = field_or(path, fields, "highlightLines", &[], Vec::new(), |p, j| dec_list(p, j, as_int))?;
         let m_language = field_req(path, fields, "language", &[], "CodeBlock.language: string", dec_string)?;
-        let m_line_numbers = field_req(path, fields, "lineNumbers", &[], "CodeBlock.lineNumbers: boolean", as_bool)?;
+        let m_line_numbers = field_or(path, fields, "lineNumbers", &[], defaults::CODE_BLOCK_LINE_NUMBERS, as_bool)?;
         Ok(CodeBlockSpec { code: m_code, copyable: m_copyable, highlight_lines: m_highlight_lines, language: m_language, line_numbers: m_line_numbers })
     }
 
@@ -4208,7 +4277,8 @@ pub(super) mod gen_decode {
         let fields = as_obj(path, j)?;
         let m_accept = field_req(path, fields, "accept", &[], "FileUpload.accept: list of string", |p, j| dec_list(p, j, dec_string))?;
         let m_label = field_req(path, fields, "label", &[], "FileUpload.label: TextSource", decode_text_source)?;
-        let m_multiple = field_req(path, fields, "multiple", &[], "FileUpload.multiple: boolean", as_bool)?;
+        let m_multiple = field_or(path, fields, "multiple", &[], defaults::FILE_UPLOAD_MULTIPLE, as_bool)?;
+        let m_on_select = field_opt(path, fields, "onSelect", &[], dec_closure)?;
         let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
         let m_accept_paste = field_or(path, fields, "acceptPaste", &[], defaults::FILE_UPLOAD_ACCEPT_PASTE, as_bool)?;
         let m_drop_target = field_or(path, fields, "dropTarget", &[], defaults::FILE_UPLOAD_DROP_TARGET, as_bool)?;
@@ -4216,7 +4286,7 @@ pub(super) mod gen_decode {
         let m_destination = field_opt(path, fields, "destination", &[], dec_string)?;
         let m_max_bytes = field_opt(path, fields, "maxBytes", &[], as_int)?;
         let m_max_files = field_opt(path, fields, "maxFiles", &[], as_int)?;
-        let v = FileUploadSpec { accept: m_accept, label: m_label, multiple: m_multiple, disabled: m_disabled, accept_paste: m_accept_paste, drop_target: m_drop_target, capture: m_capture, destination: m_destination, max_bytes: m_max_bytes, max_files: m_max_files };
+        let v = FileUploadSpec { accept: m_accept, label: m_label, multiple: m_multiple, on_select: m_on_select, disabled: m_disabled, accept_paste: m_accept_paste, drop_target: m_drop_target, capture: m_capture, destination: m_destination, max_bytes: m_max_bytes, max_files: m_max_files };
         check_file_upload(path, fields, &v)?;
         Ok(v)
     }
@@ -4250,7 +4320,7 @@ pub(super) mod gen_decode {
         let fields = as_obj(path, j)?;
         let m_level = field_req(path, fields, "level", &[], "Heading.level: integer", as_int)?;
         let m_text = field_req(path, fields, "text", &[], "Heading.text: TextSource", decode_text_source)?;
-        let m_variant = field_req(path, fields, "variant", &[], "Heading.variant: HeadingVariant", decode_heading_variant)?;
+        let m_variant = field_or(path, fields, "variant", &[], defaults::HEADING_VARIANT, decode_heading_variant)?;
         Ok(HeadingSpec { level: m_level, text: m_text, variant: m_variant })
     }
 
@@ -4267,7 +4337,7 @@ pub(super) mod gen_decode {
         let fields = as_obj(path, j)?;
         let m_alt = field_req(path, fields, "alt", &[], "Image.alt: TextSource", decode_text_source)?;
         let m_src = field_req(path, fields, "src", &[], "Image.src: Binding<string>", |p, j| decode_binding_slot(p, j, StaticSlot::Str))?;
-        let m_variant = field_req(path, fields, "variant", &[], "Image.variant: ImageVariant", decode_image_variant)?;
+        let m_variant = field_or(path, fields, "variant", &[], defaults::IMAGE_VARIANT, decode_image_variant)?;
         let m_fit = field_or(path, fields, "fit", &[], defaults::IMAGE_FIT, decode_image_fit)?;
         let m_aspect_ratio = field_or(path, fields, "aspectRatio", &[], defaults::IMAGE_ASPECT_RATIO, decode_image_aspect)?;
         let m_loading = field_or(path, fields, "loading", &[], defaults::IMAGE_LOADING, decode_image_loading)?;
@@ -4291,7 +4361,7 @@ pub(super) mod gen_decode {
         let fields = as_obj(path, j)?;
         let m_href = field_req(path, fields, "href", &[], "Link.href: Binding<string>", |p, j| decode_binding_slot(p, j, StaticSlot::Str))?;
         let m_label = field_req(path, fields, "label", &[], "Link.label: TextSource", decode_text_source)?;
-        let m_download = field_req(path, fields, "download", &[], "Link.download: boolean", as_bool)?;
+        let m_download = field_or(path, fields, "download", &[], defaults::LINK_DOWNLOAD, as_bool)?;
         let m_rel = field_opt(path, fields, "rel", &[], dec_string)?;
         let m_target = field_opt(path, fields, "target", &[], dec_string)?;
         let m_protection = field_opt(path, fields, "protection", &[], decode_link_protection)?;
@@ -4301,7 +4371,7 @@ pub(super) mod gen_decode {
     pub(in super::super) fn decode_list_spec(path: &str, j: &JVal) -> DResult<ListSpec> {
         let fields = as_obj(path, j)?;
         let m_items = field_req(path, fields, "items", &[], "List.items: list of TextSource", |p, j| dec_list(p, j, decode_text_source))?;
-        let m_ordered = field_req(path, fields, "ordered", &[], "List.ordered: boolean", as_bool)?;
+        let m_ordered = field_or(path, fields, "ordered", &[], defaults::LIST_ORDERED, as_bool)?;
         Ok(ListSpec { items: m_items, ordered: m_ordered })
     }
 
@@ -4359,7 +4429,7 @@ pub(super) mod gen_decode {
     pub(in super::super) fn decode_modal_spec(path: &str, j: &JVal) -> DResult<ModalSpec> {
         let fields = as_obj(path, j)?;
         let m_children = field_req(path, fields, "children", &[], "Modal.children: list of Node", |p, j| dec_list(p, j, decode_node_ast))?;
-        let m_dismissable = field_req(path, fields, "dismissable", &[], "Modal.dismissable: boolean", as_bool)?;
+        let m_dismissable = field_or(path, fields, "dismissable", &[], defaults::MODAL_DISMISSABLE, as_bool)?;
         let m_on_dismiss = field_opt(path, fields, "onDismiss", &[], decode_action)?;
         let m_open = field_req(path, fields, "open", &[], "Modal.open: Binding<boolean>", |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
         let m_heading = field_opt(path, fields, "heading", &["title"], decode_text_source)?;
@@ -4405,7 +4475,7 @@ pub(super) mod gen_decode {
         let m_value = decode_select_value(path, fields)?;
         let m_placeholder = field_opt(path, fields, "placeholder", &[], decode_text_source)?;
         let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
-        let m_multiple = decode_select_multiple(path, fields)?;
+        let m_multiple = field_opt(path, fields, "multiple", &[], as_bool)?;
         let m_values = field_opt(path, fields, "values", &[], |p, j| decode_binding_slot(p, j, StaticSlot::StringList))?;
         Ok(SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values })
     }
@@ -4433,9 +4503,10 @@ pub(super) mod gen_decode {
 
     pub(in super::super) fn decode_stepper_spec(path: &str, j: &JVal) -> DResult<StepperSpec> {
         let fields = as_obj(path, j)?;
-        let m_active_step = field_req(path, fields, "activeStep", &[], "Stepper.activeStep: Binding<integer>", |p, j| decode_binding_slot(p, j, StaticSlot::Int))?;
+        let m_active_step = decode_stepper_active_step(path, fields)?;
         let m_children = field_req(path, fields, "children", &[], "Stepper.children: list of Node", |p, j| dec_list(p, j, decode_node_ast))?;
-        Ok(StepperSpec { active_step: m_active_step, children: m_children })
+        let m_on_select = field_opt(path, fields, "onSelect", &[], dec_closure)?;
+        Ok(StepperSpec { active_step: m_active_step, children: m_children, on_select: m_on_select })
     }
 
     pub(in super::super) fn decode_summary_list_spec(path: &str, j: &JVal) -> DResult<SummaryListSpec> {
@@ -4821,7 +4892,7 @@ pub(super) mod gen_decode {
         let m_id = field_req(path, fields, "id", &["name"], "FormField.id: string", dec_string)?;
         let m_kind = decode_form_field_control(path, fields)?;
         let m_label = field_req(path, fields, "label", &[], "FormField.label: TextSource", decode_text_source)?;
-        let m_required = field_req(path, fields, "required", &[], "FormField.required: boolean", as_bool)?;
+        let m_required = field_or(path, fields, "required", &[], defaults::FORM_FIELD_REQUIRED, as_bool)?;
         let m_help = field_opt(path, fields, "help", &[], decode_text_source)?;
         let m_rule = field_opt(path, fields, "rule", &[], decode_field_rule)?;
         Ok(FormField { id: m_id, kind: m_kind, label: m_label, required: m_required, help: m_help, rule: m_rule })
@@ -5114,7 +5185,7 @@ pub(super) mod gen_decode {
 
     pub(in super::super) fn decode_box_layout_flex(path: &str, fields: &Fields) -> DResult<BoxLayout> {
         let m_direction = field_req(path, fields, "direction", &[], "BoxLayout.Flex.direction: Orientation", decode_orientation)?;
-        let m_wrap = field_req(path, fields, "wrap", &[], "BoxLayout.Flex.wrap: boolean", as_bool)?;
+        let m_wrap = field_or(path, fields, "wrap", &[], defaults::BOX_LAYOUT_FLEX_WRAP, as_bool)?;
         let m_gap = field_opt(path, fields, "gap", &[], as_int)?;
         Ok(BoxLayout::Flex { direction: m_direction, wrap: m_wrap, gap: m_gap })
     }

@@ -268,7 +268,7 @@ fn resolve_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             let mut spec = spec.clone();
             spec.label = resolve_text(sources, &spec.label);
             spec.source = subst(sources, &spec.source);
-            spec.value = subst(sources, &spec.value);
+            spec.value = subst_opt(sources, &spec.value);
             spec.placeholder = resolve_text_opt(sources, &spec.placeholder);
             NodeKind::Select(spec)
         }

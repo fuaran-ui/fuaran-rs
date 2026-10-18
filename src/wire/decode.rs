@@ -2463,11 +2463,11 @@ pub(super) fn decode_form_field_kind(
                 "SegmentedChoice options binding",
                 StaticSlot::Options,
             )?;
-            // Lenient omitted-when-default (§3.6): absent restores the
-            // language default `Horizontal`. Decode-only — the encoder still
-            // always emits it (unlike Tabs).
+            // Omit-at-default (§3.6): absent restores the IDL's declared default
+            // `Horizontal` — declared since Phase 2300, so the encoder omits it
+            // too, as `Tabs.orientation` always did.
             let orientation = match get(fields, "orientation") {
-                None => Orientation::Horizontal,
+                None => super::generated::defaults::FORM_FIELD_KIND_SEGMENTED_CHOICE_ORIENTATION,
                 Some(v) => decode_orientation(&format!("{path}.orientation"), v)?,
             };
             let value = value_or(StaticSlot::StringOpt, control_value_defaults::choice())?;
@@ -3172,11 +3172,6 @@ pub(super) fn decode_mount_inputs(
     )
 }
 
-/// `Select.multiple` — an absent flag is `false`.
-pub(super) fn decode_select_multiple(path: &str, fields: &Fields) -> DResult<bool> {
-    Ok(opt_bool(path, fields, "multiple")? == Some(true))
-}
-
 /// `Switch.on` — absent, the compact `stateKey` spelling names a State binding
 /// (required in that case). An explicit `on` decodes untyped.
 pub(super) fn decode_switch_on(path: &str, fields: &Fields) -> DResult<Binding> {
@@ -3238,15 +3233,28 @@ pub(super) fn check_switch(path: &str, _fields: &Fields, spec: &SwitchSpec) -> D
     }
 }
 
-/// `Tabs.activeIndex` — absent is the literal binding `0` (omit-at-default by
-/// contract); present decodes at an integer slot.
-pub(super) fn decode_tabs_active_index(path: &str, fields: &Fields) -> DResult<Binding> {
-    match get(fields, "activeIndex") {
+/// An integer-binding slot omitted at the literal binding `0` (the IDL's
+/// `omitDefault Static{value=0}`, which the defaults table does not render):
+/// absent is that literal; present decodes at an integer slot.
+fn int_binding_or_zero(path: &str, fields: &Fields, key: &str) -> DResult<Binding> {
+    match get(fields, key) {
         None => Ok(Binding::Static {
             value: StaticValue::Ast(JVal::Num(0.0)),
         }),
-        Some(v) => decode_binding_slot(&format!("{path}.activeIndex"), v, StaticSlot::Int),
+        Some(v) => decode_binding_slot(&format!("{path}.{key}"), v, StaticSlot::Int),
     }
+}
+
+/// `Tabs.activeIndex` — absent is the literal binding `0` (omit-at-default by
+/// contract); present decodes at an integer slot.
+pub(super) fn decode_tabs_active_index(path: &str, fields: &Fields) -> DResult<Binding> {
+    int_binding_or_zero(path, fields, "activeIndex")
+}
+
+/// `Stepper.activeStep` — the same slot shape as `Tabs.activeIndex`, declared
+/// omit-at-default `Static{value=0}` by Phase 2300.
+pub(super) fn decode_stepper_active_step(path: &str, fields: &Fields) -> DResult<Binding> {
+    int_binding_or_zero(path, fields, "activeStep")
 }
 
 /// `Accessibility.role` — the hosted ARIA role rides as its token string.
@@ -3785,9 +3793,30 @@ pub(super) fn decode_chart_source(path: &str, fields: &Fields) -> DResult<Bindin
 }
 
 /// `Select.value` — the selection is an optional string: "no selection" is a
-/// value, so the payload decodes through `StringOpt`.
-pub(super) fn decode_select_value(path: &str, fields: &Fields) -> DResult<Binding> {
-    req_binding_slot_aliased(path, fields, "value", &[], StaticSlot::StringOpt)
+/// value, so the payload decodes through `StringOpt`. Phase 1962 — the `value`
+/// rule (WIRE_FORMAT.md §3.2), a relation between two sibling keys the IDL's
+/// per-field optionality cannot state: a single-select REQUIRES `value`; a
+/// multi-select carries `values` and no `value`. A `value` on a multi-select is
+/// decoded as any binding is (so a malformed one still refuses) and then
+/// dropped — a §16 lenient accept that normalises it to absent, since the
+/// control never reads it. A malformed `multiple` is its own defect, so the
+/// presence rule is not applied on top of it (`value` decodes if present, is
+/// not demanded).
+pub(super) fn decode_select_value(path: &str, fields: &Fields) -> DResult<Option<Binding>> {
+    match get(fields, "multiple") {
+        Some(JVal::Bool(true)) => {
+            opt_binding_slot(path, fields, "value", StaticSlot::StringOpt)?;
+            Ok(None)
+        }
+        None | Some(JVal::Bool(false)) => Ok(Some(req_binding_slot_aliased(
+            path,
+            fields,
+            "value",
+            &[],
+            StaticSlot::StringOpt,
+        )?)),
+        Some(_) => opt_binding_slot(path, fields, "value", StaticSlot::StringOpt),
+    }
 }
 
 fn req_binding_slot_aliased(

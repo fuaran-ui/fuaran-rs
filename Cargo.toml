@@ -44,6 +44,17 @@ name = "fuaran-ui"
 # (checked by a rustdoc-JSON surface diff). One observable change: a generated
 # struct declares its fields in IDL order, so Debug output and rustdoc list
 # fields in that order. No field set moved.
+#
+# Phase 2300 (rule 1) and Phase 1962 ride it, WIRE-VISIBLE: a field holding its
+# declared default is omitted from the canonical form on every kind (fifteen
+# IDL rows moved to omit-at-default, taken by regeneration; Stepper.activeStep
+# through a declared Shape hook, the Tabs.activeIndex shape), and a multi-select
+# Select carries `values` and no `value` — `SelectSpec::value` is an Option, a
+# single-select without it is MISSING_FIELD, a decoded multi-select `value` is
+# dropped; `Select.multiple` is an ordinary optional member emitted as authored,
+# and FileUpload / Stepper `on_select` are optional closures. Every decoder still
+# accepts the explicit forms. The field-type moves are source-breaking, the class
+# this draft already carries.
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"

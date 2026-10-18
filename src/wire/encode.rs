@@ -658,7 +658,12 @@ pub(super) fn form_field_kind(auto_bind: ControlAutoBind<'_>, k: &FormFieldKind)
         } => {
             let mut fields = handler_field("onChange", on_change);
             fields.push(field("options", binding(options)));
-            fields.push(field("orientation", s(orientation.as_str())));
+            // Phase 2300 — omitted at the IDL's declared default `Horizontal`.
+            if *orientation
+                != super::generated::defaults::FORM_FIELD_KIND_SEGMENTED_CHOICE_ORIENTATION
+            {
+                fields.push(field("orientation", s(orientation.as_str())));
+            }
             fields.extend(control_value_field(
                 auto_bind,
                 control_value_defaults::choice(),
@@ -886,14 +891,10 @@ pub(super) fn encode_fragment_args(args: &[(String, FragmentArg)]) -> Option<Str
     (!args.is_empty()).then(|| enc_map(args, fragment_arg))
 }
 
-/// `Select.multiple` — an absent flag is `false`, so only `true` is written.
-pub(super) fn encode_select_multiple(multiple: &bool) -> Option<String> {
-    multiple.then(|| boolean(true))
-}
-
-/// `Tabs.activeIndex` — omitted at its default, the literal binding `0`, so a
-/// tabs node that starts on its first tab says nothing about it.
-pub(super) fn encode_tabs_active_index(active: &Binding) -> Option<String> {
+/// An integer-binding slot omitted at its default, the literal binding `0`
+/// (the IDL's `omitDefault Static{value=0}`, which the defaults table does not
+/// render).
+fn omit_literal_zero(active: &Binding) -> Option<String> {
     let is_identity = matches!(
         active,
         Binding::Static {
@@ -901,6 +902,18 @@ pub(super) fn encode_tabs_active_index(active: &Binding) -> Option<String> {
         } if *n == 0.0
     );
     (!is_identity).then(|| binding(active))
+}
+
+/// `Tabs.activeIndex` — omitted at its default, the literal binding `0`, so a
+/// tabs node that starts on its first tab says nothing about it.
+pub(super) fn encode_tabs_active_index(active: &Binding) -> Option<String> {
+    omit_literal_zero(active)
+}
+
+/// `Stepper.activeStep` — the same slot shape as `Tabs.activeIndex`, declared
+/// omit-at-default `Static{value=0}` by Phase 2300.
+pub(super) fn encode_stepper_active_step(active: &Binding) -> Option<String> {
+    omit_literal_zero(active)
 }
 
 /// `Accessibility.role` — the hosted ARIA role rides as its token string.
@@ -1037,8 +1050,11 @@ pub(super) fn encode_form_field(
             form_field_kind(ControlAutoBind::FormFieldId(id), kind),
         ),
         field("label", text_source(label)),
-        field("required", boolean(*required)),
     ];
+    // Phase 2300 — omitted at its declared default `false`.
+    if *required {
+        fields.push(field("required", boolean(true)));
+    }
     if let Some(help) = help {
         fields.push(field("help", text_source(help)));
     }

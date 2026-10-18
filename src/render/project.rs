@@ -188,6 +188,7 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
         NodeKind::Stepper(spec) => NodeKind::Stepper(StepperSpec {
             active_step: spec.active_step.clone(),
             children: project_children(sources, &spec.children),
+            on_select: spec.on_select,
         }),
         NodeKind::SummaryList(spec) => NodeKind::SummaryList(SummaryListSpec {
             children: project_children(sources, &spec.children),
@@ -422,6 +423,7 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             accept: spec.accept.clone(),
             label: map_text(sources, &spec.label),
             multiple: spec.multiple,
+            on_select: spec.on_select,
             disabled: spec.disabled.clone(),
             drop_target: spec.drop_target,
             accept_paste: spec.accept_paste,

@@ -49,9 +49,9 @@
       "name": "tooltip-trait",
       "capability": "The node-level tooltip trait (fuaran#1112)",
       "corpusFixture": "nodes/tooltip-button-1.json",
-      "tree": "{\"id\":\"tooltip-button-1\",\"kind\":{\"$type\":\"Button\",\"label\":\"Rebuild index\",\"onClick\":{\"$type\":\"Notify\",\"channel\":\"rebuild\",\"payload\":{}},\"variant\":\"Secondary\"},\"tooltip\":\"Re-reads every document; takes about a minute on this corpus.\"}",
+      "tree": "{\"id\":\"tooltip-button-1\",\"kind\":{\"$type\":\"Button\",\"label\":\"Rebuild index\",\"onClick\":{\"$type\":\"Notify\",\"channel\":\"rebuild\",\"payload\":{}}},\"tooltip\":\"Re-reads every document; takes about a minute on this corpus.\"}",
       "state": [],
-      "expectTree": "{\"id\":\"tooltip-button-1\",\"kind\":{\"$type\":\"Button\",\"label\":\"Rebuild index\",\"onClick\":{\"$type\":\"Notify\",\"channel\":\"rebuild\",\"payload\":{}},\"variant\":\"Secondary\"},\"tooltip\":\"Re-reads every document; takes about a minute on this corpus.\"}",
+      "expectTree": "{\"id\":\"tooltip-button-1\",\"kind\":{\"$type\":\"Button\",\"label\":\"Rebuild index\",\"onClick\":{\"$type\":\"Notify\",\"channel\":\"rebuild\",\"payload\":{}}},\"tooltip\":\"Re-reads every document; takes about a minute on this corpus.\"}",
       "expectRenderContains": [
         "fuaran-has-tooltip",
         "<span id=\"tooltip-button-1-tooltip\" class=\"fuaran-tooltip\" role=\"tooltip\">Re-reads every document; takes about a minute on this corpus.</span>",

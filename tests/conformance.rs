@@ -235,9 +235,9 @@ fn the_generator_refuses_a_stale_dialect_entry() {
     let refusals = [
         (
             "a departure the rules now reproduce",
-            r#""name":"multiple","optionality":{"$type":"optional"}"#,
-            r#""name":"multiple","optionality":{"$type":"omitDefault","default":{"$type":"bool","value":false}}"#,
-            "dialect entry Select.multiple is stale",
+            r#""name":"on","optionality":{"$type":"optional"}"#,
+            r#""name":"on","optionality":{"$type":"required"}"#,
+            "dialect entry Switch.on is stale",
         ),
         (
             "an entry naming an absent field",

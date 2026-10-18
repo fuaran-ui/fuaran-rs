@@ -143,7 +143,6 @@ pub(super) const FIELDS: &[FieldEntry] = &[
         "an absent list decodes as the empty list and the encoder omits an empty one, so \
          the member is a plain list; spelled with NodeId",
     ),
-    ("FileUpload", "onSelect", &[], CLOSURE_IMPLIED),
     (
         "FragmentRef",
         "args",
@@ -157,13 +156,6 @@ pub(super) const FIELDS: &[FieldEntry] = &[
         "an absent map decodes as the empty map and the encoder omits an empty one",
     ),
     ("Mount", "onBubble", &[], CLOSURE_IMPLIED),
-    (
-        "Select",
-        "multiple",
-        &[("multiple", "bool")],
-        "an absent flag is false, and the encoder writes it only when true",
-    ),
-    ("Stepper", "onSelect", &[], CLOSURE_IMPLIED),
     (
         "Switch",
         "on",
@@ -1768,11 +1760,11 @@ pub(super) const ENCODE_HOOKS: &[(&str, &str, &str, Hook, &str)] = &[
         "optional in the IDL and a plain map here: an empty map is not written",
     ),
     (
-        "Select",
-        "multiple",
-        "encode_select_multiple",
+        "Stepper",
+        "activeStep",
+        "encode_stepper_active_step",
         Hook::Shape,
-        "optional in the IDL and a plain bool here: only `true` is written",
+        "omitted at its default, the literal binding 0, which the defaults table does not render",
     ),
     (
         "Tabs",
@@ -1890,7 +1882,8 @@ pub(super) const DECODE_HOOKS: &[(&str, &str, &str, Hook, &str)] = &[
         "value",
         "decode_select_value",
         Hook::Policy,
-        "the selection decodes through the StringOpt payload slot: no selection is a value",
+        "the selection decodes through the StringOpt payload slot (no selection is a value), and the \
+         single/multi rule applies: required unless `multiple` is true, dropped beside it",
     ),
     (
         "Custom",
@@ -1921,11 +1914,11 @@ pub(super) const DECODE_HOOKS: &[(&str, &str, &str, Hook, &str)] = &[
         "optional in the IDL and a plain map here: absent is the empty map",
     ),
     (
-        "Select",
-        "multiple",
-        "decode_select_multiple",
+        "Stepper",
+        "activeStep",
+        "decode_stepper_active_step",
         Hook::Shape,
-        "optional in the IDL and a plain bool here: absent is false",
+        "absent is the literal binding 0, which the defaults table does not render",
     ),
     (
         "Switch",
