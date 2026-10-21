@@ -979,11 +979,11 @@ fn date_range_renders_two_variant_typed_inputs_over_the_pair() {
         "{html}"
     );
     assert!(
-        html.contains("fuaran-form-field-control fuaran-field-range-min"),
+        html.contains("fuaran-form-input fuaran-form-date fuaran-field-range-min"),
         "{html}"
     );
     assert!(
-        html.contains("fuaran-form-field-control fuaran-field-range-max"),
+        html.contains("fuaran-form-input fuaran-form-date fuaran-field-range-max"),
         "{html}"
     );
     assert!(html.contains("fuaran-field-range-sep"), "{html}");

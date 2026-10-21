@@ -3159,11 +3159,11 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
             // 0.7.0 — SSR parity with the client's dual-input range: two native
             // date/time inputs (per variant) over the pair's ends, sharing the
             // min/max/step attributes. Inert like every other server-rendered
-            // control; only the FROM end carries `data-fuaran-field` — it is the
-            // pair's addressable slot. Class vocabulary follows the reference
-            // server renderer (`fuaran-field-range*` + `fuaran-form-field-control`),
-            // NOT this file's older `fuaran-form-range*` spellings, which have no
-            // counterpart there.
+            // control; only the FROM end carries the field's identity (`id` +
+            // `data-fuaran-field`) — it is the pair's addressable slot. Phase
+            // 2391 — the reference host's 0.98.0 R5: both ends are classed
+            // `fuaran-form-input fuaran-form-date fuaran-field-range-min/max` and
+            // carry `required` when the field is required.
             let input_type = match variant {
                 crate::wire::DateTimeVariant::Time => "time",
                 crate::wire::DateTimeVariant::DateTime => "datetime-local",
@@ -3174,9 +3174,11 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
             let end_attrs = |v: &str, class: &'static str, addressable: bool| {
                 let mut attrs: Vec<Attr> = vec![("class", s(class))];
                 if addressable {
+                    attrs.push(("id", s(field.id.clone())));
                     attrs.push(("data-fuaran-field", s(field.id.clone())));
                 }
                 attrs.push(("type", s(input_type)));
+                attrs.push(("required", AttrVal::Flag(field.required)));
                 attrs.push(("value", s(v.to_string())));
                 if let Some(min) = min {
                     attrs.push(("min", s(min.clone())));
@@ -3198,7 +3200,7 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
                         "input",
                         &end_attrs(
                             &from_v,
-                            "fuaran-form-field-control fuaran-field-range-min",
+                            "fuaran-form-input fuaran-form-date fuaran-field-range-min",
                             true
                         )
                     ),
@@ -3207,7 +3209,7 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
                         "input",
                         &end_attrs(
                             &to_v,
-                            "fuaran-form-field-control fuaran-field-range-max",
+                            "fuaran-form-input fuaran-form-date fuaran-field-range-max",
                             false
                         )
                     )
@@ -3339,7 +3341,7 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
             void_el(
                 "input",
                 &[
-                    ("class", s("fuaran-form-field-control fuaran-color-input")),
+                    ("class", s("fuaran-form-input fuaran-color-input")),
                     ("data-fuaran-field", s(field.id.clone())),
                     ("type", s("color")),
                     ("id", s(field.id.clone())),
@@ -4535,17 +4537,13 @@ fn render_map(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &MapSpec) -> String {
         }
         _ => vec![],
     };
-    let placeholder = text_el(
-        "div",
-        &[("class", s("fuaran-map-placeholder"))],
-        &format!(
-            "[Map placeholder: {} markers around ({:.4}, {:.4}) zoom {}. Wire a Leaflet adapter for live rendering.]",
-            markers.len(),
-            spec.centre_latitude,
-            spec.centre_longitude,
-            spec.zoom
-        ),
-    );
+    // Phase 2391 — the reference host's ruled Map (its 0.98.0 R12): the served
+    // placeholder carries the marker count and the hydration caption, then one
+    // `li` per resolved marker.
+    let caption = escape_text(&format!(
+        "[Map: {} markers \u{2014} hydrates client-side]",
+        markers.len()
+    ));
     let list = if markers.is_empty() {
         String::new()
     } else {
@@ -4566,8 +4564,12 @@ fn render_map(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &MapSpec) -> String {
     };
     el(
         "div",
-        &[("class", s("fuaran-map"))],
-        &format!("{placeholder}{list}"),
+        &[
+            ("class", s("fuaran-map fuaran-map-ssr-placeholder")),
+            ("data-fuaran-ssr-placeholder", s("Map")),
+            ("data-fuaran-marker-count", s(markers.len().to_string())),
+        ],
+        &format!("{caption}{list}"),
     )
 }
 
