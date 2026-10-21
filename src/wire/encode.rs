@@ -137,7 +137,12 @@ pub(super) fn cell_column_wire(ty: ColumnType, c: &Cell) -> String {
         Cell::Null => match ty {
             ColumnType::Bool => boolean(false),
             ColumnType::Int | ColumnType::Float => "0".to_string(),
-            ColumnType::Str | ColumnType::Date | ColumnType::Timestamp => s(""),
+            ColumnType::Str
+            | ColumnType::Date
+            | ColumnType::Timestamp
+            | ColumnType::TimestampMs
+            | ColumnType::TimestampUs
+            | ColumnType::TimestampNs => s(""),
             // A decimal column's absent slot is the decimal zero, a string.
             ColumnType::Decimal => s("0"),
         },
@@ -149,7 +154,10 @@ pub(super) fn cell_column_wire(ty: ColumnType, c: &Cell) -> String {
             | ColumnType::Bool
             | ColumnType::Str
             | ColumnType::Date
-            | ColumnType::Timestamp => int(*v),
+            | ColumnType::Timestamp
+            | ColumnType::TimestampMs
+            | ColumnType::TimestampUs
+            | ColumnType::TimestampNs => int(*v),
         },
         Cell::Float(v) => num(*v),
         Cell::Bool(v) => boolean(*v),

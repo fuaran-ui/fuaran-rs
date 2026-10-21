@@ -574,7 +574,6 @@ pub(super) fn decode_column_cell(col_name: &str, ty: ColumnType, v: &JVal) -> CR
         (ColumnType::Bool, JVal::Bool(b)) => Ok(Cell::Bool(*b)),
         (ColumnType::Str, JVal::Str(s)) => Ok(Cell::Str(s.clone())),
         (ColumnType::Date, JVal::Str(s)) => Ok(Cell::Date(s.clone())),
-        (ColumnType::Timestamp, JVal::Str(s)) => Ok(Cell::Timestamp(s.clone())),
         // Phase 2001: a decimal column reads a STRING of decimal text and
         // canonicalises it; it reads a whole-valued number token within 2^53 as
         // its digits, and refuses a fractional token or one past 2^53 — that
@@ -589,20 +588,72 @@ pub(super) fn decode_column_cell(col_name: &str, ty: ColumnType, v: &JVal) -> CR
         (ColumnType::Decimal, JVal::Num(n)) if *n == n.trunc() && n.abs() <= INT53_MAX => {
             Ok(Cell::Decimal((*n as i64).to_string()))
         }
-        // Lenient-ingest (Core Phase 94): a declared-timestamp column accepts
-        // an epoch NUMBER — unit by magnitude (>= 1e11 => milliseconds; epoch
-        // seconds stay below 1e11 until year 5138) — normalised to the
-        // canonical ISO string on decode.
-        (ColumnType::Timestamp, JVal::Num(n)) if *n == n.trunc() && n.abs() < 9e15 => {
+        _ => match ty.timestamp_digits() {
+            Some(digits) => {
+                decode_instant(col_name, ty, digits, v).unwrap_or_else(|| Err(mismatch()))
+            }
+            None => Err(mismatch()),
+        },
+    }
+}
+
+/// The epoch seconds the canonical instant text spells: `0000-01-01T00:00:00Z`
+/// and `9999-12-31T23:59:59Z`.
+const MIN_EPOCH_SECOND: i64 = -62_167_219_200;
+const MAX_EPOCH_SECOND: i64 = 253_402_300_799;
+
+/// A timestamp column's present value at a unit holding `digits` fraction
+/// digits (WIRE_FORMAT §3.6.25, fuaran-core#422). TEXT is read only in its
+/// canonical form, with a fraction no finer than the unit (a coarser instant
+/// widens in unchanged — one instant has one text). An EPOCH NUMBER
+/// (whole-valued, |x| < 9e15) is read in a `timestamp` column by magnitude, as
+/// Core Phase 94 pinned it (>= 1e11 => milliseconds, truncated to the second),
+/// and in a sub-second column in its own unit with no guess; either way it must
+/// name an instant in the years 0000-9999. `None` for a value of another kind.
+fn decode_instant(col_name: &str, ty: ColumnType, digits: u32, v: &JVal) -> Option<CResult<Cell>> {
+    match v {
+        JVal::Str(s) => Some(match instant_fraction_digits(s) {
+            None => Err(format!(
+                "malformed: {col_name}: a {} value must be canonical ISO-8601 text, YYYY-MM-DDThh:mm:ssZ or YYYY-MM-DDThh:mm:ss.FZ, naming a moment that exists",
+                ty.as_str()
+            )),
+            Some(n) if n > digits => Err(format!(
+                "malformed: {col_name}: a {} value's fraction is finer than the column's unit holds: {} or finer is needed",
+                ty.as_str(),
+                ColumnType::timestamp_of_digits(n).as_str()
+            )),
+            Some(_) => Ok(Cell::Timestamp(s.clone())),
+        }),
+        JVal::Num(n) if *n == n.trunc() && n.abs() < 9e15 => {
             let i = *n as i64;
-            let secs = if i.abs() >= 100_000_000_000 {
-                i / 1000
+            let (second, fraction) = if digits == 0 {
+                (
+                    if i.abs() >= 100_000_000_000 {
+                        i / 1000
+                    } else {
+                        i
+                    },
+                    0,
+                )
             } else {
-                i
+                let scale = 10_i64.pow(digits);
+                (i.div_euclid(scale), i.rem_euclid(scale))
             };
-            Ok(Cell::Timestamp(iso_of_epoch_seconds(secs)))
+            if !(MIN_EPOCH_SECOND..=MAX_EPOCH_SECOND).contains(&second) {
+                return Some(Err(format!(
+                    "malformed: {col_name}: the epoch {i} names an instant outside the years 0000-9999 the canonical timestamp spells"
+                )));
+            }
+            let whole = iso_of_epoch_seconds(second);
+            let text = if fraction == 0 {
+                whole
+            } else {
+                let frac = format!("{fraction:0width$}", width = digits as usize);
+                format!("{}.{}Z", &whole[..19], frac.trim_end_matches('0'))
+            };
+            Some(Ok(Cell::Timestamp(text)))
         }
-        _ => Err(mismatch()),
+        _ => None,
     }
 }
 

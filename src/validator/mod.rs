@@ -640,7 +640,7 @@ impl Walker {
         // point stacked on one date.
         let temporal_x = matches!(s.x_scale, Some(ChartXScale::Temporal));
         let dated =
-            |t: ColumnType| -> bool { matches!(t, ColumnType::Date | ColumnType::Timestamp) };
+            |t: ColumnType| -> bool { t == ColumnType::Date || t.timestamp_digits().is_some() };
         let temporal_not_date = |v: &mut Self, field: &str, t: ColumnType| {
             v.push(
                 Severity::Error,

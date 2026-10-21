@@ -213,8 +213,71 @@ fn compare_cells(a: &Cell, b: &Cell) -> Option<Ordering> {
         (Cell::Bool(x), Cell::Bool(y)) => Some(x.cmp(y)),
         (Cell::Str(x), Cell::Str(y)) => Some(x.cmp(y)),
         (Cell::Date(x), Cell::Date(y)) => Some(x.cmp(y)),
-        (Cell::Timestamp(x), Cell::Timestamp(y)) => Some(x.cmp(y)),
+        (Cell::Timestamp(x), Cell::Timestamp(y)) => Some(instant_key(x).cmp(&instant_key(y))),
         _ => None,
+    }
+}
+
+/// Canonical instant text keyed so its order is the instants' (WIRE_FORMAT §3.6.25). The text
+/// drops an all-zero fraction and every trailing zero, so `…:00Z` and `…:00.5Z` do not order by
+/// their bytes (`.` sorts below `Z`); the key pads the fraction to nanoseconds. Text that is not
+/// canonical keys as itself.
+fn instant_key(s: &str) -> String {
+    let b = s.as_bytes();
+    if b.len() < 20 || b[b.len() - 1] != b'Z' || !s.is_char_boundary(19) {
+        return s.to_string();
+    }
+    let fraction = if b[19] == b'.' {
+        &s[20..s.len() - 1]
+    } else if b.len() == 20 {
+        ""
+    } else {
+        return s.to_string();
+    };
+    if fraction.len() > 9 {
+        return s.to_string();
+    }
+    format!("{}{:0<9}", &s[..19], fraction)
+}
+
+#[cfg(test)]
+mod instant_order_tests {
+    use super::*;
+
+    /// Phase 2206: timestamp cells order by the instant, not by their canonical text.
+    #[test]
+    fn timestamp_cells_order_by_instant() {
+        let ts = |s: &str| Cell::Timestamp(s.to_string());
+        let cases = [
+            (
+                "2025-07-08T18:40:00Z",
+                "2025-07-08T18:40:00.5Z",
+                Ordering::Less,
+            ),
+            (
+                "2025-07-08T18:40:00.5Z",
+                "2025-07-08T18:40:00Z",
+                Ordering::Greater,
+            ),
+            (
+                "2025-07-08T18:40:00.12Z",
+                "2025-07-08T18:40:00.123456789Z",
+                Ordering::Less,
+            ),
+            (
+                "2025-07-08T18:40:00.9Z",
+                "2025-07-08T18:40:01Z",
+                Ordering::Less,
+            ),
+            (
+                "2025-07-08T18:40:00.5Z",
+                "2025-07-08T18:40:00.5Z",
+                Ordering::Equal,
+            ),
+        ];
+        for (a, b, want) in cases {
+            assert_eq!(compare_cells(&ts(a), &ts(b)), Some(want), "{a} vs {b}");
+        }
     }
 }
 
@@ -515,11 +578,16 @@ fn cast_cell(ty: ColumnType, c: &Cell) -> Result<Cell, EvalError> {
                 detail: "cannot cast to date".to_string(),
             }),
         },
-        ColumnType::Timestamp => match c {
+        // Phase 2206 — a cast to any unit keeps the instant's one canonical
+        // text; the unit is a statement about the column, not the cell.
+        ColumnType::Timestamp
+        | ColumnType::TimestampMs
+        | ColumnType::TimestampUs
+        | ColumnType::TimestampNs => match c {
             Cell::Timestamp(_) => Ok(c.clone()),
             Cell::Str(s) => Ok(Cell::Timestamp(s.clone())),
             _ => Err(EvalError::TypeError {
-                detail: "cannot cast to timestamp".to_string(),
+                detail: format!("cannot cast to {}", ty.as_str()),
             }),
         },
         // An int is exactly a decimal; a string is read by the decimal grammar; a
@@ -1138,6 +1206,9 @@ fn typing_binary(op: BinOp, a: Typing, b: Typing) -> Typing {
                             ColumnType::Str
                                 | ColumnType::Date
                                 | ColumnType::Timestamp
+                                | ColumnType::TimestampMs
+                                | ColumnType::TimestampUs
+                                | ColumnType::TimestampNs
                                 | ColumnType::Bool
                         ) =>
                 {
@@ -2391,8 +2462,10 @@ pub fn validate_table(t: &Table) -> Result<(), EvalError> {
                 (Cell::Float(_), ColumnType::Float)
                 | (Cell::Bool(_), ColumnType::Bool)
                 | (Cell::Str(_), ColumnType::Str)
-                | (Cell::Date(_), ColumnType::Date)
-                | (Cell::Timestamp(_), ColumnType::Timestamp) => true,
+                | (Cell::Date(_), ColumnType::Date) => true,
+                // Phase 2206: a timestamp cell is one canonical instant text
+                // whichever unit its column declares.
+                (Cell::Timestamp(_), ty) if ty.timestamp_digits().is_some() => true,
                 _ => false,
             };
             if !fits {

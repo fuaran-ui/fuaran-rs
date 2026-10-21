@@ -415,6 +415,9 @@ fn type_wire(t: ColumnType) -> &'static str {
         ColumnType::Date => "date",
         ColumnType::Timestamp => "timestamp",
         ColumnType::Decimal => "decimal",
+        ColumnType::TimestampMs => "timestamp_ms",
+        ColumnType::TimestampUs => "timestamp_us",
+        ColumnType::TimestampNs => "timestamp_ns",
     }
 }
 
