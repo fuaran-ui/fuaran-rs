@@ -2,6 +2,8 @@
 //! interactivity, sanitiser posture, binding resolution, the islands
 //! partial-hydration laws, and the reference-CSS byte-copy.
 
+mod common;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -165,21 +167,6 @@ fn metric_resolves_state_binding_and_loading_slot() {
 // −0.0734 is a regression under the default polarity and an improvement under
 // `LowerIsBetter`, and NEITHER reading touches `tone` or the printed sign.
 
-/// Walks up from the crate directory looking for the shared corpus, matching
-/// `tests/conformance.rs`'s locator. `None` keeps the repo standalone-testable.
-fn corpus_root() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Some(root);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
 /// One `Metric` with a resolvable static trend. `polarity` is spliced verbatim
 /// so a test can pass the reserved spelling and watch the decode refuse it.
 fn metric_with_trend(polarity_member: &str) -> String {
@@ -312,10 +299,7 @@ fn metric_trend_sentiment_markup_matches_the_corpus_fixture() {
     // whose falling −7.34% reads as an IMPROVEMENT. Asserted as one whole
     // string, because the parity claim is about the emitted bytes rather than
     // about a set of substrings that happen to be present.
-    let Some(root) = corpus_root() else {
-        eprintln!("corpus absent; skipping the fixture-parity leg (standalone checkout)");
-        return;
-    };
+    let root = common::corpus_root();
     let fixture = root.join("nodes").join("metric-inverted-polarity.json");
     let json = std::fs::read_to_string(&fixture)
         .unwrap_or_else(|e| panic!("corpus located but {fixture:?} unreadable: {e}"));
@@ -721,25 +705,8 @@ fn reference_css_byte_copy_matches_the_reference_artefact() {
 // assertions fail loudly on divergence. The `wasm32` client renders through the
 // very same `render_to_html`, so this certifies both consumption legs.
 
-/// Locate `wire-format-fixtures/nodes/` by walking up from the crate dir;
-/// `None` on a standalone checkout (the corpus lives in the sibling tree).
-fn corpus_nodes_dir() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Some(root.join("nodes"));
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
-fn load_fixture(id: &str) -> Option<Node> {
-    let path = corpus_nodes_dir()?.join(format!("{id}.json"));
-    let raw = std::fs::read_to_string(path).expect("fixture file reads");
-    Some(decode_node(&raw).expect("fixture decodes with the host codec"))
+fn load_fixture(id: &str) -> Node {
+    decode_node(&load_fixture_json(id)).expect("fixture decodes with the host codec")
 }
 
 /// Find a descendant node by id (recursing through `Box` children — the shape
@@ -765,10 +732,7 @@ fn render_sub(tree: &Node, id: &str) -> String {
 
 #[test]
 fn transform_scalar_slots_resolve_their_compute_values() {
-    let Some(tree) = load_fixture("scalar-transform-composition") else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let tree = load_fixture("scalar-transform-composition");
 
     // Badge label — a global-aggregate scalar Transform (filter severity ==
     // critical → groupBy keys [] count): the 1×1 result cell is the count 2.
@@ -803,10 +767,7 @@ fn transform_scalar_slots_resolve_their_compute_values() {
 
 #[test]
 fn selection_default_seeds_master_detail() {
-    let Some(tree) = load_fixture("master-detail-preselected") else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let tree = load_fixture("master-detail-preselected");
 
     // The detail Fact reads Selection.defaultValue (field 'id') before any real
     // selection — Phase 629.
@@ -842,10 +803,7 @@ fn selection_default_seeds_master_detail() {
 /// those apart, because row one is what you get either way.
 #[test]
 fn selection_default_seeds_master_detail_second_row() {
-    let Some(tree) = load_fixture("master-detail-preselected-second-row") else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let tree = load_fixture("master-detail-preselected-second-row");
 
     // The detail Fact reads Selection.defaultValue (field 'id') — the SECOND
     // row's ticket, not the first.
@@ -893,10 +851,7 @@ fn selection_default_seeds_master_detail_second_row() {
 
 #[test]
 fn unset_filter_params_prune_and_resolve_all_rows() {
-    let Some(tree) = load_fixture("filterable-static-dashboard") else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let tree = load_fixture("filterable-static-dashboard");
 
     // No filter is written, so both Filter-sourced params are unbound; the
     // filter steps referencing them are pruned ("unset filter ⇒ no
@@ -923,9 +878,11 @@ fn unset_filter_params_prune_and_resolve_all_rows() {
 // (the scalar Transform slots become literals / Static numbers) and that the
 // existing `tree_json` entry point is byte-unchanged (the additive contract).
 
-fn load_fixture_json(id: &str) -> Option<String> {
-    let path = corpus_nodes_dir()?.join(format!("{id}.json"));
-    Some(std::fs::read_to_string(path).expect("fixture file reads"))
+fn load_fixture_json(id: &str) -> String {
+    let path = common::corpus_root()
+        .join("nodes")
+        .join(format!("{id}.json"));
+    std::fs::read_to_string(path).expect("fixture file reads")
 }
 
 fn projected_node(session: &ClientSession, id: &str) -> Node {
@@ -937,10 +894,7 @@ fn projected_node(session: &ClientSession, id: &str) -> Node {
 
 #[test]
 fn resolved_projection_folds_scalar_transforms_to_literals() {
-    let Some(raw) = load_fixture_json("scalar-transform-composition") else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let raw = load_fixture_json("scalar-transform-composition");
     let session = ClientSession::new(&raw).expect("fixture decodes to a session");
 
     // The additive contract: tree_json is byte-identical to a straight
@@ -984,10 +938,7 @@ fn resolved_projection_folds_scalar_transforms_to_literals() {
 
 #[test]
 fn resolved_projection_preserves_selection_defaults() {
-    let Some(raw) = load_fixture_json("master-detail-preselected") else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let raw = load_fixture_json("master-detail-preselected");
     let session = ClientSession::new(&raw).expect("fixture decodes to a session");
 
     // The detail Fact value is a Selection(defaultValue 'TCK-2041') — NOT a
@@ -1377,10 +1328,7 @@ fn emitted_class_vocabulary_matches_the_reference_renderer() {
     };
     let in_vocab = |cls: &str| exact.contains(cls) || prefixes.iter().any(|p| cls.starts_with(p));
 
-    let Some(corpus) = find_corpus_dir() else {
-        eprintln!("corpus not found; skipping class parity");
-        return;
-    };
+    let corpus = common::corpus_root();
     let manifest_raw =
         std::fs::read_to_string(corpus.join("manifest.json")).expect("reading manifest");
     let manifest = parse(&manifest_raw).expect("manifest parses");
@@ -1524,19 +1472,6 @@ fn emitted_classes(html: &str) -> std::collections::BTreeSet<String> {
         rest = &after[end..];
     }
     out
-}
-
-fn find_corpus_dir() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Some(root);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
 }
 
 /// The corpus alone does NOT measure the form-control class vocabulary: it
@@ -1805,11 +1740,10 @@ const FORWARDING_TAG: &[(&str, &str)] = &[
     ("a11y-image-decorative", "img"),
 ];
 
-/// Read the contract's behaviour vectors. `None` with no corpus present; the
-/// caller skips rather than passing vacuously.
-fn a11y_corpus_cases() -> Option<Vec<A11yCorpusCase>> {
-    let root = corpus_nodes_dir()?.parent()?.to_path_buf();
-    let raw = std::fs::read_to_string(root.join("a11y-contract.json")).ok()?;
+/// Read the contract's behaviour vectors.
+fn a11y_corpus_cases() -> Vec<A11yCorpusCase> {
+    let raw = std::fs::read_to_string(common::corpus_root().join("a11y-contract.json"))
+        .expect("a11y-contract.json reads");
     let contract = parse(&raw).expect("a11y-contract.json parses");
     let vectors = match contract.field("behaviour").and_then(|b| b.field("vectors")) {
         Some(JVal::Arr(items)) => items,
@@ -1878,15 +1812,12 @@ fn a11y_corpus_cases() -> Option<Vec<A11yCorpusCase>> {
                 .collect(),
         });
     }
-    Some(cases)
+    cases
 }
 
 #[test]
 fn a11y_corpus_projection_lands_on_the_right_element() {
-    let Some(cases) = a11y_corpus_cases() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let cases = a11y_corpus_cases();
     // A table-driven leg that silently enumerated nothing would be a gate that
     // checked nothing - and since Phase 1665 the table is READ rather than
     // written here, so an empty one is also what a mis-shaped contract looks
@@ -1905,7 +1836,7 @@ fn a11y_corpus_projection_lands_on_the_right_element() {
     );
 
     for case in &cases {
-        let tree = load_fixture(&case.fixture).expect("the corpus is present");
+        let tree = load_fixture(&case.fixture);
         let html = render_to_html(&tree, &BindingSources::default());
         let wrapper = wrapper_tag(&html);
         let carrier = match case.element {
@@ -2121,7 +2052,7 @@ fn image_presentation_tokens_map_to_classes_never_to_styles() {
 /// is authored DESCENDING, must re-encode descending and render ascending.
 #[test]
 fn srcset_renders_ascending_while_the_wire_keeps_authored_order() {
-    let json = r#"{"id":"i","kind":{"$type":"Image","alt":"Boats","src":{"$type":"Static","value":"/h.jpg"},"srcSet":[{"src":{"$type":"Static","value":"/h-1600.jpg"},"width":1600},{"src":{"$type":"Static","value":"/h-800.jpg"},"width":800},{"src":{"$type":"Static","value":"/h-400.jpg"},"width":400}],"variant":"Default"}}"#;
+    let json = r#"{"id":"i","kind":{"$type":"Image","alt":"Boats","src":{"$type":"Static","value":"/h.jpg"},"srcSet":[{"src":{"$type":"Static","value":"/h-1600.jpg"},"width":1600},{"src":{"$type":"Static","value":"/h-800.jpg"},"width":800},{"src":{"$type":"Static","value":"/h-400.jpg"},"width":400}]}}"#;
     assert_eq!(encode_node(&node(json)), json, "the codec must not re-sort");
     let html = render(json);
     let tag = open_tag(&html, "img");

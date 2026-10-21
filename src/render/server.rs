@@ -2581,7 +2581,7 @@ fn render_select(ctx: &Ctx<'_>, spec: &SelectSpec) -> String {
             )
         })
         .collect();
-    let control = if spec.multiple {
+    let control = if spec.multiple == Some(true) {
         el(
             "select",
             &[

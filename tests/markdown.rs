@@ -1,7 +1,7 @@
 //! Certifies the deterministic markdown renderer against the shared
 //! cross-host corpus (`wire-format-fixtures/markdown/corpus.json`): every
 //! fixture's render must equal its pinned `html` byte-for-byte.
-//! Skips cleanly when the corpus is absent (standalone checkout).
+//! The corpus is required: `common::corpus_root` locates it, and its absence fails.
 //!
 //! A fixture MAY carry an optional `policy` naming the destination policy the
 //! render is performed under (`WIRE_FORMAT.md` §14.1). The corpus never carries
@@ -11,7 +11,7 @@
 //! fallback turns a fixture the host cannot evaluate into one it appears to
 //! pass.
 
-use std::path::PathBuf;
+mod common;
 
 use fuaran_rs::canonical::{JVal, parse, render_canonical};
 use fuaran_rs::render::egress::{
@@ -20,22 +20,6 @@ use fuaran_rs::render::egress::{
 use fuaran_rs::render::markdown::{to_html, to_html_with_egress};
 use fuaran_rs::render::{BindingSources, render_to_html, render_to_html_with_egress};
 use fuaran_rs::wire::decode_node;
-
-fn find_corpus() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let file = dir
-            .join("wire-format-fixtures")
-            .join("markdown")
-            .join("corpus.json");
-        if file.is_file() {
-            return Some(file);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
 
 fn str_field(v: &JVal, key: &str) -> Option<String> {
     match v.field(key) {
@@ -97,10 +81,7 @@ fn an_unrecognised_policy_name_is_refused_not_defaulted() {
 
 #[test]
 fn markdown_corpus_renders_byte_identical() {
-    let Some(path) = find_corpus() else {
-        eprintln!("markdown corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let path = common::corpus_root().join("markdown").join("corpus.json");
     let raw = std::fs::read_to_string(&path).expect("reading markdown corpus");
     let corpus = parse(&raw).expect("markdown corpus parses");
     let Some(JVal::Arr(fixtures)) = corpus.field("fixtures") else {
@@ -195,10 +176,7 @@ fn wrap(html: &str) -> String {
 
 #[test]
 fn the_markdown_corpus_renders_the_same_through_the_ambient_render_path() {
-    let Some(path) = find_corpus() else {
-        eprintln!("markdown corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let path = common::corpus_root().join("markdown").join("corpus.json");
     let raw = std::fs::read_to_string(&path).expect("reading markdown corpus");
     let corpus = parse(&raw).expect("markdown corpus parses");
     let Some(JVal::Arr(fixtures)) = corpus.field("fixtures") else {

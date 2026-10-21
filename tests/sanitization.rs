@@ -12,7 +12,7 @@
 //! here is agreement with an invariant established independently, rather than
 //! agreement between two of our own assertions.
 
-use std::path::PathBuf;
+mod common;
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::render::markdown::to_html;
@@ -25,22 +25,6 @@ use fuaran_rs::render::sanitize::{
 /// than omitted: a group silently skipped would read as covered in the family,
 /// which is the shape §22.2 refuses. Empty here — this host has every seam.
 const NOT_APPLICABLE: &[(&str, &str)] = &[];
-
-fn find_manifest() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let candidate = dir
-            .join("wire-format-fixtures")
-            .join("sanitization")
-            .join("manifest.json");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
 
 fn str_field(v: &JVal, key: &str) -> Option<String> {
     match v.field(key) {
@@ -207,10 +191,9 @@ fn group<'a>(doc: &'a JVal, id: &str) -> Vec<&'a JVal> {
 
 #[test]
 fn sanitization_corpus() {
-    let Some(path) = find_manifest() else {
-        eprintln!("wire-format-fixtures/sanitization not found; skipping (standalone checkout)");
-        return;
-    };
+    let path = common::corpus_root()
+        .join("sanitization")
+        .join("manifest.json");
     let raw = std::fs::read_to_string(&path).expect("read sanitization manifest");
     let doc = parse(&raw).expect("parse sanitization manifest");
 

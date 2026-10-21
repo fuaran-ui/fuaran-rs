@@ -1438,6 +1438,24 @@ fn apply_one(op: &TreeOp, root: &Node, telem: &mut Vec<OpApplyTelemetryRecord>) 
             });
             Ok(new_tree)
         }
+        TreeOp::PatchStyle { target, style } => {
+            let mut new_tree = root.clone();
+            let Some(node) = find_node_mut(&mut new_tree, target) else {
+                return fail(
+                    ApplyErrorCode::NodeNotFound,
+                    format!("Node '{target}' not found in tree."),
+                );
+            };
+            // Phase 2291 — a patch over the CURRENT style. A result equal to the
+            // default record is the absent slot, as `UpdateStyle` stores it: the
+            // `style` slot is omitted on the wire at its default.
+            node.style = style.apply_to(node.style);
+            telem.push(OpApplyTelemetryRecord {
+                op: "PatchStyle",
+                target_id: target.clone(),
+            });
+            Ok(new_tree)
+        }
         TreeOp::UpdateState { target, state } => {
             let mut new_tree = root.clone();
             let Some(node) = find_node_mut(&mut new_tree, target) else {
@@ -1740,7 +1758,7 @@ pub fn apply(tree: &Node, op: &TreeOp) -> Result<ApplyOutcome, ApplyError> {
 /// each passed. A `Batch` is checked when any member is.
 ///
 /// The rest cannot grow the tree and are not charged a walk: `UpdateProp`,
-/// `ReplaceBinding` and `UpdateStyle` carry no node, `RemoveNode` shrinks, and
+/// `ReplaceBinding`, `UpdateStyle` and `PatchStyle` carry no node, `RemoveNode` shrinks, and
 /// `ReorderChildren` permutes. They still apply to a tree that is already over
 /// a limit, which they did not put there.
 fn op_can_grow(op: &TreeOp) -> bool {
@@ -1767,6 +1785,7 @@ fn inserted_nodes(op: &TreeOp) -> Vec<&Node> {
         TreeOp::UpdateProp { .. }
         | TreeOp::ReplaceBinding { .. }
         | TreeOp::UpdateStyle { .. }
+        | TreeOp::PatchStyle { .. }
         | TreeOp::RemoveNode { .. }
         | TreeOp::MoveNode { .. }
         | TreeOp::ReorderChildren { .. } => Vec::new(),

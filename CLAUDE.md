@@ -36,10 +36,63 @@ co-equal conformant host. Cross-repo development conventions (port allocation, f
   conformance corpus (`../wire-format-fixtures/`), not generated from any other tier.
   There is no Rust transpile path and none is wanted — the hard part (the canonical
   number form) is hand-written for every host regardless.
+- **The structural layer is generated from the corpus's `idl.json`, by this host's
+  own generator** (ruling of 2026-10-16, Phase 2298). `src/wire/idl_codegen.rs` reads
+  the language-neutral IDL the corpus publishes and writes `src/wire/generated.rs`:
+  the bare-string enums, the kind set and its categories, every union's
+  discriminator set, the omit-at-default constants, the node-bearing slots and —
+  since Phase 2315 — every wire type (the spec structs, records, unions,
+  `NodeKind`, `Node`, `TreeOp`). The types come from uniform mapping rules plus
+  this host's **dialect** (`src/wire/dialect.rs`): one entry, with its reason, per
+  position this host's public types map differently from the rules, checked against
+  the IDL at generation, so a stale entry is refused rather than kept. Reading a data
+  artefact with a host-owned generator is not a transpile, and no codec code is
+  shared with any other host. **Behaviour stays hand-written** — the impls over the
+  types, decode policy and refusal wording, leniency, limit checks, rendering and
+  the C ABI.
+- **Amendment (2026-10-18, Phase 2333): the UNIFORM half of the codec is generated;
+  POLICY stays hand-written as dialect-declared hooks.** This amends the 2298 ruling,
+  which kept the whole codec hand-written; the operator ruled it when the phase was
+  dispatched (decode policy stays hand-written; the uniform half is generated and the
+  policy hooks are declared in the dialect). The boundary is DATA, in `dialect.rs`:
+  a field is uniform unless an entry says otherwise. Uniform means a per-type rule
+  the generator applies from the IDL type, the optionality and the generated Rust
+  member — required (always written, `MISSING_FIELD` when absent), optional (written
+  when `Some`), omit-at-default (omitted at the generated `defaults` constant or an
+  empty list, filled from it on decode), with every named type coded by its own
+  codec function. Policy — aliases, `StaticSlot` hints, leniency, folds, relational
+  checks, near-miss refusals — is a hook entry naming the hand function that
+  handles it: `ENCODE_HOOKS` / `DECODE_HOOKS` for one field, `ENCODE_OWNERS` /
+  `DECODE_OWNERS` for a whole owner, `DECODE_CHECKS` for an owner-level check, and
+  `DECODE_ALIASES` for a field's foreign spellings as data. A hook receives every
+  Rust member its field (or owner) carries, so a field the IDL gains is either
+  written by the generated encoder or changes a hook's arity: an unencoded field is
+  a build error, never an absence. Union tags dispatch over generated tag enums, so
+  a hand decoder meets a new case as a non-exhaustive `match`. The generator refuses
+  a hook naming a field the IDL does not have, and a `Shape` hook the uniform rules
+  now cover. The generated codec is in `generated.rs` beside the types (modules
+  `gen_encode` / `gen_decode`); `encode.rs` and `decode.rs` keep the helpers, the
+  hooks and nothing per field. No `build.rs`: the module is committed, the generator
+  compiles only under the off-by-default `idl-codegen` feature the suite turns on,
+  and `tests/conformance.rs` is both the drift check (red when `idl.json` moves and
+  the module does not) and the regeneration
+  (`FUARAN_IDL_REGENERATE=1 cargo test --test conformance generated_module`).
 - **Wire-format conformance is the stability contract.** The codec must
   encode / decode byte-identically against the shared corpus and surface the
   canonical reject code + `$`-rooted path for every malformed fixture — certified the
   same way the F#, TypeScript, Python, and Go hosts are.
+- **The capability manifest's token families are generated from the type model,
+  never authored (Phase 2332).** The generator (`src/wire/idl_codegen.rs`) writes
+  `CONSTRUCT_TOKENS` into the generated layer beside the wire types: every kind,
+  union case, and wire member of a kind, case or record (WIRE_FORMAT §27.2), a
+  `hostOnly` row being no token. `tests/conformance.rs` publishes it as the
+  `kinds`, `kindFields`, `unionCases`, `caseFields` and `recordFields` claim, so a
+  vocabulary change grows or shrinks the claim by regeneration alone and no token
+  list is ever written by hand. `hostedCases` is declared not covered: the
+  generated layer types each hosted slot opaquely, so it holds no enumeration to
+  project (§27.5). The same test reads the claim back against the corpus fixtures
+  and fails, by token, on a construct the corpus exercises and the claim omits, or
+  a claimed one this host does not round-trip.
 - **Dependency-light.** The runtime host uses the Rust standard library only. Rust's
   stdlib has no JSON, so the canonical JSON layer is hand-written (needed for
   byte-exact canonical output anyway); third-party crates appear only as dev tooling
@@ -63,7 +116,9 @@ its arm lands.
 fuaran-rs/
 ├── src/lib.rs           # crate doc + VERSION
 ├── src/canonical/       # canonical-JSON layer — float.rs (number form) + json.rs (parser + canonical renderer)
-├── src/wire/            # model.rs (typed tree, native enums) + decode.rs / encode.rs + the DecodeError envelope
+├── src/wire/            # model.rs (host-modelled types + behaviour impls) + decode.rs / encode.rs (codec helpers + dialect-declared hooks) + the DecodeError envelope
+│                        #   + generated.rs (structural layer, wire types and the uniform codec, from the corpus idl.json)
+│                        #   + idl_codegen.rs (its generator) + dialect.rs (this host's declared departures)
 ├── src/ops/             # tree-op apply engine — total reducer + ApplyError envelope + can_apply dry-run
 │                        #   + placement.rs (the placement algebra: placed insert / move / nudge + clone verbs)
 ├── src/validator/       # pre-emit structural validator — canonical FUARAN### defect codes
@@ -133,7 +188,7 @@ certifies against the shared corpus: every **node-round-trip** and **op-round-tr
 fixture re-encodes byte-identically, and every **reject** fixture surfaces the
 canonical error code + `$`-rooted path prefix (the harness locates
 `../wire-format-fixtures/` via `manifest.json` — the authoritative enumeration — and
-skips when absent). The **lenient-accept**, **envelope**, and **elicitation**
+fails when absent). The **lenient-accept**, **envelope**, and **elicitation**
 families certify the same way — the full corpus enumeration runs, none skipped.
 
 ### Decoder robustness fuzz (`tests/decoder_fuzz.rs`)
@@ -647,8 +702,10 @@ output, not source).
 ## Cross-repo dependencies
 
 No upstream dependency on any other sibling. At test time it reads the
-workspace-relative corpus at `../wire-format-fixtures/` (skipped when absent, so the
-repo is standalone-testable). It produces a Cargo crate, not a NuGet pack — the
+workspace-relative corpus at `../wire-format-fixtures/` (or `FUARAN_WIRE_FIXTURES`),
+located for every suite by the one locator `tests/common/mod.rs` (Phase 2301); a suite
+fails without it rather than skipping (Phase 1938), and `tests/corpus_locator.rs`
+refuses a second lookup. It produces a Cargo crate, not a NuGet pack — the
 consumer-side package build treats it as a no-op.
 
 ## Public vocabulary discipline

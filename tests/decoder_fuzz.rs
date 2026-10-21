@@ -44,6 +44,8 @@
 //!   FUARAN_FUZZ_EVIDENCE=<file> cargo test --test decoder_fuzz -- --nocapture
 //! ```
 
+mod common;
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -188,31 +190,12 @@ const BUILTIN_SEEDS: &[&str] = &[
     "",
 ];
 
-/// Walks up from the crate directory looking for the shared corpus. `None` keeps
-/// the repo standalone-testable: a corpus-less checkout gets a working harness
-/// with a narrower seed pool, never a failure.
-fn find_corpus() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Some(root);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
 /// Every corpus payload the harness can find, as raw text. READ-ONLY by
 /// construction: the fuzz never writes into the corpus. A REJECT fixture is the
 /// most productive seed there is, since it already sits one edit away from the
 /// refusal boundary the fuzz is probing.
-fn load_seeds(corpus: Option<&Path>) -> Vec<String> {
+fn load_seeds(corpus: &Path) -> Vec<String> {
     let mut seeds: Vec<String> = BUILTIN_SEEDS.iter().map(|s| (*s).to_string()).collect();
-    let Some(corpus) = corpus else {
-        return seeds;
-    };
     for family in ["nodes", "ops", "reject", "lenient"] {
         let dir = corpus.join(family);
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -247,10 +230,9 @@ const FALLBACK_VOCAB: &[&str] = &[
 /// Parsed with the host's own JSON layer, which is the only one this crate has —
 /// and a manifest this host cannot read is a finding in its own right, so the
 /// fallback below is a narrower harness rather than a silent success.
-fn load_vocabulary(corpus: Option<&Path>) -> Vec<String> {
+fn load_vocabulary(corpus: &Path) -> Vec<String> {
     use fuaran_rs::canonical::{JVal, parse};
-    if let Some(corpus) = corpus
-        && let Ok(raw) = std::fs::read_to_string(corpus.join("manifest.json"))
+    if let Ok(raw) = std::fs::read_to_string(corpus.join("manifest.json"))
         && let Ok(ast) = parse(&raw)
         && let Some(JVal::Arr(kinds)) = ast.field("kinds")
     {
@@ -1238,7 +1220,7 @@ fn json_escape(s: &str) -> String {
 
 /// The machine-readable result a scheduled job collects. Written by the run, so
 /// the figures cannot drift from the methodology beside them.
-fn evidence_json(stats: &RunStats, cfg: Config, seed: u64, corpus_present: bool) -> String {
+fn evidence_json(stats: &RunStats, cfg: Config, seed: u64) -> String {
     let mut codes: Vec<String> = stats
         .reject_codes
         .iter()
@@ -1248,7 +1230,7 @@ fn evidence_json(stats: &RunStats, cfg: Config, seed: u64, corpus_present: bool)
     format!(
         "{{\n  \"host\": \"fuaran-rs\",\n  \"entryPoints\": [\"decode_node\", \"decode_op\"],\n  \
          \"config\": \"{}\",\n  \"seed\": \"{seed}\",\n  \"iterations\": {},\n  \"inputs\": {},\n  \
-         \"corpusSeeds\": {},\n  \"corpusPresent\": {corpus_present},\n  \"accepted\": {},\n  \
+         \"corpusSeeds\": {},\n  \"corpusPresent\": true,\n  \"accepted\": {},\n  \
          \"rejectCodes\": {{\n{}\n  }},\n  \"counterexamples\": {},\n  \"maxDecodeMs\": {:.3},\n  \
          \"maxAllocBytes\": {},\n  \"maxAllocRatio\": {:.3},\n  \"elapsedSeconds\": {:.3}\n}}\n",
         cfg.name,
@@ -1300,9 +1282,9 @@ fn env_usize(name: &str, fallback: usize) -> usize {
 
 #[test]
 fn the_refusal_contract_holds_over_generated_hostile_input() {
-    let corpus = find_corpus();
-    let seeds = load_seeds(corpus.as_deref());
-    let vocab = load_vocabulary(corpus.as_deref());
+    let corpus = common::corpus_root();
+    let seeds = load_seeds(&corpus);
+    let vocab = load_vocabulary(&corpus);
 
     let long = std::env::var("FUARAN_FUZZ_LONG").as_deref() == Ok("1");
     let cfg = if long { LONG_CONFIG } else { BOUNDED_CONFIG };
@@ -1328,7 +1310,7 @@ fn the_refusal_contract_holds_over_generated_hostile_input() {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("creating the evidence directory");
         }
-        std::fs::write(&path, evidence_json(&stats, cfg, seed, corpus.is_some()))
+        std::fs::write(&path, evidence_json(&stats, cfg, seed))
             .expect("writing the evidence record");
     }
 
@@ -1391,9 +1373,9 @@ fn every_nth(
 
 #[test]
 fn the_harness_goes_red_on_a_broken_decoder() {
-    let corpus = find_corpus();
-    let seeds = load_seeds(corpus.as_deref());
-    let vocab = load_vocabulary(corpus.as_deref());
+    let corpus = common::corpus_root();
+    let seeds = load_seeds(&corpus);
+    let vocab = load_vocabulary(&corpus);
 
     // The slow mutant is measured against a DELIBERATELY TIGHT budget rather
     // than the shipped three-second one. Sleeping past the real budget would cost

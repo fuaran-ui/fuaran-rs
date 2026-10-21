@@ -8,9 +8,9 @@ use super::bare_enum;
 
 // ─── Compute layer (Phases 282/284/424) ──────────────────────────────────────
 
-// The three sub-second timestamp units are appended after `timestamp` (Phase
+// The three sub-second timestamp units are appended after `decimal` (Phase
 // 2206, fuaran-core#422), so the spelling list keeps its earlier prefix.
-bare_enum!(ColumnType { Int => "int", Float => "float", Bool => "bool", Str => "string", Date => "date", Timestamp => "timestamp", TimestampMs => "timestamp_ms", TimestampUs => "timestamp_us", TimestampNs => "timestamp_ns" });
+bare_enum!(ColumnType { Int => "int", Float => "float", Bool => "bool", Str => "string", Date => "date", Timestamp => "timestamp", Decimal => "decimal", TimestampMs => "timestamp_ms", TimestampUs => "timestamp_us", TimestampNs => "timestamp_ns" });
 
 impl ColumnType {
     /// The timestamp family (WIRE_FORMAT §3.6.25): the fraction digits a
@@ -78,12 +78,16 @@ pub fn instant_fraction_digits(s: &str) -> Option<u32> {
 }
 bare_enum!(BinOp { Add => "add", Sub => "sub", Mul => "mul", Div => "div", Mod => "mod", Eq => "eq", Ne => "ne", Lt => "lt", Le => "le", Gt => "gt", Ge => "ge", And => "and", Or => "or", Contains => "contains", StartsWith => "startsWith", EndsWith => "endsWith" });
 bare_enum!(ScalarFn { Abs => "abs", Round => "round", Floor => "floor", Ceil => "ceil", Length => "length", Lower => "lower", Upper => "upper", Substr => "substr", DatePart => "datePart", Concat => "concat", Trim => "trim", Replace => "replace", DateDiffDays => "dateDiffDays" });
-bare_enum!(AggFn { Sum => "sum", Mean => "mean", Min => "min", Max => "max", Count => "count", Median => "median", Stddev => "stddev", First => "first", Last => "last" });
+bare_enum!(AggFn { Sum => "sum", Mean => "mean", Min => "min", Max => "max", Count => "count", Median => "median", Stddev => "stddev", First => "first", Last => "last", CountDistinct => "countDistinct" });
 bare_enum!(JoinKind { Inner => "inner", Left => "left", Right => "right", Outer => "outer" });
 // `cumulSum` is the canonical tag (operator rename 2026-07-19); the legacy
 // `cumSum` spelling decodes as a lenient alias and normalises on re-encode.
 bare_enum!(WindowFn { RowNumber => "rowNumber", Rank => "rank", Lag => "lag", Lead => "lead", CumulSum => "cumulSum", RollingMean => "rollingMean" });
 bare_enum!(SortDir { Asc => "asc", Desc => "desc" });
+// The seven rounding modes of the well-known set (Phase 2001), complete on
+// purpose: widening a closed enum later is breaking, so the vocabulary ships
+// whole. A mode is a value; its spelling exists only here and in the codec.
+bare_enum!(RoundingMode { HalfEven => "half-even", HalfUp => "half-up", HalfDown => "half-down", Up => "up", Down => "down", Ceiling => "ceiling", Floor => "floor" });
 
 /// A typed dataframe cell.
 #[derive(Debug, Clone, PartialEq)]
@@ -95,6 +99,27 @@ pub enum Cell {
     Str(String),
     Date(String),
     Timestamp(String),
+    /// An exact decimal, carried as its CANONICAL text (`-?[0-9]+(\.[0-9]+)?`
+    /// with no leading zero, no trailing fraction zero, no point on a whole
+    /// number and no sign on zero) — never a host number. The codec
+    /// canonicalises on decode; `core::decimal` is the one canonicaliser.
+    Decimal(String),
+}
+
+/// A rounding policy's scale (Phase 2001): a literal number of decimal places,
+/// or a named param resolved from the evaluation env — `{"$param":"<name>"}` on
+/// the wire. A scale outside `0..=1000` is refused by name at evaluation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RoundingScale {
+    Lit(i64),
+    Param(String),
+}
+
+/// A rounding policy (Phase 2001): a scale and one of the seven modes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rounding {
+    pub scale: RoundingScale,
+    pub mode: RoundingMode,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -172,6 +197,20 @@ pub enum ColExpr {
     IsNull {
         expr: Box<ColExpr>,
     },
+    /// The quotient of two EXACT numbers (a decimal or an int), correctly
+    /// rounded to `rounding` (Phase 2001): one rounding of the exact value. A
+    /// float operand is refused by name; a zero divisor answers null.
+    Quotient {
+        dividend: Box<ColExpr>,
+        divisor: Box<ColExpr>,
+        rounding: Rounding,
+    },
+    /// An exact number brought to `rounding` (Phase 2001). `Round` / `Floor` /
+    /// `Ceil` over a decimal are its scale-0 specialisations.
+    Rounded {
+        expr: Box<ColExpr>,
+        rounding: Rounding,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -247,6 +286,16 @@ pub enum TransformStep {
         offset: i64,
     },
     Union {
+        source: DataSource,
+    },
+    /// Keep the left rows whose FULL row also appears in `source` (SQL
+    /// `INTERSECT ALL`), by the same row identity `Distinct` dedups on.
+    Intersect {
+        source: DataSource,
+    },
+    /// Keep the left rows whose full row does NOT appear in `source` (SQL
+    /// `EXCEPT ALL`).
+    Except {
         source: DataSource,
     },
 }

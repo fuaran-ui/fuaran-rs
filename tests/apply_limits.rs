@@ -7,15 +7,17 @@
 //! `MoveNode` adds none, but moving one legal branch under the leaf of another
 //! stacks two depths that each passed. All three were accepted past the limit.
 //! The last tests certify this host against the shared
-//! `apply/limits-apply.json` and `apply/duplicate-ids-apply.json` corpus
-//! families.
+//! `apply/limits-apply.json`, `apply/duplicate-ids-apply.json` and
+//! `apply/style-normalise-apply.json` corpus families.
 
-use std::path::PathBuf;
+mod common;
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::limits::{MAX_NODE_DEPTH, MAX_NODES};
 use fuaran_rs::ops::{ApplyErrorCode, apply};
-use fuaran_rs::wire::{Node, NodeKind, StateBehaviour, TreeOp, decode_node, decode_op};
+use fuaran_rs::wire::{
+    Node, NodeKind, StateBehaviour, TreeOp, decode_node, decode_op, encode_node,
+};
 
 const FLEX: &str =
     r#""layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group""#;
@@ -226,29 +228,6 @@ fn an_edit_to_a_childless_kind_on_an_over_limit_tree_applies() {
 
 // ── The shared corpus family ────────────────────────────────────────────────
 
-const CORPUS_ENV: &str = "FUARAN_WIRE_FIXTURES";
-
-fn find_corpus() -> Option<PathBuf> {
-    if let Ok(declared) = std::env::var(CORPUS_ENV) {
-        let root = PathBuf::from(&declared);
-        assert!(
-            root.join("manifest.json").is_file(),
-            "{CORPUS_ENV} names '{declared}', which holds no manifest.json"
-        );
-        return Some(root);
-    }
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Some(root);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
 fn field<'a>(v: &'a JVal, key: &str) -> &'a JVal {
     match v {
         JVal::Obj(members) => members
@@ -280,12 +259,19 @@ fn duplicate_ids_apply_corpus_holds_on_this_host() {
     certify_apply_family("duplicateIdsApply");
 }
 
-/// Decode and apply every vector of one `apply/` family.
+/// The `apply/style-normalise-apply.json` family (Phase 2313): a style result
+/// equal to the default record is stored as the absent slot, so the applied
+/// tree encodes with no `style` member. Its vectors pin the result bytes.
+#[test]
+fn style_normalise_apply_corpus_holds_on_this_host() {
+    certify_apply_family("styleNormaliseApply");
+}
+
+/// Decode and apply every vector of one `apply/` family. An accepting vector
+/// that pins `expected.tree` also requires the applied tree to re-encode to
+/// exactly those bytes.
 fn certify_apply_family(family_id: &str) {
-    let Some(root) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let root = common::corpus_root();
     let read = |rel: &str| {
         let raw = std::fs::read_to_string(root.join(rel)).expect("corpus file reads");
         parse(&raw).expect("corpus file parses")
@@ -321,7 +307,17 @@ fn certify_apply_family(family_id: &str) {
         let op = decode_op(text(field(input, "op")))
             .unwrap_or_else(|e| panic!("{id}: the op did not decode: {e:?}"));
         match (text(field(expected, "verdict")), apply(&tree, &op)) {
-            ("accept", Ok(_)) => {}
+            ("accept", Ok(outcome)) => {
+                if let JVal::Obj(members) = expected
+                    && let Some((_, want)) = members.iter().find(|(k, _)| k == "tree")
+                {
+                    assert_eq!(
+                        encode_node(&outcome.new_tree),
+                        text(want),
+                        "{id}: the applied tree's canonical bytes"
+                    );
+                }
+            }
             ("accept", Err(e)) => panic!("{id}: expected accept, refused with {:?}", e.code),
             ("reject", Err(e)) => {
                 assert_eq!(

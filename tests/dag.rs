@@ -7,7 +7,9 @@
 //! envelopes (refusal envelope byte-equal + `sha256(envelope)`, and the
 //! swapped merge transposes it).
 
-use std::path::{Path, PathBuf};
+mod common;
+
+use std::path::Path;
 
 use fuaran_rs::canonical::{JVal, ordinal_cmp, parse};
 use fuaran_rs::dag::{
@@ -16,22 +18,6 @@ use fuaran_rs::dag::{
 };
 use fuaran_rs::opstream::{Actor, sha256_hex};
 use fuaran_rs::wire::{DecodeErrorCode, Node, NodeKind, ToneVariant, decode_node, encode_node};
-
-fn corpus() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        if dir
-            .join("wire-format-fixtures")
-            .join("manifest.json")
-            .is_file()
-        {
-            return Some(dir.join("wire-format-fixtures"));
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
 
 fn str_field(v: &JVal, key: &str) -> Option<String> {
     match v.field(key) {
@@ -46,10 +32,7 @@ fn read(root: &Path, rel: &str) -> String {
 
 #[test]
 fn dag_records_round_trip_byte_identical() {
-    let Some(root) = corpus() else {
-        eprintln!("corpus not found; skipping");
-        return;
-    };
+    let root = common::corpus_root();
     let manifest = parse(&read(&root, "dag/manifest.json")).expect("dag manifest parses");
     let Some(JVal::Arr(fixtures)) = manifest.field("fixtures") else {
         panic!("dag manifest has no fixtures");
@@ -215,10 +198,7 @@ fn manifest_count(manifest: &JVal, key: &str, kind: &str) -> usize {
 
 #[test]
 fn every_merge_conformance_family_is_certified() {
-    let Some(root) = corpus() else {
-        eprintln!("corpus not found; skipping");
-        return;
-    };
+    let root = common::corpus_root();
     let manifest =
         parse(&read(&root, "merge-conformance/manifest.json")).expect("merge manifest parses");
 
@@ -483,10 +463,7 @@ fn distinct_style_subfields_auto_blend() {
 /// round-trip leg above.
 #[test]
 fn the_dag_corpus_exercises_both_actor_cases() {
-    let Some(root) = corpus() else {
-        eprintln!("corpus not found; skipping");
-        return;
-    };
+    let root = common::corpus_root();
     let manifest = parse(&read(&root, "dag/manifest.json")).expect("dag manifest parses");
     let Some(JVal::Arr(fixtures)) = manifest.field("fixtures") else {
         panic!("dag manifest has no fixtures");

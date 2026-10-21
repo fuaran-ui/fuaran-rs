@@ -17,11 +17,10 @@
 //! caught by nothing here. The golden leg and the render leg below are the net,
 //! built in the same pass that moved the code into it.
 //!
-//! The corpus is a sibling checkout; the suite skips (never fails) when it is
-//! absent, keeping the crate standalone-testable — the same posture
-//! `tests/chart_lowering.rs` takes.
+//! The corpus is located by `common::corpus_root`; an absent corpus fails the
+//! suite rather than skipping it (Phase 2301).
 
-use std::path::PathBuf;
+mod common;
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::render::BindingSources;
@@ -29,20 +28,6 @@ use fuaran_rs::render::sparkline_lowering::try_lower_sparkline;
 use fuaran_rs::wire::{
     Binding, Node, NodeKind, SemanticStyle, SparklineSpec, StateBehaviour, StaticValue,
 };
-
-/// Walk up from the crate dir to the shared corpus (mirrors conformance.rs).
-fn find_corpus() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Some(root);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
 
 /// Every committed `<name>.input.json` / `<name>.expected.json` pair, sorted.
 /// A dangling half is a panic — the corpus is the authoritative enumeration and
@@ -123,10 +108,7 @@ fn lowered_json(name: &str, input: &str) -> String {
 
 #[test]
 fn every_case_lowers_byte_identically_to_its_committed_golden() {
-    let Some(corpus) = find_corpus() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let corpus = common::corpus_root();
     let dir = corpus.join("sparkline-lowering");
     for name in discover_cases(&dir) {
         let input = std::fs::read_to_string(dir.join(format!("{name}.input.json")))
@@ -144,9 +126,7 @@ fn every_case_lowers_byte_identically_to_its_committed_golden() {
 
 #[test]
 fn lowering_is_deterministic() {
-    let Some(corpus) = find_corpus() else {
-        return;
-    };
+    let corpus = common::corpus_root();
     let dir = corpus.join("sparkline-lowering");
     for name in discover_cases(&dir) {
         let Ok(input) = std::fs::read_to_string(dir.join(format!("{name}.input.json"))) else {
@@ -178,9 +158,7 @@ fn lowering_is_deterministic() {
 /// it pass on the three vectors it did move.
 #[test]
 fn the_golden_comparison_discriminates() {
-    let Some(corpus) = find_corpus() else {
-        return;
-    };
+    let corpus = common::corpus_root();
     let dir = corpus.join("sparkline-lowering");
     let mut drawn = 0usize;
     let mut rejected = 0usize;

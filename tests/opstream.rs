@@ -4,7 +4,9 @@
 //! must verify from genesis. Plus behavioural coverage of append, tamper
 //! detection, and the SHA-256 vectors (in the module's own unit tests).
 
-use std::path::{Path, PathBuf};
+mod common;
+
+use std::path::Path;
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::opstream::{
@@ -13,22 +15,6 @@ use fuaran_rs::opstream::{
     verify_chain,
 };
 use fuaran_rs::wire::{Node, TreeOp, decode_node, decode_op};
-
-fn find_corpus() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        if dir
-            .join("wire-format-fixtures")
-            .join("manifest.json")
-            .is_file()
-        {
-            return Some(dir.join("wire-format-fixtures"));
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
 
 fn str_field(v: &JVal, key: &str) -> Option<String> {
     match v.field(key) {
@@ -75,10 +61,7 @@ fn read_op(corpus: &Path, rel: &str) -> TreeOp {
 
 #[test]
 fn chain_corpus_hashes_are_byte_identical_cross_host() {
-    let Some(corpus) = find_corpus() else {
-        eprintln!("corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let corpus = common::corpus_root();
     let raw = std::fs::read_to_string(corpus.join("chain").join("chain-corpus.json"))
         .expect("reading chain corpus");
     let doc = parse(&raw).expect("chain corpus parses");

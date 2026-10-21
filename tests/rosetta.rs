@@ -21,7 +21,7 @@ const REFERENCE_WIRE: &str = concat!(
     r#"{"id":"rosetta-m-c","kind":{"$type":"Metric","label":"Churn %","value":"#,
     r#"{"$type":"Static","value":12.4}}}],"layout":{"$type":"Flex","direction":"Horizontal","#,
     r#""wrap":true},"role":"Group"}}],"heading":"Revenue snapshot","layout":"#,
-    r#"{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Dashboard"}}"#
+    r#"{"$type":"Flex","direction":"Vertical"},"role":"Dashboard"}}"#
 );
 
 #[test]

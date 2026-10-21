@@ -17,33 +17,26 @@
 //! certified via `lenient-accept` decode-then-canonical-re-encode. Every
 //! declared family is now covered.
 //!
-//! # Absence is two different facts, and only one of them is a skip
+//! # An absent corpus is a failure, never a skip
 //!
 //! Until Phase 1664 an absent corpus made every leg here return, so "the oracle
 //! is not here" and "the oracle is here and every family conforms" reported the
-//! same `ok`. That is defensible in a standalone clone of this repository, which
-//! genuinely cannot run the suite — and indefensible in the cross-host
-//! workspace, where an absent corpus means the whole conformance claim has been
-//! switched off and nobody was told. **A conformance check that passes without
-//! its oracle is worse than no check**, because it reports the same green as one
-//! that ran.
+//! same `ok`. Phase 1664 split the absence in two — a hard failure in the
+//! cross-host workspace, an honest NOT RUN in a standalone clone. Phase 1938
+//! retires the second half: **a conformance check that passes without its
+//! oracle is worse than no check**, and the remedy for a clone without the
+//! corpus is to provide it (clone `wire-format-fixtures` beside this repository,
+//! or name it in `FUARAN_WIRE_FIXTURES` — the public workflow does the former),
+//! not to report a leg that asserted nothing. A corpus that is CLAIMED and
+//! unreadable is a failure too: an operator who named a path has said the
+//! oracle exists, so a path that is wrong is a mistake to report.
 //!
-//! So the two are separated, by the same discriminator `tests/render.rs` uses
-//! for the reference host and `tests/program_wire_canonical.rs` uses for the
-//! program corpus: **any sibling host present ⇒ hard failure** naming what
-//! proved the shape; **nothing else present ⇒ the honest standalone NOT RUN**,
-//! which is what the public workflow reports (it checks out this repository and
-//! the wire corpus, and no sibling host). And a corpus that is CLAIMED —
-//! `FUARAN_WIRE_FIXTURES` names one — is a hard failure from there on whatever
-//! else is around it: an operator who named a path has said the oracle exists,
-//! so a path that is wrong is a mistake to report rather than a state to
-//! tolerate.
-//!
-//! [`classify_corpus`] is that decision as a pure function of a starting
-//! directory, which is what makes it testable — see
-//! `the_two_absences_are_told_apart`. It has to be, because this is the kind of
-//! check that passes by doing nothing.
+//! The lookup itself is the crate's one corpus locator, `common::corpus_root`
+//! (Phase 2301); its verdicts are exercised in `tests/corpus_locator.rs`.
 
+mod common;
+
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use fuaran_rs::canonical::{JVal, parse};
@@ -53,194 +46,7 @@ use fuaran_rs::elicitation::{
 use fuaran_rs::envelope::{decode_envelope, encode_envelope};
 use fuaran_rs::wire::{decode_node, decode_op, encode_node, encode_op};
 
-/// The environment variable an operator names the corpus root with, matching the
-/// estate's own spelling. A named path is CLAIMED: see [`Corpus::Declared`].
-const CORPUS_ENV: &str = "FUARAN_WIRE_FIXTURES";
-
-/// Sibling hosts whose presence proves this is a cross-host workspace checkout
-/// rather than a standalone clone. Deliberately excludes this host.
-///
-/// The same list, for the same purpose, as `tests/render.rs`'s
-/// `OTHER_HOST_NAMES` plus the reference host it names separately: each
-/// integration test is its own crate, so the constant cannot be shared without
-/// publishing it from the library, and publishing a list of sibling repository
-/// names out of a crate is not a thing this host should do to spare a
-/// duplication of seven strings.
-const WORKSPACE_SIBLING_HOSTS: &[&str] = &[
-    "fuaran-dotnet",
-    "fuaran",
-    "fuaran-ts",
-    "fuaran-py",
-    "fuaran-go",
-    "fuaran-kt",
-    "fuaran-swift",
-];
-
-/// What a corpus lookup found, with the two absences told apart.
-#[derive(Debug, PartialEq, Eq)]
-enum Corpus {
-    /// An operator named it. Anything wrong with it from here is a hard failure.
-    Declared(PathBuf),
-    /// Found beside this repository.
-    Discovered(PathBuf),
-    /// Nothing claimed and nothing found, in a checkout that is plainly the
-    /// cross-host workspace — so the oracle has been silently disabled rather
-    /// than legitimately absent. Carries the sibling that proves the shape.
-    MissingInWorkspace(String),
-    /// Nothing claimed, nothing found, and nothing else here either — a genuine
-    /// standalone clone of this repository.
-    Absent,
-}
-
-/// The classification, as a pure function of where the walk starts. Split out
-/// from [`locate_corpus`] so it can be exercised against directories built for
-/// the purpose rather than only against whatever this machine happens to hold.
-fn classify_corpus(start: &Path, declared: Option<&str>) -> Corpus {
-    if let Some(declared) = declared
-        && !declared.trim().is_empty()
-    {
-        return Corpus::Declared(PathBuf::from(declared));
-    }
-    let mut dir = start.to_path_buf();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Corpus::Discovered(root);
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    // Not found anywhere up the tree. Is this a standalone clone, or a workspace
-    // checkout whose corpus is missing? The two look identical from inside this
-    // function and are opposite facts: one is a repository that legitimately
-    // cannot run these legs, the other is an oracle that has been silently
-    // switched off. The discriminator is chosen so the PUBLIC workflow — which
-    // checks out this repository and the wire corpus and no sibling host —
-    // stays honestly NOT RUN.
-    let mut dir = start.to_path_buf();
-    loop {
-        for sibling in WORKSPACE_SIBLING_HOSTS {
-            if dir.join(sibling).is_dir() {
-                return Corpus::MissingInWorkspace(format!(
-                    "{}/ is present under {}",
-                    sibling,
-                    dir.display()
-                ));
-            }
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    Corpus::Absent
-}
-
-fn locate_corpus() -> Corpus {
-    classify_corpus(
-        Path::new(env!("CARGO_MANIFEST_DIR")),
-        std::env::var(CORPUS_ENV).ok().as_deref(),
-    )
-}
-
-/// The shared corpus root, or `None` for the one absence that is honestly a
-/// skip. Every other absence PANICS here rather than returning.
-///
-/// A located corpus must also be READABLE as one: a `manifest.json` that is not
-/// there separates "this is the wrong corpus" from "this corpus is missing a
-/// fixture", and the two have different remedies. Without it, an operator whose
-/// `FUARAN_WIRE_FIXTURES` points one directory sideways gets acceptance followed
-/// by a confident complaint about absent fixtures — loud, and wrong about the
-/// cause.
-fn find_corpus() -> Option<PathBuf> {
-    let (root, claimed) = match locate_corpus() {
-        Corpus::Declared(p) => (p, true),
-        Corpus::Discovered(p) => (p, false),
-        Corpus::MissingInWorkspace(evidence) => panic!(
-            "the wire-format corpus is neither claimed nor present, but this is a cross-host \
-             workspace checkout ({evidence}) — so this conformance leg has been silently \
-             disabled rather than legitimately skipped, and a missing oracle reports the same \
-             green as a run. Clone `wire-format-fixtures` beside this repository, or name it \
-             with {CORPUS_ENV}. (A standalone clone of this repository alone still reports NOT \
-             RUN and asserts nothing.)"
-        ),
-        Corpus::Absent => {
-            eprintln!(
-                "the wire-format corpus is neither claimed nor present beside this repository, \
-                 and no sibling host is present either; this leg asserted nothing. Set \
-                 {CORPUS_ENV} to run it."
-            );
-            return None;
-        }
-    };
-    assert!(
-        root.join("manifest.json").is_file(),
-        "the corpus is {} at '{}' but it holds no manifest.json, which is its authoritative \
-         fixture enumeration. A conformance check that passes without its oracle is worse than \
-         no check, so this is a failure rather than a skip.",
-        if claimed { "claimed" } else { "present" },
-        root.display()
-    );
-    Some(root)
-}
-
-/// The go-red for everything above. A guard whose whole job is to fail is
-/// exactly the kind of code that quietly stops working, so each verdict is
-/// produced here from a directory built to produce it — including the two that
-/// cannot be produced on a machine holding a real corpus.
-#[test]
-fn the_two_absences_are_told_apart() {
-    let scratch = std::env::temp_dir().join(format!(
-        "fuaran-rs-corpus-classify-{}-{:?}",
-        std::process::id(),
-        std::thread::current().id()
-    ));
-    let standalone = scratch.join("standalone").join("fuaran-rs");
-    let workspace = scratch.join("workspace").join("fuaran-rs");
-    std::fs::create_dir_all(&standalone).expect("scratch standalone tree");
-    std::fs::create_dir_all(workspace.parent().unwrap().join("fuaran-ts"))
-        .expect("scratch sibling host");
-    std::fs::create_dir_all(&workspace).expect("scratch workspace tree");
-
-    // Nothing named, nothing found, nothing else there: the honest NOT RUN.
-    assert_eq!(classify_corpus(&standalone, None), Corpus::Absent);
-
-    // Nothing named, nothing found, but a sibling host proves the shape.
-    let missing = classify_corpus(&workspace, None);
-    match &missing {
-        Corpus::MissingInWorkspace(evidence) => {
-            assert!(
-                evidence.contains("fuaran-ts"),
-                "the evidence names what proved the shape: {evidence}"
-            );
-        }
-        other => panic!("a workspace checkout with no corpus must not read as a skip: {other:?}"),
-    }
-
-    // A claimed path is claimed whatever surrounds it — including a claim that
-    // is wrong, which is the case an operator most needs told.
-    assert_eq!(
-        classify_corpus(&standalone, Some("/no/such/corpus")),
-        Corpus::Declared(PathBuf::from("/no/such/corpus"))
-    );
-    // An empty or whitespace claim is not a claim.
-    assert_eq!(classify_corpus(&standalone, Some("   ")), Corpus::Absent);
-
-    // The discovery arm still discovers, so the change did not disable the
-    // ordinary path in the act of hardening the absences.
-    let discoverable = scratch.join("found").join("fuaran-rs");
-    let corpus = scratch.join("found").join("wire-format-fixtures");
-    std::fs::create_dir_all(&discoverable).expect("scratch discoverable tree");
-    std::fs::create_dir_all(&corpus).expect("scratch corpus dir");
-    std::fs::write(corpus.join("manifest.json"), b"{}").expect("scratch manifest");
-    assert_eq!(
-        classify_corpus(&discoverable, None),
-        Corpus::Discovered(corpus)
-    );
-
-    let _ = std::fs::remove_dir_all(&scratch);
-}
-
+#[derive(Clone)]
 struct Fixture {
     id: String,
     kind: String,
@@ -283,97 +89,183 @@ fn read_fixture(corpus: &Path, rel: &str) -> String {
         .unwrap_or_else(|e| panic!("reading fixture file '{rel}': {e}"))
 }
 
-/// Phase 548 kind-set attestation: the emittable NodeKind vocabulary
-/// (`CANONICAL_NODE_KINDS`) must equal the generated manifest `kinds` enumeration.
-/// A vocabulary commit that skips this host fails here with a *named* missing kind
-/// ("rust decoder lacks Drawing"), so the drift class dies at the host's next test
-/// run rather than at a later audit.
-#[test]
-fn node_kind_set_matches_manifest() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
-    let raw = std::fs::read_to_string(corpus.join("manifest.json")).expect("reading manifest");
-    let manifest = parse(&raw).expect("manifest.json parses with the host's own JSON layer");
-    let Some(JVal::Arr(entries)) = manifest.field("kinds") else {
+/// The environment variable that turns [`generated_module_matches_the_corpus_idl`]
+/// from the drift check into the regeneration: set, the test WRITES the module
+/// rather than comparing it.
+const REGENERATE_ENV: &str = "FUARAN_IDL_REGENERATE";
+
+/// The corpus's `idl.json` bytes, read exactly as published — the generator's
+/// one input and the recorded hash's subject.
+fn corpus_idl(corpus: &Path) -> String {
+    std::fs::read_to_string(corpus.join("idl.json")).unwrap_or_else(|e| {
         panic!(
-            "manifest.json declares no 'kinds' array — regenerate the corpus with --emit-corpus"
+            "the corpus at '{}' holds no readable idl.json ({e}); this host's structural \
+             layer is generated from it, so its absence is a failure rather than a skip",
+            corpus.display()
+        )
+    })
+}
+
+/// Phase 2298: the structural layer in `src/wire/generated.rs` is exactly what
+/// the host's own generator writes from the corpus's `idl.json`. Red when the IDL
+/// has moved and the module has not; with `FUARAN_IDL_REGENERATE=1` it is the
+/// regeneration itself, which is the one step a vocabulary change asks of this
+/// host's structure.
+///
+/// This replaces the two set pins that compared hand-kept kind and control lists
+/// with the corpus manifest: those lists are now generated from the IDL the
+/// manifest is emitted beside, and since Phase 2315 the `NodeKind` /
+/// `FormFieldKind` enums themselves are generated from the same rows, so the
+/// drift those pins caught cannot be written any more.
+#[test]
+fn generated_module_matches_the_corpus_idl() {
+    let corpus = common::corpus_root();
+    let expected = fuaran_rs::wire::idl_codegen::generate(&corpus_idl(&corpus))
+        .unwrap_or_else(|e| panic!("the generator refused the corpus idl.json: {e}"));
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(fuaran_rs::wire::idl_codegen::GENERATED_PATH);
+    if std::env::var(REGENERATE_ENV).is_ok_and(|v| !v.trim().is_empty()) {
+        std::fs::write(&path, &expected).expect("writing the generated module");
+        eprintln!("regenerated {} from {}", path.display(), corpus.display());
+        return;
+    }
+    let committed = std::fs::read_to_string(&path).expect("reading the generated module");
+    if committed != expected {
+        let line = committed
+            .lines()
+            .zip(expected.lines())
+            .position(|(a, b)| a != b)
+            .map_or_else(
+                || committed.lines().count().min(expected.lines().count()) + 1,
+                |i| i + 1,
+            );
+        panic!(
+            "src/wire/generated.rs is not what the generator writes from {}/idl.json \
+             (first difference at line {line}). The IDL has moved: regenerate with \
+             {REGENERATE_ENV}=1 cargo test --test conformance generated_module, then build — \
+             the compiler names every hand-written site the change reaches.",
+            corpus.display()
         );
-    };
+    }
+}
 
-    let manifest_kinds: std::collections::BTreeSet<String> = entries
-        .iter()
-        .filter_map(|e| match e {
-            JVal::Str(s) => Some(s.clone()),
-            _ => None,
-        })
-        .collect();
-    let decoder_kinds: std::collections::BTreeSet<String> = fuaran_rs::wire::CANONICAL_NODE_KINDS
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-
-    let missing: Vec<&String> = manifest_kinds.difference(&decoder_kinds).collect();
-    let extra: Vec<&String> = decoder_kinds.difference(&manifest_kinds).collect();
-
-    assert!(
-        missing.is_empty(),
-        "manifest kinds the rust decoder lacks (add the NodeKind variant + CANONICAL_NODE_KINDS entry): {missing:?}"
-    );
-    assert!(
-        extra.is_empty(),
-        "rust decoder kinds the manifest omits (regenerate the corpus with --emit-corpus): {extra:?}"
+/// Phase 2298: the IDL hash the generated module records is the hash of the
+/// corpus's `idl.json` as it stands. The regeneration check above already
+/// implies it; this leg says WHICH input moved in one line, and it reads the
+/// recorded constant the library compiled with rather than the file on disk.
+#[test]
+fn generated_module_records_the_corpus_idl_hash() {
+    let corpus = common::corpus_root();
+    let actual = fuaran_rs::opstream::sha256_hex(&corpus_idl(&corpus));
+    assert_eq!(
+        fuaran_rs::wire::IDL_SHA256,
+        actual,
+        "the generated module was produced from a different idl.json than the corpus at '{}' \
+         publishes; regenerate with {REGENERATE_ENV}=1 cargo test --test conformance \
+         generated_module",
+        corpus.display()
     );
 }
 
-/// Phase 746 control-vocabulary attestation — the `node_kind_set_matches_manifest`
-/// twin over `FormFieldKind`. The kind-set pin only ever covered NodeKind, so a
-/// control-vocabulary commit that skipped this host stayed silent until a fixture
-/// happened to exercise it; this leg names the missing case ("rust decoder lacks
-/// DateRange") at the host's next test run instead.
+/// The go-red for the drift check: a generator that ignored its input, or a
+/// comparison that could not fail, would leave the check above green on a moved
+/// IDL. So the IDL is perturbed the three ways a vocabulary change perturbs it —
+/// a kind, a field, an enum case — and each must change the generated module.
 #[test]
-fn form_field_kind_set_matches_manifest() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
+fn the_generator_reacts_to_each_vocabulary_move() {
+    let corpus = common::corpus_root();
+    let idl = corpus_idl(&corpus);
+    let generate = |text: &str| {
+        fuaran_rs::wire::idl_codegen::generate(text)
+            .unwrap_or_else(|e| panic!("the generator refused a perturbed idl.json: {e}"))
     };
-    let raw = std::fs::read_to_string(corpus.join("manifest.json")).expect("reading manifest");
-    let manifest = parse(&raw).expect("manifest.json parses with the host's own JSON layer");
-    let Some(JVal::Arr(entries)) = manifest.field("formFieldKinds") else {
-        panic!(
-            "manifest.json declares no 'formFieldKinds' array — regenerate the corpus with --emit-corpus"
+    let base = generate(&idl);
+    let moves = [
+        (
+            "a new kind",
+            "\"tag\": \"Badge\"",
+            "\"tag\": \"Badge\"}, {\"category\": \"Display\", \"fields\": [], \"tag\": \"Probe\"",
+            "NodeKind::Probe(_)",
+        ),
+        (
+            "a new enum case",
+            "\"Neutral\",",
+            "\"Neutral\", \"Probe\",",
+            "Probe => \"Probe\"",
+        ),
+        (
+            "a new field",
+            "\"name\": \"label\",",
+            "\"name\": \"probeField\", \"optionality\": {\"$type\": \"optional\"}, \"type\": {\"$type\": \"str\"}}, {\"name\": \"label\",",
+            "pub probe_field: Option<String>,",
+        ),
+    ];
+    for (what, from, to, witness) in moves {
+        assert!(
+            idl.contains(from),
+            "the probe for {what} no longer finds its anchor in idl.json: {from}"
         );
-    };
+        let moved = generate(&idl.replacen(from, to, 1));
+        assert_ne!(
+            moved, base,
+            "{what} in idl.json left the generated module unchanged"
+        );
+        assert!(
+            moved.contains(witness) && !base.contains(witness),
+            "{what} did not surface as `{witness}` in the generated module"
+        );
+    }
+}
 
-    let manifest_kinds: std::collections::BTreeSet<String> = entries
-        .iter()
-        .filter_map(|e| match e {
-            JVal::Str(s) => Some(s.clone()),
-            _ => None,
-        })
-        .collect();
-    let decoder_kinds: std::collections::BTreeSet<String> =
-        fuaran_rs::wire::CANONICAL_FORM_FIELD_KINDS
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-
-    let missing: Vec<&String> = manifest_kinds.difference(&decoder_kinds).collect();
-    let extra: Vec<&String> = decoder_kinds.difference(&manifest_kinds).collect();
-
-    assert!(
-        missing.is_empty(),
-        "manifest form-field kinds the rust decoder lacks (add the FormFieldKind variant + CANONICAL_FORM_FIELD_KINDS entry): {missing:?}"
-    );
-    assert!(
-        extra.is_empty(),
-        "rust decoder form-field kinds the manifest omits (regenerate the corpus with --emit-corpus): {extra:?}"
-    );
+/// Phase 2315: the dialect (`src/wire/dialect.rs`) is checked against the IDL at
+/// generation, so it cannot decay into a mirror. Each of the three ways an entry
+/// goes stale is provoked on a perturbed copy of the corpus's `idl.json` and must
+/// be REFUSED, naming the entry: a departure the uniform rules now reproduce, an
+/// entry naming a field the IDL no longer has, and a note naming nothing the
+/// generator emits. The unperturbed copy must generate, so a refusal is the
+/// perturbation's and not the rendering's.
+#[test]
+fn the_generator_refuses_a_stale_dialect_entry() {
+    let corpus = common::corpus_root();
+    let parsed = fuaran_rs::canonical::parse(&corpus_idl(&corpus))
+        .unwrap_or_else(|e| panic!("the corpus idl.json does not parse: {e:?}"));
+    let idl = fuaran_rs::canonical::render_canonical(&parsed);
+    fuaran_rs::wire::idl_codegen::generate(&idl)
+        .unwrap_or_else(|e| panic!("the canonical rendering of idl.json was refused: {e}"));
+    let refusals = [
+        (
+            "a departure the rules now reproduce",
+            r#""name":"on","optionality":{"$type":"optional"}"#,
+            r#""name":"on","optionality":{"$type":"required"}"#,
+            "dialect entry Switch.on is stale",
+        ),
+        (
+            "an entry naming an absent field",
+            r#""name":"stateKey""#,
+            r#""name":"stateKeyProbe""#,
+            "dialect entry Switch.stateKey names a field the IDL does not have",
+        ),
+        (
+            "a note naming nothing emitted",
+            r#""name":"trendPolarity""#,
+            r#""name":"trendPolarityProbe""#,
+            "dialect note 'MetricSpec.trend_polarity' names nothing",
+        ),
+    ];
+    for (what, from, to, witness) in refusals {
+        assert_eq!(
+            idl.matches(from).count(),
+            1,
+            "the probe for {what} no longer finds exactly one anchor in idl.json: {from}"
+        );
+        match fuaran_rs::wire::idl_codegen::generate(&idl.replacen(from, to, 1)) {
+            Ok(_) => panic!("{what}: the generator accepted a stale dialect"),
+            Err(e) => assert!(
+                e.contains(witness),
+                "{what}: the generator refused, but not naming `{witness}`: {e}"
+            ),
+        }
+    }
 }
 
 /// The FormFieldKind carrier rule (WIRE_FORMAT §11.2): a control discriminator is
@@ -383,42 +275,54 @@ fn form_field_kind_set_matches_manifest() {
 /// control vocabulary, so a property-name heuristic would attest the wrong family
 /// and report green.
 fn collect_control_kinds(raw: &JVal, controls: &mut std::collections::BTreeSet<String>) {
-    let Some(kind) = raw.field("kind") else {
-        return;
-    };
-    if let Some(JVal::Str(tag)) = kind.field("$type") {
-        let carrier = match tag.as_str() {
-            "Form" => Some("fields"),
-            "Filters" => Some("items"),
-            _ => None,
-        };
-        if let Some(carrier) = carrier
-            && let Some(JVal::Arr(items)) = kind.field(carrier)
-        {
-            for item in items {
-                if let Some(control) = item.field("kind")
-                    && let Some(JVal::Str(control_tag)) = control.field("$type")
-                {
-                    controls.insert(control_tag.clone());
+    if let Some(kind) = raw.field("kind") {
+        if let Some(JVal::Str(tag)) = kind.field("$type") {
+            let carrier = match tag.as_str() {
+                "Form" => Some("fields"),
+                "Filters" => Some("items"),
+                _ => None,
+            };
+            if let Some(carrier) = carrier
+                && let Some(JVal::Arr(items)) = kind.field(carrier)
+            {
+                for item in items {
+                    if let Some(control) = item.field("kind")
+                        && let Some(JVal::Str(control_tag)) = control.field("$type")
+                    {
+                        controls.insert(control_tag.clone());
+                    }
                 }
             }
         }
+        descend_slots(kind, controls);
     }
-    // Recurse the node-bearing positions a control carrier can nest under.
-    for slot in ["child", "fallback", "default", "body"] {
-        if let Some(inner) = kind.field(slot) {
-            collect_control_kinds(inner, controls);
+    descend_slots(raw, controls);
+}
+
+/// Descend every node-bearing position of one wire object — the node envelope,
+/// a kind, or a record — through the generated slot enumeration, so a slot the
+/// vocabulary gains is walked without an edit here. A name the vocabulary uses
+/// for a node in one owner and for a scalar in another (`default`) is harmless:
+/// a scalar has no `kind` and no fields to descend.
+fn descend_slots(obj: &JVal, controls: &mut std::collections::BTreeSet<String>) {
+    let JVal::Obj(fields) = obj else {
+        return;
+    };
+    for (key, value) in fields {
+        let nodes = fuaran_rs::wire::NODE_SLOTS.contains(&key.as_str());
+        let records = fuaran_rs::wire::NODE_RECORD_SLOTS.contains(&key.as_str());
+        if !nodes && !records {
+            continue;
         }
-    }
-    if let Some(JVal::Arr(children)) = kind.field("children") {
-        for c in children {
-            collect_control_kinds(c, controls);
-        }
-    }
-    if let Some(JVal::Arr(cases)) = kind.field("cases") {
-        for c in cases {
-            if let Some(inner) = c.field("child") {
-                collect_control_kinds(inner, controls);
+        let items = match value {
+            JVal::Arr(items) => items.as_slice(),
+            other => std::slice::from_ref(other),
+        };
+        for item in items {
+            if nodes {
+                collect_control_kinds(item, controls);
+            } else {
+                descend_slots(item, controls);
             }
         }
     }
@@ -431,12 +335,7 @@ fn collect_control_kinds(raw: &JVal, controls: &mut std::collections::BTreeSet<S
 /// `other =>` fallback — this leg is what covers that gap.
 #[test]
 fn corpus_control_kinds_are_all_recognised() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = common::corpus_root();
     let known: std::collections::BTreeSet<String> = fuaran_rs::wire::CANONICAL_FORM_FIELD_KINDS
         .iter()
         .map(|s| (*s).to_string())
@@ -468,14 +367,23 @@ fn corpus_control_kinds_are_all_recognised() {
 }
 
 /// The round-trip legs: every node + op fixture must re-encode byte-identically.
+/// Round-trip fixtures this host does not certify yet, each with the reason and
+/// what lifts it. A listed fixture is still RUN: it must still fail, so an entry
+/// is deleted the moment the host learns the case (the round-trip test goes red on
+/// an entry that passes), and the claim read-back below does not count it against
+/// the tokens it exercises. Nothing else is skipped.
+const UNCERTIFIED_ROUND_TRIPS: &[(&str, &str)] = &[(
+    "mount-no-onbubble",
+    "the dialect implies Mount.onBubble (CLOSURE_IMPLIED) and always writes the sentinel, so a      Mount with no bubble handler re-encodes with one; certified once the dialect or the      generated-type cut carries the member as an Option (fuaran#2298, #2315)",
+)];
+
+fn uncertified_round_trip(id: &str) -> bool {
+    UNCERTIFIED_ROUND_TRIPS.iter().any(|(f, _)| *f == id)
+}
+
 #[test]
 fn corpus_round_trips_byte_identical() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = common::corpus_root();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -496,6 +404,15 @@ fn corpus_round_trips_byte_identical() {
         } else {
             decode_op(&input).map(|op| encode_op(&op))
         };
+        if uncertified_round_trip(&fixture.id) {
+            if re_encoded.as_ref().is_ok_and(|a| *a == expected) {
+                failures.push(format!(
+                    "{}: listed in UNCERTIFIED_ROUND_TRIPS and now round-trips — delete the entry",
+                    fixture.id
+                ));
+            }
+            continue;
+        }
         match re_encoded {
             Err(e) => failures.push(format!(
                 "{}: decode failed: {} at {}: {}",
@@ -537,12 +454,7 @@ fn corpus_round_trips_byte_identical() {
 /// code + a `$`-rooted path carrying the expected prefix.
 #[test]
 fn corpus_rejects_surface_canonical_code_and_path() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = common::corpus_root();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -619,12 +531,7 @@ fn corpus_rejects_surface_canonical_code_and_path() {
 /// fully; Behind preserves an unknown kind verbatim).
 #[test]
 fn corpus_envelope_round_trips_byte_identical() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = common::corpus_root();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -674,12 +581,7 @@ fn corpus_envelope_round_trips_byte_identical() {
 /// `FOREIGN_PROFILE` at `$.$profile`.
 #[test]
 fn corpus_envelope_rejects_surface_canonical_code_and_path() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = common::corpus_root();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -746,12 +648,7 @@ fn elicitation_round_trip(decoder: &str, input: &str) -> Result<String, (String,
 /// (envelope + outcome decoders) re-encodes byte-identically.
 #[test]
 fn corpus_elicitation_round_trips_byte_identical() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = common::corpus_root();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -815,12 +712,7 @@ fn elicitation_reject(decoder: &str, input: &str) -> Option<(String, String)> {
 /// validate clean.
 #[test]
 fn corpus_elicitation_rejects_and_answers_conform() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = common::corpus_root();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -889,12 +781,7 @@ fn corpus_elicitation_rejects_and_answers_conform() {
 /// the canonical normalisation (aliases never survive a re-encode).
 #[test]
 fn corpus_lenient_accept_round_trips_byte_identical() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
+    let corpus = common::corpus_root();
     let mut failures: Vec<String> = vec![];
     let mut ran = 0;
     for fixture in load_manifest(&corpus) {
@@ -951,40 +838,6 @@ fn corpus_lenient_accept_round_trips_byte_identical() {
         failures.join("\n")
     );
     eprintln!("lenient-accept leg: {ran} fixtures normalise byte-identical");
-}
-
-/// Names the corpus families this host does not yet run, so the skip is
-/// explicit rather than silent (§15/§18 covered as of Phase 553;
-/// lenient-accept covered above).
-#[test]
-fn corpus_families_beyond_the_floor_are_explicitly_skipped() {
-    let Some(corpus) = find_corpus() else {
-        // `find_corpus` PANICS on every absence but the standalone one, and
-        // prints that one's account itself — so this arm is reached only where
-        // asserting nothing is the honest answer.
-        return;
-    };
-    let covered = [
-        "node-round-trip",
-        "op-round-trip",
-        "reject",
-        "envelope-round-trip",
-        "envelope-reject",
-        "elicitation-round-trip",
-        "elicitation-reject",
-        "elicitation-answer-accept",
-        "elicitation-answer-reject",
-        "lenient-accept",
-    ];
-    let mut skipped: std::collections::BTreeMap<String, usize> = Default::default();
-    for fixture in load_manifest(&corpus) {
-        if !covered.contains(&fixture.kind.as_str()) {
-            *skipped.entry(fixture.kind.clone()).or_insert(0) += 1;
-        }
-    }
-    for (kind, count) in &skipped {
-        eprintln!("skipped family (beyond the codec floor): {kind} × {count}");
-    }
 }
 
 // ── Rule-marked twins — the validator declaration, checked against behaviour ──
@@ -1062,9 +915,7 @@ fn every_rule_marked_code_is_declared_exactly_once() {
 
 #[test]
 fn corpus_rule_marked_twins_decide_as_declared() {
-    let Some(corpus) = find_corpus() else {
-        return;
-    };
+    let corpus = common::corpus_root();
     let manifest = load_manifest(&corpus);
     let findings_on = |id: &str| {
         let fixture = manifest
@@ -1121,4 +972,865 @@ fn corpus_rule_marked_twins_decide_as_declared() {
             }
         }
     }
+}
+
+// ── The corpus families this host runs (WIRE_FORMAT §27.7, Phase 1938) ───────
+//
+// `HOST_CORPUS_FAMILIES` replaced a printer that logged the uncovered root
+// fixture kinds and asserted nothing: it could not see a self-enumerated
+// family. The declaration is a host STATEMENT — no introspection can see which
+// families a test suite runs — so the gate below is what keeps it true: a
+// family the corpus has and the table does not name, or one the table names
+// and the corpus no longer has, fails. `host-capability-manifest.json` at the
+// repository root publishes it, generated here; regenerate it with
+// `FUARAN_MANIFEST_REGENERATE=1 cargo test --test conformance host_capability_manifest_is_current`.
+// Its token claim (§27.3, Phase 2332) is the generated layer's
+// `CONSTRUCT_TOKENS`, read back against the corpus below ("The token claim").
+
+const NO_CARD_CODEC: &str =
+    "this host has no contract-card codec (§25) for the card fixtures to run against yet";
+const TELEPORT_UNRUN: &str = "the teleport module is unit-tested by hand; this suite does not yet run the corpus teleport/ fixtures";
+const LAW_UNRUN: &str = "this host's suite does not yet run this law family's vectors";
+const HOSTED_OPAQUE: &str = "this host's generated type model carries each hosted slot opaquely, so it holds no enumeration of the discriminators inside one (§27.5) and this host makes no claim in this family";
+
+/// One host answer for a corpus family (§27.7).
+#[derive(Clone, Copy)]
+enum FamilyAnswer {
+    Covered,
+    Pending(&'static str),
+    NotApplicable(&'static str),
+}
+
+/// Every corpus family and this host's answer, sorted by family name.
+const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
+    ("apply/duplicateIdsApply", FamilyAnswer::Covered),
+    ("apply/limitsApply", FamilyAnswer::Covered),
+    (
+        "apply/skeletonApply",
+        FamilyAnswer::Pending(
+            "the apply engine's suite does not yet run the skeleton-apply vectors",
+        ),
+    ),
+    ("apply/styleNormaliseApply", FamilyAnswer::Covered),
+    ("chain", FamilyAnswer::Covered), // tests/opstream.rs
+    ("contract-card-reject", FamilyAnswer::Pending(NO_CARD_CODEC)),
+    (
+        "contract-card-round-trip",
+        FamilyAnswer::Pending(NO_CARD_CODEC),
+    ),
+    ("dag", FamilyAnswer::Covered),
+    (
+        "decode-policy",
+        FamilyAnswer::NotApplicable("this host's decoder offers no §23 kind admission policy"),
+    ),
+    (
+        "design-seam-reject",
+        FamilyAnswer::Pending("this host has no design-provider seam codec yet (Phase 2295)"),
+    ),
+    (
+        "design-seam-round-trip",
+        FamilyAnswer::Pending("this host has no design-provider seam codec yet (Phase 2295)"),
+    ),
+    (
+        "devtools-relay",
+        FamilyAnswer::NotApplicable("this host ships no devtools relay endpoint"),
+    ),
+    ("diff/treeDiff", FamilyAnswer::Covered),
+    ("elicitation-answer-accept", FamilyAnswer::Covered),
+    ("elicitation-answer-reject", FamilyAnswer::Covered),
+    ("elicitation-reject", FamilyAnswer::Covered),
+    ("elicitation-round-trip", FamilyAnswer::Covered),
+    ("envelope-reject", FamilyAnswer::Covered),
+    ("envelope-round-trip", FamilyAnswer::Covered),
+    (
+        "formatting",
+        FamilyAnswer::Pending(
+            "the host formatter is not yet certified against the golden; carried by fuaran#2328",
+        ),
+    ),
+    ("laws/capabilityLaws", FamilyAnswer::Pending(LAW_UNRUN)),
+    ("laws/dataframeParity", FamilyAnswer::Covered),
+    ("laws/decimal", FamilyAnswer::Covered),
+    ("laws/fieldLaws", FamilyAnswer::Pending(LAW_UNRUN)),
+    ("laws/propagationLaws", FamilyAnswer::Pending(LAW_UNRUN)),
+    ("laws/transformLaws", FamilyAnswer::Covered),
+    ("lenient-accept", FamilyAnswer::Covered),
+    ("lowers-to", FamilyAnswer::Covered),
+    ("merge-conformance", FamilyAnswer::Covered),
+    ("node-round-trip", FamilyAnswer::Covered),
+    ("op-round-trip", FamilyAnswer::Covered),
+    ("reject", FamilyAnswer::Covered),
+    (
+        "repair",
+        FamilyAnswer::Pending("this host has no §28 repair function yet"),
+    ),
+    (
+        "row-encode",
+        FamilyAnswer::NotApplicable(
+            "a row cell's only number is an f64 and the wire model holds no date value, so neither §5 encode refusal can arise here",
+        ),
+    ),
+    ("sanitization", FamilyAnswer::Covered),
+    (
+        "stored-emissions",
+        FamilyAnswer::Pending("this host's suite does not yet run the stored-emission fixtures"),
+    ),
+    ("style-observer", FamilyAnswer::Covered),
+    ("teleport-decode", FamilyAnswer::Pending(TELEPORT_UNRUN)),
+    ("teleport-reject", FamilyAnswer::Pending(TELEPORT_UNRUN)),
+];
+
+/// The corpus family set, derived from the corpus tree (§27.7): each root
+/// manifest fixture kind, and each top-level directory carrying its own
+/// `manifest.json` — one family named by the directory, or one family
+/// `<directory>/<id>` per entry of that manifest's `families` array of objects.
+fn corpus_families(root: &Path) -> std::collections::BTreeSet<String> {
+    let mut found: std::collections::BTreeSet<String> =
+        load_manifest(root).into_iter().map(|f| f.kind).collect();
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(root)
+        .expect("listing the corpus")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+    for dir in dirs {
+        let Ok(raw) = std::fs::read_to_string(dir.join("manifest.json")) else {
+            continue;
+        };
+        let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+        let own = parse(&raw).unwrap_or_else(|e| panic!("{name}/manifest.json: {e:?}"));
+        match own.field("families") {
+            Some(JVal::Arr(members))
+                if !members.is_empty() && members.iter().all(|m| matches!(m, JVal::Obj(_))) =>
+            {
+                for member in members {
+                    let id = str_field(member, "id").unwrap_or_else(|| {
+                        panic!("{name}/manifest.json: a families entry carries no id")
+                    });
+                    found.insert(format!("{name}/{id}"));
+                }
+            }
+            _ => {
+                found.insert(name);
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn the_manifest_names_every_corpus_family_and_no_other() {
+    let corpus = common::corpus_root();
+    let families = corpus_families(&corpus);
+    let declared: std::collections::BTreeSet<String> = HOST_CORPUS_FAMILIES
+        .iter()
+        .map(|(f, _)| (*f).to_string())
+        .collect();
+    let missing: Vec<&String> = families.difference(&declared).collect();
+    let stale: Vec<&String> = declared.difference(&families).collect();
+    assert!(
+        missing.is_empty(),
+        "corpus families this host's manifest does not name: {missing:?}"
+    );
+    assert!(
+        stale.is_empty(),
+        "families the manifest names that the corpus no longer has: {stale:?}"
+    );
+}
+
+/// The falsifier: a family that exists only as a directory with its own
+/// manifest — the shape the printer could not see — joins the derived set, and
+/// so does each `families` entry.
+#[test]
+fn the_family_derivation_sees_a_self_enumerated_family() {
+    let dir = std::env::temp_dir().join(format!(
+        "fuaran-rs-corpus-families-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let write = |rel: &str, body: &str| {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).expect("scratch dir");
+        std::fs::write(p, body).expect("scratch file");
+    };
+    write(
+        "manifest.json",
+        r#"{"fixtures":[{"id":"a","kind":"node-round-trip","inputFile":"nodes/a.json"}]}"#,
+    );
+    write("newfamily/manifest.json", r#"{"cases":[]}"#);
+    write(
+        "split/manifest.json",
+        r#"{"families":[{"id":"a"},{"id":"b"}]}"#,
+    );
+    write("goldens/goldens.json", "{}");
+    let got = corpus_families(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    let want: std::collections::BTreeSet<String> =
+        ["node-round-trip", "newfamily", "split/a", "split/b"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+    assert_eq!(got, want);
+}
+
+fn json_string(s: &str) -> String {
+    fuaran_rs::canonical::render_canonical(&JVal::Str(s.to_string()))
+}
+
+/// The published artefact: the members in the §27.3 order, maps sorted by
+/// key, two-space indent, trailing newline.
+fn host_capability_manifest() -> String {
+    let token_families = [
+        "caseFields",
+        "hostedCases",
+        "kindFields",
+        "kinds",
+        "recordFields",
+        "unionCases",
+    ];
+    let mut out = String::from("{\n");
+    out.push_str("  \"$manifest\": \"fuaran.host-capability/1\",\n");
+    out.push_str("  \"host\": \"fuaran-rs\",\n");
+    out.push_str(&format!(
+        "  \"hostVersion\": {},\n",
+        json_string(env!("CARGO_PKG_VERSION"))
+    ));
+    out.push_str("  \"corpusAuthority\": null,\n");
+    out.push_str(&format!(
+        "  \"generator\": {},\n",
+        json_string(
+            "tests/conformance.rs (FUARAN_MANIFEST_REGENERATE=1 cargo test --test conformance host_capability_manifest_is_current)"
+        )
+    ));
+    out.push_str("  \"families\": {\n");
+    for (i, f) in token_families.iter().enumerate() {
+        let claim = if DERIVED_FAMILIES.contains(f) {
+            "\"covered\": true".to_string()
+        } else {
+            format!(
+                "\"covered\": false,\n      \"reason\": {}",
+                json_string(HOSTED_OPAQUE)
+            )
+        };
+        out.push_str(&format!(
+            "    \"{f}\": {{\n      {claim}\n    }}{}\n",
+            if i + 1 == token_families.len() {
+                ""
+            } else {
+                ","
+            }
+        ));
+    }
+    out.push_str("  },\n");
+    out.push_str("  \"corpusFamilies\": {\n");
+    for (i, (family, answer)) in HOST_CORPUS_FAMILIES.iter().enumerate() {
+        let value = match answer {
+            FamilyAnswer::Covered => "\"covered\"".to_string(),
+            FamilyAnswer::Pending(why) => {
+                format!("{{\n      \"pending\": {}\n    }}", json_string(why))
+            }
+            FamilyAnswer::NotApplicable(why) => {
+                format!("{{\n      \"notApplicable\": {}\n    }}", json_string(why))
+            }
+        };
+        out.push_str(&format!(
+            "    {}: {value}{}\n",
+            json_string(family),
+            if i + 1 == HOST_CORPUS_FAMILIES.len() {
+                ""
+            } else {
+                ","
+            }
+        ));
+    }
+    out.push_str("  },\n");
+    let tokens: Vec<String> = fuaran_rs::wire::CONSTRUCT_TOKENS
+        .iter()
+        .map(|t| format!("    {}", json_string(t)))
+        .collect();
+    if tokens.is_empty() {
+        out.push_str("  \"tokens\": []\n}\n");
+    } else {
+        out.push_str(&format!(
+            "  \"tokens\": [\n{}\n  ]\n}}\n",
+            tokens.join(",\n")
+        ));
+    }
+    out
+}
+
+#[test]
+fn host_capability_manifest_is_current() {
+    let sorted = HOST_CORPUS_FAMILIES.windows(2).all(|w| w[0].0 < w[1].0);
+    assert!(
+        sorted,
+        "HOST_CORPUS_FAMILIES must stay sorted by family name"
+    );
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("host-capability-manifest.json");
+    let want = host_capability_manifest();
+    parse(&want).expect("the rendered manifest is JSON");
+    if std::env::var_os("FUARAN_MANIFEST_REGENERATE").is_some() {
+        std::fs::write(&path, &want).expect("writing host-capability-manifest.json");
+        return;
+    }
+    let got = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading the published manifest: {e}"));
+    assert!(
+        got == want,
+        "host-capability-manifest.json is not what this host's declaration renders — regenerate it \
+         with FUARAN_MANIFEST_REGENERATE=1 cargo test --test conformance host_capability_manifest_is_current"
+    );
+}
+
+// ── The token claim (WIRE_FORMAT §27.1–27.4, Phase 2332) ─────────────────────
+//
+// The claim is `fuaran_rs::wire::CONSTRUCT_TOKENS`, which the host's generator
+// writes into the generated layer beside the wire types it projects from
+// `idl.json` — never a list written here. `hostedCases` stays not covered: the
+// generated layer types each hosted slot opaquely, so it holds no enumeration
+// of the discriminators inside one (§27.5).
+
+/// The token families `CONSTRUCT_TOKENS` carries; the sixth, `hostedCases`, is
+/// declared not covered.
+const DERIVED_FAMILIES: &[&str] = &[
+    "caseFields",
+    "kindFields",
+    "kinds",
+    "recordFields",
+    "unionCases",
+];
+
+/// The §27.3 token family a token belongs to, read from the §27.2 grammar alone.
+fn token_family(token: &str) -> &'static str {
+    let segments: Vec<&str> = token.split('.').collect();
+    match (segments[0], segments.len()) {
+        ("Kind", 2) => "kinds",
+        ("Kind", _) => "kindFields",
+        (_, 3) => "caseFields",
+        _ if segments[1].starts_with(|c: char| c.is_ascii_uppercase()) => "unionCases",
+        _ => "recordFields",
+    }
+}
+
+#[test]
+fn every_claimed_token_lies_in_a_covered_family() {
+    let outside: Vec<&str> = fuaran_rs::wire::CONSTRUCT_TOKENS
+        .iter()
+        .copied()
+        .filter(|t| !DERIVED_FAMILIES.contains(&token_family(t)))
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "tokens outside the covered families: {outside:?}"
+    );
+}
+
+/// The tokens a module generated from `idl` would claim, less those of the
+/// unmodified corpus IDL: what removing a construct from the model removes.
+fn removed_by(idl: &str, edit: impl Fn(&mut JVal)) -> Vec<String> {
+    let before = fuaran_rs::wire::idl_codegen::construct_tokens(idl).expect("the corpus IDL reads");
+    let mut doc = parse(idl).expect("idl.json parses");
+    edit(&mut doc);
+    let edited = fuaran_rs::canonical::render_canonical(&doc);
+    let after =
+        fuaran_rs::wire::idl_codegen::construct_tokens(&edited).expect("the edited IDL reads");
+    before.into_iter().filter(|t| !after.contains(t)).collect()
+}
+
+fn rows_mut<'a>(doc: &'a mut JVal, key: &str) -> &'a mut Vec<JVal> {
+    let JVal::Obj(members) = doc else {
+        panic!("idl.json is an object")
+    };
+    match members.iter_mut().find(|(k, _)| k == key) {
+        Some((_, JVal::Arr(rows))) => rows,
+        _ => panic!("idl.json has no {key} array"),
+    }
+}
+
+#[test]
+fn removing_a_kind_removes_exactly_its_tokens() {
+    let idl = corpus_idl(&common::corpus_root());
+    let removed = removed_by(&idl, |doc| {
+        rows_mut(doc, "kinds").retain(|k| str_field(k, "tag").as_deref() != Some("Badge"));
+    });
+    assert_eq!(
+        removed,
+        ["Kind.Badge", "Kind.Badge.label", "Kind.Badge.variant"]
+    );
+}
+
+#[test]
+fn removing_a_union_case_removes_exactly_its_tokens() {
+    let idl = corpus_idl(&common::corpus_root());
+    let removed = removed_by(&idl, |doc| {
+        for union in rows_mut(doc, "unions").iter_mut() {
+            if str_field(union, "name").as_deref() == Some("Binding") {
+                rows_mut(union, "cases")
+                    .retain(|c| str_field(c, "tag").as_deref() != Some("Static"));
+            }
+        }
+    });
+    assert_eq!(removed, ["Binding.Static", "Binding.Static.value"]);
+}
+
+#[test]
+fn a_host_only_row_is_no_token() {
+    let claimed = fuaran_rs::wire::CONSTRUCT_TOKENS;
+    assert!(claimed.contains(&"Action.Dispatch"));
+    assert!(
+        !claimed.contains(&"Action.Dispatch.msg"),
+        "a hostOnly row never reaches the wire"
+    );
+}
+
+// ── Reading the claim back against the corpus ───────────────────────────────
+//
+// Every fixture of the round-trip families is walked against the corpus's OWN
+// idl.json — never this host's generated layer, so the claim is checked against
+// the oracle rather than against itself — for the construct tokens it
+// exercises (§27.4). A token the corpus exercises and this host does not claim
+// fails by name; so does a claimed token carried by a fixture this host does
+// not round-trip.
+
+/// The families whose canonical documents are wire trees a host decodes and
+/// re-encodes.
+const EXERCISING_FAMILIES: &[&str] = &["node-round-trip", "op-round-trip", "lenient-accept"];
+
+/// The corpus IDL, indexed for the walk.
+struct Vocabulary {
+    kinds: BTreeMap<String, JVal>,
+    ops: BTreeMap<String, JVal>,
+    records: BTreeMap<String, JVal>,
+    unions: BTreeMap<String, BTreeMap<String, JVal>>,
+    transparent: BTreeMap<String, String>,
+    node_fields: JVal,
+}
+
+fn arr(v: Option<&JVal>) -> &[JVal] {
+    match v {
+        Some(JVal::Arr(items)) => items,
+        _ => &[],
+    }
+}
+
+fn fields_of(row: &JVal) -> JVal {
+    row.field("fields").cloned().unwrap_or(JVal::Arr(vec![]))
+}
+
+impl Vocabulary {
+    fn read(idl: &str) -> Self {
+        let doc = parse(idl).expect("idl.json parses");
+        let by = |key: &str, id: &str| -> BTreeMap<String, JVal> {
+            arr(doc.field(key))
+                .iter()
+                .map(|r| (str_field(r, id).expect("a row id"), fields_of(r)))
+                .collect()
+        };
+        let unions = arr(doc.field("unions"))
+            .iter()
+            .map(|u| {
+                let cases = arr(u.field("cases"))
+                    .iter()
+                    .map(|c| (str_field(c, "tag").expect("a case tag"), fields_of(c)))
+                    .collect();
+                (str_field(u, "name").expect("a union name"), cases)
+            })
+            .collect();
+        let transparent = arr(doc
+            .field("harden")
+            .and_then(|h| h.field("transparentUnions")))
+        .iter()
+        .map(|t| {
+            (
+                str_field(t, "union").expect("union"),
+                str_field(t, "case").expect("case"),
+            )
+        })
+        .collect();
+        Vocabulary {
+            kinds: by("kinds", "tag"),
+            ops: by("ops", "tag"),
+            records: by("records", "name"),
+            unions,
+            transparent,
+            node_fields: doc
+                .field("nodeFields")
+                .cloned()
+                .unwrap_or(JVal::Arr(vec![])),
+        }
+    }
+
+    fn members(
+        &self,
+        v: &JVal,
+        fields: &JVal,
+        owner: Option<&str>,
+        arg: Option<&JVal>,
+        out: &mut BTreeSet<String>,
+    ) {
+        if !matches!(v, JVal::Obj(_)) {
+            return;
+        }
+        for f in arr(Some(fields)) {
+            let name = str_field(f, "name").expect("a field name");
+            let Some(value) = v.field(&name) else {
+                continue;
+            };
+            if let Some(owner) = owner {
+                out.insert(format!("{owner}.{name}"));
+            }
+            let ty = f.field("type").expect("a field type");
+            let ty = match (str_field(ty, "$type").as_deref(), arg) {
+                (Some("var"), Some(bound)) => bound,
+                _ => ty,
+            };
+            self.walk(value, ty, out);
+        }
+    }
+
+    fn walk(&self, v: &JVal, ty: &JVal, out: &mut BTreeSet<String>) {
+        let tag = str_field(v, "$type");
+        match str_field(ty, "$type").as_deref() {
+            Some("node") => {
+                if let Some(kind) = v.field("kind") {
+                    self.walk(
+                        kind,
+                        &JVal::Obj(vec![("$type".into(), JVal::Str("kind".into()))]),
+                        out,
+                    );
+                }
+                self.members(v, &self.node_fields, None, None, out);
+            }
+            Some("kind") => {
+                if let Some(tag) = tag {
+                    let owner = format!("Kind.{tag}");
+                    out.insert(owner.clone());
+                    if let Some(fields) = self.kinds.get(&tag) {
+                        self.members(v, fields, Some(&owner), None, out);
+                    }
+                }
+            }
+            Some("op") => {
+                if let Some(fields) = tag.and_then(|t| self.ops.get(&t)) {
+                    self.members(v, fields, None, None, out);
+                }
+            }
+            Some("union") => {
+                let name = str_field(ty, "name").expect("a union type names its union");
+                if let Some(tag) = tag {
+                    let owner = format!("{name}.{tag}");
+                    out.insert(owner.clone());
+                    let arg = arr(ty.field("args")).first();
+                    if let Some(fields) = self.unions.get(&name).and_then(|cases| cases.get(&tag)) {
+                        self.members(v, fields, Some(&owner), arg, out);
+                    }
+                } else if let Some(case) = self.transparent.get(&name) {
+                    out.insert(format!("{name}.{case}"));
+                }
+            }
+            Some("record") => {
+                let name = str_field(ty, "name").expect("a record type names its record");
+                if let Some(fields) = self.records.get(&name) {
+                    self.members(v, fields, Some(&name), None, out);
+                }
+            }
+            // A hosted slot whose wire type the IDL declares is walked through
+            // it; one carried as bare JSON is opaque here, as it is to the IDL.
+            Some("hosted") => {
+                if let Some(wire @ JVal::Obj(_)) = ty.field("wire") {
+                    self.walk(v, wire, out);
+                }
+            }
+            Some("list") => {
+                if let JVal::Arr(items) = v {
+                    for (i, item) in items.iter().enumerate() {
+                        let of = ty.field("of").or_else(|| arr(ty.field("items")).get(i));
+                        if let Some(of) = of {
+                            self.walk(item, of, out);
+                        }
+                    }
+                }
+            }
+            Some("map") => {
+                if let (JVal::Obj(entries), Some(values)) = (v, ty.field("values")) {
+                    for (_, item) in entries {
+                        self.walk(item, values, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Each token the corpus exercises, with the ids of the round-trip fixtures
+/// that carry it.
+fn exercised_tokens(corpus: &Path) -> BTreeMap<String, Vec<Fixture>> {
+    let vocabulary = Vocabulary::read(&corpus_idl(corpus));
+    let mut by_token: BTreeMap<String, Vec<Fixture>> = BTreeMap::new();
+    for fixture in load_manifest(corpus) {
+        if !EXERCISING_FAMILIES.contains(&fixture.kind.as_str()) {
+            continue;
+        }
+        let expected = fixture
+            .expected_file
+            .as_deref()
+            .unwrap_or(&fixture.input_file);
+        let doc = parse(&read_fixture(corpus, expected)).expect("a canonical document parses");
+        let mut found = BTreeSet::new();
+        let root = JVal::Obj(vec![("$type".into(), JVal::Str(fixture.decoder.clone()))]);
+        vocabulary.walk(&doc, &root, &mut found);
+        for token in found {
+            by_token.entry(token).or_default().push(fixture.clone());
+        }
+    }
+    by_token
+}
+
+/// This host decodes a fixture's canonical document and re-encodes it
+/// byte-identically.
+fn round_trips(corpus: &Path) -> impl Fn(&Fixture) -> bool + '_ {
+    move |fixture| {
+        if uncertified_round_trip(&fixture.id) {
+            return true;
+        }
+        let expected = read_fixture(
+            corpus,
+            fixture
+                .expected_file
+                .as_deref()
+                .unwrap_or(&fixture.input_file),
+        );
+        let got = if fixture.decoder == "op" {
+            decode_op(&expected).map(|op| encode_op(&op))
+        } else {
+            decode_node(&expected).map(|n| encode_node(&n))
+        };
+        got.is_ok_and(|g| g == expected)
+    }
+}
+
+/// Every way the claim and the corpus disagree, one finding per token, in token
+/// order.
+fn claim_findings(
+    claim: &[&str],
+    by_token: &BTreeMap<String, Vec<Fixture>>,
+    run: impl Fn(&Fixture) -> bool,
+) -> Vec<String> {
+    let mut verdicts: BTreeMap<String, bool> = BTreeMap::new();
+    let mut findings = vec![];
+    for (token, fixtures) in by_token {
+        if !claim.contains(&token.as_str()) {
+            findings.push(format!(
+                "{token}: the corpus exercises it ({}) and this host does not claim it",
+                fixtures[0].id
+            ));
+            continue;
+        }
+        let red: Vec<&str> = fixtures
+            .iter()
+            .filter(|f| !*verdicts.entry(f.id.clone()).or_insert_with(|| run(f)))
+            .map(|f| f.id.as_str())
+            .collect();
+        if !red.is_empty() {
+            findings.push(format!(
+                "{token}: claimed, and this host does not round-trip {}",
+                red.join(", ")
+            ));
+        }
+    }
+    findings
+}
+
+#[test]
+fn the_claim_reads_back_against_the_corpus() {
+    let corpus = common::corpus_root();
+    let by_token = exercised_tokens(&corpus);
+    let reached: BTreeSet<&str> = by_token.keys().map(|t| token_family(t)).collect();
+    assert_eq!(
+        reached.into_iter().collect::<Vec<_>>(),
+        DERIVED_FAMILIES,
+        "the corpus walk must reach every derived family, or the read-back checks nothing there"
+    );
+    let findings = claim_findings(
+        fuaran_rs::wire::CONSTRUCT_TOKENS,
+        &by_token,
+        round_trips(&corpus),
+    );
+    assert!(
+        findings.is_empty(),
+        "the claim and the corpus disagree:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn an_omitted_token_the_corpus_exercises_fails_by_name() {
+    let corpus = common::corpus_root();
+    let claim: Vec<&str> = fuaran_rs::wire::CONSTRUCT_TOKENS
+        .iter()
+        .copied()
+        .filter(|t| *t != "Kind.Badge")
+        .collect();
+    let findings = claim_findings(&claim, &exercised_tokens(&corpus), round_trips(&corpus));
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(
+        findings[0].starts_with("Kind.Badge: the corpus exercises it ("),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn a_claimed_token_this_host_does_not_round_trip_fails_by_name() {
+    let corpus = common::corpus_root();
+    let by_token = exercised_tokens(&corpus);
+    let victim = by_token
+        .get("Kind.Badge")
+        .and_then(|fs| fs.first())
+        .map(|f| f.id.clone())
+        .expect("a fixture exercises Kind.Badge, or this falsifier tests nothing");
+    let findings = claim_findings(fuaran_rs::wire::CONSTRUCT_TOKENS, &by_token, |f| {
+        f.id != victim
+    });
+    assert!(!findings.is_empty());
+    assert!(findings.iter().all(|f| f.contains(&victim)), "{findings:?}");
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.starts_with("Kind.Badge: claimed")),
+        "{findings:?}"
+    );
+}
+
+// ── laws/dataframeParity — the evaluator against the reference's answers ────
+//
+// Phase 1938 closes this evaluator's "no oracle" (1712): the corpus law family
+// `dataframeParity` carries the reference evaluator's answers over authored
+// (source, pipeline) pairs, with a recorded producer commit. This host has no
+// public table codec, so each vector is carried on a DataGrid node whose source
+// is a `Transform` binding — the wire position the pair lives in — and read back
+// through the node codec.
+
+fn grid_json(source: &str, pipeline: &str) -> String {
+    format!(
+        r#"{{"id":"parity","kind":{{"$type":"DataGrid","columns":[],"editable":false,"rowKey":"<closure>","source":{{"$type":"Transform","pipeline":{pipeline},"source":{source}}}}}}}"#
+    )
+}
+
+/// The canonical bytes at `kind.source.<member>` of an encoded parity grid.
+fn grid_member(encoded: &str, member: &str) -> String {
+    let doc = parse(encoded).expect("the encoded grid parses");
+    let value = doc
+        .field("kind")
+        .and_then(|k| k.field("source"))
+        .and_then(|s| s.field(member))
+        .unwrap_or_else(|| panic!("the encoded grid carries no kind.source.{member}"));
+    fuaran_rs::canonical::render_canonical(value)
+}
+
+#[test]
+fn the_evaluator_matches_the_reference_on_every_dataframe_parity_vector() {
+    use fuaran_rs::transform::{Table, eval_pipeline};
+    use fuaran_rs::wire::{Binding, DataSource, NodeKind, TransformSource};
+
+    let laws = common::corpus_root().join("laws");
+    let manifest = parse(&read_fixture(&laws, "manifest.json")).expect("laws/manifest.json parses");
+    let Some(JVal::Arr(families)) = manifest.field("families") else {
+        panic!("laws/manifest.json declares no families");
+    };
+    let file = families
+        .iter()
+        .find(|f| str_field(f, "id").as_deref() == Some("dataframeParity"))
+        .and_then(|f| str_field(f, "file"))
+        .expect("laws/manifest.json declares the dataframeParity family");
+    let doc = parse(&read_fixture(&laws, &file)).expect("the parity vectors parse");
+    let Some(JVal::Arr(vectors)) = doc.field("vectors") else {
+        panic!("laws/{file} carries no vectors");
+    };
+    assert!(!vectors.is_empty(), "laws/{file} carries no vectors");
+
+    let mut failures: Vec<String> = vec![];
+    for v in vectors {
+        let id = str_field(v, "id").expect("vector id");
+        let input = v.field("input").expect("vector input");
+        let expected = v.field("expected").expect("vector expected");
+        let (source, pipeline) = (
+            str_field(input, "source").expect("input.source"),
+            str_field(input, "pipeline").expect("input.pipeline"),
+        );
+        let node = match decode_node(&grid_json(&source, &pipeline)) {
+            Ok(n) => n,
+            Err(e) => {
+                failures.push(format!("{id}: the parity grid did not decode: {e:?}"));
+                continue;
+            }
+        };
+        // Legs 1 and 2 — both inputs round-trip byte-exact through this host's codec.
+        let encoded = encode_node(&node);
+        for (member, input) in [("source", &source), ("pipeline", &pipeline)] {
+            let got = grid_member(&encoded, member);
+            if &got != input {
+                failures.push(format!(
+                    "{id}: {member} round-trip\n  got  {got}\n  want {input}"
+                ));
+            }
+        }
+        // Leg 3 — evaluation agrees with the reference's answer.
+        let NodeKind::DataGrid(spec) = &node.kind else {
+            panic!("{id}: the parity grid decoded to another kind");
+        };
+        let Binding::Transform {
+            pipeline: steps,
+            source: TransformSource::Data(DataSource::Embedded { schema, columns }),
+            ..
+        } = &spec.source
+        else {
+            panic!("{id}: the parity grid's source is not an embedded Transform");
+        };
+        let table = Table {
+            schema: schema.clone(),
+            columns: columns.clone(),
+        };
+        let verdict = str_field(expected, "verdict").expect("expected.verdict");
+        match (eval_pipeline(steps, &table), verdict.as_str()) {
+            (Err(_), "ok") => {
+                failures.push(format!("{id}: the reference evaluated; this host refused"))
+            }
+            (Ok(_), "error") => {
+                failures.push(format!("{id}: the reference refused; this host evaluated"))
+            }
+            (Err(_), _) => {}
+            (Ok(out), _) => {
+                let mut carrier = node.clone();
+                if let NodeKind::DataGrid(spec) = &mut carrier.kind {
+                    spec.source = Binding::Transform {
+                        params: None,
+                        pipeline: vec![],
+                        source: TransformSource::Data(DataSource::Embedded {
+                            schema: out.schema,
+                            columns: out.columns,
+                        }),
+                    };
+                }
+                let got = grid_member(&encode_node(&carrier), "source");
+                let want = str_field(expected, "table").expect("expected.table");
+                if got != want {
+                    failures.push(format!(
+                        "{id}: evaluator ≠ reference\n  got  {got}\n  want {want}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} dataframeParity vectors failed:\n{}",
+        failures.len(),
+        vectors.len(),
+        failures.join("\n")
+    );
+    eprintln!(
+        "dataframeParity leg: {} vectors agree with the reference",
+        vectors.len()
+    );
 }

@@ -29,6 +29,47 @@ name = "fuaran-ui"
 # once (a ReplaceRoot payload repeating an id, an EditNode / UpdateState whose new
 # nodes collide with the tree, an InsertChild subtree repeating one within
 # itself). No signature moves, and the draft already carries a breaking class.
+#
+# Phase 2298 rides it, ADDITIVE: the structural layer (the bare-string enums,
+# NodeKind::type_name / category, the kind and control sets) is now generated
+# from the corpus's idl.json into src/wire/generated.rs. Every public name is
+# kept and no type's field set moved. New public items: IDL_SHA256, IDL_VERSION,
+# NODE_SLOTS and NODE_RECORD_SLOTS. Two orders now follow the IDL rather than
+# the old hand lists: CANONICAL_NODE_KINDS / CANONICAL_FORM_FIELD_KINDS, and
+# BoxRole's case order (visible only in WIRE_NAMES and Debug).
+#
+# Phase 2315 rides it, ADDITIVE: every wire type (the spec structs, records,
+# unions, NodeKind, Node, TreeOp) is now generated from idl.json through this
+# host's dialect, with the same names, field and variant types, derives and docs
+# (checked by a rustdoc-JSON surface diff). One observable change: a generated
+# struct declares its fields in IDL order, so Debug output and rustdoc list
+# fields in that order. No field set moved.
+#
+# Phase 2300 (rule 1) and Phase 1962 ride it, WIRE-VISIBLE: a field holding its
+# declared default is omitted from the canonical form on every kind (fifteen
+# IDL rows moved to omit-at-default, taken by regeneration; Stepper.activeStep
+# through a declared Shape hook, the Tabs.activeIndex shape), and a multi-select
+# Select carries `values` and no `value` — `SelectSpec::value` is an Option, a
+# single-select without it is MISSING_FIELD, a decoded multi-select `value` is
+# dropped; `Select.multiple` is an ordinary optional member emitted as authored,
+# and FileUpload / Stepper `on_select` are optional closures. Every decoder still
+# accepts the explicit forms. The field-type moves are source-breaking, the class
+# this draft already carries.
+#
+# Phase 2001 rides it, BREAKING (the class the draft already carries): closed
+# public enums of the dataframe model gain cases — `Cell::Decimal` (canonical
+# decimal TEXT), `ColumnType::Decimal`, `AggFn::CountDistinct`,
+# `ColExpr::Quotient` / `ColExpr::Rounded` (with the new `Rounding`,
+# `RoundingScale` and seven-case `RoundingMode`), and `TransformStep::Intersect`
+# / `TransformStep::Except` — so every exhaustive match over them breaks.
+# BEHAVIOUR changes ride with it: a derived or unpivoted column is now typed by
+# its expression wherever the schema decides it (an all-null `v / 0` derive is
+# `float`, an empty-frame derive takes its expression's type), the cells decide
+# otherwise by the widening join, and a float beside a decimal, or two types no
+# column holds together, is refused; NaN orders above every float; a union
+# column takes the join of its two sides' types. New public items:
+# `transform::decimal`, `transform::aggregate`, `transform::cell_token`,
+# `transform::validate_table`.
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"
@@ -113,6 +154,13 @@ driver-semantics-abi = []
 # helper converts when called directly. The self dev-dependency below is what
 # turns it on for `cargo test` and nothing else.
 abi-panic-probe = []
+# OFF by default, and never part of the published surface. Compiles the host's
+# generator over the wire corpus's `idl.json` (`src/wire/idl_codegen.rs`), which
+# writes `src/wire/generated.rs`. The crate never needs the corpus to BUILD — the
+# generated module is committed — so the generator rides a feature the self
+# dev-dependency below turns on for the crate's own suite, where the drift test
+# and the regeneration entry point live (`tests/conformance.rs`).
+idl-codegen = []
 
 [dependencies]
 # The runtime host uses the Rust standard library only — no third-party crates.
@@ -123,5 +171,6 @@ abi-panic-probe = []
 [dev-dependencies]
 # The crate as its own dev-dependency, feature-unified: this is the one sanctioned
 # way to compile a test-only `extern "C"` entry point into the library the
-# integration tests link, without shipping it. See `abi-panic-probe` above.
-fuaran-ui = { path = ".", features = ["abi-panic-probe"] }
+# integration tests link, without shipping it. See `abi-panic-probe` above. The
+# same route compiles the `idl-codegen` generator for the suite only.
+fuaran-ui = { path = ".", features = ["abi-panic-probe", "idl-codegen"] }

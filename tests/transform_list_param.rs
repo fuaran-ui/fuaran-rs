@@ -21,8 +21,9 @@
 //! checkout, so the fixture-driven legs report and skip when it is absent — the
 //! substitution legs below are self-contained and always run.
 
+mod common;
+
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::render::BindingSources;
@@ -141,25 +142,12 @@ fn substitution_walks_nested_positions_and_non_filter_steps() {
 
 // ─── the corpus fixture (behaviours 1–3, end to end on the server path) ──────
 
-/// Walks up from the crate directory looking for the shared corpus, matching
-/// `tests/conformance.rs`.
-fn corpus_nodes_dir() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Some(root.join("nodes"));
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
-
-/// The oracle fixture's canonical bytes, or `None` on a standalone checkout.
-pub fn fixture_json() -> Option<String> {
-    let path = corpus_nodes_dir()?.join("multiselect-chip-list-param.json");
-    Some(std::fs::read_to_string(path).expect("the fixture file reads"))
+/// The oracle fixture's canonical bytes.
+pub fn fixture_json() -> String {
+    let path = common::corpus_root()
+        .join("nodes")
+        .join("multiselect-chip-list-param.json");
+    std::fs::read_to_string(path).expect("the fixture file reads")
 }
 
 fn find_node<'a>(node: &'a Node, id: &str) -> Option<&'a Node> {
@@ -214,17 +202,13 @@ fn resolved_depts(tree: &Node, filter: Option<&str>) -> Option<Vec<String>> {
     }
 }
 
-fn oracle_tree() -> Option<Node> {
-    let raw = fixture_json()?;
-    Some(decode_node(&raw).expect("the fixture decodes with this host's codec"))
+fn oracle_tree() -> Node {
+    decode_node(&fixture_json()).expect("the fixture decodes with this host's codec")
 }
 
 #[test]
 fn a_selection_scopes_the_grid_through_substitution() {
-    let Some(tree) = oracle_tree() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let tree = oracle_tree();
     assert_eq!(
         resolved_depts(&tree, Some(r#"["eng","ops"]"#)),
         Some(vec!["eng".to_string(), "ops".to_string()]),
@@ -234,10 +218,7 @@ fn a_selection_scopes_the_grid_through_substitution() {
 
 #[test]
 fn an_empty_selection_prunes_to_the_unfiltered_table() {
-    let Some(tree) = oracle_tree() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let tree = oracle_tree();
     // The acceptance criterion Phase 610 pinned as OUTPUT: deselecting
     // everything shows the unfiltered table, NOT an empty one. `items: []`
     // would give zero rows, which is the answer this rule exists to refuse.
@@ -254,10 +235,7 @@ fn an_empty_selection_prunes_to_the_unfiltered_table() {
 
 #[test]
 fn an_unwritten_filter_prunes_the_same_way_an_empty_selection_does() {
-    let Some(tree) = oracle_tree() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let tree = oracle_tree();
     assert_eq!(
         resolved_depts(&tree, None),
         resolved_depts(&tree, Some("[]")),
@@ -267,10 +245,7 @@ fn an_unwritten_filter_prunes_the_same_way_an_empty_selection_does() {
 
 #[test]
 fn a_scalar_bound_where_the_pipeline_reads_a_list_is_refused() {
-    let Some(tree) = oracle_tree() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let tree = oracle_tree();
     // The pipeline reads `depts` through `in`/`param`; a SCALAR binds the
     // scalar env, substitutes nothing, and the surviving `InParam` reaches the
     // evaluator — which refuses it. The wrong answers this pins out are "all
@@ -284,10 +259,7 @@ fn a_scalar_bound_where_the_pipeline_reads_a_list_is_refused() {
 
 #[test]
 fn a_non_scalar_list_element_is_refused_rather_than_coerced() {
-    let Some(tree) = oracle_tree() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let tree = oracle_tree();
     assert_eq!(
         resolved_depts(&tree, Some(r#"["eng",{"dept":"ops"}]"#)),
         None,
@@ -301,10 +273,7 @@ fn a_list_bound_where_the_pipeline_reads_a_scalar_is_refused() {
     // express (its pipeline reads a list). A `filter` step comparing a column
     // to a scalar `param` is handed a list: nothing substitutes it, the name is
     // not unbound so the step is not pruned, and evaluation refuses.
-    let Some(raw) = fixture_json() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let raw = fixture_json();
     // Rewrite ONLY the membership test into the scalar `param` spelling; every
     // other byte of the oracle — the params entry, the source, the chip — is
     // the fixture's own.
@@ -339,10 +308,7 @@ fn substitution_happens_before_evaluation_not_merely_before_the_prune() {
     // reading a list param has nowhere to hide. Bound, it must EVALUATE (proof
     // the rewrite reached the evaluator); unbound, it must REFUSE (proof the
     // evaluator never grew a list lookup of its own).
-    let Some(raw) = fixture_json() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let raw = fixture_json();
     let derived = raw.replace(
         r#"{"$type":"filter","pred":{"$type":"in","expr":{"$type":"col","name":"dept"},"param":"depts"}}"#,
         r#"{"$type":"derive","expr":{"$type":"in","expr":{"$type":"col","name":"dept"},"param":"depts"},"name":"picked"}"#,
@@ -384,10 +350,7 @@ fn substitution_happens_before_evaluation_not_merely_before_the_prune() {
 
 #[test]
 fn the_rendered_grid_shows_every_row_while_nothing_is_selected() {
-    let Some(tree) = oracle_tree() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let tree = oracle_tree();
     // The criterion as OUTPUT rather than as an assertion about output: the
     // server-rendered markup of the unselected fixture carries all three
     // departments.
@@ -407,10 +370,7 @@ fn the_two_target_abi_fixture_carries_the_oracle_tree_verbatim() {
     // a node script has no walk-up logic). That copy must not drift from the
     // oracle: without this, the two ABI legs could agree perfectly with each
     // other about a tree the corpus no longer contains.
-    let Some(oracle) = fixture_json() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let oracle = fixture_json();
     let abi = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/list-param.json"
@@ -449,10 +409,7 @@ fn membership_over_an_empty_literal_list_matches_nothing() {
             items: vec![],
         },
     }];
-    let Some(tree) = oracle_tree() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let tree = oracle_tree();
     let Binding::Transform { source, .. } = grid_source(&tree) else {
         panic!("the fixture's grid source is a Transform");
     };

@@ -18,8 +18,9 @@
 //! one: a rule asserted only in its passing direction cannot tell a working
 //! implementation from an absent one.
 
+mod common;
+
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use fuaran_rs::canonical::JVal;
 use fuaran_rs::client::ClientSession;
@@ -29,21 +30,6 @@ use fuaran_rs::render::{
 use fuaran_rs::wire::{Node, decode_node};
 
 const BADGE_OPEN: &str = "class=\"fuaran-badge fuaran-badge-info\">";
-
-/// Walks up from the crate directory looking for the shared corpus (a sibling
-/// checkout). `None` keeps the repo standalone-testable — legs skip, not fail.
-fn find_corpus() -> Option<PathBuf> {
-    let mut dir: PathBuf = env!("CARGO_MANIFEST_DIR").into();
-    loop {
-        let root = dir.join("wire-format-fixtures");
-        if root.join("manifest.json").is_file() {
-            return Some(root);
-        }
-        if !dir.pop() {
-            return None;
-        }
-    }
-}
 
 /// The Info badge's rendered text. Narrow on purpose: it matches the emitted
 /// element and nothing else, so a renderer that stopped emitting the badge
@@ -107,10 +93,11 @@ fn rows(teams: &[&str]) -> JVal {
     )
 }
 
-fn seeded_pair() -> Option<Node> {
-    let corpus = find_corpus()?;
-    let raw = std::fs::read_to_string(corpus.join("nodes/shared-source-seeded-pair.json")).ok()?;
-    Some(tree(&raw))
+fn seeded_pair() -> Node {
+    let raw =
+        std::fs::read_to_string(common::corpus_root().join("nodes/shared-source-seeded-pair.json"))
+            .expect("fixture should be readable");
+    tree(&raw)
 }
 
 // ── §24.6 — the render-parity assertion ──────────────────────────────────────
@@ -124,10 +111,7 @@ fn seeded_pair() -> Option<Node> {
 /// here is exactly the divergence §24.4 was written to close.
 #[test]
 fn the_seeded_pair_renders_the_declared_count() {
-    let Some(pair) = seeded_pair() else {
-        eprintln!("wire-format-fixtures corpus not found; skipping (standalone checkout)");
-        return;
-    };
+    let pair = seeded_pair();
     let sources = BindingSources::default();
     assert_eq!(badge_text(&render_to_html(&pair, &sources)), "2");
 
@@ -146,9 +130,7 @@ fn the_seeded_pair_renders_the_declared_count() {
 /// documents; neither changes a byte of the tree.
 #[test]
 fn the_parity_assertion_is_sensitive_to_the_derived_value() {
-    let Some(pair) = seeded_pair() else {
-        return;
-    };
+    let pair = seeded_pair();
     let mut one = BindingSources::default();
     one.state.insert("members".to_string(), rows(&["Solo"]));
     assert_eq!(badge_text(&render_to_html(&pair, &one)), "1");
@@ -169,7 +151,7 @@ fn the_parity_assertion_is_sensitive_to_the_derived_value() {
 /// assumption: it exercises the same two entry points those bindings call.
 #[test]
 fn the_session_projections_carry_the_seed_to_a_decode_only_consumer() {
-    let Some(corpus) = find_corpus() else { return };
+    let corpus = common::corpus_root();
     let raw = std::fs::read_to_string(corpus.join("nodes/shared-source-seeded-pair.json"))
         .expect("fixture should be readable");
     let session = ClientSession::new(&raw).expect("fixture should decode");

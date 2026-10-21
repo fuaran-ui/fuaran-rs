@@ -190,6 +190,93 @@ fn update_style_and_state() {
     assert!(encode_node(&out.new_tree).contains("\"onError\":\"<closure>\""));
 }
 
+/// Phase 2291 — a tree whose `m1` metric is styled `{tone: Info, weight: Spacious}`.
+fn styled_tree() -> Node {
+    node(
+        r#"{"id":"root","kind":{"$type":"Box","children":[
+            {"id":"m1","kind":{"$type":"Metric","label":"Revenue","value":{"$type":"Static","value":42}},"style":{"tone":"Info","weight":"Spacious"}},
+            {"id":"m2","kind":{"$type":"Metric","label":"Cost","value":{"$type":"Static","value":7}}}
+        ],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}"#,
+    )
+}
+
+fn style_of(tree: &Node, id: &str) -> fuaran_rs::wire::SemanticStyle {
+    match &tree.kind {
+        fuaran_rs::wire::NodeKind::Box(spec) => {
+            spec.children
+                .iter()
+                .find(|c| c.id == id)
+                .expect("child present")
+                .style
+        }
+        other => panic!("expected a Box root, got {other:?}"),
+    }
+}
+
+#[test]
+fn patch_style_sets_the_named_field_and_carries_the_rest() {
+    use fuaran_rs::wire::{StyleWeight, ToneVariant};
+    let ps = op(r#"{"$type":"PatchStyle","style":{"tone":"Brand"},"target":"m1"}"#);
+    let out = apply(&styled_tree(), &ps).expect("applies");
+    let style = style_of(&out.new_tree, "m1");
+    assert_eq!(style.tone, ToneVariant::Brand);
+    assert_eq!(style.weight, StyleWeight::Spacious);
+    assert!(encode_node(&out.new_tree).contains(r#""style":{"tone":"Brand","weight":"Spacious"}"#));
+    assert_eq!(out.emitted_telemetry.len(), 1);
+    assert_eq!(out.emitted_telemetry[0].op, "PatchStyle");
+    // The sibling's style is untouched.
+    assert!(style_of(&out.new_tree, "m2").is_default());
+}
+
+#[test]
+fn patch_style_back_to_every_default_stores_the_absent_slot() {
+    // `{tone: Default, weight: Standard}` over `{tone: Info, weight: Spacious}`
+    // lands on the default record — stored as the absent `style` slot, the
+    // normalisation `UpdateStyle` performs.
+    let ps = op(
+        r#"{"$type":"PatchStyle","style":{"tone":"Default","weight":"Standard"},"target":"m1"}"#,
+    );
+    let out = apply(&styled_tree(), &ps).expect("applies");
+    assert!(style_of(&out.new_tree, "m1").is_default());
+    assert!(!encode_node(&out.new_tree).contains("\"style\""));
+}
+
+#[test]
+fn patch_styles_of_different_fields_commute() {
+    let tone = op(r#"{"$type":"PatchStyle","style":{"tone":"Critical"},"target":"m1"}"#);
+    let emph = op(r#"{"$type":"PatchStyle","style":{"emphasis":"Loud"},"target":"m1"}"#);
+    let a = apply(&apply(&styled_tree(), &tone).unwrap().new_tree, &emph).unwrap();
+    let b = apply(&apply(&styled_tree(), &emph).unwrap().new_tree, &tone).unwrap();
+    assert_eq!(a.new_tree, b.new_tree);
+    assert!(
+        encode_node(&a.new_tree)
+            .contains(r#""style":{"emphasis":"Loud","tone":"Critical","weight":"Spacious"}"#)
+    );
+}
+
+#[test]
+fn patch_style_missing_target_is_node_not_found() {
+    let ps = op(r#"{"$type":"PatchStyle","style":{"tone":"Brand"},"target":"ghost"}"#);
+    assert_code(apply(&styled_tree(), &ps), ApplyErrorCode::NodeNotFound);
+}
+
+#[test]
+fn patch_style_default_token_is_an_edit_and_round_trips() {
+    // A present default token SETS the field — it is emitted, never omitted.
+    let wire = r#"{"$type":"PatchStyle","style":{"tone":"Default"},"target":"m1"}"#;
+    assert_eq!(encode_op(&op(wire)), wire);
+    let out = apply(&styled_tree(), &op(wire)).expect("applies");
+    assert!(encode_node(&out.new_tree).contains(r#""style":{"weight":"Spacious"}"#));
+}
+
+#[test]
+fn patch_style_empty_delta_is_refused() {
+    let err = decode_op(r#"{"$type":"PatchStyle","style":{},"target":"m1"}"#)
+        .expect_err("an empty patch is not an edit");
+    assert_eq!(err.code, DecodeErrorCode::WrongType);
+    assert_eq!(err.path, "$.style");
+}
+
 #[test]
 fn insert_child_appends_and_the_retired_position_never_reaches_apply() {
     // 0.4.0: InsertChild APPENDS. There is no ordinal and so no out-of-range
