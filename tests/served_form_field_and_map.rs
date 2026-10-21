@@ -84,3 +84,39 @@ fn a_date_range_s_ends_are_date_inputs_carrying_id_and_required() {
         "{html}"
     );
 }
+
+#[test]
+fn a_combobox_input_is_classed_as_the_reference_classes_it() {
+    let html = render(
+        r#"{"id":"f1","kind":{"$type":"Form","fields":[{"id":"country","kind":{"$type":"Combobox","onChange":"<closure>","options":{"$type":"Static","value":[]}},"label":"Country"}],"onSubmit":{"$type":"Dispatch"},"submitLabel":"Save"}}"#,
+    );
+    assert!(
+        html.contains(r#"class="fuaran-form-field-control fuaran-combobox-input""#),
+        "{html}"
+    );
+    assert!(
+        !html.contains("fuaran-form-input fuaran-combobox-input"),
+        "{html}"
+    );
+}
+
+#[test]
+fn a_range_field_s_from_end_carries_the_field_identity_and_no_bounds() {
+    let html = render(
+        r#"{"id":"f1","kind":{"$type":"Form","fields":[{"id":"price","kind":{"$type":"Range","max":100,"min":0,"value":{"$type":"Static","value":{"max":80,"min":20}}},"label":"Price"}],"onSubmit":{"$type":"Dispatch"},"submitLabel":"Save"}}"#,
+    );
+    assert!(
+        html.contains(r#"<span class="fuaran-field-range"><input class="fuaran-field-range-min" id="price" data-fuaran-field="price" type="number""#),
+        "{html}"
+    );
+    assert!(
+        html.contains(r#"<input class="fuaran-field-range-max" type="number""#),
+        "{html}"
+    );
+    assert!(!html.contains("min=\""), "{html}");
+    assert!(!html.contains("max=\""), "{html}");
+    assert!(
+        !html.contains("fuaran-form-field-control fuaran-field-range"),
+        "{html}"
+    );
+}

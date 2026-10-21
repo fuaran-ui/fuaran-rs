@@ -2902,51 +2902,40 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
                 ],
             )
         }
-        FormFieldKind::Range {
-            value, min, max, ..
-        } => {
-            // 0.2.0 dual-thumb range: two bounded number inputs over the
-            // resolved (min, max) pair.
+        FormFieldKind::Range { value, .. } => {
+            // 0.2.0 dual-thumb range: two number inputs over the resolved
+            // (min, max) pair.
             //
-            // Class vocabulary reconciled to the reference renderer (Phase 747).
-            // This arm emitted `fuaran-form-range*`, which matches NEITHER of the
-            // reference's two context-dependent spellings — `fuaran-filter-range*`
-            // for a filter chip (this host's filter path already gets that right)
-            // and `fuaran-field-range*` for a form field, which is this path. The
-            // divergence survived because no gate measured it: the parity oracle
-            // this host now has did not exist, and the corpus exercises `Range`
-            // only through the Filters carrier, so it is invisible there too.
+            // Class vocabulary reconciled to the reference renderer (Phase 747):
+            // `fuaran-field-range*` for a form field, `fuaran-filter-range*` for a
+            // filter chip. Phase 2391 — the reference host's 0.98.0 plan: the
+            // ends are classed `fuaran-field-range-min` / `-max`, the FROM end
+            // carries the field's identity (`id` + `data-fuaran-field`), and the
+            // ends write no `min` / `max`.
             let (lo, hi) = resolve_float_pair(ctx.sources, value).unwrap_or((0.0, 0.0));
-            let bound_attrs = |v: f64, class: &'static str| {
-                let mut attrs: Vec<Attr> = vec![
-                    ("type", s("number")),
-                    ("class", s(class)),
-                    ("value", s(display_number(v))),
-                ];
-                if let Some(min) = min {
-                    attrs.push(("min", s(display_number(*min))));
-                }
-                if let Some(max) = max {
-                    attrs.push(("max", s(display_number(*max))));
-                }
-                attrs
-            };
             el(
                 "span",
-                &[
-                    ("class", s("fuaran-field-range")),
-                    ("id", s(field.id.clone())),
-                ],
+                &[("class", s("fuaran-field-range"))],
                 &format!(
                     "{}{}{}",
                     void_el(
                         "input",
-                        &bound_attrs(lo, "fuaran-form-field-control fuaran-field-range-min")
+                        &[
+                            ("class", s("fuaran-field-range-min")),
+                            ("id", s(field.id.clone())),
+                            ("data-fuaran-field", s(field.id.clone())),
+                            ("type", s("number")),
+                            ("value", s(display_number(lo))),
+                        ]
                     ),
                     text_el("span", &[("class", s("fuaran-field-range-sep"))], "–"),
                     void_el(
                         "input",
-                        &bound_attrs(hi, "fuaran-form-field-control fuaran-field-range-max")
+                        &[
+                            ("class", s("fuaran-field-range-max")),
+                            ("type", s("number")),
+                            ("value", s(display_number(hi))),
+                        ]
                     )
                 ),
             )
@@ -3060,7 +3049,10 @@ fn render_form_control(ctx: &Ctx<'_>, field: &FormField) -> String {
             let input = void_el(
                 "input",
                 &[
-                    ("class", s("fuaran-form-input fuaran-combobox-input")),
+                    (
+                        "class",
+                        s("fuaran-form-field-control fuaran-combobox-input"),
+                    ),
                     ("data-fuaran-field", s(field.id.clone())),
                     ("type", s("text")),
                     ("list", s(list_id.clone())),

@@ -72,7 +72,7 @@
       "expectTree": "{\"id\":\"form-combobox-static\",\"kind\":{\"$type\":\"Form\",\"fields\":[{\"id\":\"country\",\"kind\":{\"$type\":\"Combobox\",\"onChange\":\"<closure>\",\"options\":{\"$type\":\"Static\",\"value\":[{\"label\":\"United Kingdom\",\"value\":\"gbr\"},{\"label\":\"France\",\"value\":\"fra\"},{\"label\":\"Germany\",\"value\":\"deu\"}]},\"value\":{\"$type\":\"Static\",\"value\":\"fra\"}},\"label\":\"Country\",\"required\":true}],\"onSubmit\":{\"$type\":\"Chain\",\"ops\":[]},\"submitLabel\":\"Save\"}}",
       "expectRenderContains": [
         "class=\"fuaran-combobox\"",
-        "class=\"fuaran-form-input fuaran-combobox-input\"",
+        "class=\"fuaran-form-field-control fuaran-combobox-input\"",
         "list=\"country-options\"",
         "autocomplete=\"off\"",
         "data-fuaran-combobox-constrained=\"true\"",
