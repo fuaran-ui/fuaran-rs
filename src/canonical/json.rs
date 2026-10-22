@@ -326,9 +326,12 @@ impl<'a> Parser<'a> {
     /// would otherwise be admitted as bare tokens, where §7's QUOTED sentinels
     /// are the specified representation.
     ///
-    /// Row 7's `1e999` is deliberately untouched: it is a well-formed JSON
-    /// number whose value is not representable, and IEEE-754 already specifies
-    /// what a finite decimal that overflows becomes.
+    /// Two VALUE rules follow the grammar (Phase 2286, the amended §20.2 row 7
+    /// and §2 rule 5): a value outside the finite double range (`1e999`) is
+    /// refused, since the wire has no non-finite float; and an integer token past
+    /// 2^53 is read only when it is the canonical float layout of the double it
+    /// reads as. The second is judged on the TOKEN: 2^53 + 1 reads as 2^53, so a
+    /// range check on the value would admit it.
     fn parse_number(&mut self) -> PResult<f64> {
         let start = self.pos;
         while self.pos < self.bytes.len() && is_number_byte(self.bytes[self.pos]) {
@@ -341,7 +344,13 @@ impl<'a> Parser<'a> {
             ));
         }
         match slice.parse::<f64>() {
-            Ok(n) if !n.is_nan() => Ok(n),
+            Ok(n) if !n.is_finite() => self.fail(format!(
+                "number outside the finite double range; it cannot round-trip on the wire: {slice}"
+            )),
+            Ok(n) if !int53_safe_or_canonical(slice, n) => self.fail(format!(
+                "integer literal outside the int53 safe range (|n| > 2^53); it cannot round-trip without precision loss: {slice}"
+            )),
+            Ok(n) => Ok(n),
             _ => self.fail(format!("invalid number '{slice}'")),
         }
     }
@@ -491,6 +500,18 @@ impl<'a> Parser<'a> {
 
 fn is_number_byte(b: u8) -> bool {
     matches!(b, b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')
+}
+
+/// An integer token (no `.`, `e` or `E`) within 2^53 in magnitude, or one past
+/// it that is the canonical float layout of `n`, the double it reads as (§2
+/// rule 5, amended by Phase 2286). Every other token past 2^53 is refused.
+fn int53_safe_or_canonical(slice: &str, n: f64) -> bool {
+    if slice.contains(['.', 'e', 'E']) {
+        return true;
+    }
+    let digits = slice.strip_prefix('-').unwrap_or(slice);
+    let safe = digits.len() < 16 || (digits.len() == 16 && digits <= "9007199254740992");
+    safe || format_number(n) == slice
 }
 
 /// The RFC 8259 number production, exactly:
@@ -759,9 +780,11 @@ mod tests {
         for bad in ["NaN", "Infinity", "-Infinity", "inf", "-inf", "nan"] {
             assert!(parse(bad).is_err(), "expected the bare {bad} to be refused");
         }
-        // Row 7 is the one row that ratifies an ACCEPT, and it sits beside this
-        // one refusing the same value written as a bare literal.
-        assert_eq!(parse("1e999").unwrap(), JVal::Num(f64::INFINITY));
+        // Row 7, amended by Phase 2286: the overflowing exponent is refused too.
+        for bad in ["1e999", "-1e999", "1E+400"] {
+            assert!(parse(bad).is_err(), "expected {bad} to be refused");
+        }
+        assert_eq!(parse("1e-999").unwrap(), JVal::Num(0.0));
     }
 
     #[test]

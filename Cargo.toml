@@ -70,6 +70,11 @@ name = "fuaran-ui"
 # column takes the join of its two sides' types. New public items:
 # `transform::decimal`, `transform::aggregate`, `transform::cell_token`,
 # `transform::validate_table`.
+#
+# Phase 2286 rides it, BEHAVIOUR: the JSON parser refuses two number tokens it
+# read, both INVALID_JSON — an overflowing exponent (`1e999`, the amended §20.2
+# row 7) and an integer token past 2^53 that is not the canonical float layout
+# of the double it reads as (the amended §2 rule 5). No signature moves.
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"

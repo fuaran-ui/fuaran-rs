@@ -139,14 +139,47 @@ fn a_bounded_integer_slot_refuses_in_range_as_a_limit_breach() {
 }
 
 #[test]
-fn row_7_overflowing_exponent_is_still_accepted() {
-    // The one row that ratifies an ACCEPT, sitting beside row 4 which refuses
-    // the same three values written as bare literals. `1e999` is a well-formed
-    // JSON number whose value is not representable, and IEEE-754 already says
-    // what a finite decimal that overflows becomes.
+fn row_7_overflowing_exponent_is_refused() {
+    // Amended by Phase 2286: the value is outside the finite double range and the
+    // wire has no non-finite float. Row 4 refuses the bare literals; row 8 reads
+    // the quoted sentinels.
+    for lit in ["1e999", "-1e999", "1E+400"] {
+        assert_eq!(
+            refused(&format!(
+                r#"{{"id":"m","kind":{{"$type":"Metric","label":"x","value":{{"$type":"Static","value":{lit}}}}}}}"#
+            )),
+            "INVALID_JSON"
+        );
+    }
     accepted(
-        r#"{"id":"m","kind":{"$type":"Metric","label":"x","value":{"$type":"Static","value":1e999}}}"#,
+        r#"{"id":"m","kind":{"$type":"Metric","label":"x","value":{"$type":"Static","value":1e-999}}}"#,
     );
+}
+
+#[test]
+fn rule_5_an_integer_token_past_int53_is_read_only_as_a_canonical_float() {
+    // §2 rule 5, amended by Phase 2286.
+    let payload = |lit: &str| {
+        format!(
+            r#"{{"id":"c","kind":{{"$type":"Custom","componentId":"c","moduleId":"m","props":{{"n":{lit}}}}}}}"#
+        )
+    };
+    for lit in [
+        "9007199254740993",
+        "-9007199254740993",
+        "12345678901234567890",
+        "100000000000000000",
+    ] {
+        assert_eq!(refused(&payload(lit)), "INVALID_JSON", "{lit}");
+    }
+    for lit in [
+        "9007199254740991",
+        "9007199254740992",
+        "9007199254740994",
+        "10000000000000000",
+    ] {
+        accepted(&payload(lit));
+    }
 }
 
 // ── row 4: bare NaN / Infinity ──────────────────────────────────────────────
@@ -236,9 +269,12 @@ fn a_fraction_is_refused_at_an_integer_slot() {
 fn a_value_outside_the_slot_width_is_refused() {
     // The measured row: the cast was implementation-defined, so the same bytes
     // became Int32.MinValue on one runtime and 1410065408 on another.
-    for lit in ["1e10", "3000000000", "-3000000000", "1e400"] {
+    for lit in ["1e10", "3000000000", "-3000000000"] {
         assert_eq!(refused(&skeleton(lit)), "WRONG_TYPE", "for {lit}");
     }
+    // Since Phase 2286 an overflowing exponent never reaches the slot: the parse
+    // refuses it (§20.2 row 7) before the slot's type is consulted.
+    assert_eq!(refused(&skeleton("1e400")), "INVALID_JSON");
 }
 
 #[test]

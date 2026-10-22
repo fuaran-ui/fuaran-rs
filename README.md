@@ -497,6 +497,28 @@ This host declares no stability policy yet (pre-1.0), so the change is recorded 
 rather than in a `STABILITY.md` it does not have; the version advances
 `0.0.1-alpha.1` -> `0.0.2-alpha.1`.
 
+## Two number tokens refused at decode — Phase 2286
+
+The corpus amended two decode answers when the reference host moved its parse onto the
+substrate's token reader, and this host moved with it in the same change-set. Both tokens are
+now `INVALID_JSON`:
+
+- an **overflowing exponent** (`1e999`, `-1e999`), which read as an infinity (WIRE_FORMAT.md
+  §20.2 row 7, amended). The wire has no non-finite float and §7's quoted sentinels are the one
+  spelling of an infinity. An underflowing exponent (`1e-999`) still reads, as zero;
+- an **integer token past 2^53** that is not the canonical float layout of the double it reads
+  as (`9007199254740993`, a 19-digit identifier), which read as the nearest double (§2 rule 5,
+  amended). The test is on the token, never the double, because 2^53 + 1 reads as 2^53; a token
+  that IS a canonical layout (`10000000000000000`, the fixed-point layout of `1E+16`) still reads.
+
+Neither token can be written by a conformant encoder, so the narrowing costs no conformant
+document. Certified by the corpus fixtures `reject-json-number-overflow-exponent` and
+`reject-json-integer-beyond-int53` (the lenient fixture that pinned the rounding is gone) and
+pinned by `tests/decode_determinism.rs` and the parser's own unit tests in `src/canonical/json.rs`.
+
+This host declares no stability policy yet (pre-1.0), so the change is recorded here rather than
+in a `STABILITY.md` it does not have; it rides the current unreleased version.
+
 ## The Core boundary — `src/core/`
 
 The subsystems this host reimplements from the `Fuaran.Core` reference live in one
