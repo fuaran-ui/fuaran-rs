@@ -9,40 +9,18 @@
 //! wall-clock, so the same tree and event script bound identically at every
 //! placement and on every target — including `wasm32`, where there is no clock
 //! this crate is willing to read.
+//!
+//! Both walks are the generic Program core's (`fuaran_program::budget`), over the UI witness; what
+//! is this tier's is only the per-node data cost below.
 
 use crate::wire::{Action, Binding, Node, NodeKind, StaticValue};
 
-/// Per-interaction resource caps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InteractionBudget {
-    /// Max leaf-action count of one action cascade. A chain flattens; every
-    /// other arm costs one.
-    pub max_actions: u64,
-    /// Max render **cost** of the driven tree — the node count, with
-    /// data-bearing nodes weighted by the data they carry.
-    pub max_nodes: u64,
-}
+use super::witness::{UiAction, UiFold, UiWalk};
 
-impl InteractionBudget {
-    /// No caps — the trusted-author case, where the program is your own.
-    pub const fn unlimited() -> Self {
-        InteractionBudget {
-            max_actions: u64::MAX,
-            max_nodes: u64::MAX,
-        }
-    }
-}
-
-impl Default for InteractionBudget {
-    /// Conservative caps for the case this loop exists to serve: a host running
-    /// a program it did not write.
-    fn default() -> Self {
-        InteractionBudget {
-            max_actions: 64,
-            max_nodes: 10_000,
-        }
-    }
-}
+/// Per-interaction resource caps — the generic core's: `max_actions` caps one cascade's priced
+/// cost (a chain flattens; every other UI arm costs one), `max_nodes` the driven tree's render
+/// cost (the node count, with data-bearing nodes weighted by the data they carry).
+pub use fuaran_program::budget::InteractionBudget;
 
 /// Ceiling on rows counted for cost. Reading a possibly-large payload to
 /// exhaustion just to price it would itself be the unbounded work, and a count
@@ -50,22 +28,11 @@ impl Default for InteractionBudget {
 /// it carries no decision.
 const MAX_COUNTED_ROWS: u64 = 100_000;
 
-/// The leaf-action count of one cascade. A chain flattens; every other arm costs
-/// one. Iterative with an explicit stack: a function whose whole job is to bound
-/// an untrusted tree's cost must not itself be bounded by the caller's stack.
+/// The leaf-action count of one cascade: a chain flattens; every other arm costs one — the core's
+/// pricing over the UI view, iterative with an explicit stack, since a function whose whole job is
+/// to bound an untrusted tree's cost must not itself be bounded by the caller's stack.
 pub fn action_cascade_cost(action: &Action) -> u64 {
-    let mut pending: Vec<&Action> = vec![action];
-    let mut total: u64 = 0;
-    while let Some(current) = pending.pop() {
-        match current {
-            Action::Chain(inner) => pending.extend(inner.iter()),
-            _ => total = total.saturating_add(1),
-        }
-        if total == u64::MAX {
-            break;
-        }
-    }
-    total
+    fuaran_program::budget::action_cascade_cost(&UiFold::default(), &UiAction::unaddressed(action))
 }
 
 /// The number of rows a `Static` collection payload carries, capped at
@@ -87,25 +54,25 @@ fn static_collection_len(binding: &Binding) -> u64 {
     (len as u64).min(MAX_COUNTED_ROWS)
 }
 
-/// The render cost of one node, excluding its children.
+/// The DATA cost of one node, beyond the one every node costs, excluding its children.
 ///
-/// Most nodes cost one. A **data-bearing** node is different: its cost scales
+/// Most nodes carry none. A **data-bearing** node is different: its cost scales
 /// with data it carries inside a single node, which a node count cannot see. A
 /// chart is one node whose render emits geometry per (point × series); a grid is
 /// one node whose render emits a cell per (row × column). Counting those as one
 /// is what would let a single node carry unbounded work behind a
 /// bounded-looking tree.
-fn node_cost(node: &Node) -> u64 {
+pub(crate) fn node_data_cost(node: &Node) -> u64 {
     match &node.kind {
-        NodeKind::Chart(spec) => 1u64.saturating_add(
-            static_collection_len(&spec.source).saturating_mul((spec.y_fields.len() as u64).max(1)),
-        ),
-        NodeKind::DataGrid(spec) => 1u64.saturating_add(
-            static_collection_len(&spec.source).saturating_mul((spec.columns.len() as u64).max(1)),
-        ),
-        NodeKind::Map(spec) => 1u64.saturating_add(static_collection_len(&spec.source)),
-        NodeKind::Sparkline(spec) => 1u64.saturating_add(static_collection_len(&spec.source)),
-        _ => 1,
+        NodeKind::Chart(spec) => {
+            static_collection_len(&spec.source).saturating_mul((spec.y_fields.len() as u64).max(1))
+        }
+        NodeKind::DataGrid(spec) => {
+            static_collection_len(&spec.source).saturating_mul((spec.columns.len() as u64).max(1))
+        }
+        NodeKind::Map(spec) => static_collection_len(&spec.source),
+        NodeKind::Sparkline(spec) => static_collection_len(&spec.source),
+        _ => 0,
     }
 }
 
@@ -121,16 +88,7 @@ fn node_cost(node: &Node) -> u64 {
 /// `ceiling`" otherwise — all a budget comparand needs, since every use past
 /// that point is a refusal.
 pub fn tree_cost(ceiling: u64, node: &Node) -> u64 {
-    let mut pending: Vec<&Node> = vec![node];
-    let mut total: u64 = 0;
-    while let Some(current) = pending.pop() {
-        if total > ceiling {
-            break;
-        }
-        total = total.saturating_add(node_cost(current));
-        pending.extend(super::resolve::structural_children(&current.kind));
-    }
-    total
+    fuaran_program::budget::tree_cost(&UiWalk, ceiling, node)
 }
 
 #[cfg(test)]

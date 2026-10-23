@@ -1,52 +1,45 @@
-//! The bounded action interpreter — one resolved action, one store, one
+//! The bounded action interpreter for the UI tier — one resolved action, one store, one
 //! outcome.
+//!
+//! ## The fold is the generic core's
+//!
+//! There is no evaluating match over `Action` in this file. A fold of an action is the generic
+//! Program core's fold (`fuaran_program::fold`), run over the UI witness ([`super::witness`]): a
+//! `Chain` is the core's sequence, a `SetState` its one store write, a `Call` its call — recognised
+//! at every depth — and every other arm a leaf. What this file holds is what is the UI vocabulary's
+//! own: what each LEAF does at dispatch ([`lower_leaf`]), the bounded flush a commit writes through,
+//! the confirm round trip's addressing, and the lowering table the specification's `lowers-to/`
+//! vectors certify.
 //!
 //! ## The safety property, stated and tested
 //!
-//! A program tree that arrived over the wire is **data, not code**. The wire
-//! format cannot carry a closure, so the decoder erases every closure slot; this
-//! interpreter enforces the other half, and it enforces it by construction
-//! rather than by remembering to: there is no closure in the decoded model for
-//! it to invoke. The only store mutation it performs is the state write; the
-//! only outward reach is the closed client-effect vocabulary. Together —
-//! bounded wire, so no foreign code in the tree; this fold, so nothing foreign
-//! is ever called — running an emitted program has no arbitrary-code-execution
-//! surface.
-//!
-//! ## One evaluating match, in one file
-//!
-//! This is the **only** place anything here interprets an action, which is a
-//! property a reader can check rather than a claim they have to trust. The
-//! budget's cost accounting walks the same closed vocabulary without
-//! interpreting it — it performs, mutates and resolves nothing — and that
-//! distinction is why it is not a second evaluator.
+//! A program tree that arrived over the wire is **data, not code**. The wire format cannot carry a
+//! closure, so the decoder erases every closure slot; the core's fold reads an action only through
+//! the witness's view, lowering and description, so there is nothing in the decoded model for it to
+//! invoke. The only store mutation is the state write; the only outward reach is the closed
+//! client-effect vocabulary.
 //!
 //! ## Documented no-ops, never silent ones
 //!
-//! Several arms have no form on this path. Each is a **documented no-op that
-//! emits a readable diagnostic**, not a silent nothing: a program that intended
-//! one of them is observable to whoever is debugging its emission. The no-op is
-//! the correct behaviour; the diagnostic is what makes it debuggable.
+//! Several arms have no form on this path. Each is a **documented no-op that emits a readable
+//! diagnostic**, not a silent nothing: a program that intended one of them is observable to whoever
+//! is debugging its emission.
 //!
-//! ## Where a handler-running placement would attach
+//! ## Where a handler-running placement attaches
 //!
-//! A call action is recognised by this fold **at every depth**, because the fold
-//! is the only thing that knows where in a chain a call sits — a placement that
-//! matched on the action itself to find nested calls would be a second
-//! evaluator. What a call *means* is placement-specific; *where* it is
-//! recognised is not. This host implements the client placement, which registers
-//! no handlers, so a call resolves to the documented no-op it has always been
-//! where nothing is registered. The seam a handler-running placement would fill
-//! is the one arm below, and it is deliberately absent rather than stubbed:
-//! a placement that ran handlers would thread its own accumulation through this
-//! fold, and inventing that shape before there is a second placement to fit it
-//! would bake this one's assumptions into the contract.
+//! A call is recognised by the core's fold at every depth, and what it MEANS is the placement's,
+//! through the core's handler arm. This host implements the client placement, which registers no
+//! handlers, so it folds with the core's inert arm and a call is the documented no-op it has always
+//! been.
 
 use std::collections::BTreeMap;
 
+use fuaran_program::fold;
+use fuaran_program::witness::LeafOutcome;
+
 use crate::canonical::{JVal, parse};
 use crate::render::BindingSources;
-use crate::render::bindings::{Resolution, Value, resolve, try_string};
+use crate::render::bindings::{Value, try_string};
 use crate::render::sanitize::sanitize_url;
 use crate::wire::{
     Action, Binding, FileReadEncoding, FormField, FormFieldKind, Format, NavigateTarget, Node,
@@ -56,6 +49,7 @@ use crate::wire::{
 use super::effect::ClientEffect;
 use super::resolve::structural_children;
 use super::validate::LiveValue;
+use super::witness::{UiAction, UiFold};
 
 /// The state namespace a host reserves for itself. A program is untrusted by
 /// construction, so a program writing under it is exactly the case the namespace
@@ -69,40 +63,12 @@ use super::validate::LiveValue;
 /// decode failure.
 pub const HOST_RESERVED_STATE_PREFIX: &str = "host.";
 
-/// A readable "this did nothing, on purpose" signal.
-///
-/// The two arms mean opposite things to whoever is debugging an emission —
-/// *this path does not implement that* versus *that was not allowed* — so they
-/// are kept apart. Both name the action's **discriminator** only: every string
-/// inside an action came off an untrusted wire, and a diagnostic that echoed one
-/// would be the leak every other rule here avoids.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BoundedDiagnostic {
-    /// The action is inert on the bounded path — it has no form here.
-    UnsupportedOnBoundedPath { node_id: String, action: String },
-    /// The action was **refused**, not merely inert.
-    Refused {
-        node_id: String,
-        action: String,
-        reason: String,
-    },
-}
-
-impl BoundedDiagnostic {
-    /// A log-safe description.
-    pub fn describe(&self) -> String {
-        match self {
-            BoundedDiagnostic::UnsupportedOnBoundedPath { node_id, action } => format!(
-                "action '{action}' on node '{node_id}' is inert on the bounded path (it has no form for this loop)"
-            ),
-            BoundedDiagnostic::Refused {
-                node_id,
-                action,
-                reason,
-            } => format!("action '{action}' on node '{node_id}' was refused: {reason}"),
-        }
-    }
-}
+/// A readable "this did nothing, on purpose" signal — the generic core's diagnostic, under the
+/// name this crate has always published it by. The two arms mean opposite things to whoever is
+/// debugging an emission — *this path does not implement that* versus *that was not allowed* —
+/// and both name the action's **discriminator** only: every string inside an action came off an
+/// untrusted wire.
+pub use fuaran_program::fold::Diagnostic as BoundedDiagnostic;
 
 /// Interpreting one action: the store as the fold left it, the client effects
 /// the action reached in order, and the diagnostics it wants observed.
@@ -138,42 +104,6 @@ pub fn describe_action(action: &Action) -> &'static str {
     }
 }
 
-fn unchanged(store: BindingSources) -> BoundedOutcome {
-    BoundedOutcome {
-        store,
-        effects: Vec::new(),
-        diagnostics: Vec::new(),
-    }
-}
-
-fn no_op(node_id: &str, action: &Action, store: BindingSources) -> BoundedOutcome {
-    BoundedOutcome {
-        store,
-        effects: Vec::new(),
-        diagnostics: vec![BoundedDiagnostic::UnsupportedOnBoundedPath {
-            node_id: node_id.to_string(),
-            action: describe_action(action).to_string(),
-        }],
-    }
-}
-
-fn refused(
-    node_id: &str,
-    action: &Action,
-    reason: impl Into<String>,
-    store: BindingSources,
-) -> BoundedOutcome {
-    BoundedOutcome {
-        store,
-        effects: Vec::new(),
-        diagnostics: vec![BoundedDiagnostic::Refused {
-            node_id: node_id.to_string(),
-            action: describe_action(action).to_string(),
-            reason: reason.into(),
-        }],
-    }
-}
-
 /// A `TextSource` resolved at DISPATCH time, through the same binding
 /// resolution the host renders text slots with (§3.6.16 / §3.6's Navigate
 /// obligation). `None` means the source did not resolve — the two call sites
@@ -192,19 +122,11 @@ fn resolve_text_source(store: &BindingSources, text: &TextSource) -> Option<Stri
     }
 }
 
-fn emitted(store: BindingSources, effect: ClientEffect) -> BoundedOutcome {
-    BoundedOutcome {
-        store,
-        effects: vec![effect],
-        diagnostics: Vec::new(),
-    }
-}
-
 /// The state-slot form of a resolved value. The collection payloads have no
 /// state-slot form on this wire, and are reported rather than coerced: writing
 /// some flattened stand-in would be the interpreter inventing a value nobody
 /// asked for.
-fn to_state_value(value: &Value<'_>) -> Option<JVal> {
+pub(crate) fn to_state_value(value: &Value<'_>) -> Option<JVal> {
     match value {
         Value::Json(json) => Some((*json).clone()),
         Value::Text(text) => Some(JVal::Str(text.clone())),
@@ -240,7 +162,7 @@ fn file_read_encoding(encoding: FileReadEncoding) -> &'static str {
 /// reaches. A `CommitLocal` reached here has no tree to find its field in, so it
 /// writes nothing; a loop flushes it through [`Flush`].
 pub fn run_bounded_action(node_id: &str, action: &Action, store: BindingSources) -> BoundedOutcome {
-    run_at(node_id, None, None, action, store)
+    run_at(node_id, UiAction::unaddressed(action), None, store)
 }
 
 /// Interpret a **gesture** — the action an admitted, non-answer event resolves
@@ -253,7 +175,25 @@ pub fn run_gesture(
     store: BindingSources,
     flush: Option<Flush<'_>>,
 ) -> BoundedOutcome {
-    run_at(node_id, Some(""), flush, action, store)
+    run_at(node_id, UiAction::at(action, ""), flush, store)
+}
+
+/// The one fold: the generic core's, over the UI witness, at the client placement — which answers
+/// no call. The UI vocabulary views nothing as a guard, so the outcome never halts and the core's
+/// halt flag carries nothing this outcome must keep.
+fn run_at(
+    node_id: &str,
+    at: UiAction,
+    flush: Option<Flush<'_>>,
+    store: BindingSources,
+) -> BoundedOutcome {
+    let outcome = fold::run_inert(&UiFold { flush }, node_id, &at, store);
+    debug_assert!(!outcome.halted, "no UI arm views as a guard");
+    BoundedOutcome {
+        store: outcome.store,
+        effects: outcome.effects,
+        diagnostics: outcome.diagnostics,
+    }
 }
 
 // ── The bounded flush (WIRE_FORMAT §30.1, Phase 2198) ────────────────────────
@@ -330,7 +270,7 @@ fn form_field<'a>(node: &'a Node, field_id: &str) -> Option<&'a FormField> {
 /// number, and reads a string under the JSON number grammar. An absent or
 /// `null` member writes nothing. Every refusal text is this host's own; no
 /// payload string is echoed.
-fn flushed_value(numeric: bool, value: Option<&LiveValue>) -> Result<JVal, String> {
+pub(crate) fn flushed_value(numeric: bool, value: Option<&LiveValue>) -> Result<JVal, String> {
     let not_a_number = || {
         "the committed value is not a number, and the field's codec takes only numbers — no write performed"
             .to_string()
@@ -376,36 +316,6 @@ pub fn commit_writes(action: &Action, flush: Flush<'_>) -> Vec<Action> {
     }
 }
 
-/// The one store write, shared by `SetState` and a flushed commit: refused
-/// under the host-reserved namespace, and refused with its reason when there is
-/// no value to write.
-fn write(
-    node_id: &str,
-    action: &Action,
-    key: &str,
-    payload: Result<JVal, String>,
-    store: BindingSources,
-) -> BoundedOutcome {
-    if key.starts_with(HOST_RESERVED_STATE_PREFIX) {
-        return refused(
-            node_id,
-            action,
-            format!(
-                "the state key is under the host-reserved '{HOST_RESERVED_STATE_PREFIX}' namespace"
-            ),
-            store,
-        );
-    }
-    match payload {
-        Ok(json) => {
-            let mut store = store;
-            store.state.insert(key.to_string(), json);
-            unchanged(store)
-        }
-        Err(reason) => refused(node_id, action, reason, store),
-    }
-}
-
 /// The token a question carries: the originating node and the confirm's
 /// structural path inside that node's action — dot-joined chain positions and
 /// continuation names, the empty path naming the action itself. The node is in
@@ -413,23 +323,6 @@ fn write(
 pub fn confirm_token(node_id: &str, path: &str) -> String {
     format!("{node_id}#{path}")
 }
-
-fn child_path(path: &str, index: usize) -> String {
-    if path.is_empty() {
-        index.to_string()
-    } else {
-        format!("{path}.{index}")
-    }
-}
-
-fn branch_path(path: &str, name: &str) -> String {
-    if path.is_empty() {
-        name.to_string()
-    } else {
-        format!("{path}.{name}")
-    }
-}
-
 /// The confirm a token addresses inside the node's **current** action, with its
 /// path. The token is untrusted payload: its node half must be this node, and a
 /// segment that names nothing is an ordinary miss — a tree that moved on, or a
@@ -489,6 +382,14 @@ pub fn answer_branch(confirm: &Action, accepted: bool) -> Option<&Action> {
     }
 }
 
+fn branch_path(path: &str, name: &str) -> String {
+    if path.is_empty() {
+        name.to_string()
+    } else {
+        format!("{path}.{name}")
+    }
+}
+
 /// Interpret an **answer**: the addressed confirm folded as a selection over the
 /// reader's answer — the core's `Choose` with the answer as its entry. Yes runs
 /// `onConfirm`, no runs `onCancel` or nothing, each addressed under its own
@@ -505,91 +406,29 @@ pub fn run_answer(
     match answer_branch(confirm, accepted) {
         Some(branch) => run_at(
             node_id,
-            Some(&branch_path(path, name)),
+            UiAction::at(branch, &branch_path(path, name)),
             flush,
-            branch,
             store,
         ),
-        None => unchanged(store),
+        None => BoundedOutcome {
+            store,
+            effects: Vec::new(),
+            diagnostics: Vec::new(),
+        },
     }
 }
 
-/// The one evaluating match. `path` is `Some` when the loop addressed this
-/// position — a confirm there asks — and `None` when it did not. `flush` is
-/// `Some` when the loop handed the fold the tree and the event a commit flushes
-/// from (Phase 2198), and `None` when it did not.
-fn run_at(
+/// What a LEAF does at dispatch — every arm the UI witness views as a leaf, lowered to at most one
+/// effect, a refusal with its reason, or a documented decline. `path` is `Some` when the loop
+/// addressed this position, so a confirm there asks. Exhaustive with no wildcard, so an arm added
+/// to the vocabulary is a build error here until somebody says what it does.
+pub(crate) fn lower_leaf(
     node_id: &str,
     path: Option<&str>,
-    flush: Option<Flush<'_>>,
     action: &Action,
-    store: BindingSources,
-) -> BoundedOutcome {
+    store: &BindingSources,
+) -> LeafOutcome<ClientEffect> {
     match action {
-        // ── The one store mutation ───────────────────────────────────────────
-        //
-        // The reserved namespace is closed to it, checked in `write` before
-        // anything is written.
-        Action::SetState {
-            key,
-            value,
-            value_from,
-        } => {
-            // `value` XOR `value_from`, which the decoder enforces. A bound
-            // source evaluates AT DISPATCH TIME against the store itself, and a
-            // source that does not resolve performs NO write and is diagnosed —
-            // never a silent skip and never a fabricated default.
-            let payload = match (value_from, value) {
-                (Some(binding), _) => match resolve(&store, binding) {
-                    Resolution::Resolved(resolved) => match to_state_value(&resolved) {
-                        Some(json) => Ok(json),
-                        None => Err(
-                            "the bound source resolved to a collection, which has no state-slot form — no write performed"
-                                .to_string(),
-                        ),
-                    },
-                    Resolution::NotResolved => Err(
-                        "the bound source did not resolve to a value — no write performed"
-                            .to_string(),
-                    ),
-                    Resolution::I18nUnresolved(_) => Err(
-                        "the bound source is an unresolved i18n key — no write performed".to_string(),
-                    ),
-                    // Phase 1667 — the seam's error channel. Reported with the
-                    // message VERBATIM rather than wrapped: it already names the
-                    // remedy, and a write is exactly where a fabricated default
-                    // would be least recoverable — the wrong value would then be
-                    // in the store, indistinguishable from one a reader typed.
-                    Resolution::Errored(msg) => Err(format!("{msg} — no write performed")),
-                },
-                (None, Some(literal)) => Ok(literal.clone()),
-                (None, None) => Err(
-                    "the write declares neither a literal nor a bound source — no write performed"
-                        .to_string(),
-                ),
-            };
-            write(node_id, action, key, payload, store)
-        }
-
-        // ── The bounded flush (Phase 2198) ───────────────────────────────────
-        //
-        // A commit the loop can resolve writes exactly as a literal `SetState`
-        // does: the key its field declares, the value its event carried. One
-        // the loop cannot resolve, or one folded with no loop at all, has no key
-        // to write and is the documented no-op it always was.
-        Action::CommitLocal { node_id: field_id } => {
-            match flush.and_then(|f| commit_destination(f.tree, field_id).map(|d| (f, d))) {
-                Some((f, (key, numeric))) => write(
-                    node_id,
-                    action,
-                    key,
-                    flushed_value(numeric, f.payload.get(field_id)),
-                    store,
-                ),
-                None => no_op(node_id, action, store),
-            }
-        }
-
         // ── The inherently-surface arms ──────────────────────────────────────
         //
         // The route is checked before the effect is shipped: the host navigates
@@ -631,31 +470,20 @@ fn run_at(
         // real navigation — the current document with its query and fragment
         // stripped — so the honest answer is a diagnostic and nothing else.
         //
-        // Phase 1664 — the target is CARRIED, where Phase 1536 had to refuse it.
-        // The client-effect envelope now names the browsing context (an optional
-        // member, omitted at `Self`), so the two targets are one arm again and
-        // the interpreter has nothing to decide about them: it resolves the
-        // route, applies the scheme floor, and reports what the document asked
-        // for. That is the whole of the change on this side — dropping the
-        // target was the defect, not refusing it, because a seam that cannot
-        // open a second context must not pretend to and a seam that CAN must not
-        // pretend it cannot.
-        Action::Navigate { route, target } => match resolve_text_source(&store, route) {
-            None => refused(
-                node_id,
-                action,
-                "the route did not resolve — an unresolved route navigates nowhere",
-                store,
+        // Phase 1664 — the target is CARRIED: the client-effect envelope names
+        // the browsing context (an optional member, omitted at `Self`), so the
+        // interpreter resolves the route, applies the scheme floor, and reports
+        // what the document asked for.
+        Action::Navigate { route, target } => match resolve_text_source(store, route) {
+            None => LeafOutcome::Refuse(
+                "the route did not resolve — an unresolved route navigates nowhere".to_string(),
             ),
             Some(resolved) => match sanitize_url(&resolved) {
-                Some(safe) => emitted(
-                    store,
-                    ClientEffect::Navigate {
-                        route: safe.into_owned(),
-                        target: *target,
-                    },
-                ),
-                None => refused(node_id, action, "the route is not a safe URL", store),
+                Some(safe) => LeafOutcome::Emit(ClientEffect::Navigate {
+                    route: safe.into_owned(),
+                    target: *target,
+                }),
+                None => LeafOutcome::Refuse("the route is not a safe URL".to_string()),
             },
         },
         // Phase 1126 — resolution happens at DISPATCH time, so what is copied is
@@ -663,62 +491,33 @@ fn run_at(
         // unresolvable payload resolves to the EMPTY STRING, as it does at every
         // text slot: the asymmetry is the specification's, and it is why the two
         // arms read differently.
-        Action::WriteToClipboard { text } => {
-            let resolved = resolve_text_source(&store, text).unwrap_or_default();
-            emitted(store, ClientEffect::WriteToClipboard { text: resolved })
-        }
+        Action::WriteToClipboard { text } => LeafOutcome::Emit(ClientEffect::WriteToClipboard {
+            text: resolve_text_source(store, text).unwrap_or_default(),
+        }),
         // Phase 1537 — the focus move: a bare node id in THIS document, so
         // there is nothing to resolve and nothing to gate.
-        Action::Focus { node_id: target } => emitted(
-            store,
-            ClientEffect::Focus {
-                node_id: target.clone(),
-            },
-        ),
+        Action::Focus { node_id: target } => LeafOutcome::Emit(ClientEffect::Focus {
+            node_id: target.clone(),
+        }),
         // `nodeId` is the node the EVENT came from, which §5.2 now states: the
         // surface holds the selected file against that node, so a reference
         // taken from the action would name something it cannot resolve.
-        Action::ReadFileBody { encoding, .. } => emitted(
-            store,
-            ClientEffect::ReadFileBody {
-                node_id: node_id.to_string(),
-                encoding: file_read_encoding(*encoding).to_string(),
-            },
-        ),
-
-        // ── Composition ──────────────────────────────────────────────────────
-        //
-        // Fold in order, threading the store and concatenating effects and
-        // diagnostics. Threading the store is what makes an action mid-chain see
-        // the write before it and be seen by the write after it — and it is why
-        // a nested call behaves exactly as a top-level one, the chain being the
-        // only structure that could have made them differ.
-        Action::Chain(inner) => {
-            inner
-                .iter()
-                .enumerate()
-                .fold(unchanged(store), |acc, (index, next)| {
-                    let mut acc = acc;
-                    let at = path.map(|p| child_path(p, index));
-                    let step = run_at(node_id, at.as_deref(), flush, next, acc.store);
-                    acc.store = step.store;
-                    acc.effects.extend(step.effects);
-                    acc.diagnostics.extend(step.diagnostics);
-                    acc
-                })
-        }
+        Action::ReadFileBody { encoding, .. } => LeafOutcome::Emit(ClientEffect::ReadFileBody {
+            node_id: node_id.to_string(),
+            encoding: file_read_encoding(*encoding).to_string(),
+        }),
 
         // ── Documented no-ops ────────────────────────────────────────────────
         //
         // Host-channel and capability arms fan out to machinery this placement
         // does not have; a dispatch carries only an erased payload and there is
-        // no update function to fold it through. (A commit is not here: it writes
-        // when a loop flushes it, above, and is that arm's no-op otherwise.)
-        //
+        // no update function to fold it through. A commit reaches here only when
+        // it cannot write (the witness views a writable one as the store write).
         Action::Notify { .. }
         | Action::AiTool { .. }
         | Action::Invoke { .. }
-        | Action::Dispatch => no_op(node_id, action, store),
+        | Action::Dispatch
+        | Action::CommitLocal { .. } => LeafOutcome::Decline,
 
         // Phase 2106 — `Confirm` is a ROUND TRIP on the bounded path: the
         // gesture asks, and the answer — the originating event re-delivered with
@@ -733,26 +532,17 @@ fn run_at(
         // answered, and asking it would tell an author something was pending that
         // nothing will ever run.
         Action::Confirm { prompt, .. } => match path {
-            None => no_op(node_id, action, store),
-            Some(p) => match resolve_text_source(&store, prompt) {
-                Some(text) if !text.trim().is_empty() => emitted(
-                    store,
-                    ClientEffect::Confirm {
-                        prompt: text,
-                        token: confirm_token(node_id, p),
-                    },
+            None => LeafOutcome::Decline,
+            Some(p) => match resolve_text_source(store, prompt) {
+                Some(text) if !text.trim().is_empty() => LeafOutcome::Emit(ClientEffect::Confirm {
+                    prompt: text,
+                    token: confirm_token(node_id, p),
+                }),
+                Some(_) => LeafOutcome::Refuse(
+                    "the prompt resolved to no text — nothing was asked".to_string(),
                 ),
-                Some(_) => refused(
-                    node_id,
-                    action,
-                    "the prompt resolved to no text — nothing was asked",
-                    store,
-                ),
-                None => refused(
-                    node_id,
-                    action,
-                    "the prompt did not resolve to a value — nothing was asked",
-                    store,
+                None => LeafOutcome::Refuse(
+                    "the prompt did not resolve to a value — nothing was asked".to_string(),
                 ),
             },
         },
@@ -760,28 +550,12 @@ fn run_at(
         // `Print` has no round trip to model. It is payload-free, it returns
         // nothing, and format version 2 gives it a declared arm — so the whole
         // of performing it is reporting that the program asked, which is
-        // exactly what this fold's `effects` are. Emitting it rather than
-        // diagnosing it is the completion the codec arm exists for: a no-op
-        // would now be this placement declining an instruction it can express,
-        // for no reason it could state.
-        Action::Print => emitted(store, ClientEffect::Print),
+        // exactly what this fold's `effects` are.
+        Action::Print => LeafOutcome::Emit(ClientEffect::Print),
 
-        // A call that ALSO declares where its answer should land is refused
-        // rather than honoured or quietly ignored. Result-target ownership sits
-        // with the handler — its stages name landing slots, one per result — and
-        // a tree-declared target is a second mechanism for the same job that no
-        // placement honours. Refusing makes that observable; ignoring would
-        // leave an author believing an answer lands somewhere it never does.
-        //
-        // The reason names neither the endpoint nor the target: both come off
-        // the wire.
-        Action::Call { into: Some(_), .. } => refused(
-            node_id,
-            action,
-            "the call declares a result target; a handler declares where its own results land",
-            store,
-        ),
-        Action::Call { into: None, .. } => no_op(node_id, action, store),
+        // Never views as a leaf: the core folds these arms itself. Declining is the answer that
+        // could not do harm if the obligation ever broke.
+        Action::Chain(_) | Action::SetState { .. } | Action::Call { .. } => LeafOutcome::Decline,
     }
 }
 

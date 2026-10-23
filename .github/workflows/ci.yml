@@ -9,6 +9,7 @@
 #     $GITHUB_WORKSPACE/
 #     ├── fuaran-rs/               ← this repo
 #     ├── fuaran-core-rs/          ← the Core spine it depends on (Fuaran-Core/fuaran-core-rs)
+#     ├── fuaran-program-rs/       ← Program's generic core its loop runs on (Fuaran-Core/fuaran-program-rs)
 #     └── wire-format-fixtures/    ← the corpus (fuaran-ui/fuaran-ui-specification)
 #
 # The corpus repository is PUBLIC, so the checkout is anonymous — no token.
@@ -80,6 +81,17 @@ jobs:
 
       - name: Assert the spine is where Cargo.toml resolves it
         run: test -f ../fuaran-core-rs/Cargo.toml
+
+      # The generic Program core the bounded loop runs on, by path (`../fuaran-program-rs`), on the
+      # spine's terms: the dependency names its version too.
+      - name: Check out the Program core
+        uses: actions/checkout@v4
+        with:
+          repository: Fuaran-Core/fuaran-program-rs
+          path: fuaran-program-rs
+
+      - name: Assert the Program core is where Cargo.toml resolves it
+        run: test -f ../fuaran-program-rs/Cargo.toml
 
       - name: Set up Rust
         run: |
@@ -175,6 +187,12 @@ jobs:
         with:
           repository: Fuaran-Core/fuaran-core-rs
           path: fuaran-core-rs
+
+      - name: Check out the Program core
+        uses: actions/checkout@v4
+        with:
+          repository: Fuaran-Core/fuaran-program-rs
+          path: fuaran-program-rs
 
       - name: Set up Rust + the wasm32 target
         run: |

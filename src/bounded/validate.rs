@@ -272,9 +272,15 @@ fn bounds_check(node: &Node, event: &LiveEvent) -> Result<(), RejectReason> {
 /// closes the cross-host divergence this comment used to record as open. The
 /// resulting step is inert and, per the same section, is **not** a refusal.
 pub fn resolve_action(node: &Node, event: &LiveEvent) -> Option<Action> {
+    handler_for(node, &event.event).cloned()
+}
+
+/// The action a node carries for an event, by the event's name — the dispatch witness's
+/// `handler`, and the one place the kind-to-event table that carries an action is written.
+pub(crate) fn handler_for<'n>(node: &'n Node, event: &str) -> Option<&'n Action> {
     match &node.kind {
-        NodeKind::Button(spec) if event.event == "click" => Some(spec.on_click.clone()),
-        NodeKind::Form(spec) if event.event == "submit" => Some(spec.on_submit.clone()),
+        NodeKind::Button(spec) if event == "click" => Some(&spec.on_click),
+        NodeKind::Form(spec) if event == "submit" => Some(&spec.on_submit),
         _ => None,
     }
 }

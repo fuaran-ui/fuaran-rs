@@ -84,6 +84,13 @@ name = "fuaran-ui"
 # is the spine's, and an object's member bound is now checked before the
 # member past it is read rather than after (§21.2 rule 4), so where that
 # member is also malformed the breach is reported first.
+#
+# Phase 2267 rides it, ADDITIVE in surface: the bounded loop's fold, budget and
+# re-resolution walk are the generic Program core's (`fuaran-program`), with
+# the UI vocabulary as its witness. No public name, signature or behaviour
+# moved: `BoundedDiagnostic` is the core's diagnostic re-exported under the
+# name this crate published (same variants, same fields, same text), and
+# `InteractionBudget` the core's budget record (same fields, same defaults).
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"
@@ -187,6 +194,12 @@ idl-codegen = []
 # later crates.io publish open and fails this build loudly if the spine moves.
 # Third-party crates appear only as dev tooling if ever.
 fuaran-core = { version = "0.0.1-alpha.1", path = "../fuaran-core-rs", default-features = false }
+# Phase 2267: the bounded loop's algebra — the fold over the eight view shapes, the budget's
+# cascade and tree costs, re-resolution of the fixed base tree — is Program's generic core,
+# `fuaran-program` (repository Fuaran-Core/fuaran-program-rs, checked out beside this one), and
+# `src/bounded/` is its UI witness. A second first-party crate, on the spine's terms: the path is
+# the working layout, the version requirement keeps a later publish open.
+fuaran-program = { version = "0.0.1-alpha.1", path = "../fuaran-program-rs" }
 
 [dev-dependencies]
 # The crate as its own dev-dependency, feature-unified: this is the one sanctioned

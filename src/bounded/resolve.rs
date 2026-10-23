@@ -34,14 +34,17 @@
 //! host's own, and the two paragraphs above are the declaration §10.5 requires
 //! of it.
 //!
-//! Structure is never lost. Children recurse generically through
-//! [`structural_children`], so an uncovered container still has its covered
-//! descendants resolved.
+//! Structure is never lost. The walk is the generic Program core's
+//! (`fuaran_program::resolve::resolve_tree`): it re-resolves each node's OWN slots through
+//! [`resolve_node`] and recurses through [`structural_children`], rebuilding with
+//! [`replace_children`], so an uncovered container still has its covered descendants resolved.
 
 use crate::canonical::JVal;
 use crate::render::BindingSources;
 use crate::render::bindings::{Resolution, Value, resolve, try_scalar_string};
 use crate::wire::{Binding, Node, NodeKind, StaticValue, TextSource};
+
+use super::witness::{UiFold, UiWalk};
 
 /// The child nodes a kind carries as an ordered structural list — the same set
 /// the structural tree-ops address. A kind holding child nodes in some other
@@ -117,6 +120,12 @@ fn resolve_text_opt(sources: &BindingSources, text: &Option<TextSource>) -> Opti
 /// — no node added, removed or re-identified; only leaf binding and text values
 /// change.
 pub fn resolve_tree(sources: &BindingSources, node: &Node) -> Node {
+    fuaran_program::resolve::resolve_tree(&UiWalk, &UiFold::default(), sources, node)
+}
+
+/// Re-resolve ONE node's own slots, leaving its structural children exactly as they are — the
+/// core walks those.
+pub(crate) fn resolve_node(sources: &BindingSources, node: &Node) -> Node {
     Node {
         id: node.id.clone(),
         kind: resolve_kind(sources, &node.kind),
@@ -135,8 +144,40 @@ pub fn resolve_tree(sources: &BindingSources, node: &Node) -> Node {
     }
 }
 
-fn resolve_children(sources: &BindingSources, children: &[Node]) -> Vec<Node> {
-    children.iter().map(|n| resolve_tree(sources, n)).collect()
+macro_rules! with_children {
+    ($spec:expr, $children:expr) => {{
+        let mut spec = $spec.clone();
+        spec.children = $children;
+        spec
+    }};
+}
+
+/// The node with its structural child list replaced — the inverse of [`structural_children`],
+/// over exactly the kinds it reaches. A kind with no structural list takes none and is returned
+/// as it was.
+pub(crate) fn replace_children(node: &Node, children: Vec<Node>) -> Node {
+    let kind = match &node.kind {
+        NodeKind::Box(spec) => NodeKind::Box(with_children!(spec, children)),
+        NodeKind::SplitPanel(spec) => NodeKind::SplitPanel(with_children!(spec, children)),
+        NodeKind::Tabs(spec) => NodeKind::Tabs(with_children!(spec, children)),
+        NodeKind::Stepper(spec) => NodeKind::Stepper(with_children!(spec, children)),
+        NodeKind::SummaryList(spec) => NodeKind::SummaryList(with_children!(spec, children)),
+        NodeKind::Disclosure(spec) => NodeKind::Disclosure(with_children!(spec, children)),
+        NodeKind::Modal(spec) => NodeKind::Modal(with_children!(spec, children)),
+        NodeKind::ScrollArea(spec) => NodeKind::ScrollArea(with_children!(spec, children)),
+        NodeKind::FragmentDecl(spec) => {
+            let mut spec = spec.clone();
+            if let Some(body) = children.into_iter().next() {
+                spec.body = Box::new(body);
+            }
+            NodeKind::FragmentDecl(spec)
+        }
+        other => other.clone(),
+    };
+    Node {
+        kind,
+        ..node.clone()
+    }
 }
 
 /// The per-kind pass. Exhaustive with **no catch-all arm**, so a kind added to
@@ -145,61 +186,40 @@ fn resolve_children(sources: &BindingSources, children: &[Node]) -> Vec<Node> {
 /// keep explicit.
 fn resolve_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
     match kind {
-        // ── Layout: covered chrome, and children recurse ─────────────────────
+        // ── Layout: covered chrome; the core walks the children ──────────────
         NodeKind::Box(spec) => {
             let mut spec = spec.clone();
-            spec.children = resolve_children(sources, &spec.children);
             spec.heading = resolve_text_opt(sources, &spec.heading);
             NodeKind::Box(spec)
         }
         NodeKind::Tabs(spec) => {
             let mut spec = spec.clone();
-            spec.children = resolve_children(sources, &spec.children);
             spec.active_index = subst(sources, &spec.active_index);
             spec.active_tag = subst_opt(sources, &spec.active_tag);
             NodeKind::Tabs(spec)
         }
         NodeKind::Stepper(spec) => {
             let mut spec = spec.clone();
-            spec.children = resolve_children(sources, &spec.children);
             spec.active_step = subst(sources, &spec.active_step);
             NodeKind::Stepper(spec)
         }
         NodeKind::SummaryList(spec) => {
             let mut spec = spec.clone();
-            spec.children = resolve_children(sources, &spec.children);
             spec.heading = resolve_text_opt(sources, &spec.heading);
             NodeKind::SummaryList(spec)
         }
         NodeKind::Disclosure(spec) => {
             let mut spec = spec.clone();
-            spec.children = resolve_children(sources, &spec.children);
             spec.open = subst(sources, &spec.open);
             spec.heading = resolve_text(sources, &spec.heading);
             NodeKind::Disclosure(spec)
         }
         // Outside the floor for their own slots, but still containers: their
         // descendants resolve.
-        NodeKind::SplitPanel(spec) => {
-            let mut spec = spec.clone();
-            spec.children = resolve_children(sources, &spec.children);
-            NodeKind::SplitPanel(spec)
-        }
-        NodeKind::Modal(spec) => {
-            let mut spec = spec.clone();
-            spec.children = resolve_children(sources, &spec.children);
-            NodeKind::Modal(spec)
-        }
-        NodeKind::ScrollArea(spec) => {
-            let mut spec = spec.clone();
-            spec.children = resolve_children(sources, &spec.children);
-            NodeKind::ScrollArea(spec)
-        }
-        NodeKind::FragmentDecl(spec) => {
-            let mut spec = spec.clone();
-            spec.body = Box::new(resolve_tree(sources, &spec.body));
-            NodeKind::FragmentDecl(spec)
-        }
+        NodeKind::SplitPanel(_) => kind.clone(),
+        NodeKind::Modal(_) => kind.clone(),
+        NodeKind::ScrollArea(_) => kind.clone(),
+        NodeKind::FragmentDecl(_) => kind.clone(),
 
         // ── Display: the state-reactive text and scalar slots ────────────────
         NodeKind::Heading(spec) => {

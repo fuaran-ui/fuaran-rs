@@ -7,6 +7,13 @@
 //! a state write visible, and the loop that puts them in order —
 //! **validate → interpret → effects → re-resolve**.
 //!
+//! The ALGEBRA under it is Program's generic core (`fuaran-program`): the fold over the eight view
+//! shapes, the budget's cascade and tree costs, and the re-resolution walk are that crate's, and
+//! this module is the UI vocabulary's witness over them (`witness.rs`) — how each action arm
+//! views, what each leaf does, how a binding resolves, how the tree is walked — plus the loop's own
+//! transport, policy and confirm correlation. One algebra, instantiated here and at the
+//! specification's toy subject by the same code.
+//!
 //! # The bounded-path declaration
 //!
 //! The program wire specification makes its driver-semantics family **opt-in by
@@ -79,6 +86,7 @@ pub mod program;
 pub mod resolve;
 pub mod trace;
 pub mod validate;
+mod witness;
 
 pub use actions::{BoundedDiagnostic, BoundedOutcome, run_bounded_action};
 pub use budget::InteractionBudget;
