@@ -126,8 +126,9 @@ fuaran-rs/
 │                        #   + chart_lowering.rs / sparkline_lowering.rs (golden-certified Drawing lowerings)
 │                        #   + sanitize.rs (injection floor) + egress.rs (destination policy, §14.1)
 │                        #   + bindings.rs / class_names.rs / html.rs
-├── src/bounded/         # the bounded program loop (client placement) — actions.rs (the one evaluating
-│                        #   match) + budget.rs + effect.rs + resolve.rs + validate.rs + program.rs
+├── src/bounded/         # the bounded program loop (client placement) — witness.rs (the UI witness over
+│                        #   the generic Program core's fold) + actions.rs (leaf lowering, flush, confirm)
+│                        #   + budget.rs + effect.rs + resolve.rs + validate.rs + program.rs
 │                        #   + trace.rs (the IO-free scenario runner + first-divergence comparison)
 ├── src/ffi/             # target-neutral C-ABI (Phase 537) — fuaran_* over an opaque ClientSession, all targets
 ├── src/client/          # mod.rs (ClientSession, target-agnostic) + wasm.rs (wasm32 re-export of src/ffi/)
@@ -353,8 +354,10 @@ permissive path and stay green on a host that never implemented §14.1.
 ## The bounded program loop + its conformance leg (`src/bounded/`)
 
 `src/bounded/` is the **client placement of the bounded program loop** — behaviour
-carried as data: the closed action walk (`actions.rs`, the one evaluating `match`
-over `Action` in this crate), the per-interaction resource budget (`budget.rs`),
+carried as data: the action walk, which is the generic Program core's fold
+(`fuaran-program`, checked out beside this repository) over the UI witness
+(`witness.rs`: how each `Action` arm views, with `actions.rs` holding what each leaf
+does), the per-interaction resource budget (`budget.rs`, the core's walks),
 the default-deny client-effect vocabulary and policy (`effect.rs`), the binding
 re-resolution pass that makes a state write visible (`resolve.rs`), the inbound
 trust boundary (`validate.rs`), and the loop that orders them (`program.rs`).
