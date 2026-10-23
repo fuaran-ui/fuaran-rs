@@ -1,4 +1,4 @@
-//! The op-stream provenance substrate: a dependency-free SHA-256 ([`sha256`])
+//! The op-stream provenance substrate: SHA-256 ([`mod@sha256`], the Core spine's)
 //! and the hash-chained op-stream ([`chain`]) — the integrity engine behind the
 //! notarisation / provenance / relay capabilities. A chain a Rust host computes
 //! is byte-identical to an F#/TS host's, so a chain is verifiable across
@@ -7,8 +7,9 @@
 
 pub mod chain;
 pub mod replay;
-pub mod sha256;
 pub mod sink;
+
+pub use fuaran_core::sha256;
 
 pub use chain::{
     Actor, OpRecord, OpResult, OpStream, VerificationError, compute_hash, encode_actor,

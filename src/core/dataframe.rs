@@ -84,10 +84,10 @@ bare_enum!(JoinKind { Inner => "inner", Left => "left", Right => "right", Outer 
 // `cumSum` spelling decodes as a lenient alias and normalises on re-encode.
 bare_enum!(WindowFn { RowNumber => "rowNumber", Rank => "rank", Lag => "lag", Lead => "lead", CumulSum => "cumulSum", RollingMean => "rollingMean" });
 bare_enum!(SortDir { Asc => "asc", Desc => "desc" });
-// The seven rounding modes of the well-known set (Phase 2001), complete on
-// purpose: widening a closed enum later is breaking, so the vocabulary ships
-// whole. A mode is a value; its spelling exists only here and in the codec.
-bare_enum!(RoundingMode { HalfEven => "half-even", HalfUp => "half-up", HalfDown => "half-down", Up => "up", Down => "down", Ceiling => "ceiling", Floor => "floor" });
+// The seven rounding modes of the well-known set (Phase 2001) live with the
+// exact decimal they round, in the Core spine (Phase 463); same names, same
+// spellings, same API.
+pub use super::decimal::RoundingMode;
 
 /// A typed dataframe cell.
 #[derive(Debug, Clone, PartialEq)]

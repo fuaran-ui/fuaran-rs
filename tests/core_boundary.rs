@@ -25,9 +25,23 @@ const CRATE_NAME: &str = "fuaran_rs";
 const CORE: &str = "core";
 
 /// The roots a `use` inside the boundary may start from: the standard library
-/// crates and the in-crate path keywords. Everything else is either a domain
-/// module of this host or a package the boundary must not depend on.
-const ALLOWED_USE_ROOTS: &[&str] = &["std", "core", "alloc", "crate", "self", "super"];
+/// crates, the in-crate path keywords, and the Core spine crate. Everything else
+/// is either a domain module of this host or a package the boundary must not
+/// depend on.
+///
+/// `fuaran_core` is here because it IS the boundary's other side: the twins
+/// this test kept liftable were lifted into it (Phase 463 — the number form and
+/// the exact decimal), and the boundary re-exports them. Code behind the
+/// boundary may reach Core; it still may not reach this host's domain.
+const ALLOWED_USE_ROOTS: &[&str] = &[
+    "std",
+    "core",
+    "alloc",
+    "crate",
+    "self",
+    "super",
+    "fuaran_core",
+];
 
 // ─── Lexing ──────────────────────────────────────────────────────────────────
 
@@ -524,7 +538,6 @@ fn core_references_no_module_of_this_crate_outside_the_boundary() {
         "src/core/dataframe.rs",
         "src/core/transform.rs",
         "src/core/function.rs",
-        "src/core/number.rs",
     ] {
         assert!(
             names.iter().any(|n| n == expected),

@@ -75,6 +75,15 @@ name = "fuaran-ui"
 # read, both INVALID_JSON — an overflowing exponent (`1e999`, the amended §20.2
 # row 7) and an integer token past 2^53 that is not the canonical float layout
 # of the double it reads as (the amended §2 rule 5). No signature moves.
+#
+# Phase 463 rides it, ADDITIVE in surface: the canonical JSON layer, the number
+# form, the exact decimal (with `RoundingMode`), SHA-256 and the actor move to
+# the Core spine crate `fuaran-core` and are re-exported at every path this
+# crate published, so no public name or type moved (`Actor` gains the spine's
+# `PartialOrd`/`Ord`). Two BEHAVIOUR notes: a parse refusal's message sentence
+# is the spine's, and an object's member bound is now checked before the
+# member past it is read rather than after (§21.2 rule 4), so where that
+# member is also malformed the breach is reported first.
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"
@@ -168,10 +177,16 @@ abi-panic-probe = []
 idl-codegen = []
 
 [dependencies]
-# The runtime host uses the Rust standard library only — no third-party crates.
-# Rust's stdlib has no JSON, so the canonical JSON layer is hand-written for
-# byte-exact output regardless (the same "hand-write the hard part" stance every
-# host takes). Third-party crates appear only as dev tooling if ever.
+# The runtime host uses the Rust standard library and ONE first-party crate — no
+# third-party crates. Rust's stdlib has no JSON, so the canonical JSON layer is
+# hand-written for byte-exact output regardless (the same "hand-write the hard
+# part" stance every host takes); since Phase 463 it lives in the Core spine,
+# `fuaran-core` (repository Fuaran-Core/fuaran-core-rs, checked out beside this
+# one), with the number form, the exact decimal, SHA-256 and the chain's
+# pre-image. The path is the working layout; the version requirement keeps a
+# later crates.io publish open and fails this build loudly if the spine moves.
+# Third-party crates appear only as dev tooling if ever.
+fuaran-core = { version = "0.0.1-alpha.1", path = "../fuaran-core-rs", default-features = false }
 
 [dev-dependencies]
 # The crate as its own dev-dependency, feature-unified: this is the one sanctioned

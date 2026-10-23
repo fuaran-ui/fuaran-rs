@@ -32,8 +32,9 @@ pub mod canonical;
 pub mod client;
 /// The Core boundary (Phase 1863) — this host's twins of the Core reference
 /// subsystems (the dataframe model, the Transform evaluator, the function
-/// registry, the canonical number form), kept in one module that imports
-/// nothing else from this crate. Private: [`transform`], [`function`], [`wire`]
+/// registry), kept in one module that imports nothing else from this crate but
+/// the Core spine, `fuaran-core`, into which the number form and the exact
+/// decimal were lifted (Phase 463). Private: [`transform`], [`function`], [`wire`]
 /// and [`canonical`] re-export it under their published paths. The rule is held
 /// by `tests/core_boundary.rs`.
 mod core;

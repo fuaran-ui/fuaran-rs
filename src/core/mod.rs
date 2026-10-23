@@ -11,6 +11,10 @@
 //!   arithmetic and rounding kernel the evaluator computes decimals with;
 //! - [`number`] — the canonical number form (`formatFiniteDouble`).
 //!
+//! The last two have been LIFTED (Phase 463): they live in the Core spine crate
+//! (`fuaran-core`) and are re-exported here at their old paths, which is the
+//! lift this boundary was kept for.
+//!
 //! It mirrors `Fuaran.Core`, the reference these twins certify against. The
 //! module is private: the published paths are the public modules that re-export
 //! it (`crate::transform`, `crate::function`, `crate::wire`,
@@ -22,10 +26,9 @@
 //! day these twins are lifted into a crate of their own, the lift is a copy.
 
 pub mod dataframe;
-pub mod decimal;
 pub mod function;
-pub mod number;
 pub mod transform;
+pub use fuaran_core::{decimal, number};
 
 /// Writes a closed, bare-string wire enum: the `enum` itself, its wire-stable
 /// spelling, the full spelling list and the parser. Shared by the dataframe

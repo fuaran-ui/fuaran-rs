@@ -8,6 +8,7 @@
 #
 #     $GITHUB_WORKSPACE/
 #     ├── fuaran-rs/               ← this repo
+#     ├── fuaran-core-rs/          ← the Core spine it depends on (Fuaran-Core/fuaran-core-rs)
 #     └── wire-format-fixtures/    ← the corpus (fuaran-ui/fuaran-ui-specification)
 #
 # The corpus repository is PUBLIC, so the checkout is anonymous — no token.
@@ -67,6 +68,18 @@ jobs:
 
       - name: Assert the corpus is where the tests resolve it
         run: test -f ../wire-format-fixtures/manifest.json
+
+      # The Core spine this crate depends on by path (`../fuaran-core-rs`). The
+      # dependency also names the spine's version, so a spine that moved past it
+      # fails this build at resolution rather than linking something else.
+      - name: Check out the Core spine
+        uses: actions/checkout@v4
+        with:
+          repository: Fuaran-Core/fuaran-core-rs
+          path: fuaran-core-rs
+
+      - name: Assert the spine is where Cargo.toml resolves it
+        run: test -f ../fuaran-core-rs/Cargo.toml
 
       - name: Set up Rust
         run: |
@@ -156,6 +169,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: fuaran-rs
+
+      - name: Check out the Core spine
+        uses: actions/checkout@v4
+        with:
+          repository: Fuaran-Core/fuaran-core-rs
+          path: fuaran-core-rs
 
       - name: Set up Rust + the wasm32 target
         run: |

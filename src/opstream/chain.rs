@@ -15,13 +15,13 @@
 //! ```
 //!
 //! `sequence` is the public 1-based value; the pre-image folds Core's 0-based
-//! index (`sequence - 1`). Certified byte-for-byte against the shared
-//! `chain-corpus.json` golden.
+//! index (`sequence - 1`). The pre-image and the link are the Core spine's
+//! (`fuaran_core::chain::payload` / `link`, Phase 463) over this wire's op
+//! envelope; the 64-zero genesis is this wire's. Certified byte-for-byte against
+//! the shared `chain-corpus.json` golden.
 
 use crate::canonical::escape_string;
 use crate::wire::{TreeOp, encode_op};
-
-use super::sha256::sha256_hex;
 
 /// The chain FORMAT version, folded first into every pre-image.
 pub const CHAIN_FORMAT_VERSION: u32 = 2;
@@ -33,42 +33,15 @@ pub fn genesis_previous_hash() -> String {
 }
 
 /// The actor attributed with a record — folded into the integrity chain
-/// (attribution is tamper-evident).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Actor {
-    Human {
-        id: String,
-    },
-    Agent {
-        model: String,
-        version: String,
-        id: String,
-    },
-}
+/// (attribution is tamper-evident). The Core spine's actor (Phase 463), so the
+/// linear chain here, the DAG record and every Core vector spell it one way.
+pub use fuaran_core::chain::{Actor, encode_actor};
 
 /// The apply outcome an op-record carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpResult {
     Success,
     Failure { code: String, message: String },
-}
-
-/// Canonical encoding of the actor — field order pinned (`kind` first, then the
-/// case fields), NOT Ordinal-sorted. That pinning is the contract: the same
-/// bytes are folded into the linear chain's pre-image here and nested verbatim
-/// into the DAG record's wire form (`crate::dag::record`) since Phase 1144, so
-/// there is ONE canonical actor encoding in this host rather than two that can
-/// drift. Public for that second consumer.
-pub fn encode_actor(a: &Actor) -> String {
-    match a {
-        Actor::Human { id } => format!("{{\"kind\":\"human\",\"id\":{}}}", escape_string(id)),
-        Actor::Agent { model, version, id } => format!(
-            "{{\"kind\":\"agent\",\"model\":{},\"version\":{},\"id\":{}}}",
-            escape_string(model),
-            escape_string(version),
-            escape_string(id)
-        ),
-    }
 }
 
 /// Canonical encoding of the apply outcome — lowercase tag.
@@ -114,13 +87,12 @@ pub fn compute_hash(
     prompt_id: Option<&str>,
     result: &OpResult,
 ) -> String {
-    let payload = format!(
-        "{{\"seq\":{},\"actor\":{},\"op\":{}}}",
+    let payload = fuaran_core::chain::payload(
         sequence.saturating_sub(1),
-        encode_actor(actor),
-        encode_stream_entry(op, timestamp_unix_seconds, prompt_id, result)
+        &encode_actor(actor),
+        &encode_stream_entry(op, timestamp_unix_seconds, prompt_id, result),
     );
-    sha256_hex(&format!("{previous_hash}|{payload}"))
+    fuaran_core::chain::link(previous_hash, &payload)
 }
 
 /// One record in the op-stream: the op + its provenance + the chain links.
