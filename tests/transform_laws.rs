@@ -19,6 +19,17 @@
 //! - the `columnOp` and `delta` case kinds: this host carries no ColumnOp
 //!   surface and no table-delta surface. The set of case kinds in the file must
 //!   be exactly the three this leg knows, so a new kind fails loudly.
+//!
+//! A vector carrying `expected.tolerance` (Phase 2400) names the columns the
+//! reference marks host-rounded, each with a bound in ulps. Those columns are
+//! compared cell by cell — one type, one length, null in the same rows, two
+//! present nonzero finite floats of one sign within the bound (the distance being
+//! the difference of their IEEE-754 binary64 bit patterns), every other cell (a
+//! zero of either sign, a non-finite float, a non-float) exactly — and the rest
+//! of the table byte for byte: this host's answer with every named column
+//! replaced by the recorded one must encode to `expected.table` exactly. The
+//! bound is the vector's own, never a constant here; the worst distance per
+//! named column is reported, so a host drifting toward the bound is visible.
 
 mod common;
 
@@ -26,7 +37,9 @@ use std::collections::BTreeSet;
 
 use fuaran_rs::canonical::{JVal, parse, render_canonical};
 use fuaran_rs::transform::{Table, eval_pipeline};
-use fuaran_rs::wire::{Binding, DataSource, NodeKind, TransformSource, decode_node, encode_node};
+use fuaran_rs::wire::{
+    Binding, Cell, DataColumn, DataSource, NodeKind, TransformSource, decode_node, encode_node,
+};
 
 const UNIT_REASON: &str = "carried by fuaran#2208 — this host does not yet carry field metadata (fuaran#2207) or the unit algebra";
 
@@ -88,6 +101,83 @@ fn encode_table(carrier: &fuaran_rs::wire::Node, out: Table) -> String {
         };
     }
     grid_member(&encode_node(&carrier), "source")
+}
+
+/// The distance between two doubles of one sign: their bit patterns' difference.
+fn ulp_distance(a: f64, b: f64) -> u64 {
+    a.to_bits().abs_diff(b.to_bits())
+}
+
+/// The family's tolerance rule (see the module header): `Ok` with the worst
+/// distance per named column, or the first disagreement.
+fn within_tolerance(
+    tolerance: &[(String, u64)],
+    expected_table: &str,
+    out: &mut Table,
+) -> Result<Vec<(String, u64)>, String> {
+    let node = decode_node(&grid_json(expected_table, "[]"))
+        .map_err(|e| format!("expected.table does not decode: {e:?}"))?;
+    let NodeKind::DataGrid(spec) = &node.kind else {
+        return Err("expected.table decoded to another kind".to_string());
+    };
+    let Binding::Transform {
+        source: TransformSource::Data(DataSource::Embedded { columns: want, .. }),
+        ..
+    } = &spec.source
+    else {
+        return Err("expected.table is not an embedded table".to_string());
+    };
+    let mut worst = Vec::new();
+    for (name, bound) in tolerance {
+        let w: &DataColumn = want
+            .iter()
+            .find(|c| &c.name == name)
+            .ok_or_else(|| format!("tolerance column {name} is absent from expected.table"))?;
+        let g = out
+            .columns
+            .iter_mut()
+            .find(|c| &c.name == name)
+            .ok_or_else(|| format!("tolerance column {name} is absent from this host's answer"))?;
+        if g.column_type != w.column_type || g.cells.len() != w.cells.len() {
+            return Err(format!("tolerance column {name} differs in type or length"));
+        }
+        let mut column_worst = 0;
+        for (r, (wc, gc)) in w.cells.iter().zip(&g.cells).enumerate() {
+            match (wc, gc) {
+                (Cell::Float(a), Cell::Float(b))
+                    if *a != 0.0
+                        && *b != 0.0
+                        && a.is_finite()
+                        && b.is_finite()
+                        && a.is_sign_negative() == b.is_sign_negative() =>
+                {
+                    let d = ulp_distance(*a, *b);
+                    column_worst = column_worst.max(d);
+                    if d > *bound {
+                        return Err(format!(
+                            "tolerance column {name} row {r}: {b} is {d} ulp from the recorded {a}; the bound is {bound}"
+                        ));
+                    }
+                }
+                (Cell::Float(a), Cell::Float(b))
+                    if a.to_bits() == b.to_bits() || (a.is_nan() && b.is_nan()) => {}
+                (Cell::Float(_), Cell::Float(_)) => {
+                    return Err(format!(
+                        "tolerance column {name} row {r}: {gc:?} differs from the recorded {wc:?} (compared exactly)"
+                    ));
+                }
+                (a, b) if a == b => {}
+                (a, b) => {
+                    return Err(format!(
+                        "tolerance column {name} row {r}: {b:?} differs from the recorded {a:?}"
+                    ));
+                }
+            }
+        }
+        g.cells.clone_from(&w.cells);
+        worst.push((name.clone(), column_worst));
+    }
+    Ok(worst)
 }
 
 #[test]
@@ -225,9 +315,34 @@ fn the_evaluator_matches_the_reference_on_every_transform_law_vector() {
                 failures.push(format!("{id}: the reference refused; this host evaluated"))
             }
             (Err(_), _) => {}
-            (Ok(out), _) => {
-                let got = encode_table(&node, out);
+            (Ok(mut out), _) => {
                 let want = str_field(expected, "table").expect("expected.table");
+                let tolerance: Vec<(String, u64)> = match expected.field("tolerance") {
+                    Some(JVal::Obj(members)) => members
+                        .iter()
+                        .map(|(k, v)| match v {
+                            JVal::Num(n) => (k.clone(), *n as u64),
+                            other => panic!("{id}: tolerance {k} is not a number: {other:?}"),
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                if !tolerance.is_empty() {
+                    match within_tolerance(&tolerance, &want, &mut out) {
+                        Ok(worst) => {
+                            for (name, d) in worst {
+                                eprintln!(
+                                    "transformLaws tolerance: {id} column {name} worst {d} ulp"
+                                );
+                            }
+                        }
+                        Err(why) => {
+                            failures.push(format!("{id}: {why}"));
+                            continue;
+                        }
+                    }
+                }
+                let got = encode_table(&node, out);
                 if got != want {
                     failures.push(format!(
                         "{id}: evaluator ≠ reference\n  got  {got}\n  want {want}"

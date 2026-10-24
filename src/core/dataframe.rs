@@ -77,7 +77,7 @@ pub fn instant_fraction_digits(s: &str) -> Option<u32> {
         .then(|| (n - 21) as u32)
 }
 bare_enum!(BinOp { Add => "add", Sub => "sub", Mul => "mul", Div => "div", Mod => "mod", Eq => "eq", Ne => "ne", Lt => "lt", Le => "le", Gt => "gt", Ge => "ge", And => "and", Or => "or", Contains => "contains", StartsWith => "startsWith", EndsWith => "endsWith" });
-bare_enum!(ScalarFn { Abs => "abs", Round => "round", Floor => "floor", Ceil => "ceil", Length => "length", Lower => "lower", Upper => "upper", Substr => "substr", DatePart => "datePart", Concat => "concat", Trim => "trim", Replace => "replace", DateDiffDays => "dateDiffDays" });
+bare_enum!(ScalarFn { Abs => "abs", Round => "round", Floor => "floor", Ceil => "ceil", Length => "length", Lower => "lower", Upper => "upper", Substr => "substr", DatePart => "datePart", Concat => "concat", Trim => "trim", Replace => "replace", DateDiffDays => "dateDiffDays", Pow => "pow", Exp => "exp", Ln => "ln", Log10 => "log10" });
 bare_enum!(AggFn { Sum => "sum", Mean => "mean", Min => "min", Max => "max", Count => "count", Median => "median", Stddev => "stddev", First => "first", Last => "last", CountDistinct => "countDistinct" });
 bare_enum!(JoinKind { Inner => "inner", Left => "left", Right => "right", Outer => "outer" });
 // `cumulSum` is the canonical tag (operator rename 2026-07-19); the legacy

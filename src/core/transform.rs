@@ -704,6 +704,198 @@ fn round_half_away(x: f64) -> f64 {
     }
 }
 
+// ── Phase 2400: the power functions (the reference's D43) ───────────────────
+//
+// Two guarantees, stated per function. An INTEGER exponent is EXACT on every
+// host: one pinned product tree over IEEE-754 multiplication, which every host
+// rounds the same way, so the tree and not the host decides the bits. A float
+// exponent, `exp`, `ln` and `log10` are HOST-ROUNDED: the special-value table
+// below answers every input the hosts' libraries disagree on BEFORE the host is
+// called, and what remains is this host's `f64` maths — within the bound the
+// transform laws compare in (`expected.tolerance`, in ulps).
+
+/// Binary exponentiation, the accumulator empty until the first set bit, so a
+/// power takes exactly the multiplies its bits name: `x^1` is `x`, `x^2` is
+/// `x*x`, `x^3` is `x*(x*x)`, `x^4` is `(x*x)*(x*x)`. `k > 0` is the exponent's
+/// magnitude.
+pub(crate) fn pow_go(mut b: f64, mut k: u64) -> f64 {
+    let mut acc: Option<f64> = None;
+    loop {
+        if k % 2 == 1 {
+            acc = Some(match acc {
+                Some(a) => a * b,
+                None => b,
+            });
+        }
+        k /= 2;
+        if k == 0 {
+            return acc.unwrap_or(1.0);
+        }
+        b *= b;
+    }
+}
+
+/// A float base under an integer exponent: `x^0` is 1 with no multiply; a
+/// negative exponent is one reciprocal of the positive power, null where that
+/// power is zero (a zero base, or a power that underflowed), exactly as a
+/// division by zero is null. The caller has answered a NaN base.
+fn pow_int_float(x: f64, n: i64) -> Cell {
+    match n {
+        0 => Cell::Float(1.0),
+        n if n > 0 => Cell::Float(pow_go(x, n.unsigned_abs())),
+        n => {
+            let p = pow_go(x, n.unsigned_abs());
+            if p == 0.0 { NULL } else { Cell::Float(1.0 / p) }
+        }
+    }
+}
+
+/// An int base under a non-negative int exponent: the same product tree over
+/// `i64`, every product that leaves the int32 band refused by name — a base
+/// square that leaves it with exponent bits still to take included, since every
+/// value it would still multiply into is at least as large.
+fn pow_int_exact(x: i64, n: i64) -> Result<Cell, EvalError> {
+    if n == 0 {
+        return Ok(Cell::Int(1));
+    }
+    let in_band = |v: i64| v >= i64::from(i32::MIN) && v <= i64::from(i32::MAX);
+    let overflow = |v: i64| EvalError::TypeError {
+        detail: format!("pow overflowed int32: {v}"),
+    };
+    let (mut acc, mut b, mut k): (Option<i64>, i64, i64) = (None, x, n);
+    loop {
+        if k % 2 == 1 {
+            let a = match acc {
+                Some(a) => a * b,
+                None => b,
+            };
+            if !in_band(a) {
+                return Err(overflow(a));
+            }
+            acc = Some(a);
+        }
+        k /= 2;
+        if k == 0 {
+            return Ok(Cell::Int(acc.unwrap_or(1)));
+        }
+        let b2 = b * b;
+        if !in_band(b2) {
+            return Err(overflow(b2));
+        }
+        b = b2;
+    }
+}
+
+/// A float exponent: the special-value table, then the host. A NaN operand
+/// propagates (`pow(1, NaN)` and `pow(NaN, 0)` included); a zero exponent and a
+/// base of one answer 1, and so does a base of minus one under an infinite
+/// exponent; a zero base under a negative exponent and a finite negative base
+/// under a finite non-integer exponent are outside the reals and answer null.
+pub(crate) fn pow_float(x: f64, y: f64) -> Cell {
+    if x.is_nan() || y.is_nan() {
+        Cell::Float(f64::NAN)
+    } else if y == 0.0 || x == 1.0 {
+        Cell::Float(1.0)
+    } else if x == 0.0 && y < 0.0 {
+        NULL
+    } else if x == -1.0 && y.is_infinite() {
+        Cell::Float(1.0)
+    } else if x < 0.0 && !x.is_infinite() && !y.is_infinite() && y != y.floor() {
+        NULL
+    } else {
+        Cell::Float(x.powf(y))
+    }
+}
+
+/// `exp`'s table: a NaN propagates; above the natural log of the largest double
+/// the answer is +Inf and below the natural log of half the smallest subnormal
+/// it is 0 — the two edges where a host's last-ulp rounding decides between a
+/// finite value and the limit; between them the host answers.
+pub(crate) fn exp_host(x: f64) -> f64 {
+    if x.is_nan() {
+        x
+    } else if x > 709.782_712_893_384 {
+        f64::INFINITY
+    } else if x < -745.133_219_101_941_2 {
+        0.0
+    } else {
+        x.exp()
+    }
+}
+
+/// `ln`'s and `log10`'s table over a host logarithm: a NaN propagates, zero and
+/// below is null, one is exactly 0 and +Inf is +Inf; in between the host
+/// answers.
+pub(crate) fn log_host(log: fn(f64) -> f64, x: f64) -> Cell {
+    if x.is_nan() {
+        Cell::Float(x)
+    } else if x <= 0.0 {
+        NULL
+    } else if x == 1.0 {
+        Cell::Float(0.0)
+    } else if x == f64::INFINITY {
+        Cell::Float(x)
+    } else {
+        Cell::Float(log(x))
+    }
+}
+
+fn apply_power(func: ScalarFn, args: &[Cell]) -> Result<Cell, EvalError> {
+    let arity = |n: usize| -> Result<(), EvalError> {
+        if args.len() == n {
+            Ok(())
+        } else {
+            Err(EvalError::ArityError {
+                func: func.as_str().to_string(),
+                expected: n,
+                got: args.len(),
+            })
+        }
+    };
+    let type_error = |detail: String| EvalError::TypeError { detail };
+    if func == ScalarFn::Pow {
+        arity(2)?;
+        return match (&args[0], &args[1]) {
+            (Cell::Null, _) | (_, Cell::Null) => Ok(NULL),
+            (Cell::Decimal(_), _) | (_, Cell::Decimal(_)) => Err(type_error(
+                "pow of a decimal is not exact: write Pow(Cast(float, x), n)".to_string(),
+            )),
+            (Cell::Int(b), Cell::Int(n)) if *n >= 0 => pow_int_exact(*b, *n),
+            (Cell::Int(b), Cell::Int(n)) => Ok(pow_int_float(*b as f64, *n)),
+            (x, Cell::Int(n)) => match as_num(x) {
+                Some(f) if f.is_nan() => Ok(Cell::Float(f)),
+                Some(f) => Ok(pow_int_float(f, *n)),
+                None => Err(type_error("pow of a non-numeric".to_string())),
+            },
+            (x, y) => match (as_num(x), as_num(y)) {
+                (Some(f), Some(g)) => Ok(pow_float(f, g)),
+                _ => Err(type_error("pow of a non-numeric".to_string())),
+            },
+        };
+    }
+    arity(1)?;
+    let name = func.as_str();
+    match &args[0] {
+        Cell::Null => Ok(NULL),
+        Cell::Decimal(_) => {
+            let spelled = match func {
+                ScalarFn::Exp => "Exp",
+                ScalarFn::Ln => "Ln",
+                _ => "Log10",
+            };
+            Err(type_error(format!(
+                "{name} of a decimal is not exact: write {spelled}(Cast(float, x))"
+            )))
+        }
+        c => match (as_num(c), func) {
+            (None, _) => Err(type_error(format!("{name} of a non-numeric"))),
+            (Some(f), ScalarFn::Exp) => Ok(Cell::Float(exp_host(f))),
+            (Some(f), ScalarFn::Ln) => Ok(log_host(f64::ln, f)),
+            (Some(f), _) => Ok(log_host(f64::log10, f)),
+        },
+    }
+}
+
 fn apply_scalar(func: ScalarFn, args: &[Cell]) -> Result<Cell, EvalError> {
     let name = |f: ScalarFn| f.as_str().to_string();
     let arity = |n: usize| -> Result<(), EvalError> {
@@ -724,6 +916,7 @@ fn apply_scalar(func: ScalarFn, args: &[Cell]) -> Result<Cell, EvalError> {
         if is_null(c) { Ok(NULL) } else { g(c) }
     };
     match func {
+        ScalarFn::Pow | ScalarFn::Exp | ScalarFn::Ln | ScalarFn::Log10 => apply_power(func, args),
         ScalarFn::Abs => unary(&|c| match c {
             Cell::Int(v) => Ok(Cell::Int(v.abs())),
             Cell::Float(v) => Ok(Cell::Float(v.abs())),
@@ -1296,6 +1489,31 @@ fn typing_apply(func: ScalarFn, args: &[Typing]) -> Typing {
                 Typing::Of(ColumnType::Int)
             }
         }
+        // Phase 2400 (the reference's D43): the transcendentals answer a float,
+        // as a root does. A power over an int base and an int exponent is decided
+        // by the exponent's SIGN, which a typing does not carry — `typing_pow_lit`
+        // reads a literal exponent, and otherwise the cells decide; an undecided
+        // operand may be that pair, so it is undecided too; every other pair is a
+        // float.
+        ScalarFn::Exp | ScalarFn::Ln | ScalarFn::Log10 => unary(&|_| Typing::Of(ColumnType::Float)),
+        ScalarFn::Pow => match args {
+            [Typing::Absent, _] | [_, Typing::Absent] => Typing::Absent,
+            [Typing::Of(ColumnType::Int), Typing::Of(ColumnType::Int)] => Typing::Unknown,
+            [Typing::Unknown, _] | [_, Typing::Unknown] => Typing::Unknown,
+            [_, _] => Typing::Of(ColumnType::Float),
+            _ => Typing::Absent,
+        },
+    }
+}
+
+/// A power under a LITERAL integer exponent: an int base answers an int at or
+/// above zero and a float below; any other typed base a float.
+fn typing_pow_lit(n: i64, b: Typing) -> Typing {
+    match b {
+        Typing::Absent => Typing::Absent,
+        Typing::Unknown => Typing::Unknown,
+        Typing::Of(ColumnType::Int) if n >= 0 => Typing::Of(ColumnType::Int),
+        Typing::Of(_) => Typing::Of(ColumnType::Float),
     }
 }
 
@@ -1322,6 +1540,15 @@ fn typing(cols: &[SchemaEntry], e: &ColExpr) -> Typing {
             Typing::Absent => Typing::Absent,
             Typing::Of(_) | Typing::Unknown => Typing::Of(*column_type),
         },
+        ColExpr::Apply {
+            func: ScalarFn::Pow,
+            args,
+        } if matches!(args.as_slice(), [_, ColExpr::Lit { cell: Cell::Int(_) }]) => {
+            match args.as_slice() {
+                [b, ColExpr::Lit { cell: Cell::Int(n) }] => typing_pow_lit(*n, go(b)),
+                _ => unreachable!("guarded by the arm's pattern"),
+            }
+        }
         ColExpr::Apply { func, args } => {
             typing_apply(*func, &args.iter().map(go).collect::<Vec<_>>())
         }
@@ -1848,12 +2075,37 @@ fn eval_filter(f: &Frame, pred: &ColExpr, env: &EvalEnv) -> Result<Frame, EvalEr
     })
 }
 
+/// Each output column's name beside what produced it, in output order: the
+/// first name an earlier output already took is refused — a table cannot hold
+/// two columns of one name (the reference's D35, Phase 468: project, groupBy,
+/// unpivot and pivot ask this one check, after every name the verb resolves and
+/// before any row is read).
+fn repeated_output(verb: &str, outs: &[(String, String)]) -> Result<(), EvalError> {
+    let mut seen: BTreeMap<&str, &str> = BTreeMap::new();
+    for (name, by) in outs {
+        if let Some(first) = seen.get(name.as_str()) {
+            return Err(EvalError::TypeError {
+                detail: format!(
+                    "{verb} output '{name}' is named twice, by {first} and by {by}; give each output a name of its own"
+                ),
+            });
+        }
+        seen.insert(name, by);
+    }
+    Ok(())
+}
+
 fn eval_project(f: &Frame, pairs: &[(String, String)]) -> Result<Frame, EvalError> {
     let mut resolved: Vec<(String, ColumnType, usize)> = Vec::new();
     for (a, b) in pairs {
         let i = col_index(&f.cols, a).ok_or_else(|| unknown_column(a, &f.cols))?;
         resolved.push((b.clone(), f.cols[i].column_type, i));
     }
+    let outs: Vec<(String, String)> = pairs
+        .iter()
+        .map(|(a, b)| (b.clone(), format!("the projection of '{a}'")))
+        .collect();
+    repeated_output("project", &outs)?;
     Ok(Frame {
         cols: resolved
             .iter()
@@ -1966,6 +2218,15 @@ fn eval_group_by(f: &Frame, keys: &[String], aggs: &[Agg]) -> Result<Frame, Eval
         let ty = col_type(&f.cols, &a.of).ok_or_else(|| unknown_column(&a.of, &f.cols))?;
         resolved.push((a, ty, col_index(&f.cols, &a.of).unwrap()));
     }
+    let outs: Vec<(String, String)> = keys
+        .iter()
+        .map(|k| (k.clone(), format!("the key '{k}'")))
+        .chain(
+            aggs.iter()
+                .map(|a| (a.name.clone(), format!("the aggregate over '{}'", a.of))),
+        )
+        .collect();
+    repeated_output("groupBy", &outs)?;
 
     let mut out_cols: Vec<SchemaEntry> = keys
         .iter()
@@ -2352,6 +2613,16 @@ fn eval_pivot(
         }
     }
     on_values.sort_by_key(cell_string);
+    let outs: Vec<(String, String)> = index
+        .iter()
+        .map(|n| (n.clone(), format!("the index column '{n}'")))
+        .chain(on_values.iter().map(|ov| {
+            let t = cell_string(ov);
+            let by = format!("the column for the on value '{t}'");
+            (t, by)
+        }))
+        .collect();
+    repeated_output("pivot", &outs)?;
 
     // Index groups, first-appearance order.
     let mut order: Vec<Vec<Cell>> = Vec::new();
@@ -2405,6 +2676,21 @@ fn eval_unpivot(f: &Frame, id_vars: &[String], value_vars: &[String]) -> Result<
     for n in value_vars {
         val_idx.push(col_index(&f.cols, n).ok_or_else(|| unknown_column(n, &f.cols))?);
     }
+    let outs: Vec<(String, String)> = id_vars
+        .iter()
+        .map(|n| (n.clone(), format!("the id column '{n}'")))
+        .chain([
+            (
+                "variable".to_string(),
+                "the unpivot's variable column".to_string(),
+            ),
+            (
+                "value".to_string(),
+                "the unpivot's value column".to_string(),
+            ),
+        ])
+        .collect();
+    repeated_output("unpivot", &outs)?;
     // The value column is typed by the one derived-column rule, the value
     // columns being its arms: their declared types' join where the schema
     // decides it — over an empty frame too — and the melted cells only where it
@@ -2859,4 +3145,40 @@ pub fn substitute_list_params(
             | TransformStep::Except { .. } => t.clone(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod power_tests {
+    //! Phase 2400: the special-value rows the wire cannot carry (a NaN or an
+    //! infinity, so the law file cannot), the pinned product tree past the
+    //! cube, and the int32 band an int power stays inside.
+    use super::*;
+
+    fn is_nan(c: &Cell) -> bool {
+        matches!(c, Cell::Float(f) if f.is_nan())
+    }
+
+    #[test]
+    fn the_rows_off_the_wire() {
+        let (nan, inf) = (f64::NAN, f64::INFINITY);
+        assert!(is_nan(&pow_float(1.0, nan)));
+        assert!(is_nan(&pow_float(nan, 0.0)));
+        assert_eq!(pow_float(-1.0, inf), Cell::Float(1.0));
+        assert_eq!(pow_float(-1.0, -inf), Cell::Float(1.0));
+        assert!(exp_host(nan).is_nan());
+        assert_eq!(exp_host(709.8), inf);
+        assert_eq!(log_host(f64::ln, inf), Cell::Float(inf));
+        assert!(is_nan(&log_host(f64::log10, nan)));
+        let pow = |a: Cell, b: Cell| apply_scalar(ScalarFn::Pow, &[a, b]);
+        assert!(is_nan(&pow(Cell::Float(nan), Cell::Int(0)).unwrap()));
+        assert_eq!(pow(Cell::Float(1e-300), Cell::Int(-2)).unwrap(), NULL);
+        assert!(pow(Cell::Int(46_341), Cell::Int(2)).is_err());
+        assert_eq!(
+            pow(Cell::Int(-2), Cell::Int(31)).unwrap(),
+            Cell::Int(-2_147_483_648)
+        );
+        let x = 1.1_f64;
+        assert_eq!(pow_go(x, 4).to_bits(), ((x * x) * (x * x)).to_bits());
+        assert_eq!(pow_go(x, 5).to_bits(), (x * ((x * x) * (x * x))).to_bits());
+    }
 }
