@@ -203,6 +203,28 @@ fn the_sentiment_composition_is_sign_times_polarity() {
     assert_eq!(glyphs, vec!["\u{25B2}", "\u{25BC}", "\u{2192}"]);
 }
 
+/// fuaran#2472 — each further comparison is one more trend line after the
+/// primary trend, under its OWN polarity, then its figure and its label. The
+/// expected bytes are the reference server renderer's for the corpus fixture
+/// `metric-comparison-inverted` (the F#, TypeScript and Python hosts agree).
+#[test]
+fn metric_comparisons_render_as_trend_lines_under_their_own_polarity() {
+    let html = render(
+        r#"{"id":"metric-comparison-inverted","kind":{"$type":"Metric","comparisons":[{"label":"minutes vs last year","polarity":"LowerIsBetter","value":{"$type":"Static","value":12}}],"label":"Avg wait","subtext":"trend is vs last week","trend":{"$type":"Static","value":-0.0734},"trendFormat":{"$type":"Percent","decimals":2},"trendPolarity":"LowerIsBetter","value":{"$type":"Static","value":80}}}"#,
+    );
+    let expected = concat!(
+        r#"<div class="fuaran-metric-trend fuaran-metric-trend-improving"><span class="fuaran-metric-trend-glyph" role="img" aria-label="improving">"#,
+        "\u{25B2}",
+        r#"</span>-7.34%</div><div class="fuaran-metric-trend fuaran-metric-trend-regressing"><span class="fuaran-metric-trend-glyph" role="img" aria-label="regressing">"#,
+        "\u{25BC}",
+        r#"</span>12 minutes vs last year</div><div class="fuaran-metric-subtext">trend is vs last week</div>"#
+    );
+    assert!(
+        html.contains(expected),
+        "the comparison is its own trend line: {html}"
+    );
+}
+
 #[test]
 fn metric_trend_without_polarity_reads_a_fall_as_a_regression() {
     let html = render(&metric_with_trend(""));

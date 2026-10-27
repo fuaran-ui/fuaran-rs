@@ -63,6 +63,7 @@ fn metric(id: &str, label: &str, value: f64) -> Node {
             // Phase 867 — the omitted-when-default value, keeping this node's
             // "round-trips minimal" property (no `trendPolarity` is emitted).
             trend_polarity: TrendPolarity::HigherIsBetter,
+            comparisons: Vec::new(),
             icon: None,
             subtext: None,
         }),

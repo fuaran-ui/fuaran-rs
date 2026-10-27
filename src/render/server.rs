@@ -622,6 +622,41 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
                     None => parts.push(text_el("div", &[("class", s("fuaran-metric-trend"))], "")),
                 }
             }
+            // fuaran#2472 — each further comparison is one more trend line after
+            // the primary one, under its OWN polarity, with its label after the
+            // figure; an unresolved value keeps the bare div, as the trend does.
+            for c in &spec.comparisons {
+                match try_scalar_number(ctx.sources, &c.value) {
+                    Some(v) => {
+                        let (sentiment, glyph) = trend_sentiment(c.polarity, v);
+                        let glyph_span = text_el(
+                            "span",
+                            &[
+                                ("class", s("fuaran-metric-trend-glyph")),
+                                ("role", s("img")),
+                                ("aria-label", s(sentiment)),
+                            ],
+                            glyph,
+                        );
+                        let line = escape_text(&format!(
+                            "{} {}",
+                            format_number(&c.format, v),
+                            render_text(ctx.sources, &c.label)
+                        ));
+                        parts.push(el(
+                            "div",
+                            &[(
+                                "class",
+                                s(format!(
+                                    "fuaran-metric-trend fuaran-metric-trend-{sentiment}"
+                                )),
+                            )],
+                            &format!("{glyph_span}{line}"),
+                        ));
+                    }
+                    None => parts.push(text_el("div", &[("class", s("fuaran-metric-trend"))], "")),
+                }
+            }
             if let Some(subtext) = &spec.subtext {
                 parts.push(text_el(
                     "div",

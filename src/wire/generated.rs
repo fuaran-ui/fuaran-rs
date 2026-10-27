@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "e9ff0a22d727111d3d847a689655149081bdd1203f66ea2417905e13cd1791c7";
+pub const IDL_SHA256: &str = "c78f383ca50dc36dc5d158d63052aa202e70d2a1bdee77a30c629354247f76d4";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -941,6 +941,7 @@ pub struct MetricSpec {
     /// The slot is inert without `trend` — a `Metric` that declares a polarity
     /// and carries no trend is legal and says nothing (§3.6.1 clause 4).
     pub trend_polarity: TrendPolarity,
+    pub comparisons: Vec<MetricComparison>,
     pub icon: Option<String>,
     pub subtext: Option<TextSource>,
 }
@@ -1275,6 +1276,14 @@ pub struct MapMarker {
     pub label: TextSource,
     pub latitude: f64,
     pub longitude: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetricComparison {
+    pub label: TextSource,
+    pub value: Binding,
+    pub format: CellFormat,
+    pub polarity: TrendPolarity,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2394,6 +2403,8 @@ pub(crate) mod defaults {
     pub(crate) const COLUMN_ERASED_FORMAT: CellFormat = CellFormat::None;
     pub(crate) const COLUMN_ERASED_WIDTH: ColumnWidth = ColumnWidth::Auto;
     pub(crate) const FORM_FIELD_REQUIRED: bool = false;
+    pub(crate) const METRIC_COMPARISON_FORMAT: CellFormat = CellFormat::None;
+    pub(crate) const METRIC_COMPARISON_POLARITY: TrendPolarity = TrendPolarity::HigherIsBetter;
     pub(crate) const SEMANTIC_STYLE_DIRECTION: TextDirection = TextDirection::Auto;
     pub(crate) const SEMANTIC_STYLE_EMPHASIS: Emphasis = Emphasis::Normal;
     pub(crate) const SEMANTIC_STYLE_ROLE: StyleRole = StyleRole::None;
@@ -2873,7 +2884,7 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn metric_spec(v: &MetricSpec) -> String {
-        let MetricSpec { label: m_label, value: m_value, format: m_format, tone: m_tone, weight: m_weight, emphasis: m_emphasis, trend: m_trend, trend_format: m_trend_format, trend_polarity: m_trend_polarity, icon: m_icon, subtext: m_subtext } = v;
+        let MetricSpec { label: m_label, value: m_value, format: m_format, tone: m_tone, weight: m_weight, emphasis: m_emphasis, trend: m_trend, trend_format: m_trend_format, trend_polarity: m_trend_polarity, comparisons: m_comparisons, icon: m_icon, subtext: m_subtext } = v;
         let mut f: Vec<Field> = vec![field("label", text_source(m_label)), field("value", binding(m_value))];
         if *m_format != defaults::METRIC_FORMAT {
             f.push(field("format", cell_format(m_format)));
@@ -2895,6 +2906,9 @@ pub(super) mod gen_encode {
         }
         if *m_trend_polarity != defaults::METRIC_TREND_POLARITY {
             f.push(field("trendPolarity", s(m_trend_polarity.as_str())));
+        }
+        if !m_comparisons.is_empty() {
+            f.push(field("comparisons", enc_list(m_comparisons, metric_comparison)));
         }
         if let Some(x) = m_icon {
             f.push(field("icon", s(x)));
@@ -3317,6 +3331,18 @@ pub(super) mod gen_encode {
         }
         f.push(field("latitude", num(*m_latitude)));
         f.push(field("longitude", num(*m_longitude)));
+        obj(f)
+    }
+
+    pub(in super::super) fn metric_comparison(v: &MetricComparison) -> String {
+        let MetricComparison { label: m_label, value: m_value, format: m_format, polarity: m_polarity } = v;
+        let mut f: Vec<Field> = vec![field("label", text_source(m_label)), field("value", binding(m_value))];
+        if *m_format != defaults::METRIC_COMPARISON_FORMAT {
+            f.push(field("format", cell_format(m_format)));
+        }
+        if *m_polarity != defaults::METRIC_COMPARISON_POLARITY {
+            f.push(field("polarity", s(m_polarity.as_str())));
+        }
         obj(f)
     }
 
@@ -4421,9 +4447,10 @@ pub(super) mod gen_decode {
         let m_trend = field_opt(path, fields, "trend", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Float))?;
         let m_trend_format = field_opt(path, fields, "trendFormat", &[], decode_cell_format)?;
         let m_trend_polarity = field_or(path, fields, "trendPolarity", &[], defaults::METRIC_TREND_POLARITY, decode_trend_polarity)?;
+        let m_comparisons = field_or(path, fields, "comparisons", &[], Vec::new(), |p, j| dec_list(p, j, decode_metric_comparison))?;
         let m_icon = field_opt(path, fields, "icon", &[], dec_string)?;
         let m_subtext = field_opt(path, fields, "subtext", &[], decode_text_source)?;
-        Ok(MetricSpec { label: m_label, value: m_value, format: m_format, tone: m_tone, weight: m_weight, emphasis: m_emphasis, trend: m_trend, trend_format: m_trend_format, trend_polarity: m_trend_polarity, icon: m_icon, subtext: m_subtext })
+        Ok(MetricSpec { label: m_label, value: m_value, format: m_format, tone: m_tone, weight: m_weight, emphasis: m_emphasis, trend: m_trend, trend_format: m_trend_format, trend_polarity: m_trend_polarity, comparisons: m_comparisons, icon: m_icon, subtext: m_subtext })
     }
 
     pub(in super::super) fn decode_modal_spec(path: &str, j: &JVal) -> DResult<ModalSpec> {
@@ -4918,6 +4945,15 @@ pub(super) mod gen_decode {
         let m_latitude = field_req(path, fields, "latitude", &[], "MapMarker.latitude: number", as_float)?;
         let m_longitude = field_req(path, fields, "longitude", &[], "MapMarker.longitude: number", as_float)?;
         Ok(MapMarker { label: m_label, latitude: m_latitude, longitude: m_longitude })
+    }
+
+    pub(in super::super) fn decode_metric_comparison(path: &str, j: &JVal) -> DResult<MetricComparison> {
+        let fields = as_obj(path, j)?;
+        let m_label = field_req(path, fields, "label", &[], "MetricComparison.label: TextSource", decode_text_source)?;
+        let m_value = field_req(path, fields, "value", &[], "MetricComparison.value: Binding<number>", |p, j| decode_binding_slot(p, j, StaticSlot::Float))?;
+        let m_format = field_or(path, fields, "format", &[], defaults::METRIC_COMPARISON_FORMAT, decode_cell_format)?;
+        let m_polarity = field_or(path, fields, "polarity", &[], defaults::METRIC_COMPARISON_POLARITY, decode_trend_polarity)?;
+        Ok(MetricComparison { label: m_label, value: m_value, format: m_format, polarity: m_polarity })
     }
 
     pub(in super::super) fn decode_select_option(path: &str, j: &JVal) -> DResult<SelectOption> {
@@ -6728,6 +6764,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Kind.Media.tracks",
     "Kind.Media.transcript",
     "Kind.Metric",
+    "Kind.Metric.comparisons",
     "Kind.Metric.emphasis",
     "Kind.Metric.format",
     "Kind.Metric.icon",
@@ -6828,6 +6865,10 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "MediaKind.Video",
     "MediaKind.Video.autoplay",
     "MediaKind.Video.poster",
+    "MetricComparison.format",
+    "MetricComparison.label",
+    "MetricComparison.polarity",
+    "MetricComparison.value",
     "RangePair.max",
     "RangePair.min",
     "Scalar.Bool",

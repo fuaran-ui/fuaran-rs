@@ -39,9 +39,9 @@ use crate::wire::{
     Binding, BoxSpec, CalloutSpec, ChartAnnotation, ChartSpec, DisclosureSpec, DrawingSpec,
     ErrorBoundarySpec, FactSpec, FilterSpec, FormField, FormSpec, FragmentArg, FragmentDeclSpec,
     FragmentRefSpec, GridSpec, HeadingSpec, LabelValueRowSpec, LinkSpec, ListSpec, MarkdownSpec,
-    MetricSpec, ModalSpec, MountSpec, Node, NodeKind, ProgressSpec, ScrollAreaSpec, SelectSpec,
-    Shape, SplitPanelSpec, StaticRows, StaticValue, StepperSpec, SummaryListSpec, SwitchSpec,
-    TabHeader, TabsSpec, TextSource, ToastSpec,
+    MetricComparison, MetricSpec, ModalSpec, MountSpec, Node, NodeKind, ProgressSpec,
+    ScrollAreaSpec, SelectSpec, Shape, SplitPanelSpec, StaticRows, StaticValue, StepperSpec,
+    SummaryListSpec, SwitchSpec, TabHeader, TabsSpec, TextSource, ToastSpec,
 };
 
 /// Project a resolved copy of `tree` against the live `sources` — the entry
@@ -241,6 +241,18 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             // rule (§3.6.1). Projecting it away would hand a native surface a
             // trend it could only read one way.
             trend_polarity: spec.trend_polarity,
+            // fuaran#2472 — each comparison's label and value resolve like the
+            // trend's; its format and polarity are declarations, carried as-is.
+            comparisons: spec
+                .comparisons
+                .iter()
+                .map(|c| MetricComparison {
+                    label: map_text(sources, &c.label),
+                    value: map_scalar_number(sources, &c.value),
+                    format: c.format.clone(),
+                    polarity: c.polarity,
+                })
+                .collect(),
             icon: spec.icon.clone(),
             subtext: map_opt_text(sources, &spec.subtext),
         }),

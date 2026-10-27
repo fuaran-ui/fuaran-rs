@@ -310,6 +310,11 @@ impl Walker {
                 if let Some(trend) = &s.trend {
                     self.check_binding(id, trend);
                 }
+                // fuaran#2472 — each further comparison reads a label and a value.
+                for c in &s.comparisons {
+                    self.check_binding(id, &c.value);
+                    self.check_text(id, &c.label);
+                }
                 if let Some(subtext) = &s.subtext {
                     self.check_text(id, subtext);
                 }

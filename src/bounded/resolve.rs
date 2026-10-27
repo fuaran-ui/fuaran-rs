@@ -242,6 +242,11 @@ fn resolve_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             spec.label = resolve_text(sources, &spec.label);
             spec.value = subst(sources, &spec.value);
             spec.trend = subst_opt(sources, &spec.trend);
+            // fuaran#2472 — each further comparison's label and value.
+            for c in &mut spec.comparisons {
+                c.label = resolve_text(sources, &c.label);
+                c.value = subst(sources, &c.value);
+            }
             spec.subtext = resolve_text_opt(sources, &spec.subtext);
             NodeKind::Metric(spec)
         }
