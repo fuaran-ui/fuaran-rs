@@ -185,6 +185,12 @@ impl DispatchFold for UiFold<'_> {
         store
     }
 
+    /// The core's read of one store key (Phase 2268): the same slot `assign` writes, so a
+    /// windowed limit's counter under the reserved prefix reads back exactly as it was committed.
+    fn read(&self, key: &str, store: &BindingSources) -> Option<JVal> {
+        store.state.get(key).cloned()
+    }
+
     fn is_reserved(&self, key: &str) -> bool {
         key.starts_with(HOST_RESERVED_STATE_PREFIX)
     }
