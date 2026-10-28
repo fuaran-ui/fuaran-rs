@@ -354,6 +354,22 @@ fn markdown_node_renders_through_the_deterministic_renderer() {
     ));
 }
 
+/// Phase 2473 — a static table's declared columns are read by position, and a
+/// `TonedPill` column draws its cell as the toned pill with the cell's own text.
+#[test]
+fn static_grid_tones_a_declared_toned_pill_column() {
+    let html = render(
+        r#"{"id":"table-toned-column","kind":{"$type":"DataGrid","columns":[{"field":"segment","kind":{"$type":"Text"},"label":"segment"},{"field":"change","kind":{"$type":"TonedPill","field":"change","map":{"+4.1%":"Success","-2.3%":"Critical"}},"label":"change"}],"source":{"$type":"Static","value":[]},"staticRows":{"headers":["Segment","Change"],"rows":[["Retail","+4.1%"],["Wholesale","-2.3%"],["Online","0.0%"]]}}}"#,
+    );
+    assert!(html.contains("<td class=\"fuaran-table-cell\"><span class=\"fuaran-grid-cell-pill fuaran-pill-success\">+4.1%</span></td>"), "{html}");
+    assert!(html.contains("<td class=\"fuaran-table-cell\"><span class=\"fuaran-grid-cell-pill fuaran-pill-critical\">-2.3%</span></td>"), "{html}");
+    assert!(html.contains("<td class=\"fuaran-table-cell\"><span class=\"fuaran-grid-cell-pill fuaran-pill-default\">0.0%</span></td>"), "{html}");
+    assert!(
+        html.contains("<td class=\"fuaran-table-cell\">Retail</td>"),
+        "{html}"
+    );
+}
+
 #[test]
 fn static_grid_renders_the_semantic_table_leg() {
     let html = render(

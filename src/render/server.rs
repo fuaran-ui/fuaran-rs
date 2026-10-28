@@ -4393,6 +4393,45 @@ fn present_grid_window(
 }
 
 /// The static read-only table leg, driven by a grid's `staticRows`.
+/// Phase 2473 — one static cell under the grid's declared columns, read by POSITION
+/// (`columns[j]` describes every row's cell `j`). A `TonedPill` column draws the cell as
+/// the toned pill: the cell's OWN text, toned by the map entry for the row's value at the
+/// pill's `field`, where a static row reads as each declared column's `field` mapped to
+/// its cell's text (an absent field reads as the empty text, as the row projection does).
+/// Every other cell is plain text, escaped as before. Parity-locked with the reference
+/// hosts' static leg.
+fn static_cell(columns: &[ColumnErased], texts: &[String], j: usize, text: &str) -> String {
+    match columns.get(j).map(|c| &c.kind) {
+        Some(CellKindErased::TonedPill {
+            field,
+            map,
+            default_tone,
+        }) => {
+            let key = texts
+                .iter()
+                .enumerate()
+                .rfind(|(k, _)| {
+                    columns.get(*k).and_then(|c| c.field.as_deref()) == Some(field.as_str())
+                })
+                .map(|(_, t)| t.as_str())
+                .unwrap_or("");
+            let tone = map.get(key).copied().unwrap_or(*default_tone);
+            text_el(
+                "span",
+                &[(
+                    "class",
+                    s(format!(
+                        "fuaran-grid-cell-pill fuaran-pill-{}",
+                        tone_var(tone)
+                    )),
+                )],
+                text,
+            )
+        }
+        _ => escape_text(text),
+    }
+}
+
 fn render_static_table(ctx: &Ctx<'_>, spec: &StaticRows, grid: &GridSpec) -> String {
     let header_cells: String = spec
         .headers
@@ -4410,13 +4449,18 @@ fn render_static_table(ctx: &Ctx<'_>, spec: &StaticRows, grid: &GridSpec) -> Str
         .rows
         .iter()
         .map(|row| {
-            let cells: String = row
+            let texts: Vec<String> = row
                 .iter()
-                .map(|cell| {
-                    text_el(
+                .map(|cell| render_text(ctx.sources, cell))
+                .collect();
+            let cells: String = texts
+                .iter()
+                .enumerate()
+                .map(|(j, text)| {
+                    el(
                         "td",
                         &[("class", s("fuaran-table-cell"))],
-                        &render_text(ctx.sources, cell),
+                        &static_cell(&grid.columns, &texts, j, text),
                     )
                 })
                 .collect();
