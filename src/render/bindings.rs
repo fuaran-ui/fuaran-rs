@@ -1397,10 +1397,45 @@ pub fn format_relative_english(unit: RelativeTimeUnit, value: f64) -> String {
 /// Format a numeric value per a `CellFormat`. A decoded `Custom` formatter is a
 /// closure placeholder — it renders the `"<closure>"` sentinel, as on every
 /// decoded-tree path.
+///
+/// Phase 2490 — a `Number` / `Currency` / `Percent` figure carrying a `locale`
+/// renders through [`format_locale_value`], this host's `Binding.Format`
+/// formatter for the matching `Format` case (its invariant fallback, see below);
+/// a figure without one is the locale-free projection.
 pub fn format_number(format: &CellFormat, value: f64) -> String {
     match format {
+        CellFormat::Number {
+            decimals,
+            locale: Some(locale),
+        } => format_locale_value(
+            locale,
+            &Format::Number {
+                decimals: *decimals,
+            },
+            value,
+        ),
+        CellFormat::Currency {
+            code,
+            locale: Some(locale),
+        } => format_locale_value(
+            locale,
+            &Format::Currency {
+                iso_code: code.clone(),
+            },
+            value,
+        ),
+        CellFormat::Percent {
+            decimals,
+            locale: Some(locale),
+        } => format_locale_value(
+            locale,
+            &Format::Percent {
+                decimals: *decimals,
+            },
+            value,
+        ),
         CellFormat::None => display_number(value),
-        CellFormat::Number { decimals } => match decimals {
+        CellFormat::Number { decimals, .. } => match decimals {
             Some(d) => format!("{value:.*}", (*d).clamp(0, 17) as usize),
             None => {
                 if is_integer(value) {
@@ -1410,8 +1445,8 @@ pub fn format_number(format: &CellFormat, value: f64) -> String {
                 }
             }
         },
-        CellFormat::Currency { code } => format!("{code} {value:.2}"),
-        CellFormat::Percent { decimals } => {
+        CellFormat::Currency { code, .. } => format!("{code} {value:.2}"),
+        CellFormat::Percent { decimals, .. } => {
             let d = decimals.unwrap_or(1).clamp(0, 17) as usize;
             format!("{:.*}%", d, value * 100.0)
         }

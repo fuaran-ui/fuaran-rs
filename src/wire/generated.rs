@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "c78f383ca50dc36dc5d158d63052aa202e70d2a1bdee77a30c629354247f76d4";
+pub const IDL_SHA256: &str = "b8d8755fcf412df90d10c812c9ce99634d616486d007aeb7b5ca42c1c1ced409";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -1685,12 +1685,15 @@ pub enum CellFormat {
     None,
     Number {
         decimals: Option<i64>,
+        locale: Option<LocaleSource>,
     },
     Currency {
         code: String,
+        locale: Option<LocaleSource>,
     },
     Percent {
         decimals: Option<i64>,
+        locale: Option<LocaleSource>,
     },
     SignificantDigits {
         digits: i64,
@@ -3706,20 +3709,30 @@ pub(super) mod gen_encode {
             CellFormat::None => {
             case_obj("None", vec![])
             }
-            CellFormat::Number { decimals: m_decimals } => {
+            CellFormat::Number { decimals: m_decimals, locale: m_locale } => {
             let mut f: Vec<Field> = vec![];
             if let Some(x) = m_decimals {
                 f.push(field("decimals", int(*x)));
+            }
+            if let Some(x) = m_locale {
+                f.push(field("locale", locale_source(x)));
             }
             case_obj("Number", f)
             }
-            CellFormat::Currency { code: m_code } => {
-            case_obj("Currency", vec![field("code", s(m_code))])
+            CellFormat::Currency { code: m_code, locale: m_locale } => {
+            let mut f: Vec<Field> = vec![field("code", s(m_code))];
+            if let Some(x) = m_locale {
+                f.push(field("locale", locale_source(x)));
             }
-            CellFormat::Percent { decimals: m_decimals } => {
+            case_obj("Currency", f)
+            }
+            CellFormat::Percent { decimals: m_decimals, locale: m_locale } => {
             let mut f: Vec<Field> = vec![];
             if let Some(x) = m_decimals {
                 f.push(field("decimals", int(*x)));
+            }
+            if let Some(x) = m_locale {
+                f.push(field("locale", locale_source(x)));
             }
             case_obj("Percent", f)
             }
@@ -5287,17 +5300,20 @@ pub(super) mod gen_decode {
 
     pub(in super::super) fn decode_cell_format_number(path: &str, fields: &Fields) -> DResult<CellFormat> {
         let m_decimals = field_opt(path, fields, "decimals", &[], as_int)?;
-        Ok(CellFormat::Number { decimals: m_decimals })
+        let m_locale = field_opt(path, fields, "locale", &[], decode_locale_source)?;
+        Ok(CellFormat::Number { decimals: m_decimals, locale: m_locale })
     }
 
     pub(in super::super) fn decode_cell_format_currency(path: &str, fields: &Fields) -> DResult<CellFormat> {
         let m_code = field_req(path, fields, "code", &[], "CellFormat.Currency.code: string", dec_string)?;
-        Ok(CellFormat::Currency { code: m_code })
+        let m_locale = field_opt(path, fields, "locale", &[], decode_locale_source)?;
+        Ok(CellFormat::Currency { code: m_code, locale: m_locale })
     }
 
     pub(in super::super) fn decode_cell_format_percent(path: &str, fields: &Fields) -> DResult<CellFormat> {
         let m_decimals = field_opt(path, fields, "decimals", &[], as_int)?;
-        Ok(CellFormat::Percent { decimals: m_decimals })
+        let m_locale = field_opt(path, fields, "locale", &[], decode_locale_source)?;
+        Ok(CellFormat::Percent { decimals: m_decimals, locale: m_locale })
     }
 
     pub(in super::super) fn decode_cell_format_significant_digits(path: &str, fields: &Fields) -> DResult<CellFormat> {
@@ -6336,6 +6352,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "CallResultTarget.State.key",
     "CellFormat.Currency",
     "CellFormat.Currency.code",
+    "CellFormat.Currency.locale",
     "CellFormat.Custom",
     "CellFormat.Custom.fn",
     "CellFormat.DateTime",
@@ -6346,8 +6363,10 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "CellFormat.None",
     "CellFormat.Number",
     "CellFormat.Number.decimals",
+    "CellFormat.Number.locale",
     "CellFormat.Percent",
     "CellFormat.Percent.decimals",
+    "CellFormat.Percent.locale",
     "CellFormat.RelativeTime",
     "CellFormat.RelativeTime.unit",
     "CellFormat.SignificantDigits",
