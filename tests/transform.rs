@@ -13,10 +13,7 @@ use fuaran_rs::wire::{
 fn schema(entries: &[(&str, ColumnType)]) -> Vec<SchemaEntry> {
     entries
         .iter()
-        .map(|(n, t)| SchemaEntry {
-            name: (*n).to_string(),
-            column_type: *t,
-        })
+        .map(|(n, t)| SchemaEntry::new((*n).to_string(), *t))
         .collect()
 }
 

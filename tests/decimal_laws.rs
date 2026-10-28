@@ -85,10 +85,7 @@ fn cells_of(input: &JVal) -> Vec<Cell> {
 
 fn decimal_table(cells: Vec<Cell>) -> Table {
     Table {
-        schema: vec![SchemaEntry {
-            name: "c".to_string(),
-            column_type: ColumnType::Decimal,
-        }],
+        schema: vec![SchemaEntry::new("c".to_string(), ColumnType::Decimal)],
         columns: vec![DataColumn {
             name: "c".to_string(),
             column_type: ColumnType::Decimal,

@@ -4,7 +4,10 @@
 //! in `crate::wire`, which re-exports them, so every `fuaran_rs::wire::` path is
 //! unchanged.
 
+use std::collections::BTreeMap;
+
 use super::bare_enum;
+use super::unit::UnitOfMeasure;
 
 // ─── Compute layer (Phases 282/284/424) ──────────────────────────────────────
 
@@ -122,10 +125,46 @@ pub struct Rounding {
     pub mode: RoundingMode,
 }
 
+/// One schema entry: what a column IS (its `name` and `type`) and, since
+/// Phase 2207 (WIRE_FORMAT §3.6.26), what it MEANS — an optional `unit`, `label`
+/// and `description`, and the `ext` extension members a host preserves
+/// verbatim. The twin of the reference's `Fuaran.Core.Field`.
+///
+/// An unstated member is `None` and a stated empty string is `Some("")`; the
+/// two are different statements. An empty `ext` states nothing. The unit is a
+/// unit the algebra READ (`fuaran_core::unit`), never text carried through, so
+/// it has exactly one canonical spelling.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SchemaEntry {
     pub name: String,
     pub column_type: ColumnType,
+    pub unit: Option<UnitOfMeasure>,
+    pub label: Option<String>,
+    pub description: Option<String>,
+    /// The extension members, one per key; the canonical writer sorts them.
+    pub ext: BTreeMap<String, String>,
+}
+
+impl SchemaEntry {
+    /// An entry of `name` and `column_type` stating no metadata.
+    pub fn new(name: impl Into<String>, column_type: ColumnType) -> SchemaEntry {
+        SchemaEntry {
+            name: name.into(),
+            column_type,
+            unit: None,
+            label: None,
+            description: None,
+            ext: BTreeMap::new(),
+        }
+    }
+
+    /// Whether the entry states any metadata member (`Field.hasMetadata`).
+    pub fn has_metadata(&self) -> bool {
+        self.unit.is_some()
+            || self.label.is_some()
+            || self.description.is_some()
+            || !self.ext.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

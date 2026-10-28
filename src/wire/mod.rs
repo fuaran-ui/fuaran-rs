@@ -21,4 +21,7 @@ pub(crate) use decode::live_data_source;
 pub use decode::{decode_node, decode_op, is_hex_colour};
 pub use encode::{encode_node, encode_op};
 pub use model::*;
+// The schema operations and the unit algebra a schema entry's metadata is
+// read through (Phase 2207, WIRE_FORMAT §3.6.26).
+pub use crate::core::{schema, unit};
 pub use result::{DecodeError, DecodeErrorCode};

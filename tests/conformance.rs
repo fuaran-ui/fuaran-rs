@@ -1051,7 +1051,7 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
     ("laws/capabilityLaws", FamilyAnswer::Pending(LAW_UNRUN)),
     ("laws/dataframeParity", FamilyAnswer::Covered),
     ("laws/decimal", FamilyAnswer::Covered),
-    ("laws/fieldLaws", FamilyAnswer::Pending(LAW_UNRUN)),
+    ("laws/fieldLaws", FamilyAnswer::Covered),
     ("laws/propagationLaws", FamilyAnswer::Pending(LAW_UNRUN)),
     ("laws/transformLaws", FamilyAnswer::Covered),
     ("lenient-accept", FamilyAnswer::Covered),

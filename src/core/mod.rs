@@ -9,11 +9,15 @@
 //!   (`findBySignature` + compose-path resolution);
 //! - [`decimal`] — the exact decimal: canonical text, order, and the exact
 //!   arithmetic and rounding kernel the evaluator computes decimals with;
-//! - [`number`] — the canonical number form (`formatFiniteDouble`).
+//! - [`number`] — the canonical number form (`formatFiniteDouble`);
+//! - [`unit`] — the unit algebra's parse and canonical render (Phase 2207),
+//!   which a schema entry's `unit` is read through;
+//! - [`schema`] — the schema fingerprint, delta and compatibility verdict over
+//!   this host's schema entries, bridged to the spine's field operations.
 //!
-//! The last two have been LIFTED (Phase 463): they live in the Core spine crate
-//! (`fuaran-core`) and are re-exported here at their old paths, which is the
-//! lift this boundary was kept for.
+//! The decimal, the number form (Phase 463) and the unit algebra (Phase 2207)
+//! are LIFTED: they live in the Core spine crate (`fuaran-core`) and are
+//! re-exported here, which is the lift this boundary was kept for.
 //!
 //! It mirrors `Fuaran.Core`, the reference these twins certify against. The
 //! module is private: the published paths are the public modules that re-export
@@ -27,8 +31,9 @@
 
 pub mod dataframe;
 pub mod function;
+pub mod schema;
 pub mod transform;
-pub use fuaran_core::{decimal, number};
+pub use fuaran_core::{decimal, number, unit};
 
 /// Writes a closed, bare-string wire enum: the `enum` itself, its wire-stable
 /// spelling, the full spelling list and the parser. Shared by the dataframe

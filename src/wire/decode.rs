@@ -684,16 +684,62 @@ pub(super) fn iso_of_epoch_seconds(secs: i64) -> String {
 }
 
 pub(super) fn decode_col_schema(j: &JVal) -> CResult<Vec<SchemaEntry>> {
-    c_arr(j)?
-        .iter()
-        .map(|e| {
-            let fields = c_obj(e)?;
-            let name = c_str_field(fields, "name")?;
-            let ty = c_str_field(fields, "type")?;
-            let column_type = c_enum(&ty, ColumnType::from_wire, ColumnType::WIRE_NAMES)?;
-            Ok(SchemaEntry { name, column_type })
-        })
-        .collect()
+    c_arr(j)?.iter().map(decode_schema_entry).collect()
+}
+
+/// One schema entry (WIRE_FORMAT §3.6.26): `name` and `type`, then the metadata
+/// members when present. `unit` is read through the unit algebra — so it
+/// re-encodes in its one canonical text — and REFUSED, naming the column and
+/// the reason, where the algebra does not parse it; `label` and `description`
+/// must be strings; `ext` must be an object of strings, and an empty one states
+/// nothing. A member the entry does not define is read past.
+fn decode_schema_entry(e: &JVal) -> CResult<SchemaEntry> {
+    let fields = c_obj(e)?;
+    let name = c_str_field(fields, "name")?;
+    let ty = c_str_field(fields, "type")?;
+    let column_type = c_enum(&ty, ColumnType::from_wire, ColumnType::WIRE_NAMES)?;
+    let text = |member: &str| -> CResult<Option<String>> {
+        match get(fields, member) {
+            None => Ok(None),
+            Some(JVal::Str(s)) => Ok(Some(s.clone())),
+            Some(other) => Err(format!(
+                "malformed: {name}: schema entry member '{member}' must be a string, got {}",
+                ast_kind(other)
+            )),
+        }
+    };
+    let mut entry = SchemaEntry::new(name.clone(), column_type);
+    if let Some(unit) = text("unit")? {
+        entry.unit = Some(crate::core::unit::parse(&unit).map_err(|r| {
+            format!(
+                "malformed: {name}: unit '{unit}' is not a unit the algebra parses: {}",
+                r.text()
+            )
+        })?);
+    }
+    entry.label = text("label")?;
+    entry.description = text("description")?;
+    match get(fields, "ext") {
+        None => {}
+        Some(JVal::Obj(members)) => {
+            for (key, value) in members {
+                let JVal::Str(value) = value else {
+                    return Err(format!(
+                        "malformed: {name}: schema entry extension member '{key}' must be a string, got {}",
+                        ast_kind(value)
+                    ));
+                };
+                entry.ext.insert(key.clone(), value.clone());
+            }
+        }
+        Some(other) => {
+            return Err(format!(
+                "malformed: {name}: schema entry member 'ext' must be an object, got {}",
+                ast_kind(other)
+            ));
+        }
+    }
+    Ok(entry)
 }
 
 /// Lenient-ingest (Core Phases 88 + 94) — the `(values, validity)` parts of a
@@ -818,10 +864,10 @@ pub(super) fn decode_data_source(j: &JVal) -> CResult<DataSource> {
                 let col =
                     get(cols_obj, name).ok_or_else(|| format!("missing field: columns.{name}"))?;
                 let (values, _) = column_parts(name, col)?;
-                out.push(SchemaEntry {
-                    name: name.clone(),
-                    column_type: infer_column_type(name, values)?,
-                });
+                out.push(SchemaEntry::new(
+                    name.clone(),
+                    infer_column_type(name, values)?,
+                ));
             }
             out
         }

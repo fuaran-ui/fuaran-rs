@@ -2109,10 +2109,7 @@ fn eval_project(f: &Frame, pairs: &[(String, String)]) -> Result<Frame, EvalErro
     Ok(Frame {
         cols: resolved
             .iter()
-            .map(|(out, ty, _)| SchemaEntry {
-                name: out.clone(),
-                column_type: *ty,
-            })
+            .map(|(out, ty, _)| SchemaEntry::new(out.clone(), *ty))
             .collect(),
         rows: f
             .rows
@@ -2142,10 +2139,7 @@ fn eval_derive(f: &Frame, name: &str, expr: &ColExpr, env: &EvalEnv) -> Result<F
             .enumerate()
             .map(|(j, e)| {
                 if j == i {
-                    SchemaEntry {
-                        name: e.name.clone(),
-                        column_type: ty,
-                    }
+                    SchemaEntry::new(e.name.clone(), ty)
                 } else {
                     e.clone()
                 }
@@ -2171,10 +2165,7 @@ fn eval_derive(f: &Frame, name: &str, expr: &ColExpr, env: &EvalEnv) -> Result<F
         Ok(Frame { cols, rows })
     } else {
         let mut cols = f.cols.clone();
-        cols.push(SchemaEntry {
-            name: name.to_string(),
-            column_type: ty,
-        });
+        cols.push(SchemaEntry::new(name.to_string(), ty));
         let rows = f
             .rows
             .iter()
@@ -2230,15 +2221,13 @@ fn eval_group_by(f: &Frame, keys: &[String], aggs: &[Agg]) -> Result<Frame, Eval
 
     let mut out_cols: Vec<SchemaEntry> = keys
         .iter()
-        .map(|k| SchemaEntry {
-            name: k.clone(),
-            column_type: col_type(&f.cols, k).unwrap(),
-        })
+        .map(|k| SchemaEntry::new(k.clone(), col_type(&f.cols, k).unwrap()))
         .collect();
-    out_cols.extend(resolved.iter().map(|(a, ty, _)| SchemaEntry {
-        name: a.name.clone(),
-        column_type: agg_type(a.func, *ty),
-    }));
+    out_cols.extend(
+        resolved
+            .iter()
+            .map(|(a, ty, _)| SchemaEntry::new(a.name.clone(), agg_type(a.func, *ty))),
+    );
 
     let rows = order
         .iter()
@@ -2321,13 +2310,13 @@ fn eval_join(
     let right_cols: Vec<SchemaEntry> = right
         .cols
         .iter()
-        .map(|e| SchemaEntry {
-            name: if left_names.contains(&e.name) {
+        .map(|e| {
+            let name = if left_names.contains(&e.name) {
                 format!("{}_right", e.name)
             } else {
                 e.name.clone()
-            },
-            column_type: e.column_type,
+            };
+            SchemaEntry::new(name, e.column_type)
         })
         .collect();
     let out_cols = [f.cols.clone(), right_cols].concat();
@@ -2384,10 +2373,7 @@ fn eval_union(f: &Frame, other: &Frame) -> Result<Frame, EvalError> {
                 ),
             }
         })?;
-        cols.push(SchemaEntry {
-            name: l.name.clone(),
-            column_type: ty,
-        });
+        cols.push(SchemaEntry::new(l.name.clone(), ty));
     }
     let pack = |row: &Vec<Cell>| -> Vec<Cell> {
         row.iter()
@@ -2565,10 +2551,7 @@ fn eval_window(
     };
 
     let mut cols = f.cols.clone();
-    cols.push(SchemaEntry {
-        name: alias.to_string(),
-        column_type: ty,
-    });
+    cols.push(SchemaEntry::new(alias.to_string(), ty));
     let rows = f
         .rows
         .iter()
@@ -2636,15 +2619,13 @@ fn eval_pivot(
 
     let mut cols: Vec<SchemaEntry> = index
         .iter()
-        .map(|n| SchemaEntry {
-            name: n.clone(),
-            column_type: col_type(&f.cols, n).unwrap(),
-        })
+        .map(|n| SchemaEntry::new(n.clone(), col_type(&f.cols, n).unwrap()))
         .collect();
-    cols.extend(on_values.iter().map(|ov| SchemaEntry {
-        name: cell_string(ov),
-        column_type: agg_type(agg, val_type),
-    }));
+    cols.extend(
+        on_values
+            .iter()
+            .map(|ov| SchemaEntry::new(cell_string(ov), agg_type(agg, val_type))),
+    );
 
     let rows = order
         .iter()
@@ -2715,19 +2696,10 @@ fn eval_unpivot(f: &Frame, id_vars: &[String], value_vars: &[String]) -> Result<
 
     let mut cols: Vec<SchemaEntry> = id_vars
         .iter()
-        .map(|n| SchemaEntry {
-            name: n.clone(),
-            column_type: col_type(&f.cols, n).unwrap(),
-        })
+        .map(|n| SchemaEntry::new(n.clone(), col_type(&f.cols, n).unwrap()))
         .collect();
-    cols.push(SchemaEntry {
-        name: "variable".to_string(),
-        column_type: ColumnType::Str,
-    });
-    cols.push(SchemaEntry {
-        name: "value".to_string(),
-        column_type: val_type,
-    });
+    cols.push(SchemaEntry::new("variable".to_string(), ColumnType::Str));
+    cols.push(SchemaEntry::new("value".to_string(), val_type));
     Ok(Frame { cols, rows })
 }
 

@@ -187,15 +187,32 @@ pub(super) fn data_column(c: &DataColumn) -> String {
 }
 
 pub(super) fn schema_json(schema: &[SchemaEntry]) -> String {
-    arr(schema
-        .iter()
-        .map(|e| {
-            obj(vec![
-                field("name", s(&e.name)),
-                field("type", s(e.column_type.as_str())),
-            ])
-        })
-        .collect())
+    arr(schema.iter().map(schema_entry).collect())
+}
+
+/// One schema entry (WIRE_FORMAT §3.6.26): `name` and `type`, then exactly the
+/// metadata members the entry states — the unit as its canonical text — so an
+/// entry stating none keeps its `{name, type}` bytes, and an empty `ext` is
+/// never written.
+fn schema_entry(e: &SchemaEntry) -> String {
+    let mut fields = vec![
+        field("name", s(&e.name)),
+        field("type", s(e.column_type.as_str())),
+    ];
+    if let Some(unit) = &e.unit {
+        fields.push(field("unit", s(&crate::core::unit::render(unit))));
+    }
+    if let Some(label) = &e.label {
+        fields.push(field("label", s(label)));
+    }
+    if let Some(description) = &e.description {
+        fields.push(field("description", s(description)));
+    }
+    if !e.ext.is_empty() {
+        let ext = e.ext.iter().map(|(k, v)| field(k, s(v))).collect();
+        fields.push(field("ext", obj(ext)));
+    }
+    obj(fields)
 }
 
 pub(super) fn data_source(src: &DataSource) -> String {
