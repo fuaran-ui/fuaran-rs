@@ -768,7 +768,7 @@ impl Walker {
                 );
             }
             Binding::Format { format, source, .. } => {
-                if let crate::wire::Format::Currency { iso_code } = format
+                if let crate::wire::Format::Currency { iso_code, .. } = format
                     && iso_code.trim().is_empty()
                 {
                     self.push(

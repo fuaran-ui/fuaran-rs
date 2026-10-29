@@ -1416,11 +1416,13 @@ pub fn format_number(format: &CellFormat, value: f64) -> String {
         ),
         CellFormat::Currency {
             code,
+            decimals,
             locale: Some(locale),
         } => format_locale_value(
             locale,
             &Format::Currency {
                 iso_code: code.clone(),
+                decimals: *decimals,
             },
             value,
         ),
@@ -1445,7 +1447,11 @@ pub fn format_number(format: &CellFormat, value: f64) -> String {
                 }
             }
         },
-        CellFormat::Currency { code, .. } => format!("{code} {value:.2}"),
+        // Phase 2499 — a present `decimals` is the fixed digit count; absent, two.
+        CellFormat::Currency { code, decimals, .. } => {
+            let d = decimals.unwrap_or(2).clamp(0, 17) as usize;
+            format!("{code} {value:.d$}")
+        }
         CellFormat::Percent { decimals, .. } => {
             let d = decimals.unwrap_or(1).clamp(0, 17) as usize;
             format!("{:.*}%", d, value * 100.0)
@@ -1504,7 +1510,10 @@ pub fn format_locale_value(_locale: &LocaleSource, format: &Format, value: f64) 
             Some(d) => format!("{value:.*}", (*d).clamp(0, 17) as usize),
             None => display_number(value),
         },
-        Format::Currency { iso_code } => format!("{iso_code} {value:.2}"),
+        Format::Currency { iso_code, decimals } => {
+            let d = decimals.unwrap_or(2).clamp(0, 17) as usize;
+            format!("{iso_code} {value:.d$}")
+        }
         Format::Percent { decimals } => {
             let d = decimals.unwrap_or(0).clamp(0, 17) as usize;
             format!("{:.*}%", d, value * 100.0)
