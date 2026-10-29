@@ -80,7 +80,7 @@ pub fn instant_fraction_digits(s: &str) -> Option<u32> {
         .then(|| (n - 21) as u32)
 }
 bare_enum!(BinOp { Add => "add", Sub => "sub", Mul => "mul", Div => "div", Mod => "mod", Eq => "eq", Ne => "ne", Lt => "lt", Le => "le", Gt => "gt", Ge => "ge", And => "and", Or => "or", Contains => "contains", StartsWith => "startsWith", EndsWith => "endsWith" });
-bare_enum!(ScalarFn { Abs => "abs", Round => "round", Floor => "floor", Ceil => "ceil", Length => "length", Lower => "lower", Upper => "upper", Substr => "substr", DatePart => "datePart", Concat => "concat", Trim => "trim", Replace => "replace", DateDiffDays => "dateDiffDays", Pow => "pow", Exp => "exp", Ln => "ln", Log10 => "log10" });
+bare_enum!(ScalarFn { Abs => "abs", Round => "round", Floor => "floor", Ceil => "ceil", Length => "length", Lower => "lower", Upper => "upper", Substr => "substr", DatePart => "datePart", Concat => "concat", Trim => "trim", Replace => "replace", DateDiffDays => "dateDiffDays", Pow => "pow", Exp => "exp", Ln => "ln", Log10 => "log10", Least => "least", Greatest => "greatest" });
 bare_enum!(AggFn { Sum => "sum", Mean => "mean", Min => "min", Max => "max", Count => "count", Median => "median", Stddev => "stddev", First => "first", Last => "last", CountDistinct => "countDistinct" });
 bare_enum!(JoinKind { Inner => "inner", Left => "left", Right => "right", Outer => "outer" });
 // `cumulSum` is the canonical tag (operator rename 2026-07-19); the legacy
@@ -249,6 +249,17 @@ pub enum ColExpr {
     Rounded {
         expr: Box<ColExpr>,
         rounding: Rounding,
+    },
+    /// The operand brought to `unit` (Phase 2208, the reference's Phase 429):
+    /// the one explicit conversion between two units of one dimension, and the
+    /// one way to give a literal or a unitless column a unit. Resolved against
+    /// the step's schema before evaluation — over an operand stating no unit a
+    /// tag (the operand cast to float), over a compatible unit the float times
+    /// the exact factor, across dimensions a `UnitMismatch`.
+    /// Wire: `{"$type":"convert","expr":…,"unit":"<canonical unit text>"}`.
+    Convert {
+        expr: Box<ColExpr>,
+        unit: UnitOfMeasure,
     },
 }
 

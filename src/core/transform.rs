@@ -11,6 +11,7 @@ use super::dataframe::{
     WindowFn,
 };
 use super::number::format_number;
+use super::unit::{self, UnitOfMeasure};
 
 /// The exact decimal's text and arithmetic (Phase 2001), published beside the
 /// evaluator that computes with it as `crate::transform::decimal`.
@@ -52,6 +53,15 @@ pub enum EvalError {
     UnboundParam {
         name: String,
         bound: Vec<String>,
+    },
+    /// Two units met where the rule requires one (Phase 2208): `step` names the
+    /// step, `expr` the expression they met in, `left` and `right` the units by
+    /// their canonical text.
+    UnitMismatch {
+        step: String,
+        expr: Box<ColExpr>,
+        left: String,
+        right: String,
     },
 }
 
@@ -1091,6 +1101,31 @@ fn apply_scalar(func: ScalarFn, args: &[Cell]) -> Result<Cell, EvalError> {
                 }
             }
         }
+        // Variadic (at least one). Any null propagates, as `Concat`'s does;
+        // incomparable operands are a typed error through the shared ordering.
+        ScalarFn::Least | ScalarFn::Greatest => {
+            let least = func == ScalarFn::Least;
+            let Some((first, rest)) = args.split_first() else {
+                return Err(EvalError::ArityError {
+                    func: (if least { "Least" } else { "Greatest" }).to_string(),
+                    expected: 1,
+                    got: 0,
+                });
+            };
+            if args.iter().any(is_null) {
+                return Ok(NULL);
+            }
+            let mut best = first;
+            for c in rest {
+                let k = compare_cells(best, c).ok_or_else(|| EvalError::TypeError {
+                    detail: "least/greatest over incompatible types".to_string(),
+                })?;
+                if least != (k != Ordering::Greater) {
+                    best = c;
+                }
+            }
+            Ok(best.clone())
+        }
     }
 }
 
@@ -1284,6 +1319,12 @@ fn eval_expr(
             let scale = resolve_scale(env, &rounding.scale)?;
             let v = eval_expr(cols, row, expr, env)?;
             rounded_cell(rounding.mode, scale, &v)
+        }
+        // Every step resolves a conversion before evaluation; one that reaches
+        // here is resolved the same way, a mismatch raised when a row reaches it.
+        ColExpr::Convert { .. } => {
+            let (_, resolved) = resolve_units("expression", cols, e)?;
+            eval_expr(cols, row, &resolved, env)
         }
     }
 }
@@ -1503,6 +1544,13 @@ fn typing_apply(func: ScalarFn, args: &[Typing]) -> Typing {
             [_, _] => Typing::Of(ColumnType::Float),
             _ => Typing::Absent,
         },
+        ScalarFn::Least | ScalarFn::Greatest => {
+            if args.is_empty() || args.contains(&Typing::Absent) {
+                Typing::Absent
+            } else {
+                Typing::join_all(args.iter().copied())
+            }
+        }
     }
 }
 
@@ -1570,6 +1618,11 @@ fn typing(cols: &[SchemaEntry], e: &ColExpr) -> Typing {
             t if t.exact() => Typing::Of(ColumnType::Decimal),
             _ => Typing::Unknown,
         },
+        // The float cast the conversion resolves to.
+        ColExpr::Convert { expr, .. } => match go(expr) {
+            Typing::Absent => Typing::Absent,
+            _ => Typing::Of(ColumnType::Float),
+        },
     }
 }
 
@@ -1603,7 +1656,8 @@ fn arms_have(ty: ColumnType, cols: &[SchemaEntry], e: &ColExpr) -> bool {
         | ColExpr::InParam { .. }
         | ColExpr::IsNull { .. }
         | ColExpr::Quotient { .. }
-        | ColExpr::Rounded { .. } => typing(cols, e) == Typing::Of(ty),
+        | ColExpr::Rounded { .. }
+        | ColExpr::Convert { .. } => typing(cols, e) == Typing::Of(ty),
     }
 }
 
@@ -1687,6 +1741,10 @@ fn substitute_params(env: &EvalEnv, e: &ColExpr) -> ColExpr {
         ColExpr::Rounded { expr, rounding } => ColExpr::Rounded {
             expr: go(expr),
             rounding: scale(rounding),
+        },
+        ColExpr::Convert { expr, unit } => ColExpr::Convert {
+            expr: go(expr),
+            unit: unit.clone(),
         },
     }
 }
@@ -2062,7 +2120,413 @@ fn row_key(cells: &[Cell]) -> String {
 
 // ─── per-verb evaluation ─────────────────────────────────────────────────────
 
-fn eval_filter(f: &Frame, pred: &ColExpr, env: &EvalEnv) -> Result<Frame, EvalError> {
+// ─── the unit check (Phase 2208, the reference's Phase 429 / D29) ───────────
+//
+// A column's unit is a fact of its schema entry, so the check is a static walk
+// over the step's schema before any row: an empty frame is checked exactly as a
+// full one. The walk answers the expression's unit — `None` is UNCONSTRAINED: a
+// literal, a param, a column that states no unit; it composes with anything, so
+// a unitless pipeline passes and evaluates as it always did — and rewrites every
+// `Convert` to the cast (and factor) it stands for.
+
+/// What a power, product or quotient whose exponent would leave the algebra's
+/// range is refused against.
+const POWER_RANGE_TEXT: &str = "a power the algebra can carry";
+
+/// The unit a schema states for a column, where it states one.
+fn col_unit(cols: &[SchemaEntry], name: &str) -> Option<UnitOfMeasure> {
+    cols.iter()
+        .find(|e| e.name == name)
+        .and_then(|e| e.unit.clone())
+}
+
+/// A verb's own column: its name and type, and the unit it derives — no label,
+/// description or extension member it did not derive.
+fn stated(name: impl Into<String>, ty: ColumnType, unit: Option<UnitOfMeasure>) -> SchemaEntry {
+    let mut e = SchemaEntry::new(name, ty);
+    e.unit = unit;
+    e
+}
+
+/// The entry under another name, every metadatum kept.
+fn renamed(e: &SchemaEntry, name: impl Into<String>) -> SchemaEntry {
+    SchemaEntry {
+        name: name.into(),
+        ..e.clone()
+    }
+}
+
+/// A compact text of an expression for a refusal — the reference's `exprText`.
+fn expr_text(e: &ColExpr) -> String {
+    let args = |xs: &[ColExpr]| xs.iter().map(expr_text).collect::<Vec<_>>().join(", ");
+    match e {
+        ColExpr::Col { name } => format!("'{name}'"),
+        ColExpr::Lit { cell } => cell_string(cell),
+        ColExpr::Param { name } => format!("${name}"),
+        ColExpr::Binary { op, left, right } => format!(
+            "{}({}, {})",
+            op.as_str().to_lowercase(),
+            expr_text(left),
+            expr_text(right)
+        ),
+        ColExpr::Not { expr } => format!("not({})", expr_text(expr)),
+        ColExpr::Coalesce { exprs } => format!("coalesce({})", args(exprs)),
+        ColExpr::Case { cases, else_expr } => {
+            let arms: Vec<ColExpr> = cases
+                .iter()
+                .flat_map(|a| [a.when.clone(), a.then.clone()])
+                .collect();
+            format!("case({}, {})", args(&arms), expr_text(else_expr))
+        }
+        ColExpr::Cast { column_type, expr } => {
+            format!("cast({}, {})", column_type.as_str(), expr_text(expr))
+        }
+        ColExpr::Apply { func, args: xs } => {
+            format!("{}({})", func.as_str().to_lowercase(), args(xs))
+        }
+        ColExpr::InList { subject, items } => {
+            format!("in({}; {})", expr_text(subject), args(items))
+        }
+        ColExpr::IsNull { expr } => format!("isNull({})", expr_text(expr)),
+        ColExpr::InParam { subject, name } => format!("in({}; ${name})", expr_text(subject)),
+        ColExpr::Quotient {
+            dividend, divisor, ..
+        } => format!("quotient({}, {})", expr_text(dividend), expr_text(divisor)),
+        ColExpr::Rounded { expr, .. } => format!("rounded({})", expr_text(expr)),
+        ColExpr::Convert { expr, unit } => {
+            format!("convert({}, {})", expr_text(expr), unit::render(unit))
+        }
+    }
+}
+
+fn unit_mismatch(step: &str, at: &ColExpr, left: String, right: String) -> EvalError {
+    EvalError::UnitMismatch {
+        step: step.to_string(),
+        expr: Box::new(at.clone()),
+        left,
+        right,
+    }
+}
+
+type Resolved = (Option<UnitOfMeasure>, ColExpr);
+
+/// The unit of `e` over `cols`, and `e` with every `Convert` resolved — the
+/// reference's `resolveUnitsIn`. `step` names the step a refusal is about.
+/// Addition, subtraction, comparison, `Coalesce`, `Case` arms, `Least` /
+/// `Greatest` and `InList` require ONE unit among the operands that state one,
+/// and the answer carries it; multiplication, division, `Quotient` and `Mod`
+/// compose through the algebra; `Cast`, `Abs`, `Round`, `Floor`, `Ceil` and
+/// `Rounded` keep their operand's unit; a boolean, a text and a date carry none;
+/// a literal and a param are unconstrained.
+fn resolve_units(step: &str, cols: &[SchemaEntry], e: &ColExpr) -> Result<Resolved, EvalError> {
+    let go = |x: &ColExpr| resolve_units(step, cols, x);
+    let mismatch = |l: &UnitOfMeasure, r: &UnitOfMeasure| {
+        unit_mismatch(step, e, unit::render(l), unit::render(r))
+    };
+    // One unit among the stated ones: an unconstrained operand takes the other's.
+    let agree = |acc: Option<UnitOfMeasure>,
+                 units: &[Option<UnitOfMeasure>]|
+     -> Result<Option<UnitOfMeasure>, EvalError> {
+        let mut acc = acc;
+        for u in units.iter().flatten() {
+            match &acc {
+                None => acc = Some(u.clone()),
+                Some(a) if a != u => return Err(mismatch(a, u)),
+                Some(_) => {}
+            }
+        }
+        Ok(acc)
+    };
+    let many = |xs: &[ColExpr]| -> Result<(Vec<Option<UnitOfMeasure>>, Vec<ColExpr>), EvalError> {
+        let mut units = Vec::with_capacity(xs.len());
+        let mut out = Vec::with_capacity(xs.len());
+        for x in xs {
+            let (u, r) = go(x)?;
+            units.push(u);
+            out.push(r);
+        }
+        Ok((units, out))
+    };
+    let range =
+        |u: &UnitOfMeasure| unit_mismatch(step, e, unit::render(u), POWER_RANGE_TEXT.into());
+    let product = |a: Option<UnitOfMeasure>, b: Option<UnitOfMeasure>| match (a, b) {
+        (None, u) | (u, None) => Ok(u),
+        (Some(x), Some(y)) => unit::mul(&x, &y).map(Some).ok_or_else(|| range(&x)),
+    };
+    // An unconstrained dividend is dimensionless over a stated divisor (`1 / s`
+    // is `/s`); an unconstrained divisor leaves the dividend's unit.
+    let quotient = |a: Option<UnitOfMeasure>, b: Option<UnitOfMeasure>| match b {
+        None => Ok(a),
+        Some(y) => {
+            let x = a.unwrap_or_else(unit::dimensionless);
+            unit::div(&x, &y).map(Some).ok_or_else(|| range(&x))
+        }
+    };
+    let first_dimensioned = |units: &[Option<UnitOfMeasure>]| {
+        units
+            .iter()
+            .flatten()
+            .find(|u| **u != unit::dimensionless())
+            .cloned()
+    };
+    match e {
+        ColExpr::Col { name } => Ok((col_unit(cols, name), e.clone())),
+        ColExpr::Lit { .. } | ColExpr::Param { .. } => Ok((None, e.clone())),
+        ColExpr::Binary { op, left, right } => {
+            let (ua, a) = go(left)?;
+            let (ub, b) = go(right)?;
+            let u = match op {
+                BinOp::Add | BinOp::Sub => agree(ua, &[ub])?,
+                BinOp::Mul => product(ua, ub)?,
+                BinOp::Div => quotient(ua, ub)?,
+                BinOp::Mod => ua,
+                BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                    agree(ua, &[ub])?;
+                    None
+                }
+                BinOp::And | BinOp::Or | BinOp::Contains | BinOp::StartsWith | BinOp::EndsWith => {
+                    None
+                }
+            };
+            Ok((
+                u,
+                ColExpr::Binary {
+                    op: *op,
+                    left: Box::new(a),
+                    right: Box::new(b),
+                },
+            ))
+        }
+        ColExpr::Not { expr } => Ok((
+            None,
+            ColExpr::Not {
+                expr: Box::new(go(expr)?.1),
+            },
+        )),
+        ColExpr::IsNull { expr } => Ok((
+            None,
+            ColExpr::IsNull {
+                expr: Box::new(go(expr)?.1),
+            },
+        )),
+        ColExpr::InParam { subject, name } => Ok((
+            None,
+            ColExpr::InParam {
+                subject: Box::new(go(subject)?.1),
+                name: name.clone(),
+            },
+        )),
+        ColExpr::Coalesce { exprs } => {
+            let (units, out) = many(exprs)?;
+            Ok((agree(None, &units)?, ColExpr::Coalesce { exprs: out }))
+        }
+        ColExpr::Case { cases, else_expr } => {
+            let whens: Vec<ColExpr> = cases.iter().map(|a| a.when.clone()).collect();
+            let thens: Vec<ColExpr> = cases.iter().map(|a| a.then.clone()).collect();
+            let (_, rw) = many(&whens)?;
+            let (ut, rt) = many(&thens)?;
+            let (ue, re) = go(else_expr)?;
+            let u = agree(ue, &ut)?;
+            let cases = rw
+                .into_iter()
+                .zip(rt)
+                .map(|(when, then)| CaseArm { when, then })
+                .collect();
+            Ok((
+                u,
+                ColExpr::Case {
+                    cases,
+                    else_expr: Box::new(re),
+                },
+            ))
+        }
+        ColExpr::Cast { column_type, expr } => {
+            let (u, r) = go(expr)?;
+            Ok((
+                u,
+                ColExpr::Cast {
+                    column_type: *column_type,
+                    expr: Box::new(r),
+                },
+            ))
+        }
+        ColExpr::Apply { func, args } => {
+            let (units, out) = many(args)?;
+            let applied = ColExpr::Apply {
+                func: *func,
+                args: out,
+            };
+            let u = match func {
+                ScalarFn::Abs | ScalarFn::Round | ScalarFn::Floor | ScalarFn::Ceil => {
+                    units.first().cloned().flatten()
+                }
+                ScalarFn::Least | ScalarFn::Greatest => agree(None, &units)?,
+                // An integer-LITERAL exponent composes the unit through the
+                // algebra (`m` squared is `m2`; to the power zero, unconstrained);
+                // any other power takes a dimensionless operand only.
+                ScalarFn::Pow => match (args.as_slice(), units.first().cloned().flatten()) {
+                    ([_, ColExpr::Lit { cell: Cell::Int(n) }], base) => match base {
+                        None => None,
+                        Some(_) if *n == 0 => None,
+                        Some(b) => {
+                            let n = i32::try_from(*n).map_err(|_| range(&b))?;
+                            Some(unit::pow(&b, n).ok_or_else(|| range(&b))?)
+                        }
+                    },
+                    _ => match first_dimensioned(&units) {
+                        None => None,
+                        Some(d) => return Err(mismatch(&d, &unit::dimensionless())),
+                    },
+                },
+                ScalarFn::Exp | ScalarFn::Ln | ScalarFn::Log10 => match first_dimensioned(&units) {
+                    None => None,
+                    Some(d) => return Err(mismatch(&d, &unit::dimensionless())),
+                },
+                ScalarFn::Length
+                | ScalarFn::Lower
+                | ScalarFn::Upper
+                | ScalarFn::Substr
+                | ScalarFn::DatePart
+                | ScalarFn::Concat
+                | ScalarFn::Trim
+                | ScalarFn::Replace
+                | ScalarFn::DateDiffDays => None,
+            };
+            Ok((u, applied))
+        }
+        ColExpr::InList { subject, items } => {
+            let (us, rs) = go(subject)?;
+            let (units, out) = many(items)?;
+            agree(us, &units)?;
+            Ok((
+                None,
+                ColExpr::InList {
+                    subject: Box::new(rs),
+                    items: out,
+                },
+            ))
+        }
+        ColExpr::Quotient {
+            dividend,
+            divisor,
+            rounding,
+        } => {
+            let (ua, a) = go(dividend)?;
+            let (ub, b) = go(divisor)?;
+            Ok((
+                quotient(ua, ub)?,
+                ColExpr::Quotient {
+                    dividend: Box::new(a),
+                    divisor: Box::new(b),
+                    rounding: rounding.clone(),
+                },
+            ))
+        }
+        ColExpr::Rounded { expr, rounding } => {
+            let (u, r) = go(expr)?;
+            Ok((
+                u,
+                ColExpr::Rounded {
+                    expr: Box::new(r),
+                    rounding: rounding.clone(),
+                },
+            ))
+        }
+        // Over an operand stating no unit, a TAG: the operand as a float under the
+        // unit. Over a compatible unit, the float times the exact factor as a float
+        // literal. Across dimensions, refused.
+        ColExpr::Convert { expr, unit: target } => {
+            let (source, r) = go(expr)?;
+            let as_float = ColExpr::Cast {
+                column_type: ColumnType::Float,
+                expr: Box::new(r),
+            };
+            match source {
+                None => Ok((Some(target.clone()), as_float)),
+                Some(s) if s == *target => Ok((Some(target.clone()), as_float)),
+                Some(s) => match unit::conversion_factor(&s, target) {
+                    None => Err(mismatch(&s, target)),
+                    Some(ratio) => Ok((
+                        Some(target.clone()),
+                        ColExpr::Binary {
+                            op: BinOp::Mul,
+                            left: Box::new(as_float),
+                            right: Box::new(ColExpr::Lit {
+                                cell: Cell::Float(ratio.to_f64()),
+                            }),
+                        },
+                    )),
+                },
+            }
+        }
+    }
+}
+
+/// An aggregate's column unit: a count is dimensionless, every other aggregate
+/// keeps its source's.
+fn aggregate_unit(func: AggFn, source: Option<UnitOfMeasure>) -> Option<UnitOfMeasure> {
+    match func {
+        AggFn::Count | AggFn::CountDistinct => None,
+        AggFn::Sum
+        | AggFn::Mean
+        | AggFn::Min
+        | AggFn::Max
+        | AggFn::Median
+        | AggFn::Stddev
+        | AggFn::First
+        | AggFn::Last => source,
+    }
+}
+
+/// A window column's unit: the ranking family none, the shifting and running
+/// families their source's.
+fn window_unit(func: WindowFn, source: Option<UnitOfMeasure>) -> Option<UnitOfMeasure> {
+    match func {
+        WindowFn::RowNumber | WindowFn::Rank => None,
+        WindowFn::Lag | WindowFn::Lead | WindowFn::CumulSum | WindowFn::RollingMean => source,
+    }
+}
+
+/// An unpivot's `value` unit: the one unit every value column states, none
+/// where they differ or any states none.
+fn shared_unit(cols: &[SchemaEntry], value_vars: &[String]) -> Option<UnitOfMeasure> {
+    let units: Vec<Option<UnitOfMeasure>> = value_vars.iter().map(|n| col_unit(cols, n)).collect();
+    match units.first() {
+        Some(Some(first)) if units.iter().all(|u| u.as_ref() == Some(first)) => Some(first.clone()),
+        _ => None,
+    }
+}
+
+/// Two columns met as one (a union's pair, a set op's pair): the left entry
+/// under the one unit the pair states, or the mismatch.
+fn units_agree(
+    what: &str,
+    left: &SchemaEntry,
+    right: &SchemaEntry,
+) -> Result<SchemaEntry, EvalError> {
+    match (&left.unit, &right.unit) {
+        (Some(l), Some(r)) if l != r => Err(unit_mismatch(
+            &format!("{what} '{}'", left.name),
+            &ColExpr::Col {
+                name: left.name.clone(),
+            },
+            unit::render(l),
+            unit::render(r),
+        )),
+        (None, Some(r)) => {
+            let mut e = left.clone();
+            e.unit = Some(r.clone());
+            Ok(e)
+        }
+        _ => Ok(left.clone()),
+    }
+}
+
+// The predicate's units are checked over the schema before any row; the
+// resolved predicate is what is evaluated.
+fn eval_filter(f: &Frame, written: &ColExpr, env: &EvalEnv) -> Result<Frame, EvalError> {
+    let (_, pred) = resolve_units("filter", &f.cols, written)?;
+    let pred = &pred;
     let mut rows = Vec::new();
     for row in &f.rows {
         if matches!(eval_expr(&f.cols, row, pred, env)?, Cell::Bool(true)) {
@@ -2096,10 +2560,10 @@ fn repeated_output(verb: &str, outs: &[(String, String)]) -> Result<(), EvalErro
 }
 
 fn eval_project(f: &Frame, pairs: &[(String, String)]) -> Result<Frame, EvalError> {
-    let mut resolved: Vec<(String, ColumnType, usize)> = Vec::new();
+    let mut resolved: Vec<(String, usize)> = Vec::new();
     for (a, b) in pairs {
         let i = col_index(&f.cols, a).ok_or_else(|| unknown_column(a, &f.cols))?;
-        resolved.push((b.clone(), f.cols[i].column_type, i));
+        resolved.push((b.clone(), i));
     }
     let outs: Vec<(String, String)> = pairs
         .iter()
@@ -2107,22 +2571,31 @@ fn eval_project(f: &Frame, pairs: &[(String, String)]) -> Result<Frame, EvalErro
         .collect();
     repeated_output("project", &outs)?;
     Ok(Frame {
+        // A projection renames a column and states nothing new about it.
         cols: resolved
             .iter()
-            .map(|(out, ty, _)| SchemaEntry::new(out.clone(), *ty))
+            .map(|(out, i)| renamed(&f.cols[*i], out.clone()))
             .collect(),
         rows: f
             .rows
             .iter()
-            .map(|row| resolved.iter().map(|(_, _, i)| row[*i].clone()).collect())
+            .map(|row| resolved.iter().map(|(_, i)| row[*i].clone()).collect())
             .collect(),
     })
 }
 
-fn eval_derive(f: &Frame, name: &str, expr: &ColExpr, env: &EvalEnv) -> Result<Frame, EvalError> {
-    // The column's typing is read off the schema before any row: a derive
-    // refused statically is refused on every frame, an empty one included, and
-    // a decided one carries its type whatever rows the frame holds.
+fn eval_derive(
+    f: &Frame,
+    name: &str,
+    written: &ColExpr,
+    env: &EvalEnv,
+) -> Result<Frame, EvalError> {
+    // The column's unit and typing are read off the schema before any row: a
+    // derive refused statically is refused on every frame, an empty one
+    // included, and a decided one carries its type, and its unit, whatever rows
+    // the frame holds. The column's entry is its own.
+    let (unit, expr) = resolve_units(&format!("derive '{name}'"), &f.cols, written)?;
+    let expr = &expr;
     let dt = derived_typing_in(env, &f.cols, expr);
     if dt == DerivedTyping::Refused {
         return Err(float_beside_decimal(name));
@@ -2139,7 +2612,7 @@ fn eval_derive(f: &Frame, name: &str, expr: &ColExpr, env: &EvalEnv) -> Result<F
             .enumerate()
             .map(|(j, e)| {
                 if j == i {
-                    SchemaEntry::new(e.name.clone(), ty)
+                    stated(e.name.clone(), ty, unit.clone())
                 } else {
                     e.clone()
                 }
@@ -2165,7 +2638,7 @@ fn eval_derive(f: &Frame, name: &str, expr: &ColExpr, env: &EvalEnv) -> Result<F
         Ok(Frame { cols, rows })
     } else {
         let mut cols = f.cols.clone();
-        cols.push(SchemaEntry::new(name.to_string(), ty));
+        cols.push(stated(name, ty, unit));
         let rows = f
             .rows
             .iter()
@@ -2219,15 +2692,16 @@ fn eval_group_by(f: &Frame, keys: &[String], aggs: &[Agg]) -> Result<Frame, Eval
         .collect();
     repeated_output("groupBy", &outs)?;
 
-    let mut out_cols: Vec<SchemaEntry> = keys
-        .iter()
-        .map(|k| SchemaEntry::new(k.clone(), col_type(&f.cols, k).unwrap()))
-        .collect();
-    out_cols.extend(
-        resolved
-            .iter()
-            .map(|(a, ty, _)| SchemaEntry::new(a.name.clone(), agg_type(a.func, *ty))),
-    );
+    // A key keeps its entry; an aggregate's column keeps its source's unit, a
+    // count none.
+    let mut out_cols: Vec<SchemaEntry> = idxs.iter().map(|i| f.cols[*i].clone()).collect();
+    out_cols.extend(resolved.iter().map(|(a, ty, _)| {
+        stated(
+            a.name.clone(),
+            agg_type(a.func, *ty),
+            aggregate_unit(a.func, col_unit(&f.cols, &a.of)),
+        )
+    }));
 
     let rows = order
         .iter()
@@ -2303,6 +2777,24 @@ fn eval_join(
         li.push(il);
         ri.push(ir);
     }
+    // A key pair is an equality, so the comparison's rule holds it: two stated
+    // units must be one unit.
+    for (a, b) in on {
+        if let (Some(lu), Some(ru)) = (col_unit(&f.cols, a), col_unit(&right.cols, b))
+            && lu != ru
+        {
+            return Err(unit_mismatch(
+                &format!("join key '{a}' = '{b}'"),
+                &ColExpr::Binary {
+                    op: BinOp::Eq,
+                    left: Box::new(ColExpr::Col { name: a.clone() }),
+                    right: Box::new(ColExpr::Col { name: b.clone() }),
+                },
+                unit::render(&lu),
+                unit::render(&ru),
+            ));
+        }
+    }
     let key_match =
         |lr: &[Cell], rr: &[Cell]| li.iter().zip(&ri).all(|(l, r)| cell_eq(&lr[*l], &rr[*r]));
 
@@ -2316,7 +2808,7 @@ fn eval_join(
             } else {
                 e.name.clone()
             };
-            SchemaEntry::new(name, e.column_type)
+            renamed(e, name)
         })
         .collect();
     let out_cols = [f.cols.clone(), right_cols].concat();
@@ -2363,6 +2855,9 @@ fn eval_union(f: &Frame, other: &Frame) -> Result<Frame, EvalError> {
     // under it), and is refused by name where none does.
     let mut cols = Vec::with_capacity(f.cols.len());
     for (l, r) in f.cols.iter().zip(&other.cols) {
+        // The unit is the left's, the right's where only the right states one;
+        // two stated units are refused.
+        let mut entry = units_agree("union column", l, r)?;
         let ty = join_column_type(l.column_type, r.column_type).ok_or_else(|| {
             EvalError::TypeError {
                 detail: format!(
@@ -2373,7 +2868,8 @@ fn eval_union(f: &Frame, other: &Frame) -> Result<Frame, EvalError> {
                 ),
             }
         })?;
-        cols.push(SchemaEntry::new(l.name.clone(), ty));
+        entry.column_type = ty;
+        cols.push(entry);
     }
     let pack = |row: &Vec<Cell>| -> Vec<Cell> {
         row.iter()
@@ -2402,6 +2898,11 @@ fn eval_set_op(
         return Err(EvalError::JoinError {
             detail: format!("{verb} requires matching column names"),
         });
+    }
+    // Row identity across two units is the comparison's error; the left schema
+    // is what the answer keeps.
+    for (l, r) in f.cols.iter().zip(&other.cols) {
+        units_agree(&format!("{verb} column"), l, r)?;
     }
     let right: BTreeSet<String> = other.rows.iter().map(|r| row_key(r)).collect();
     Ok(Frame {
@@ -2551,7 +3052,7 @@ fn eval_window(
     };
 
     let mut cols = f.cols.clone();
-    cols.push(SchemaEntry::new(alias.to_string(), ty));
+    cols.push(stated(alias, ty, window_unit(func, col_unit(&f.cols, of))));
     let rows = f
         .rows
         .iter()
@@ -2617,14 +3118,14 @@ fn eval_pivot(
         }
     }
 
-    let mut cols: Vec<SchemaEntry> = index
-        .iter()
-        .map(|n| SchemaEntry::new(n.clone(), col_type(&f.cols, n).unwrap()))
-        .collect();
+    // An index column keeps its entry; every value column is one aggregate of
+    // `values`, so each carries that aggregate's unit.
+    let mut cols: Vec<SchemaEntry> = idx_idx.iter().map(|i| f.cols[*i].clone()).collect();
+    let value_unit = aggregate_unit(agg, col_unit(&f.cols, values));
     cols.extend(
         on_values
             .iter()
-            .map(|ov| SchemaEntry::new(cell_string(ov), agg_type(agg, val_type))),
+            .map(|ov| stated(cell_string(ov), agg_type(agg, val_type), value_unit.clone())),
     );
 
     let rows = order
@@ -2694,12 +3195,9 @@ fn eval_unpivot(f: &Frame, id_vars: &[String], value_vars: &[String]) -> Result<
     let melted: Vec<Cell> = rows.iter().map(|r| r[id_vars.len() + 1].clone()).collect();
     let val_type = column_type_by(dt, "value", &melted)?;
 
-    let mut cols: Vec<SchemaEntry> = id_vars
-        .iter()
-        .map(|n| SchemaEntry::new(n.clone(), col_type(&f.cols, n).unwrap()))
-        .collect();
+    let mut cols: Vec<SchemaEntry> = id_idx.iter().map(|i| f.cols[*i].clone()).collect();
     cols.push(SchemaEntry::new("variable".to_string(), ColumnType::Str));
-    cols.push(SchemaEntry::new("value".to_string(), val_type));
+    cols.push(stated("value", val_type, shared_unit(&f.cols, value_vars)));
     Ok(Frame { cols, rows })
 }
 
@@ -2886,6 +3384,15 @@ pub fn eval_error_string(e: &EvalError) -> String {
         EvalError::UnboundParam { name, bound } => {
             format!("unbound param '{name}'; bound: {}", bound.join(", "))
         }
+        EvalError::UnitMismatch {
+            step,
+            expr,
+            left,
+            right,
+        } => format!(
+            "unit mismatch in {step}: {left} against {right} in {}",
+            expr_text(expr)
+        ),
     }
 }
 
@@ -2933,6 +3440,7 @@ fn col_expr_params(e: &ColExpr) -> Vec<String> {
         ColExpr::Rounded { expr, rounding } => {
             [col_expr_params(expr), scale_params(rounding)].concat()
         }
+        ColExpr::Convert { expr, .. } => col_expr_params(expr),
     }
 }
 
@@ -3063,6 +3571,10 @@ fn substitute_list_params_expr(list_env: &ListEnv, e: &ColExpr) -> ColExpr {
         ColExpr::Rounded { expr, rounding } => ColExpr::Rounded {
             expr: Box::new(substitute_list_params_expr(list_env, expr)),
             rounding: rounding.clone(),
+        },
+        ColExpr::Convert { expr, unit } => ColExpr::Convert {
+            expr: Box::new(substitute_list_params_expr(list_env, expr)),
+            unit: unit.clone(),
         },
     }
 }

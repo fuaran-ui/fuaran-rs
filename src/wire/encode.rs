@@ -336,6 +336,13 @@ pub(super) fn col_expr(e: &ColExpr) -> String {
                 field("rounding", rounding_json(rounding)),
             ],
         ),
+        ColExpr::Convert { expr, unit } => case_obj(
+            "convert",
+            vec![
+                field("expr", col_expr(expr)),
+                field("unit", s(&crate::core::unit::render(unit))),
+            ],
+        ),
     }
 }
 

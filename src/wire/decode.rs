@@ -944,7 +944,7 @@ pub(super) fn expr_children(e: &ColExpr) -> Vec<&ColExpr> {
         ColExpr::Quotient {
             dividend, divisor, ..
         } => vec![dividend, divisor],
-        ColExpr::Rounded { expr, .. } => vec![expr],
+        ColExpr::Rounded { expr, .. } | ColExpr::Convert { expr, .. } => vec![expr],
     }
 }
 
@@ -1136,6 +1136,16 @@ pub(super) fn decode_col_expr(j: &JVal) -> CResult<ColExpr> {
             expr: Box::new(decode_col_expr(c_field(fields, "expr")?)?),
             rounding: decode_rounding(c_field(fields, "rounding")?)?,
         }),
+        // Phase 2208: the operand brought to a unit, read by the unit algebra.
+        "convert" => {
+            let text = c_str(c_field(fields, "unit")?)?;
+            let unit = crate::core::unit::parse(&text)
+                .map_err(|_| format!("malformed: convert: '{text}' is not a unit"))?;
+            Ok(ColExpr::Convert {
+                expr: Box::new(decode_col_expr(c_field(fields, "expr")?)?),
+                unit,
+            })
+        }
         // Lenient-ingest (Core Phase 93): expression-level string-predicate
         // spellings — {"$type":"contains","expr":X,"other":Y} (also
         // left/right) denotes exactly the canonical binary form.
