@@ -560,6 +560,17 @@ pub(super) fn decode_cell_lit(j: &JVal) -> CResult<Cell> {
 /// which a whole-valued token has been through a float (Phase 2001).
 const INT53_MAX: f64 = 9_007_199_254_740_992.0;
 
+/// The value of a JSON number that is whole-valued and inside the signed 32-bit
+/// range — an `int` column's value under WIRE_FORMAT §3.6.28 (§7.1's
+/// integer-slot rule, read by value rather than spelling) — or `None`.
+pub(super) fn int32_value(n: f64) -> Option<i32> {
+    if n.is_finite() && n == n.trunc() && n >= f64::from(i32::MIN) && n <= f64::from(i32::MAX) {
+        Some(n as i32)
+    } else {
+        None
+    }
+}
+
 pub(super) fn decode_column_cell(col_name: &str, ty: ColumnType, v: &JVal) -> CResult<Cell> {
     let mismatch = || {
         format!(
@@ -569,7 +580,12 @@ pub(super) fn decode_column_cell(col_name: &str, ty: ColumnType, v: &JVal) -> CR
         )
     };
     match (ty, v) {
-        (ColumnType::Int, JVal::Num(n)) => Ok(Cell::Int(n.trunc() as i64)),
+        // An int column holds signed 32-bit integers, read by value (WIRE_FORMAT
+        // §3.6.28): 2.0 is 2; a fraction or a value past either end is refused,
+        // never truncated or widened.
+        (ColumnType::Int, JVal::Num(n)) => int32_value(*n).map(|i| Cell::Int(i64::from(i))).ok_or_else(|| {
+            format!("column '{col_name}': an int column holds signed 32-bit integers, and {n} is not one")
+        }),
         (ColumnType::Float, JVal::Num(n)) => Ok(Cell::Float(*n)),
         (ColumnType::Bool, JVal::Bool(b)) => Ok(Cell::Bool(*b)),
         (ColumnType::Str, JVal::Str(s)) => Ok(Cell::Str(s.clone())),
@@ -800,8 +816,8 @@ pub(super) fn decode_data_column(
 }
 
 /// Lenient-ingest (Core Phase 88) — infer one column's type from its cells.
-/// Pinned deterministic rules: all-int numerics => int, any fractional =>
-/// float, all-bool => bool, all-string => string — never date/timestamp
+/// Pinned deterministic rules: all-int numerics => int (a whole value inside
+/// int32, WIRE_FORMAT §3.6.28), any other number => float, all-bool => bool, all-string => string — never date/timestamp
 /// (temporal types require a declared schema). Empty / mixed is a didactic
 /// reject naming the explicit-schema remedy.
 pub(super) fn infer_column_type(name: &str, values: &[JVal]) -> CResult<ColumnType> {
@@ -817,7 +833,9 @@ pub(super) fn infer_column_type(name: &str, values: &[JVal]) -> CResult<ColumnTy
     let mut saw_other = false;
     for v in values {
         match v {
-            JVal::Num(n) if *n == n.trunc() => saw_int = true,
+            // By value (WIRE_FORMAT §3.6.28): a whole value inside int32 is an
+            // int, any other number — a fraction, or one past the range — a float.
+            JVal::Num(n) if int32_value(*n).is_some() => saw_int = true,
             JVal::Num(_) => saw_float = true,
             JVal::Bool(_) => saw_bool = true,
             JVal::Str(_) => saw_str = true,
