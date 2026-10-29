@@ -10,6 +10,8 @@ mod encode;
 // `idl_codegen`). Written by the generator, not by rustfmt.
 #[rustfmt::skip]
 mod generated;
+/// Grid edits as columnar ops (WIRE_FORMAT §3.2, "Edits as column ops — GridEdit").
+pub mod grid_edit;
 #[cfg(feature = "idl-codegen")]
 #[doc(hidden)]
 pub mod idl_codegen;

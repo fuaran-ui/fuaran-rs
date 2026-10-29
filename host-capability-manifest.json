@@ -65,6 +65,10 @@
     "formatting": {
       "pending": "the host formatter is not yet certified against the golden; carried by fuaran#2328"
     },
+    "grid-edit": "covered",
+    "grid-window-writer": {
+      "notApplicable": "this host renders a grid as inert HTML and leaves event-to-store wiring to the app, so no viewport of its, server or wasm32 client, measures a viewport or writes a window descriptor"
+    },
     "laws/capabilityLaws": {
       "pending": "this host's suite does not yet run this law family's vectors"
     },

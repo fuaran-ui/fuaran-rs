@@ -1054,6 +1054,13 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
             "the host formatter is not yet certified against the golden; carried by fuaran#2328",
         ),
     ),
+    ("grid-edit", FamilyAnswer::Covered), // tests/grid_edit.rs
+    (
+        "grid-window-writer",
+        FamilyAnswer::NotApplicable(
+            "this host renders a grid as inert HTML and leaves event-to-store wiring to the app, so no viewport of its, server or wasm32 client, measures a viewport or writes a window descriptor",
+        ),
+    ),
     ("laws/capabilityLaws", FamilyAnswer::Pending(LAW_UNRUN)),
     ("laws/dataframeParity", FamilyAnswer::Covered),
     ("laws/decimal", FamilyAnswer::Covered),

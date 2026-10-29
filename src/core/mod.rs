@@ -5,6 +5,8 @@
 //! - [`dataframe`] — the dataframe model (cells, schema, column expressions,
 //!   transform steps), the twin of `Fuaran.Core.DataFrame`'s model;
 //! - [`transform`] — the Transform evaluator and list-param substitution;
+//! - [`grid_edit`] — the columnar edit ops a grid edit carries: apply, inverse,
+//!   the row delta under a declared row identity, and the edit history;
 //! - [`function`] — the signature-searchable function registry
 //!   (`findBySignature` + compose-path resolution);
 //! - [`decimal`] — the exact decimal: canonical text, order, and the exact
@@ -34,6 +36,7 @@
 
 pub mod dataframe;
 pub mod function;
+pub mod grid_edit;
 pub mod schema;
 pub mod transform;
 pub mod unit;
