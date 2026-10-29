@@ -1012,6 +1012,12 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
         ),
     ),
     ("apply/styleNormaliseApply", FamilyAnswer::Covered),
+    (
+        "binding-propagation",
+        FamilyAnswer::Pending(
+            "this host has no binding walk deriving which bindings a write makes stale for the vectors to run against yet",
+        ),
+    ),
     ("chain", FamilyAnswer::Covered), // tests/opstream.rs
     ("contract-card-reject", FamilyAnswer::Pending(NO_CARD_CODEC)),
     (

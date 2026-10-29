@@ -32,6 +32,9 @@
       "pending": "the apply engine's suite does not yet run the skeleton-apply vectors"
     },
     "apply/styleNormaliseApply": "covered",
+    "binding-propagation": {
+      "pending": "this host has no binding walk deriving which bindings a write makes stale for the vectors to run against yet"
+    },
     "chain": "covered",
     "contract-card-reject": {
       "pending": "this host has no contract-card codec (§25) for the card fixtures to run against yet"
