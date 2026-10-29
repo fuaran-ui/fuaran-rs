@@ -1137,7 +1137,7 @@ fn currency_symbol(iso: &str) -> String {
 /// The unit symbol a `Format` contributes to an axis-unit label.
 fn format_unit_symbol(fmt: Option<&Format>) -> String {
     match fmt {
-        Some(Format::Currency { iso_code }) => currency_symbol(iso_code),
+        Some(Format::Currency { iso_code, .. }) => currency_symbol(iso_code),
         _ => String::new(),
     }
 }
@@ -1171,7 +1171,7 @@ fn format_value(
     let body = render_fixed(dps, dv);
     match fmt {
         Some(Format::Percent { .. }) => format!("{body}%"),
-        Some(Format::Currency { iso_code }) if !drop_symbol => {
+        Some(Format::Currency { iso_code, .. }) if !drop_symbol => {
             let sym = currency_symbol(iso_code);
             if let Some(rest) = body.strip_prefix('-') {
                 format!("-{sym}{rest}")

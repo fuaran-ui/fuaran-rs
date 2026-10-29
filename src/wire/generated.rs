@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "b8d8755fcf412df90d10c812c9ce99634d616486d007aeb7b5ca42c1c1ced409";
+pub const IDL_SHA256: &str = "08ca738ed16bd740e160879588ee8aa778a2d6724beffc08126fedf462d47019";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -1689,6 +1689,7 @@ pub enum CellFormat {
     },
     Currency {
         code: String,
+        decimals: Option<i64>,
         locale: Option<LocaleSource>,
     },
     Percent {
@@ -2004,6 +2005,7 @@ pub enum Format {
     },
     Currency {
         iso_code: String,
+        decimals: Option<i64>,
     },
     Percent {
         decimals: Option<i64>,
@@ -3719,8 +3721,11 @@ pub(super) mod gen_encode {
             }
             case_obj("Number", f)
             }
-            CellFormat::Currency { code: m_code, locale: m_locale } => {
+            CellFormat::Currency { code: m_code, decimals: m_decimals, locale: m_locale } => {
             let mut f: Vec<Field> = vec![field("code", s(m_code))];
+            if let Some(x) = m_decimals {
+                f.push(field("decimals", int(*x)));
+            }
             if let Some(x) = m_locale {
                 f.push(field("locale", locale_source(x)));
             }
@@ -3897,8 +3902,12 @@ pub(super) mod gen_encode {
             }
             case_obj("Number", f)
             }
-            Format::Currency { iso_code: m_iso_code } => {
-            case_obj("Currency", vec![field("isoCode", s(m_iso_code))])
+            Format::Currency { iso_code: m_iso_code, decimals: m_decimals } => {
+            let mut f: Vec<Field> = vec![field("isoCode", s(m_iso_code))];
+            if let Some(x) = m_decimals {
+                f.push(field("decimals", int(*x)));
+            }
+            case_obj("Currency", f)
             }
             Format::Percent { decimals: m_decimals } => {
             let mut f: Vec<Field> = vec![];
@@ -5306,8 +5315,9 @@ pub(super) mod gen_decode {
 
     pub(in super::super) fn decode_cell_format_currency(path: &str, fields: &Fields) -> DResult<CellFormat> {
         let m_code = field_req(path, fields, "code", &[], "CellFormat.Currency.code: string", dec_string)?;
+        let m_decimals = field_opt(path, fields, "decimals", &[], as_int)?;
         let m_locale = field_opt(path, fields, "locale", &[], decode_locale_source)?;
-        Ok(CellFormat::Currency { code: m_code, locale: m_locale })
+        Ok(CellFormat::Currency { code: m_code, decimals: m_decimals, locale: m_locale })
     }
 
     pub(in super::super) fn decode_cell_format_percent(path: &str, fields: &Fields) -> DResult<CellFormat> {
@@ -5629,7 +5639,8 @@ pub(super) mod gen_decode {
 
     pub(in super::super) fn decode_format_currency(path: &str, fields: &Fields) -> DResult<Format> {
         let m_iso_code = field_req(path, fields, "isoCode", &[], "Format.Currency.isoCode: string", dec_string)?;
-        Ok(Format::Currency { iso_code: m_iso_code })
+        let m_decimals = field_opt(path, fields, "decimals", &[], as_int)?;
+        Ok(Format::Currency { iso_code: m_iso_code, decimals: m_decimals })
     }
 
     pub(in super::super) fn decode_format_percent(path: &str, fields: &Fields) -> DResult<Format> {
@@ -6352,6 +6363,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "CallResultTarget.State.key",
     "CellFormat.Currency",
     "CellFormat.Currency.code",
+    "CellFormat.Currency.decimals",
     "CellFormat.Currency.locale",
     "CellFormat.Custom",
     "CellFormat.Custom.fn",
@@ -6552,6 +6564,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "FormFieldKind.Tokens.suggestions",
     "FormFieldKind.Tokens.value",
     "Format.Currency",
+    "Format.Currency.decimals",
     "Format.Currency.isoCode",
     "Format.DateTime",
     "Format.DateTime.dateStyle",

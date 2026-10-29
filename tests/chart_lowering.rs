@@ -88,6 +88,7 @@ fn value_format_of(j: &JVal) -> Format {
                 Some(JVal::Str(c)) => c.clone(),
                 _ => panic!("Currency valueFormat missing isoCode"),
             },
+            decimals,
         },
         other => panic!("chart-lowering input: unsupported valueFormat {other}"),
     }
