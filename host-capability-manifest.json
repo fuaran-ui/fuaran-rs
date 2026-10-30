@@ -32,6 +32,7 @@
       "pending": "the apply engine's suite does not yet run the skeleton-apply vectors"
     },
     "apply/styleNormaliseApply": "covered",
+    "apply/updatePropApply": "covered",
     "binding-propagation": {
       "pending": "this host has no binding walk deriving which bindings a write makes stale for the vectors to run against yet"
     },

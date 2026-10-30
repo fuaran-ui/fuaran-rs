@@ -7,8 +7,9 @@
 //! `MoveNode` adds none, but moving one legal branch under the leaf of another
 //! stacks two depths that each passed. All three were accepted past the limit.
 //! The last tests certify this host against the shared
-//! `apply/limits-apply.json`, `apply/duplicate-ids-apply.json` and
-//! `apply/style-normalise-apply.json` corpus families.
+//! `apply/limits-apply.json`, `apply/duplicate-ids-apply.json`,
+//! `apply/style-normalise-apply.json` and `apply/update-prop-apply.json` corpus
+//! families.
 
 mod common;
 
@@ -265,6 +266,14 @@ fn duplicate_ids_apply_corpus_holds_on_this_host() {
 #[test]
 fn style_normalise_apply_corpus_holds_on_this_host() {
     certify_apply_family("styleNormaliseApply");
+}
+
+/// The `apply/update-prop-apply.json` family (Phase 1925): an `UpdateProp`
+/// value is read through the decoder's own field rules — the §7.1 integer
+/// slot, the §21.9 row bound, omission at a declared default.
+#[test]
+fn update_prop_apply_corpus_holds_on_this_host() {
+    certify_apply_family("updatePropApply");
 }
 
 /// Decode and apply every vector of one `apply/` family. An accepting vector

@@ -1012,6 +1012,7 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
         ),
     ),
     ("apply/styleNormaliseApply", FamilyAnswer::Covered),
+    ("apply/updatePropApply", FamilyAnswer::Covered),
     (
         "binding-propagation",
         FamilyAnswer::Pending(

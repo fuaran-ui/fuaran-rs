@@ -424,6 +424,9 @@ enum UpdateOutcome {
     UnknownField,
     NotSupported,
     TypeMismatch(String),
+    /// A value the slot can hold that a WIRE_FORMAT §21 bound refuses
+    /// (Phase 1925) — the decoder's `LIMIT_EXCEEDED`, met on the write path.
+    OverLimit(String),
 }
 
 /// Thread a coercion result into a spec patch.
@@ -559,9 +562,15 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
             _ => UnknownField,
         },
         NodeKind::Skeleton(_) => match field {
-            "Rows" => patch(coerce::int(value), |x| {
-                NodeKind::Skeleton(crate::wire::SkeletonSpec { rows: x })
-            }),
+            "Rows" => match coerce::skeleton_rows(value) {
+                Ok(rows) => UpdateOutcome::Updated(Box::new(NodeKind::Skeleton(crate::wire::SkeletonSpec {
+                    rows,
+                }))),
+                Err(e) if e.code == crate::wire::DecodeErrorCode::LimitExceeded => {
+                    UpdateOutcome::OverLimit(e.message)
+                }
+                Err(e) => UpdateOutcome::TypeMismatch(e.message),
+            },
             _ => UnknownField,
         },
         // Phase 821 — the standalone Icon display kind's field surface.
@@ -1342,6 +1351,12 @@ fn apply_one(op: &TreeOp, root: &Node, telem: &mut Vec<OpApplyTelemetryRecord>) 
                         ApplyErrorCode::KindMismatch,
                         format!(
                             "UpdateProp value for '{path}' on node '{target}' does not match the field's expected type: {detail}"
+                        ),
+                    ),
+                    UpdateOutcome::OverLimit(detail) => fail(
+                        ApplyErrorCode::LimitExceeded,
+                        format!(
+                            "UpdateProp value for '{path}' on node '{target}' is past a wire limit: {detail}"
                         ),
                     ),
                 }

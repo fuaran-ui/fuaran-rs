@@ -3657,13 +3657,20 @@ pub(super) fn decode_src_set_width(path: &str, fields: &Fields) -> DResult<i64> 
 
 /// `Skeleton.rows` — the §21.9 bound.
 pub(super) fn check_skeleton(path: &str, _fields: &Fields, spec: &SkeletonSpec) -> DResult<()> {
-    if spec.rows > crate::limits::MAX_SKELETON_ROWS {
+    bound_skeleton_rows(&format!("{path}.rows"), spec.rows).map(|_| ())
+}
+
+/// The §21.9 row bound, ONE function for the decoder and the write path
+/// (Phase 1925): an `UpdateProp` that set `rows` without it built a tree no
+/// host decodes, and the next render looped once per count.
+fn bound_skeleton_rows(path: &str, rows: i64) -> DResult<i64> {
+    if rows > crate::limits::MAX_SKELETON_ROWS {
         return Err(make_error(
             DecodeErrorCode::LimitExceeded,
-            format!("{path}.rows"),
+            path.to_string(),
             format!(
                 "skeleton rows {} exceeds the maximum of {} (WIRE_FORMAT 21.9)",
-                spec.rows,
+                rows,
                 crate::limits::MAX_SKELETON_ROWS
             ),
             Some(format!(
@@ -3672,7 +3679,7 @@ pub(super) fn check_skeleton(path: &str, _fields: &Fields, spec: &SkeletonSpec) 
             )),
         ));
     }
-    Ok(())
+    Ok(rows)
 }
 
 /// `FieldRule` — a rule must constrain something, and its length bounds must
@@ -4193,32 +4200,33 @@ pub(crate) mod coerce {
         dec("$value", v).map_err(|e| e.message)
     }
 
+    /// An integer slot, read through the decoder's own §7.1 rule (Phase 1925):
+    /// `2.0` is the integer 2; a fractional value or one outside the signed
+    /// 32-bit range is refused. It used to be `n.trunc() as i64`, which kept
+    /// the truncation `as_int` retired at decode alive on the write path.
     pub fn int(v: &JVal) -> C<i64> {
-        match v {
-            JVal::Num(n) => Ok(n.trunc() as i64),
-            _ => Err("expected a JSON number (integer)".to_string()),
-        }
+        via(v, as_int)
     }
 
+    /// `Skeleton.rows` — §7.1 first, then the §21.9 bound, the decoder's two
+    /// rules in the decoder's order. The refusal keeps its decode CODE, so a
+    /// bound answers `LimitExceeded` and a slot violation `KindMismatch`.
+    pub fn skeleton_rows(v: &JVal) -> Result<i64, DecodeError> {
+        as_int("$value", v).and_then(|rows| bound_skeleton_rows("$value", rows))
+    }
+
+    /// The scalar slots read through the decoder's own primitives too, the
+    /// static envelope and the non-finite sentinels included.
     pub fn float(v: &JVal) -> C<f64> {
-        match v {
-            JVal::Num(n) => Ok(*n),
-            _ => Err("expected a JSON number".to_string()),
-        }
+        via(v, as_float)
     }
 
     pub fn boolean(v: &JVal) -> C<bool> {
-        match v {
-            JVal::Bool(b) => Ok(*b),
-            _ => Err("expected a JSON boolean".to_string()),
-        }
+        via(v, as_bool)
     }
 
     pub fn string(v: &JVal) -> C<String> {
-        match v {
-            JVal::Str(s) => Ok(s.clone()),
-            _ => Err("expected a JSON string".to_string()),
-        }
+        via(v, |p, j| as_str(p, j).map(str::to_string))
     }
 
     pub fn text_source(v: &JVal) -> C<TextSource> {
