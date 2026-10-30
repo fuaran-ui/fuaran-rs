@@ -14,10 +14,16 @@
 //! field metadata through every verb and checks units, so a refusal among them
 //! is the unit check's and an answer carries its schema's units and labels.
 //!
+//! The `columnOp` vectors run (Phase 2500 gave this host the surface): the op
+//! decodes through `decode_column_op_json`, re-encodes byte for byte to
+//! `expected.op`, and applies through `apply_column_op`, compared as an
+//! `evalPipeline` vector is.
+//!
 //! What is NOT run is reported by name and counted, never silent:
-//! - the `columnOp` and `delta` case kinds: this host carries no ColumnOp
-//!   surface and no table-delta surface. The set of case kinds in the file must
-//!   be exactly the three this leg knows, so a new kind fails loudly.
+//! - the `delta` case kind: a vector carries two tables and asks for their diff,
+//!   and this host's `grid_edit_delta` derives a row delta from an op over the
+//!   before table. The set of case kinds in the file must be exactly the three
+//!   this leg knows, so a new kind fails loudly.
 //!
 //! A vector carrying `expected.tolerance` (Phase 2400) names the columns the
 //! reference marks host-rounded, each with a bound in ulps. Those columns are
@@ -36,6 +42,10 @@ use std::collections::BTreeSet;
 
 use fuaran_rs::canonical::{JVal, parse, render_canonical};
 use fuaran_rs::transform::{Table, eval_pipeline};
+use fuaran_rs::wire::grid_edit::{
+    apply_column_op, decode_column_op_json, decode_table_json, encode_column_op,
+    encode_table as encode_embedded_table,
+};
 use fuaran_rs::wire::{
     Binding, Cell, DataColumn, DataSource, NodeKind, TransformSource, decode_node, encode_node,
 };
@@ -89,6 +99,37 @@ fn encode_table(carrier: &fuaran_rs::wire::Node, out: Table) -> String {
         };
     }
     grid_member(&encode_node(&carrier), "source")
+}
+
+/// One `columnOp` vector: `Ok`, or the first disagreement with the reference.
+fn run_column_op_vector(input: &JVal, expected: &JVal) -> Result<(), String> {
+    let text = str_field(input, "op").ok_or("the vector carries no input.op")?;
+    let doc = parse(&text).map_err(|e| format!("input.op does not parse: {}", e.message))?;
+    let op = decode_column_op_json(&doc).map_err(|e| format!("input.op did not decode: {e}"))?;
+    let encoded = encode_column_op(&op);
+    let want_op = str_field(expected, "op").ok_or("the vector carries no expected.op")?;
+    if encoded != want_op {
+        return Err(format!("op round-trip\n  got  {encoded}\n  want {want_op}"));
+    }
+    let source = str_field(input, "source").ok_or("the vector carries no input.source")?;
+    let doc = parse(&source).map_err(|e| format!("input.source does not parse: {}", e.message))?;
+    let table = decode_table_json(&doc).map_err(|e| format!("input.source: {e}"))?;
+    let verdict = str_field(expected, "verdict").ok_or("the vector carries no verdict")?;
+    match (apply_column_op(&op, &table), verdict.as_str()) {
+        (Err(_), "error") => Ok(()),
+        (Ok(_), "error") => Err("the reference refused; this host applied".to_string()),
+        (Err(e), _) => Err(format!("the reference applied; this host refused: {e:?}")),
+        (Ok(out), _) => {
+            let got = encode_embedded_table(&out);
+            let want =
+                str_field(expected, "table").ok_or("the vector carries no expected.table")?;
+            if got == want {
+                Ok(())
+            } else {
+                Err(format!("applied table\n  got  {got}\n  want {want}"))
+            }
+        }
+    }
 }
 
 /// The distance between two doubles of one sign: their bit patterns' difference.
@@ -233,24 +274,32 @@ fn the_evaluator_matches_the_reference_on_every_transform_law_vector() {
     );
 
     let mut failures: Vec<String> = vec![];
-    let (mut ran, mut units) = (0usize, 0usize);
+    let (mut ran, mut column_ops, mut units) = (0usize, 0usize, 0usize);
     let mut not_run_kinds: Vec<(String, String)> = vec![];
     for v in vectors {
         let id = str_field(v, "id").expect("vector id");
         let case = str_field(v, "case").expect("vector case");
         let input = v.field("input").expect("vector input");
+        let expected = v.field("expected").expect("vector expected");
         match case.as_str() {
             "columnOp" => {
-                not_run_kinds.push((id, "this host carries no ColumnOp surface".to_string()));
+                column_ops += 1;
+                if let Err(why) = run_column_op_vector(input, expected) {
+                    failures.push(format!("{id}: {why}"));
+                }
                 continue;
             }
             "delta" => {
-                not_run_kinds.push((id, "this host carries no table-delta surface".to_string()));
+                not_run_kinds.push((
+                    id,
+                    "this host derives a row delta from an op over the before table \
+                     (grid_edit_delta); it has no surface that diffs two tables"
+                        .to_string(),
+                ));
                 continue;
             }
             _ => {}
         }
-        let expected = v.field("expected").expect("vector expected");
         let source = str_field(input, "source").expect("input.source");
         let pipeline = str_field(input, "pipeline").expect("input.pipeline");
         if id.contains("-unit-") {
@@ -345,13 +394,20 @@ fn the_evaluator_matches_the_reference_on_every_transform_law_vector() {
     }
     assert!(
         failures.is_empty(),
-        "{} of {ran} transformLaws evalPipeline vectors failed:\n{}",
+        "{} of {} transformLaws vectors failed:\n{}",
         failures.len(),
+        ran + column_ops,
         failures.join("\n")
     );
+    assert!(column_ops > 0, "the family carries no columnOp vector");
+    assert_eq!(
+        ran + column_ops + not_run_kinds.len(),
+        vectors.len(),
+        "every vector is run or named as not run"
+    );
     eprintln!(
-        "transformLaws leg: {ran} evalPipeline vectors agree with the reference ({units} of them \
-         unit vectors); {} columnOp/delta vectors not run (no surface)",
+        "transformLaws leg: {ran} evalPipeline vectors ({units} of them unit vectors) and \
+         {column_ops} columnOp vectors agree with the reference; {} delta vectors not run",
         not_run_kinds.len()
     );
 }
