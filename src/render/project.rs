@@ -408,6 +408,7 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
                     // prose is shown on violation, which this projection does not
                     // model. Carried through unchanged rather than silently mapped.
                     rule: f.rule.clone(),
+                    affordance: f.affordance.clone(),
                 })
                 .collect(),
             on_submit: spec.on_submit.clone(),
@@ -430,6 +431,7 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             variant: spec.variant,
             icon: spec.icon.clone(),
             disabled: spec.disabled.clone(),
+            affordance: spec.affordance.clone(),
         }),
         NodeKind::FileUpload(spec) => NodeKind::FileUpload(crate::wire::FileUploadSpec {
             accept: spec.accept.clone(),
@@ -456,6 +458,7 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             multiple: spec.multiple,
             values: spec.values.clone(),
             on_change_multi: spec.on_change_multi,
+            affordance: spec.affordance.clone(),
         }),
         // ── Visualisation (map chrome text; collection sources left as-is) ───
         NodeKind::DataGrid(spec) => NodeKind::DataGrid(GridSpec {

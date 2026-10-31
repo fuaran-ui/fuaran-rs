@@ -2302,6 +2302,24 @@ pub(super) const DECODE_CHECKS: &[(&str, &str, Check, &str)] = &[
         "a named destination is non-empty and each ceiling positive",
     ),
     (
+        "Button",
+        "check_button_affordance",
+        Check::Post,
+        "a click names no slot (§31.2)",
+    ),
+    (
+        "Select",
+        "check_select_affordance",
+        Check::Post,
+        "a set names exactly one slot (§31.2)",
+    ),
+    (
+        "FormField",
+        "check_form_field_affordance",
+        Check::Post,
+        "a set names exactly one slot (§31.2)",
+    ),
+    (
         "DefaultSort",
         "check_default_sort",
         Check::Post,

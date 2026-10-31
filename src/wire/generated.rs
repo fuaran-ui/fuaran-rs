@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "08ca738ed16bd740e160879588ee8aa778a2d6724beffc08126fedf462d47019";
+pub const IDL_SHA256: &str = "6c868d199afb85263b42344ce1930b1604dd6abf3a209dfab1d4267e081a47f3";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -478,6 +478,7 @@ pub struct ButtonSpec {
     pub variant: ButtonVariant,
     pub icon: Option<String>,
     pub disabled: Option<Binding>,
+    pub affordance: Option<Affordance>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1001,6 +1002,7 @@ pub struct SelectSpec {
     /// Emitted only when `true` (Phase 291), so single-select stays byte-identical.
     pub multiple: Option<bool>,
     pub values: Option<Binding>,
+    pub affordance: Option<Affordance>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1107,6 +1109,22 @@ pub struct Accessibility {
     /// `TextSource` (bare-string canonical for a literal, as `tooltip`). Inert to
     /// every visual renderer: it MUST reach no attribute and no visible text.
     pub speak: Option<TextSource>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Affordance {
+    pub patterns: Vec<String>,
+    pub read_patterns: Vec<String>,
+    pub aliases: Vec<AffordanceAlias>,
+    pub description: Option<String>,
+    pub clearable: bool,
+    pub never_controllable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AffordanceAlias {
+    pub alias: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1257,6 +1275,7 @@ pub struct FormField {
     pub required: bool,
     pub help: Option<TextSource>,
     pub rule: Option<FieldRule>,
+    pub affordance: Option<Affordance>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2405,6 +2424,8 @@ pub(crate) mod defaults {
     pub(crate) const TABS_ORIENTATION: Orientation = Orientation::Horizontal;
     pub(crate) const TOAST_DISMISSABLE: bool = true;
     pub(crate) const TOAST_TONE: ToneVariant = ToneVariant::Default;
+    pub(crate) const AFFORDANCE_CLEARABLE: bool = false;
+    pub(crate) const AFFORDANCE_NEVER_CONTROLLABLE: bool = false;
     pub(crate) const COLUMN_ERASED_FORMAT: CellFormat = CellFormat::None;
     pub(crate) const COLUMN_ERASED_WIDTH: ColumnWidth = ColumnWidth::Auto;
     pub(crate) const FORM_FIELD_REQUIRED: bool = false;
@@ -2464,7 +2485,7 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn button_spec(v: &ButtonSpec) -> String {
-        let ButtonSpec { label: m_label, on_click: m_on_click, variant: m_variant, icon: m_icon, disabled: m_disabled } = v;
+        let ButtonSpec { label: m_label, on_click: m_on_click, variant: m_variant, icon: m_icon, disabled: m_disabled, affordance: m_affordance } = v;
         let mut f: Vec<Field> = vec![field("label", text_source(m_label)), field("onClick", action(m_on_click))];
         if *m_variant != defaults::BUTTON_VARIANT {
             f.push(field("variant", s(m_variant.as_str())));
@@ -2474,6 +2495,9 @@ pub(super) mod gen_encode {
         }
         if let Some(x) = m_disabled {
             f.push(field("disabled", binding(x)));
+        }
+        if let Some(x) = m_affordance {
+            f.push(field("affordance", affordance(x)));
         }
         obj(f)
     }
@@ -2988,7 +3012,7 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn select_spec(v: &SelectSpec) -> String {
-        let SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values } = v;
+        let SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values, affordance: m_affordance } = v;
         let mut f: Vec<Field> = vec![field("label", text_source(m_label))];
         if m_on_change.is_some() {
             f.push(field("onChange", CLOSURE.to_string()));
@@ -3011,6 +3035,9 @@ pub(super) mod gen_encode {
         }
         if let Some(x) = m_values {
             f.push(field("values", binding(x)));
+        }
+        if let Some(x) = m_affordance {
+            f.push(field("affordance", affordance(x)));
         }
         obj(f)
     }
@@ -3190,6 +3217,35 @@ pub(super) mod gen_encode {
         obj(f)
     }
 
+    pub(in super::super) fn affordance(v: &Affordance) -> String {
+        let Affordance { patterns: m_patterns, read_patterns: m_read_patterns, aliases: m_aliases, description: m_description, clearable: m_clearable, never_controllable: m_never_controllable } = v;
+        let mut f: Vec<Field> = vec![];
+        if !m_patterns.is_empty() {
+            f.push(field("patterns", enc_list(m_patterns, |v| s(v))));
+        }
+        if !m_read_patterns.is_empty() {
+            f.push(field("readPatterns", enc_list(m_read_patterns, |v| s(v))));
+        }
+        if !m_aliases.is_empty() {
+            f.push(field("aliases", enc_list(m_aliases, affordance_alias)));
+        }
+        if let Some(x) = m_description {
+            f.push(field("description", s(x)));
+        }
+        if *m_clearable != defaults::AFFORDANCE_CLEARABLE {
+            f.push(field("clearable", boolean(*m_clearable)));
+        }
+        if *m_never_controllable != defaults::AFFORDANCE_NEVER_CONTROLLABLE {
+            f.push(field("neverControllable", boolean(*m_never_controllable)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn affordance_alias(v: &AffordanceAlias) -> String {
+        let AffordanceAlias { alias: m_alias, value: m_value } = v;
+        obj(vec![field("alias", s(m_alias)), field("value", s(m_value))])
+    }
+
     pub(in super::super) fn column_erased(v: &ColumnErased) -> String {
         let ColumnErased { field: m_field, sortable: m_sortable, editable: m_editable, format: m_format, kind: m_kind, label: m_label, value: m_value, width: m_width } = v;
         let mut f: Vec<Field> = vec![];
@@ -3310,8 +3366,8 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn form_field(v: &FormField) -> String {
-        let FormField { id: m_id, kind: m_kind, label: m_label, required: m_required, help: m_help, rule: m_rule } = v;
-        encode_form_field(m_id, m_kind, m_label, m_required, m_help, m_rule)
+        let FormField { id: m_id, kind: m_kind, label: m_label, required: m_required, help: m_help, rule: m_rule, affordance: m_affordance } = v;
+        encode_form_field(m_id, m_kind, m_label, m_required, m_help, m_rule, m_affordance)
     }
 
     pub(in super::super) fn mount_channel(v: &MountChannel) -> String {
@@ -4193,7 +4249,10 @@ pub(super) mod gen_decode {
         let m_variant = field_or(path, fields, "variant", &[], defaults::BUTTON_VARIANT, decode_button_variant)?;
         let m_icon = field_opt(path, fields, "icon", &[], dec_string)?;
         let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
-        Ok(ButtonSpec { label: m_label, on_click: m_on_click, variant: m_variant, icon: m_icon, disabled: m_disabled })
+        let m_affordance = field_opt(path, fields, "affordance", &[], decode_affordance)?;
+        let v = ButtonSpec { label: m_label, on_click: m_on_click, variant: m_variant, icon: m_icon, disabled: m_disabled, affordance: m_affordance };
+        check_button_affordance(path, fields, &v)?;
+        Ok(v)
     }
 
     pub(in super::super) fn decode_callout_spec(path: &str, j: &JVal) -> DResult<CalloutSpec> {
@@ -4526,7 +4585,10 @@ pub(super) mod gen_decode {
         let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
         let m_multiple = field_opt(path, fields, "multiple", &[], as_bool)?;
         let m_values = field_opt(path, fields, "values", &[], |p, j| decode_binding_slot(p, j, StaticSlot::StringList))?;
-        Ok(SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values })
+        let m_affordance = field_opt(path, fields, "affordance", &[], decode_affordance)?;
+        let v = SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values, affordance: m_affordance };
+        check_select_affordance(path, fields, &v)?;
+        Ok(v)
     }
 
     pub(in super::super) fn decode_skeleton_spec(path: &str, j: &JVal) -> DResult<SkeletonSpec> {
@@ -4846,6 +4908,24 @@ pub(super) mod gen_decode {
         Ok(Accessibility { described_by: m_described_by, hidden: m_hidden, label: m_label, labelled_by: m_labelled_by, live_region: m_live_region, role: m_role, speak: m_speak })
     }
 
+    pub(in super::super) fn decode_affordance(path: &str, j: &JVal) -> DResult<Affordance> {
+        let fields = as_obj(path, j)?;
+        let m_patterns = field_or(path, fields, "patterns", &[], Vec::new(), |p, j| dec_list(p, j, dec_string))?;
+        let m_read_patterns = field_or(path, fields, "readPatterns", &[], Vec::new(), |p, j| dec_list(p, j, dec_string))?;
+        let m_aliases = field_or(path, fields, "aliases", &[], Vec::new(), |p, j| dec_list(p, j, decode_affordance_alias))?;
+        let m_description = field_opt(path, fields, "description", &[], dec_string)?;
+        let m_clearable = field_or(path, fields, "clearable", &[], defaults::AFFORDANCE_CLEARABLE, as_bool)?;
+        let m_never_controllable = field_or(path, fields, "neverControllable", &[], defaults::AFFORDANCE_NEVER_CONTROLLABLE, as_bool)?;
+        Ok(Affordance { patterns: m_patterns, read_patterns: m_read_patterns, aliases: m_aliases, description: m_description, clearable: m_clearable, never_controllable: m_never_controllable })
+    }
+
+    pub(in super::super) fn decode_affordance_alias(path: &str, j: &JVal) -> DResult<AffordanceAlias> {
+        let fields = as_obj(path, j)?;
+        let m_alias = field_req(path, fields, "alias", &[], "AffordanceAlias.alias: string", dec_string)?;
+        let m_value = field_req(path, fields, "value", &[], "AffordanceAlias.value: string", dec_string)?;
+        Ok(AffordanceAlias { alias: m_alias, value: m_value })
+    }
+
     pub(in super::super) fn decode_column_erased(path: &str, j: &JVal) -> DResult<ColumnErased> {
         let fields = as_obj(path, j)?;
         check_column_near_misses(path, fields)?;
@@ -4944,7 +5024,10 @@ pub(super) mod gen_decode {
         let m_required = field_or(path, fields, "required", &[], defaults::FORM_FIELD_REQUIRED, as_bool)?;
         let m_help = field_opt(path, fields, "help", &[], decode_text_source)?;
         let m_rule = field_opt(path, fields, "rule", &[], decode_field_rule)?;
-        Ok(FormField { id: m_id, kind: m_kind, label: m_label, required: m_required, help: m_help, rule: m_rule })
+        let m_affordance = field_opt(path, fields, "affordance", &[], decode_affordance)?;
+        let v = FormField { id: m_id, kind: m_kind, label: m_label, required: m_required, help: m_help, rule: m_rule, affordance: m_affordance };
+        check_form_field_affordance(path, fields, &v)?;
+        Ok(v)
     }
 
     pub(in super::super) fn decode_mount_channel(path: &str, j: &JVal) -> DResult<MountChannel> {
@@ -6299,6 +6382,14 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Action.SetState.valueFrom",
     "Action.WriteToClipboard",
     "Action.WriteToClipboard.text",
+    "Affordance.aliases",
+    "Affordance.clearable",
+    "Affordance.description",
+    "Affordance.neverControllable",
+    "Affordance.patterns",
+    "Affordance.readPatterns",
+    "AffordanceAlias.alias",
+    "AffordanceAlias.value",
     "Binding.Computed",
     "Binding.Computed.fn",
     "Binding.Expr",
@@ -6488,6 +6579,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "FilterSpec.kind",
     "FilterSpec.label",
     "FilterSpec.name",
+    "FormField.affordance",
     "FormField.help",
     "FormField.id",
     "FormField.kind",
@@ -6627,6 +6719,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Kind.Box.layout",
     "Kind.Box.role",
     "Kind.Button",
+    "Kind.Button.affordance",
     "Kind.Button.disabled",
     "Kind.Button.icon",
     "Kind.Button.label",
@@ -6834,6 +6927,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Kind.ScrollArea.maxWidth",
     "Kind.ScrollArea.orientation",
     "Kind.Select",
+    "Kind.Select.affordance",
     "Kind.Select.disabled",
     "Kind.Select.label",
     "Kind.Select.multiple",

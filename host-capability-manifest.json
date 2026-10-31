@@ -85,7 +85,7 @@
     "node-round-trip": "covered",
     "op-round-trip": "covered",
     "operability": {
-      "pending": "the operability family (WIRE_FORMAT section 31: affordances, derivation, resolution) lands with fuaran#2517; this host decodes the affordance member leniently and does not yet run the family"
+      "pending": "the codec round-trips and refuses the affordance member (WIRE_FORMAT 31.1, 31.2) and its suite runs the family wire section; the derivation and the matcher (31.3-31.5) are not yet ported"
     },
     "page-document": {
       "notApplicable": "this host renders no stored page"
@@ -155,6 +155,14 @@
     "Action.SetState.valueFrom",
     "Action.WriteToClipboard",
     "Action.WriteToClipboard.text",
+    "Affordance.aliases",
+    "Affordance.clearable",
+    "Affordance.description",
+    "Affordance.neverControllable",
+    "Affordance.patterns",
+    "Affordance.readPatterns",
+    "AffordanceAlias.alias",
+    "AffordanceAlias.value",
     "Binding.Computed",
     "Binding.Computed.fn",
     "Binding.Expr",
@@ -344,6 +352,7 @@
     "FilterSpec.kind",
     "FilterSpec.label",
     "FilterSpec.name",
+    "FormField.affordance",
     "FormField.help",
     "FormField.id",
     "FormField.kind",
@@ -483,6 +492,7 @@
     "Kind.Box.layout",
     "Kind.Box.role",
     "Kind.Button",
+    "Kind.Button.affordance",
     "Kind.Button.disabled",
     "Kind.Button.icon",
     "Kind.Button.label",
@@ -690,6 +700,7 @@
     "Kind.ScrollArea.maxWidth",
     "Kind.ScrollArea.orientation",
     "Kind.Select",
+    "Kind.Select.affordance",
     "Kind.Select.disabled",
     "Kind.Select.label",
     "Kind.Select.multiple",

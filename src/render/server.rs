@@ -3716,6 +3716,7 @@ fn render_filter(ctx: &Ctx<'_>, spec: &FilterSpec) -> String {
                 // no authored rule, and inventing one here would render a
                 // constraint the tree never declared.
                 rule: None,
+                affordance: None,
             };
             render_form_control(ctx, &synthetic)
         }

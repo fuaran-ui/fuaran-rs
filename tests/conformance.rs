@@ -1075,7 +1075,7 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
     (
         "operability",
         FamilyAnswer::Pending(
-            "the operability family (WIRE_FORMAT section 31: affordances, derivation, resolution) lands with fuaran#2517; this host decodes the affordance member leniently and does not yet run the family",
+            "the codec round-trips and refuses the affordance member (WIRE_FORMAT 31.1, 31.2) and its suite runs the family wire section; the derivation and the matcher (31.3-31.5) are not yet ported",
         ),
     ),
     (

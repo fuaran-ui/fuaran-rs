@@ -3775,6 +3775,75 @@ pub(super) fn check_file_upload(
     Ok(())
 }
 
+/// Phase 2517 — WIRE_FORMAT §31.2, the slot rule of an `affordance` member. A pattern is literal
+/// text with at most one slot, spelled exactly `{value}`; any other brace is refused, so the grammar
+/// stays closed. Which patterns must name the slot is the CARRYING kind's: a set (`Select`, a form
+/// field) names exactly one in each `patterns` entry, a click (`Button`) names none, and no
+/// `readPatterns` entry names one. A blank pattern is refused. Each refusal is `WRONG_TYPE` at the
+/// offending entry.
+fn check_affordance(path: &str, affordance: &Option<Affordance>, set: bool) -> DResult<()> {
+    const SLOT: &str = "{value}";
+    let slots = |pattern: &str| -> Option<usize> {
+        let stripped = pattern.replace(SLOT, "");
+        if stripped.contains(['{', '}']) {
+            return None;
+        }
+        Some((pattern.len() - stripped.len()) / SLOT.len())
+    };
+    let Some(affordance) = affordance else {
+        return Ok(());
+    };
+    let (want, expected) = if set {
+        (1, "a set pattern naming exactly one {value} slot")
+    } else {
+        (0, "a click pattern naming no slot")
+    };
+    for (i, p) in affordance.patterns.iter().enumerate() {
+        if slots(p) != Some(want) || p.trim().is_empty() {
+            return Err(wrong_type(
+                &format!("{path}.affordance.patterns[{i}]"),
+                expected,
+            ));
+        }
+    }
+    for (i, p) in affordance.read_patterns.iter().enumerate() {
+        if slots(p) != Some(0) || p.trim().is_empty() {
+            return Err(wrong_type(
+                &format!("{path}.affordance.readPatterns[{i}]"),
+                "a read pattern naming no slot",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A `Button` is a CLICK (§31.2).
+pub(super) fn check_button_affordance(
+    path: &str,
+    _fields: &Fields,
+    spec: &ButtonSpec,
+) -> DResult<()> {
+    check_affordance(path, &spec.affordance, false)
+}
+
+/// A `Select` is a SET (§31.2).
+pub(super) fn check_select_affordance(
+    path: &str,
+    _fields: &Fields,
+    spec: &SelectSpec,
+) -> DResult<()> {
+    check_affordance(path, &spec.affordance, true)
+}
+
+/// A form field is a SET (§31.2).
+pub(super) fn check_form_field_affordance(
+    path: &str,
+    _fields: &Fields,
+    field: &FormField,
+) -> DResult<()> {
+    check_affordance(path, &field.affordance, true)
+}
+
 /// `ColumnErased` — the grid vocabulary's near misses, before any field is read.
 pub(super) fn check_column_near_misses(path: &str, fields: &Fields) -> DResult<()> {
     check_near_misses(path, fields, COLUMN_NEAR_MISSES)

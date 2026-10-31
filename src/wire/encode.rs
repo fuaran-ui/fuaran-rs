@@ -1118,6 +1118,7 @@ pub(super) fn encode_form_field(
     required: &bool,
     help: &Option<TextSource>,
     rule: &Option<FieldRule>,
+    declared: &Option<Affordance>,
 ) -> String {
     let mut fields = vec![
         field("id", s(id)),
@@ -1136,6 +1137,10 @@ pub(super) fn encode_form_field(
     }
     if let Some(rule) = rule {
         fields.push(field("rule", field_rule(rule)));
+    }
+    // Phase 2517 — the operable-surface member, absent at `None`.
+    if let Some(declared) = declared {
+        fields.push(field("affordance", affordance(declared)));
     }
     obj(fields)
 }
