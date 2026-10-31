@@ -1072,6 +1072,16 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
     ("merge-conformance", FamilyAnswer::Covered),
     ("node-round-trip", FamilyAnswer::Covered),
     ("op-round-trip", FamilyAnswer::Covered),
+    (
+        "operability",
+        FamilyAnswer::Pending(
+            "the operability family (WIRE_FORMAT section 31: affordances, derivation, resolution) lands with fuaran#2517; this host decodes the affordance member leniently and does not yet run the family",
+        ),
+    ),
+    (
+        "page-document",
+        FamilyAnswer::NotApplicable("this host renders no stored page"),
+    ),
     ("reject", FamilyAnswer::Covered),
     (
         "repair",
