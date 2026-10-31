@@ -101,6 +101,9 @@
     },
     "teleport-reject": {
       "pending": "the teleport module is unit-tested by hand; this suite does not yet run the corpus teleport/ fixtures"
+    },
+    "operability": {
+      "pending": "the operability family (WIRE_FORMAT section 31: affordances, derivation, resolution) lands with fuaran#2517; this host decodes the affordance member leniently and does not yet run the family"
     }
   },
   "tokens": [
