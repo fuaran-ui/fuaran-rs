@@ -11,14 +11,15 @@
 //! field: kind, style, state, accessibility). It favours a localised edit over
 //! replacing the whole tree, but never at the cost of correctness.
 //!
-//! A style change is the one granular facet (Phase 2314, the reference engine's
-//! rule since Phase 2291): when a matched node differs from its counterpart in
-//! its style and nothing else of its own, the diff emits the style edit —
-//! `PatchStyle` naming exactly the fields that moved, the whole-record
-//! `UpdateStyle` only when all six did — instead of the replace, and a layout
-//! node's children are then recursed as usual. Every host's diff records a
-//! restyle as the same op, so two restyles of different fields of one node
-//! carry disjoint field sets wherever they were recorded.
+//! The style and the two traits are the granular facets (Phase 2314, the
+//! reference engine's rule since Phase 2291, and Phase 2527): when a matched node
+//! differs from its counterpart in those and nothing else of its own, the diff
+//! emits their edits instead of the replace — `PatchStyle` naming exactly the
+//! fields that moved, the whole-record `UpdateStyle` only when all six did, then
+//! `UpdateAccessibility` and `UpdateTooltip` — and a layout node's children are
+//! then recursed as usual. Every host's diff records these edits as the same ops,
+//! so two restyles of different fields of one node carry disjoint field sets
+//! wherever they were recorded.
 
 use crate::wire::{Node, NodeKind, SemanticStyle, StyleDelta, TreeOp, encode_node};
 
@@ -104,6 +105,26 @@ fn style_edit(target: &str, before: &SemanticStyle, after: &SemanticStyle) -> Op
     }
 }
 
+// The ops taking `a`'s two traits to `b`'s, each only when it moved. An absent
+// accessibility and an empty one are the same trait, as the apply engine stores it.
+fn trait_edits(a: &Node, b: &Node) -> Vec<TreeOp> {
+    let mut edits = Vec::new();
+    let after = b.accessibility.clone().unwrap_or_default();
+    if a.accessibility.clone().unwrap_or_default() != after {
+        edits.push(TreeOp::UpdateAccessibility {
+            target: b.id.clone(),
+            accessibility: after,
+        });
+    }
+    if a.tooltip != b.tooltip {
+        edits.push(TreeOp::UpdateTooltip {
+            target: b.id.clone(),
+            tooltip: b.tooltip.clone(),
+        });
+    }
+    edits
+}
+
 // Recurse a matched-id pair. `parent`, when present, is `(parent_id, position)`
 // — the seat for a `RemoveNode`+`InsertChild` whole-node replace; `None` marks
 // the root (a `ReplaceRoot`).
@@ -115,22 +136,25 @@ fn diff_node(a: &Node, b: &Node, parent: Option<(&str, usize, &[String])>, ops: 
     if encode_node(a) == encode_node(b) {
         return; // identical subtree — nothing to do
     }
-    // `a` restyled to `b`'s style: what still differs from `b` is everything else.
-    let restyled = Node {
+    // `a` given `b`'s style and traits: what still differs from `b` is everything else.
+    let faceted = Node {
         style: b.style,
+        accessibility: b.accessibility.clone(),
+        tooltip: b.tooltip.clone(),
         ..a.clone()
     };
-    let style = style_edit(&a.id, &a.style, &b.style);
-    if encode_node(&restyled) == encode_node(b) {
-        ops.extend(style); // the style is the only difference
+    let mut edits: Vec<TreeOp> = style_edit(&a.id, &a.style, &b.style).into_iter().collect();
+    edits.extend(trait_edits(a, b));
+    if encode_node(&faceted) == encode_node(b) {
+        ops.extend(edits); // the facets are the only difference
         return;
     }
     let recurse = match (structural_children(a), structural_children(b)) {
-        (Some(ak), Some(bk)) => own_content_same(&restyled, b) && child_ids(ak) == child_ids(bk),
+        (Some(ak), Some(bk)) => own_content_same(&faceted, b) && child_ids(ak) == child_ids(bk),
         _ => false,
     };
     if recurse {
-        ops.extend(style);
+        ops.extend(edits);
         let ak = structural_children(a).unwrap();
         let bk = structural_children(b).unwrap();
         let sibling_ids: Vec<String> = bk.iter().map(|n| n.id.clone()).collect();

@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "6c868d199afb85263b42344ce1930b1604dd6abf3a209dfab1d4267e081a47f3";
+pub const IDL_SHA256: &str = "3d7b02a648d9b15cfd67622ede39e11272f227893097986a786bd2b86e825a8c";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -434,9 +434,11 @@ pub(crate) const TREE_OP_TAGS: &[&str] = &[
     "ReorderChildren",
     "ReplaceBinding",
     "ReplaceRoot",
+    "UpdateAccessibility",
     "UpdateProp",
     "UpdateState",
     "UpdateStyle",
+    "UpdateTooltip",
 ];
 
 // ─── Wire types ─────────────────────────────────────────────────────────────
@@ -2352,6 +2354,12 @@ pub enum TreeOp {
     ReplaceRoot {
         node: Node,
     },
+    /// Phase 2527 — replaces the target's whole `accessibility` trait; a record
+    /// setting no member removes it.
+    UpdateAccessibility {
+        accessibility: Accessibility,
+        target: NodeId,
+    },
     /// `value` is a structured-JSON position (rule 12); `path` is a plain
     /// string at codec level (grammar violations surface at apply time, §3.4).
     UpdateProp {
@@ -2366,6 +2374,11 @@ pub enum TreeOp {
     UpdateStyle {
         style: SemanticStyle,
         target: NodeId,
+    },
+    /// Phase 2527 — sets the target's `tooltip`, or clears it on `None`.
+    UpdateTooltip {
+        target: NodeId,
+        tooltip: Option<TextSource>,
     },
 }
 
@@ -4207,6 +4220,9 @@ pub(super) mod gen_encode {
             TreeOp::ReplaceRoot { node: m_node } => {
             case_obj("ReplaceRoot", vec![field("node", node(m_node))])
             }
+            TreeOp::UpdateAccessibility { accessibility: m_accessibility, target: m_target } => {
+            case_obj("UpdateAccessibility", vec![field("accessibility", accessibility(m_accessibility)), field("target", s(m_target))])
+            }
             TreeOp::UpdateProp { path: m_path, target: m_target, value: m_value } => {
             case_obj("UpdateProp", vec![field("path", s(m_path)), field("target", s(m_target)), field("value", json_value(m_value))])
             }
@@ -4215,6 +4231,13 @@ pub(super) mod gen_encode {
             }
             TreeOp::UpdateStyle { style: m_style, target: m_target } => {
             case_obj("UpdateStyle", vec![field("style", semantic_style(m_style)), field("target", s(m_target))])
+            }
+            TreeOp::UpdateTooltip { target: m_target, tooltip: m_tooltip } => {
+            let mut f: Vec<Field> = vec![field("target", s(m_target))];
+            if let Some(x) = m_tooltip {
+                f.push(field("tooltip", text_source(x)));
+            }
+            case_obj("UpdateTooltip", f)
             }
         }
     }
@@ -6066,9 +6089,11 @@ pub(super) mod gen_decode {
             "ReorderChildren" => decode_tree_op_ast_reorder_children(path, fields),
             "ReplaceBinding" => decode_tree_op_ast_replace_binding(path, fields),
             "ReplaceRoot" => decode_tree_op_ast_replace_root(path, fields),
+            "UpdateAccessibility" => decode_tree_op_ast_update_accessibility(path, fields),
             "UpdateProp" => decode_tree_op_ast_update_prop(path, fields),
             "UpdateState" => decode_tree_op_ast_update_state(path, fields),
             "UpdateStyle" => decode_tree_op_ast_update_style(path, fields),
+            "UpdateTooltip" => decode_tree_op_ast_update_tooltip(path, fields),
             other => Err(unknown_du_case(path, other, TREE_OP_TAGS)),
         }
     }
@@ -6127,6 +6152,12 @@ pub(super) mod gen_decode {
         Ok(TreeOp::ReplaceRoot { node: m_node })
     }
 
+    pub(in super::super) fn decode_tree_op_ast_update_accessibility(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        let m_accessibility = field_req(path, fields, "accessibility", &[], "TreeOp.UpdateAccessibility.accessibility: Accessibility", decode_accessibility)?;
+        let m_target = field_req(path, fields, "target", &[], "TreeOp.UpdateAccessibility.target: string", dec_string)?;
+        Ok(TreeOp::UpdateAccessibility { accessibility: m_accessibility, target: m_target })
+    }
+
     pub(in super::super) fn decode_tree_op_ast_update_prop(path: &str, fields: &Fields) -> DResult<TreeOp> {
         let m_path = field_req(path, fields, "path", &[], "TreeOp.UpdateProp.path: string", dec_string)?;
         let m_target = field_req(path, fields, "target", &[], "TreeOp.UpdateProp.target: string", dec_string)?;
@@ -6144,6 +6175,12 @@ pub(super) mod gen_decode {
         let m_style = field_req(path, fields, "style", &[], "TreeOp.UpdateStyle.style: SemanticStyle", decode_semantic_style)?;
         let m_target = field_req(path, fields, "target", &[], "TreeOp.UpdateStyle.target: string", dec_string)?;
         Ok(TreeOp::UpdateStyle { style: m_style, target: m_target })
+    }
+
+    pub(in super::super) fn decode_tree_op_ast_update_tooltip(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        let m_target = field_req(path, fields, "target", &[], "TreeOp.UpdateTooltip.target: string", dec_string)?;
+        let m_tooltip = field_opt(path, fields, "tooltip", &[], decode_text_source)?;
+        Ok(TreeOp::UpdateTooltip { target: m_target, tooltip: m_tooltip })
     }
 
 

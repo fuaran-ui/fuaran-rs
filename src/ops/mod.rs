@@ -23,7 +23,7 @@ pub mod placement;
 use crate::canonical::{JVal, ordinal_cmp};
 use crate::limits::{MAX_NODE_DEPTH, MAX_NODES};
 use crate::wire::coerce;
-use crate::wire::{Binding, Node, NodeKind, TreeOp};
+use crate::wire::{Accessibility, Binding, Node, NodeKind, TreeOp};
 
 // ─── Error + result surface ──────────────────────────────────────────────────
 
@@ -1456,6 +1456,42 @@ fn apply_one(op: &TreeOp, root: &Node, telem: &mut Vec<OpApplyTelemetryRecord>) 
             });
             Ok(new_tree)
         }
+        TreeOp::UpdateAccessibility {
+            target,
+            accessibility,
+        } => {
+            let mut new_tree = root.clone();
+            let Some(node) = find_node_mut(&mut new_tree, target) else {
+                return fail(
+                    ApplyErrorCode::NodeNotFound,
+                    format!("Node '{target}' not found in tree."),
+                );
+            };
+            // A record setting no member is the absent slot, which is how the
+            // trait is removed (Phase 2527).
+            node.accessibility =
+                (*accessibility != Accessibility::default()).then(|| accessibility.clone());
+            telem.push(OpApplyTelemetryRecord {
+                op: "UpdateAccessibility",
+                target_id: target.clone(),
+            });
+            Ok(new_tree)
+        }
+        TreeOp::UpdateTooltip { target, tooltip } => {
+            let mut new_tree = root.clone();
+            let Some(node) = find_node_mut(&mut new_tree, target) else {
+                return fail(
+                    ApplyErrorCode::NodeNotFound,
+                    format!("Node '{target}' not found in tree."),
+                );
+            };
+            node.tooltip = tooltip.clone();
+            telem.push(OpApplyTelemetryRecord {
+                op: "UpdateTooltip",
+                target_id: target.clone(),
+            });
+            Ok(new_tree)
+        }
         TreeOp::UpdateState { target, state } => {
             let mut new_tree = root.clone();
             let Some(node) = find_node_mut(&mut new_tree, target) else {
@@ -1758,8 +1794,8 @@ pub fn apply(tree: &Node, op: &TreeOp) -> Result<ApplyOutcome, ApplyError> {
 /// each passed. A `Batch` is checked when any member is.
 ///
 /// The rest cannot grow the tree and are not charged a walk: `UpdateProp`,
-/// `ReplaceBinding`, `UpdateStyle` and `PatchStyle` carry no node, `RemoveNode` shrinks, and
-/// `ReorderChildren` permutes. They still apply to a tree that is already over
+/// `ReplaceBinding`, `UpdateStyle`, `PatchStyle`, `UpdateAccessibility` and `UpdateTooltip`
+/// carry no node, `RemoveNode` shrinks, and `ReorderChildren` permutes. They still apply to a tree that is already over
 /// a limit, which they did not put there.
 fn op_can_grow(op: &TreeOp) -> bool {
     match op {
@@ -1786,6 +1822,8 @@ fn inserted_nodes(op: &TreeOp) -> Vec<&Node> {
         | TreeOp::ReplaceBinding { .. }
         | TreeOp::UpdateStyle { .. }
         | TreeOp::PatchStyle { .. }
+        | TreeOp::UpdateAccessibility { .. }
+        | TreeOp::UpdateTooltip { .. }
         | TreeOp::RemoveNode { .. }
         | TreeOp::MoveNode { .. }
         | TreeOp::ReorderChildren { .. } => Vec::new(),

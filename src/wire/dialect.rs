@@ -504,6 +504,18 @@ pub(super) const FIELDS: &[FieldEntry] = &[
         NODE_ID,
     ),
     (
+        "TreeOp.UpdateAccessibility",
+        "target",
+        &[("target", "NodeId")],
+        NODE_ID,
+    ),
+    (
+        "TreeOp.UpdateTooltip",
+        "target",
+        &[("target", "NodeId")],
+        NODE_ID,
+    ),
+    (
         "TreeOp.RemoveNode",
         "target",
         &[("target", "NodeId")],
@@ -1695,6 +1707,15 @@ string at codec level (grammar violations surface at apply time, §3.4)."#,
         "TreeOp::PatchStyle",
         r#"Phase 2291 — the field-level style edit: a patch over the target's
 current style, setting exactly the fields `style` names."#,
+    ),
+    (
+        "TreeOp::UpdateAccessibility",
+        r#"Phase 2527 — replaces the target's whole `accessibility` trait; a record
+setting no member removes it."#,
+    ),
+    (
+        "TreeOp::UpdateTooltip",
+        r#"Phase 2527 — sets the target's `tooltip`, or clears it on `None`."#,
     ),
 ];
 
