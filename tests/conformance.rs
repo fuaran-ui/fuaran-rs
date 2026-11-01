@@ -1095,6 +1095,12 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
     ),
     ("sanitization", FamilyAnswer::Covered),
     (
+        "server-driven",
+        FamilyAnswer::NotApplicable(
+            "this host neither produces nor applies a server-driven frame (WIRE_FORMAT section 33); only the reference host does today",
+        ),
+    ),
+    (
         "stored-emissions",
         FamilyAnswer::Pending("this host's suite does not yet run the stored-emission fixtures"),
     ),

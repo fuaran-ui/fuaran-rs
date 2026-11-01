@@ -98,6 +98,9 @@
       "notApplicable": "a row cell's only number is an f64 and the wire model holds no date value, so neither §5 encode refusal can arise here"
     },
     "sanitization": "covered",
+    "server-driven": {
+      "notApplicable": "this host neither produces nor applies a server-driven frame (WIRE_FORMAT section 33); only the reference host does today"
+    },
     "stored-emissions": {
       "pending": "this host's suite does not yet run the stored-emission fixtures"
     },
