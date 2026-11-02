@@ -101,6 +101,14 @@ name = "fuaran-ui"
 # entry states (the unit in its canonical text). New public items:
 # `SchemaEntry::new`, `SchemaEntry::has_metadata`, `wire::unit` (the spine's unit
 # algebra) and `wire::schema` (fingerprint, diff, patch, classify, encode_delta).
+#
+# Phase 2571 rides it, BREAKING in surface (the class the draft already carries):
+# `SelectSpec` gains `groups: Vec<SelectOptionGroup>` (WIRE_FORMAT §3.6.30), so a
+# struct literal naming every other member no longer compiles; add `groups:
+# vec![]`. WIRE-VISIBLE: the member decodes and encodes omit-at-default, and two
+# refusals land (a value named twice; over static options, a value naming no
+# option). The server renderer draws `<optgroup>`s. New public item:
+# `SelectOptionGroup`.
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"

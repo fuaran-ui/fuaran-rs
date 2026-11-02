@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "3d7b02a648d9b15cfd67622ede39e11272f227893097986a786bd2b86e825a8c";
+pub const IDL_SHA256: &str = "514121018ffc157776d234c63295c8686f399d42a55f589a2756fe3974968f18";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -1005,6 +1005,7 @@ pub struct SelectSpec {
     pub multiple: Option<bool>,
     pub values: Option<Binding>,
     pub affordance: Option<Affordance>,
+    pub groups: Vec<SelectOptionGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1311,6 +1312,12 @@ pub struct MetricComparison {
 pub struct SelectOption {
     pub label: TextSource,
     pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectOptionGroup {
+    pub label: String,
+    pub values: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3025,7 +3032,7 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn select_spec(v: &SelectSpec) -> String {
-        let SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values, affordance: m_affordance } = v;
+        let SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values, affordance: m_affordance, groups: m_groups } = v;
         let mut f: Vec<Field> = vec![field("label", text_source(m_label))];
         if m_on_change.is_some() {
             f.push(field("onChange", CLOSURE.to_string()));
@@ -3051,6 +3058,9 @@ pub(super) mod gen_encode {
         }
         if let Some(x) = m_affordance {
             f.push(field("affordance", affordance(x)));
+        }
+        if !m_groups.is_empty() {
+            f.push(field("groups", enc_list(m_groups, select_option_group)));
         }
         obj(f)
     }
@@ -3428,6 +3438,11 @@ pub(super) mod gen_encode {
         }
         f.push(field("value", s(m_value)));
         obj(f)
+    }
+
+    pub(in super::super) fn select_option_group(v: &SelectOptionGroup) -> String {
+        let SelectOptionGroup { label: m_label, values: m_values } = v;
+        obj(vec![field("label", s(m_label)), field("values", enc_list(m_values, |v| s(v)))])
     }
 
     pub(in super::super) fn semantic_style(v: &SemanticStyle) -> String {
@@ -4609,8 +4624,9 @@ pub(super) mod gen_decode {
         let m_multiple = field_opt(path, fields, "multiple", &[], as_bool)?;
         let m_values = field_opt(path, fields, "values", &[], |p, j| decode_binding_slot(p, j, StaticSlot::StringList))?;
         let m_affordance = field_opt(path, fields, "affordance", &[], decode_affordance)?;
-        let v = SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values, affordance: m_affordance };
-        check_select_affordance(path, fields, &v)?;
+        let m_groups = field_or(path, fields, "groups", &[], Vec::new(), |p, j| dec_list(p, j, decode_select_option_group))?;
+        let v = SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values, affordance: m_affordance, groups: m_groups };
+        check_select(path, fields, &v)?;
         Ok(v)
     }
 
@@ -5092,6 +5108,13 @@ pub(super) mod gen_decode {
         let m_label = decode_text_label(path, fields)?;
         let m_value = field_req(path, fields, "value", &[], "SelectOption.value: string", dec_string)?;
         Ok(SelectOption { label: m_label, value: m_value })
+    }
+
+    pub(in super::super) fn decode_select_option_group(path: &str, j: &JVal) -> DResult<SelectOptionGroup> {
+        let fields = as_obj(path, j)?;
+        let m_label = field_req(path, fields, "label", &[], "SelectOptionGroup.label: string", dec_string)?;
+        let m_values = field_req(path, fields, "values", &[], "SelectOptionGroup.values: list of string", |p, j| dec_list(p, j, dec_string))?;
+        Ok(SelectOptionGroup { label: m_label, values: m_values })
     }
 
     pub(in super::super) fn decode_semantic_style(path: &str, j: &JVal) -> DResult<SemanticStyle> {
@@ -6966,6 +6989,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Kind.Select",
     "Kind.Select.affordance",
     "Kind.Select.disabled",
+    "Kind.Select.groups",
     "Kind.Select.label",
     "Kind.Select.multiple",
     "Kind.Select.onChange",
@@ -7044,6 +7068,8 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Scalar.Str.value",
     "SelectOption.label",
     "SelectOption.value",
+    "SelectOptionGroup.label",
+    "SelectOptionGroup.values",
     "SemanticStyle.direction",
     "SemanticStyle.emphasis",
     "SemanticStyle.role",

@@ -3826,13 +3826,67 @@ pub(super) fn check_button_affordance(
     check_affordance(path, &spec.affordance, false)
 }
 
-/// A `Select` is a SET (§31.2).
-pub(super) fn check_select_affordance(
-    path: &str,
-    _fields: &Fields,
-    spec: &SelectSpec,
-) -> DResult<()> {
-    check_affordance(path, &spec.affordance, true)
+/// A `Select` is a SET (§31.2), and its option groups (Phase 2571, §3.6.30) name each option at
+/// most once and — over STATIC options — only options the select carries.
+pub(super) fn check_select(path: &str, _fields: &Fields, spec: &SelectSpec) -> DResult<()> {
+    check_affordance(path, &spec.affordance, true)?;
+    check_select_groups(path, spec)
+}
+
+/// Phase 2571 — WIRE_FORMAT §3.6.30, the two option-group refusals, both `WRONG_TYPE` at the
+/// offending `values` element: a value named more than once (by two groups, or twice by one), and
+/// over a STATIC source a value naming no option. A bound source resolves at render; the decoder
+/// cannot judge it.
+fn check_select_groups(path: &str, spec: &SelectSpec) -> DResult<()> {
+    if spec.groups.is_empty() {
+        return Ok(());
+    }
+    let known: Option<Vec<&str>> = match &spec.source {
+        Binding::Static {
+            value: StaticValue::Options(options),
+        } if !options.iter().any(|o| o.value == "<opaque>") => {
+            Some(options.iter().map(|o| o.value.as_str()).collect())
+        }
+        _ => None,
+    };
+    let mut seen: BTreeMap<&str, (usize, &str)> = BTreeMap::new();
+    for (gi, group) in spec.groups.iter().enumerate() {
+        for (vi, value) in group.values.iter().enumerate() {
+            let at = format!("{path}.groups[{gi}].values[{vi}]");
+            if let Some((first, first_label)) = seen.get(value.as_str()) {
+                return Err(make_error(
+                    DecodeErrorCode::WrongType,
+                    &at,
+                    format!(
+                        "option value '{value}' is already named by group {first} ('{first_label}'):                          an option belongs to at most one group"
+                    ),
+                    Some(
+                        "a value no other group (and no earlier entry of this group) names"
+                            .to_string(),
+                    ),
+                ));
+            }
+            if let Some(known) = &known {
+                if !known.contains(&value.as_str()) {
+                    let mut names: Vec<String> = known.iter().map(|v| format!("'{v}'")).collect();
+                    names.sort();
+                    return Err(make_error(
+                        DecodeErrorCode::WrongType,
+                        &at,
+                        format!(
+                            "option value '{value}' names no option of this Select:                              a group can only gather the options its Select carries"
+                        ),
+                        Some(format!(
+                            "the value of one of this Select's options: {}",
+                            names.join(", ")
+                        )),
+                    ));
+                }
+            }
+            seen.insert(value.as_str(), (gi, group.label.as_str()));
+        }
+    }
+    Ok(())
 }
 
 /// A form field is a SET (§31.2).

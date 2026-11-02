@@ -2606,16 +2606,38 @@ fn render_select(ctx: &Ctx<'_>, spec: &SelectSpec) -> String {
         .as_ref()
         .map(|p| text_el("option", &[("value", s(""))], &render_text(ctx.sources, p)))
         .unwrap_or_default();
-    let opts: String = options
-        .iter()
-        .map(|o| {
-            text_el(
-                "option",
-                &[("value", s(o.value.clone()))],
-                &render_text(ctx.sources, &o.label),
-            )
-        })
-        .collect();
+    let option = |o: &&SelectOption| {
+        text_el(
+            "option",
+            &[("value", s(o.value.clone()))],
+            &render_text(ctx.sources, &o.label),
+        )
+    };
+    // Phase 2571 — option groups (WIRE_FORMAT §3.6.30): one `<optgroup label>` per group in list
+    // order holding the options it names in `source` order, then the options no group names. No
+    // groups: the flat list exactly as before.
+    let opts: String = if spec.groups.is_empty() {
+        options.iter().map(option).collect()
+    } else {
+        let grouped: String = spec
+            .groups
+            .iter()
+            .map(|g| {
+                let inner: String = options
+                    .iter()
+                    .filter(|o| g.values.contains(&o.value))
+                    .map(option)
+                    .collect();
+                el("optgroup", &[("label", s(g.label.clone()))], &inner)
+            })
+            .collect();
+        let rest: String = options
+            .iter()
+            .filter(|o| !spec.groups.iter().any(|g| g.values.contains(&o.value)))
+            .map(option)
+            .collect();
+        format!("{grouped}{rest}")
+    };
     let control = if spec.multiple == Some(true) {
         el(
             "select",

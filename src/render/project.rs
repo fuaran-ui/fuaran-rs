@@ -459,6 +459,8 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             values: spec.values.clone(),
             on_change_multi: spec.on_change_multi,
             affordance: spec.affordance.clone(),
+            // Phase 2571 — option groups carry plain labels, no bindable text.
+            groups: spec.groups.clone(),
         }),
         // ── Visualisation (map chrome text; collection sources left as-is) ───
         NodeKind::DataGrid(spec) => NodeKind::DataGrid(GridSpec {

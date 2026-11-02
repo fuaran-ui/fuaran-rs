@@ -433,6 +433,49 @@ fn data_grid_projects_declarative_fields() {
     assert!(html.contains(">GBP 1234.50<"));
 }
 
+// Phase 2571 — option groups (WIRE_FORMAT §3.6.30): one <optgroup> per group in list order, a
+// group's options in `source` order, the ungrouped remainder after the last group.
+#[test]
+fn select_option_groups_render_as_optgroups_with_the_remainder_last() {
+    let html = render(
+        r#"{"id":"s","kind":{"$type":"Select","groups":[{"label":"Second","values":["d","b"]},{"label":"First","values":["a"]}],"label":"Pick","source":{"$type":"Static","value":[{"label":"A","value":"a"},{"label":"B","value":"b"},{"label":"C","value":"c"},{"label":"D","value":"d"}]},"value":{"$type":"Static","value":"b"}}}"#,
+    );
+    assert!(
+        html.contains(r#"<optgroup label="Second"><option value="b">B</option><option value="d">D</option></optgroup><optgroup label="First"><option value="a">A</option></optgroup><option value="c">C</option></select>"#),
+        "{html}"
+    );
+}
+
+#[test]
+fn an_ungrouped_select_renders_no_optgroup() {
+    let html = render(
+        r#"{"id":"s","kind":{"$type":"Select","label":"Pick","source":{"$type":"Static","value":[{"label":"A","value":"a"}]},"value":{"$type":"Static","value":"a"}}}"#,
+    );
+    assert!(!html.contains("optgroup"), "{html}");
+}
+
+#[test]
+fn select_option_groups_are_refused_where_they_name_an_option_twice_or_none() {
+    let refused = |json: &str| match decode_node(json) {
+        Ok(_) => panic!("accepted {json}"),
+        Err(e) => (format!("{:?}", e.code), e.path),
+    };
+    let src = r#""source":{"$type":"Static","value":[{"label":"A","value":"a"},{"label":"B","value":"b"}]},"value":{"$type":"Static","value":"a"}"#;
+    let twice = format!(
+        r#"{{"id":"s","kind":{{"$type":"Select","groups":[{{"label":"One","values":["a","a"]}}],"label":"Pick",{src}}}}}"#
+    );
+    assert_eq!(refused(&twice).1, "$.kind.groups[0].values[1]");
+    let unknown = format!(
+        r#"{{"id":"s","kind":{{"$type":"Select","groups":[{{"label":"One","values":["zz"]}}],"label":"Pick",{src}}}}}"#
+    );
+    assert_eq!(refused(&unknown).1, "$.kind.groups[0].values[0]");
+    let bound = r#"{"id":"s","kind":{"$type":"Select","groups":[{"label":"One","values":["zz"]}],"label":"Pick","source":{"$type":"State","key":"k"},"value":{"$type":"Static","value":"a"}}}"#;
+    assert!(
+        decode_node(bound).is_ok(),
+        "a bound source is not judged at decode"
+    );
+}
+
 #[test]
 fn select_drops_the_opaque_placeholder_option() {
     // An opaque options source renders no concrete <option> (§5 render contract).

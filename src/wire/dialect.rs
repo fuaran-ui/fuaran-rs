@@ -2330,9 +2330,9 @@ pub(super) const DECODE_CHECKS: &[(&str, &str, Check, &str)] = &[
     ),
     (
         "Select",
-        "check_select_affordance",
+        "check_select",
         Check::Post,
-        "a set names exactly one slot (§31.2)",
+        "a set names exactly one slot (§31.2); an option group names each option at most once and, over static options, only options the select carries (§3.6.30)",
     ),
     (
         "FormField",
