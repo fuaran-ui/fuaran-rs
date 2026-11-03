@@ -606,3 +606,379 @@ fn the_emitter_writes_the_go_drivers_frame_ops_and_reads_its_event() {
     let ev = emitter::decode_event(&image, GO_EVENT, &EVENT_LIMITS).expect("admitted");
     assert_eq!((ev.handler, ev.last_seq, ev.payload.as_str()), (0, 4, ""));
 }
+
+// ─── The figure: the panel's single-tap worst case, priced at build time (Phase 2454) ───
+//
+// The tree compiler's pricing walk (`emitter::price`) is generic over the device's
+// dispatch witness; this crate holds no device vocabulary. These tests supply one as a
+// TEST witness over the handler documents of a device domain's corpus panels, copied
+// below byte for byte, and hold the walk to the figures that domain's own validator
+// recomputes from the same documents (pinned there under the same strings). The two
+// sides agree by vector, not by trust.
+
+use fuaran_core::unit;
+use fuaran_program::handler::{Handler as ProgramHandler, ServerEffect, Stage};
+use fuaran_program::witness::{
+    ActionView, Bound, DispatchFold, ExprResolution, LeafOutcome, QuantityDeclaration,
+};
+use fuaran_rs::canonical::{JVal, parse};
+use fuaran_rs::serverdriven::emitter::{Figure, Registration, Spend};
+
+/// A corpus panel's tree: a status row and one control.
+const FIGURE_TREE_ONE: &str = r#"{"id":"emitter-panel","kind":{"$type":"Box","children":[{"id":"panel-title","kind":{"$type":"Heading","level":2,"text":"Cold room 3"}},{"id":"panel-temp","kind":{"$type":"Metric","label":"Temperature","value":{"$type":"Static","value":4}}},{"id":"panel-status","kind":{"$type":"Badge","label":"Cooling","variant":"Success"}},{"id":"panel-defrost","kind":{"$type":"Button","label":"Start defrost","onClick":{"$type":"Dispatch"}}}],"layout":{"$type":"Flex","direction":"Vertical"},"role":"Group"}}"#;
+
+/// The same tree with a second control, labelled `label`.
+fn figure_tree_two(label: &str) -> String {
+    FIGURE_TREE_ONE.replace(
+        r#"{"$type":"Dispatch"}}}]"#,
+        &format!(
+            r#"{{"$type":"Dispatch"}}}}}},{{"id":"panel-cycle","kind":{{"$type":"Button","label":"{label}","onClick":{{"$type":"Dispatch"}}}}}}]"#
+        ),
+    )
+}
+
+/// The handler documents, as the corpus panels carry them.
+const HANDLER_START_DEFROST: &str = r#"{"$type":"Handler","name":"start-defrost","stages":[{"$type":"Compute","action":{"$type":"Actuate","actuator":"defrost","command":"StartDefrost","arguments":{"minutes":{"$type":"Literal","value":45}}}},{"$type":"Effect","effect":{"$type":"EmitPatch","ops":[{"$type":"UpdateProp","path":"Label","target":"panel-status","value":"Defrosting"},{"$type":"ReplaceBinding","binding":{"$type":"State","key":"device.sensor.case-temp"},"slot":"Value","target":"panel-temp"}]}}]}"#;
+const HANDLER_DEFROST_TWICE: &str = r#"{"$type":"Handler","name":"defrost-twice","stages":[{"$type":"Compute","action":{"$type":"Repeat","count":2,"body":{"$type":"Actuate","actuator":"defrost","command":"StartDefrost","arguments":{"minutes":{"$type":"Literal","value":45}}}}},{"$type":"Effect","effect":{"$type":"EmitPatch","ops":[{"$type":"UpdateProp","path":"Label","target":"panel-status","value":"Defrosting"}]}}]}"#;
+const HANDLER_DEFROST_CYCLE: &str = r#"{"$type":"Handler","name":"defrost-cycle","stages":[{"$type":"Compute","action":{"$type":"Repeat","count":3,"body":{"$type":"Actuate","actuator":"defrost","command":"StartDefrost","arguments":{"minutes":{"$type":"Literal","value":45}}}}},{"$type":"Effect","effect":{"$type":"EmitPatch","ops":[{"$type":"UpdateProp","path":"Label","target":"panel-status","value":"Defrosting"}]}}]}"#;
+
+/// The figures the device domain's validator recomputes from the same documents.
+const FIGURE_ONE: &str =
+    r#"[{"handler":"start-defrost","quantity":"heater-minutes","unit":"min","worstCase":45}]"#;
+const FIGURE_WITHIN: &str =
+    r#"[{"handler":"defrost-twice","quantity":"heater-minutes","unit":"min","worstCase":90}]"#;
+const FIGURE_OVER: &str =
+    r#"[{"handler":"defrost-cycle","quantity":"heater-minutes","unit":"min","worstCase":135}]"#;
+
+/// The first panel's figure as the device compiles it in, beside its image — the
+/// pricing walk's own Rust source, verbatim (`the_compiled_in_figure_is_the_walks_output`).
+#[rustfmt::skip]
+const COLD_ROOM_FIGURE: &[Spend<'static>] = &[
+    Spend { handler: "start-defrost", quantity: "heater-minutes", unit: "min", worst_case: 45 },
+];
+
+/// The test device's action vocabulary: a sequence, a bounded repeat and the one act.
+#[derive(Debug, Clone, PartialEq)]
+enum DeviceAction {
+    Steps(Vec<DeviceAction>),
+    Repeat(i64, Box<DeviceAction>),
+    Actuate {
+        actuator: String,
+        arguments: Vec<(String, JVal)>,
+    },
+}
+
+/// The test device: which actuator spends which quantity, read off which argument,
+/// and the envelope's `atMost` on that argument (what a non-literal argument prices at).
+struct TestDevice {
+    spends: &'static [(&'static str, &'static str, &'static str, &'static str, i64)],
+}
+
+const TEST_DEVICE: TestDevice = TestDevice {
+    spends: &[("defrost", "heater-minutes", "min", "minutes", 45)],
+};
+
+impl DispatchFold for TestDevice {
+    type Action = DeviceAction;
+    type Expr = JVal;
+    type Store = ();
+    type Effect = ();
+
+    fn view(&self, action: &DeviceAction) -> ActionView<DeviceAction, JVal> {
+        match action {
+            DeviceAction::Steps(members) => ActionView::Sequence(members.clone()),
+            DeviceAction::Repeat(n, body) => ActionView::Repeat {
+                bound: Bound::Literal(*n),
+                body: (**body).clone(),
+            },
+            DeviceAction::Actuate { .. } => ActionView::Leaf,
+        }
+    }
+
+    fn lower(&self, _node_id: &str, _action: &DeviceAction, _store: &()) -> LeafOutcome<()> {
+        LeafOutcome::Decline
+    }
+
+    fn describe(&self, action: &DeviceAction) -> String {
+        match action {
+            DeviceAction::Steps(_) => "Steps".to_string(),
+            DeviceAction::Repeat(..) => "Repeat".to_string(),
+            DeviceAction::Actuate { actuator, .. } => format!("Actuate {actuator}"),
+        }
+    }
+
+    fn resolve(&self, _store: &(), _expr: &JVal) -> ExprResolution {
+        ExprResolution::NotResolved
+    }
+
+    fn assign(&self, _key: &str, _value: JVal, _store: ()) {}
+
+    fn read(&self, _key: &str, _store: &()) -> Option<JVal> {
+        None
+    }
+
+    /// A literal integer argument is its own amount; any other is priced at the
+    /// envelope's `atMost` on it.
+    fn quantities(&self, leaf: &DeviceAction) -> Vec<QuantityDeclaration> {
+        let DeviceAction::Actuate {
+            actuator,
+            arguments,
+        } = leaf
+        else {
+            return Vec::new();
+        };
+        self.spends
+            .iter()
+            .filter(|(a, ..)| a == actuator)
+            .map(|(_, name, unit_text, argument, at_most)| {
+                let literal = arguments
+                    .iter()
+                    .find(|(n, _)| n == argument)
+                    .and_then(|(_, v)| match v.field("$type") {
+                        Some(JVal::Str(t)) if t == "Literal" => match v.field("value") {
+                            Some(JVal::Num(n)) => Some(*n as i64),
+                            _ => None,
+                        },
+                        _ => None,
+                    });
+                QuantityDeclaration {
+                    name: name.to_string(),
+                    unit: unit::parse(unit_text).expect("the unit parses"),
+                    amount: literal.unwrap_or(*at_most).max(0),
+                }
+            })
+            .collect()
+    }
+
+    fn is_reserved(&self, key: &str) -> bool {
+        key.starts_with("device.")
+    }
+
+    fn reserved_prefix(&self) -> &str {
+        "device."
+    }
+}
+
+fn text_of<'v>(v: &'v JVal, member: &str) -> &'v str {
+    match v.field(member) {
+        Some(JVal::Str(s)) => s,
+        other => panic!("'{member}' is not a string: {other:?}"),
+    }
+}
+
+fn action_of(v: &JVal) -> DeviceAction {
+    match text_of(v, "$type") {
+        "Steps" => match v.field("actions") {
+            Some(JVal::Arr(items)) => DeviceAction::Steps(items.iter().map(action_of).collect()),
+            other => panic!("Steps without actions: {other:?}"),
+        },
+        "Repeat" => match (v.field("count"), v.field("body")) {
+            (Some(JVal::Num(n)), Some(body)) => {
+                DeviceAction::Repeat(*n as i64, Box::new(action_of(body)))
+            }
+            other => panic!("a malformed Repeat: {other:?}"),
+        },
+        "Actuate" => DeviceAction::Actuate {
+            actuator: text_of(v, "actuator").to_string(),
+            arguments: match v.field("arguments") {
+                Some(JVal::Obj(members)) => members.clone(),
+                other => panic!("Actuate without arguments: {other:?}"),
+            },
+        },
+        other => panic!("the test device has no '{other}' action"),
+    }
+}
+
+/// A handler document, read at the test device: compute stages are its actions,
+/// and an `EmitPatch` stage keeps its tree-ops as the values they are.
+fn handler_of(json: &str) -> ProgramHandler<DeviceAction, JVal> {
+    let v = parse(json).expect("the handler document parses");
+    let stages = match v.field("stages") {
+        Some(JVal::Arr(stages)) => stages
+            .iter()
+            .map(|s| match text_of(s, "$type") {
+                "Compute" => Stage::Compute(action_of(s.field("action").expect("an action"))),
+                "Effect" => {
+                    let effect = s.field("effect").expect("an effect");
+                    assert_eq!(text_of(effect, "$type"), "EmitPatch");
+                    match effect.field("ops") {
+                        Some(JVal::Arr(ops)) => Stage::Effect(ServerEffect::EmitPatch(ops.clone())),
+                        other => panic!("EmitPatch without ops: {other:?}"),
+                    }
+                }
+                other => panic!("no stage '{other}'"),
+            })
+            .collect(),
+        other => panic!("a handler without stages: {other:?}"),
+    };
+    ProgramHandler {
+        name: text_of(&v, "name").to_string(),
+        stages,
+    }
+}
+
+fn compiled(tree: &str) -> emitter::CompiledPanel {
+    emitter::compile(&PanelSpec {
+        root: decode_node(tree).expect("the tree decodes"),
+        fragments: vec![],
+        readings: vec![],
+        props: vec![],
+    })
+    .expect("the tree certifies")
+}
+
+fn figure_of(
+    tree: &str,
+    handlers: &[(&str, &ProgramHandler<DeviceAction, JVal>)],
+) -> Result<Figure, CompileError> {
+    let registrations: Vec<Registration<'_, DeviceAction, JVal>> = handlers
+        .iter()
+        .map(|(node, handler)| Registration {
+            node,
+            event: "click",
+            handler,
+        })
+        .collect();
+    emitter::price(&compiled(tree), &TEST_DEVICE, &registrations)
+}
+
+#[test]
+fn the_walk_emits_each_corpus_panels_pinned_figure() {
+    let start = handler_of(HANDLER_START_DEFROST);
+    let twice = handler_of(HANDLER_DEFROST_TWICE);
+    let cycle = handler_of(HANDLER_DEFROST_CYCLE);
+
+    let one = figure_of(FIGURE_TREE_ONE, &[("panel-defrost", &start)]).expect("priced");
+    assert_eq!(one.to_json(), FIGURE_ONE);
+
+    let within = figure_of(
+        &figure_tree_two("Defrost twice"),
+        &[("panel-defrost", &start), ("panel-cycle", &twice)],
+    )
+    .expect("priced");
+    assert_eq!(
+        within.to_json(),
+        FIGURE_WITHIN,
+        "two 45-minute defrosts in one tap"
+    );
+
+    let tree_over = figure_tree_two("Defrost cycle");
+    let over = figure_tree_two_figure(&tree_over, &start, &cycle);
+    assert_eq!(over.to_json(), FIGURE_OVER, "the dearer of 45 and 3 x 45");
+
+    // The order the registrations are listed in moves nothing.
+    let reversed = figure_of(
+        &tree_over,
+        &[("panel-cycle", &cycle), ("panel-defrost", &start)],
+    )
+    .expect("priced");
+    assert_eq!(reversed, over);
+}
+
+fn figure_tree_two_figure(
+    tree: &str,
+    first: &ProgramHandler<DeviceAction, JVal>,
+    second: &ProgramHandler<DeviceAction, JVal>,
+) -> Figure {
+    figure_of(tree, &[("panel-defrost", first), ("panel-cycle", second)]).expect("priced")
+}
+
+#[test]
+fn a_tie_names_the_first_handler_in_byte_order_and_a_spend_saturates() {
+    let tree = figure_tree_two("Defrost again");
+    let b = ProgramHandler {
+        name: "b-defrost".to_string(),
+        ..handler_of(HANDLER_START_DEFROST)
+    };
+    let a = ProgramHandler {
+        name: "a-defrost".to_string(),
+        ..handler_of(HANDLER_START_DEFROST)
+    };
+    let figure = figure_tree_two_figure(&tree, &b, &a);
+    assert_eq!(figure.spends.len(), 1);
+    assert_eq!(
+        (
+            figure.spends[0].handler.as_str(),
+            figure.spends[0].worst_case
+        ),
+        ("a-defrost", 45)
+    );
+
+    // A spend past the document's 32-bit integer reads as it and never wraps.
+    let huge = handler_of(
+        &HANDLER_DEFROST_CYCLE
+            .replace("\"count\":3", "\"count\":1024")
+            .replace("\"value\":45", "\"value\":9007199254740991"),
+    );
+    let saturated = figure_of(FIGURE_TREE_ONE, &[("panel-defrost", &huge)]).expect("priced");
+    assert_eq!(saturated.spends[0].worst_case, i64::from(i32::MAX));
+}
+
+#[test]
+fn the_walk_prices_exactly_the_set_a_tap_can_reach() {
+    let start = handler_of(HANDLER_START_DEFROST);
+    let tree = figure_tree_two("Defrost cycle");
+    let code = |r: Result<Figure, CompileError>| r.expect_err("the walk must refuse").code;
+
+    assert_eq!(
+        code(figure_of(&tree, &[("panel-defrost", &start)])),
+        "UNPRICED_HANDLER",
+        "a control whose tap nothing prices"
+    );
+    assert_eq!(
+        code(figure_of(
+            FIGURE_TREE_ONE,
+            &[("panel-defrost", &start), ("panel-title", &start)]
+        )),
+        "UNREACHABLE_HANDLER",
+        "a handler no node of the tree dispatches to"
+    );
+    assert_eq!(
+        code(figure_of(
+            FIGURE_TREE_ONE,
+            &[("panel-defrost", &start), ("panel-defrost", &start)]
+        )),
+        "DUPLICATE_REGISTRATION"
+    );
+
+    // A panel whose taps reach no quantity has a priced, EMPTY figure.
+    let quiet = ProgramHandler {
+        name: "acknowledge".to_string(),
+        stages: vec![],
+    };
+    let none = figure_of(FIGURE_TREE_ONE, &[("panel-defrost", &quiet)]).expect("priced");
+    assert_eq!(none.to_json(), "[]");
+    assert_eq!(
+        none.to_rust_source("QUIET"),
+        "const QUIET: &[Spend<'static>] = &[];\n"
+    );
+}
+
+#[test]
+fn the_compiled_in_figure_is_the_walks_output() {
+    let start = handler_of(HANDLER_START_DEFROST);
+    let figure = figure_of(FIGURE_TREE_ONE, &[("panel-defrost", &start)]).expect("priced");
+    let compiled_in: Vec<(&str, &str, &str, i64)> = COLD_ROOM_FIGURE
+        .iter()
+        .map(|s| (s.handler, s.quantity, s.unit, s.worst_case))
+        .collect();
+    let walked: Vec<(&str, &str, &str, i64)> = figure
+        .spends
+        .iter()
+        .map(|s| {
+            (
+                s.handler.as_str(),
+                s.quantity.as_str(),
+                s.unit.as_str(),
+                s.worst_case,
+            )
+        })
+        .collect();
+    assert_eq!(compiled_in, walked);
+    let this_file = include_str!("serverdriven.rs").replace("\r\n", "\n");
+    assert!(
+        this_file.contains(&figure.to_rust_source("COLD_ROOM_FIGURE")),
+        "the compiled-in figure is not the walk's current output:\n{}",
+        figure.to_rust_source("COLD_ROOM_FIGURE")
+    );
+}

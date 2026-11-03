@@ -109,6 +109,11 @@ name = "fuaran-ui"
 # refusals land (a value named twice; over static options, a value naming no
 # option). The server renderer draws `<optgroup>`s. New public item:
 # `SelectOptionGroup`.
+#
+# Phase 2454 rides it, ADDITIVE: the constrained emitter's tree compiler gains a
+# pricing walk. New public items: `serverdriven::emitter::{price, Registration,
+# Figure, SpendSpec, Spend}`. No existing type's field set moved (`Image`,
+# `CompiledPanel` and `PanelSpec` are unchanged), and the wire is untouched.
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"

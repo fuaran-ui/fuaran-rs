@@ -50,7 +50,10 @@ use fuaran_core::json::{self, JVal, JsonLimits, JsonRefusal, escape_string};
 #[cfg(feature = "std")]
 mod compile;
 #[cfg(feature = "std")]
-pub use compile::{CompileError, CompiledPanel, PanelSpec, WriteSpec, compile};
+pub use compile::{
+    CompileError, CompiledPanel, Figure, PanelSpec, Registration, SpendSpec, WriteSpec, compile,
+    price,
+};
 
 /// The emitter profile revision this emitter claims (WIRE_FORMAT §11.4): the
 /// corpus's `panel` lineage in its current spelling. `tests/conformance.rs` pins
@@ -132,6 +135,20 @@ pub struct Write<'a> {
 pub struct Handler<'a> {
     pub node: &'a str,
     pub event: &'a str,
+}
+
+/// One entry of a panel's figure (Phase 2454): the worst case of one named
+/// quantity that a SINGLE tap can spend, in its unit's canonical text, and the
+/// name of the handler whose tap spends it. Priced on the desktop by the tree
+/// compiler's walk ([`price`], `std` only) and compiled in beside the [`Image`]
+/// as `&[Spend]` ([`Figure::to_rust_source`]), so the bound is a checked artefact
+/// of the firmware rather than a figure the device computes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Spend<'a> {
+    pub handler: &'a str,
+    pub quantity: &'a str,
+    pub unit: &'a str,
+    pub worst_case: i64,
 }
 
 /// A compiled panel: everything the device knows about its tree, as constants.

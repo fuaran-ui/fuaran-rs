@@ -20,6 +20,17 @@
 //!
 //! The output is [`CompiledPanel`]: the image as owned values
 //! ([`CompiledPanel::with_image`]) and as Rust source ([`CompiledPanel::to_rust_source`]).
+//!
+//! **The figure (Phase 2454).** [`price`] then walks every handler the panel's table
+//! registers, each a Program handler document read under the device's own dispatch
+//! witness, prices each with the Program core's quantity walk (a sequence sums, a choice
+//! takes its dearer arm, a repeat multiplies by its bound, saturating; nothing runs), and
+//! emits the per-quantity worst case of any SINGLE tap, with the handler whose tap it is:
+//! the [`Figure`], beside the image, as canonical JSON ([`Figure::to_json`]) for the
+//! signed declaration and as Rust source ([`Figure::to_rust_source`]) for the firmware.
+//! The figure bounds one tap. A sequence of taps is the run-time time windows' to bound,
+//! never this walk's. The walk prices compute stages; an effect stage spends nothing here
+//! (a panel's effect stage is the `EmitPatch` that carries its ops).
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -33,6 +44,10 @@ use crate::ops::{all_node_ids, apply};
 use crate::serverdriven::driver::legitimate_event;
 use crate::validator::{Severity, validate};
 use crate::wire::{Node, decode_node, decode_op, encode_node, encode_op};
+use fuaran_core::json::escape_string;
+use fuaran_core::unit;
+use fuaran_program::handler::{Handler as ProgramHandler, handler_quantities};
+use fuaran_program::witness::DispatchFold;
 
 /// A declared write: the node, the field (slot or property path) and the value kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -468,6 +483,167 @@ impl CompiledPanel {
             self.state_keys.iter().map(|k| format!("{k:?}")).collect(),
         );
         s.push_str("};\n");
+        s
+    }
+}
+
+// ─── The figure (Phase 2454) ─────────────────────────────────────────────────
+
+/// One registration the pricing walk prices: an entry of the compiled panel's
+/// handler table, in the image's spelling (`click`, `submit`, `change`), and the
+/// Program handler document that answers it, read under the device's witness.
+#[derive(Debug, Clone, Copy)]
+pub struct Registration<'h, A, Op> {
+    pub node: &'h str,
+    pub event: &'h str,
+    pub handler: &'h ProgramHandler<A, Op>,
+}
+
+/// One entry of a figure, owned: the [`Spend`](super::Spend) the firmware carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpendSpec {
+    /// The name of the handler whose single tap is dearest in this quantity; on
+    /// a tie, the first name in byte order.
+    pub handler: String,
+    pub quantity: String,
+    /// The unit's canonical text (the Core unit algebra's rendering).
+    pub unit: String,
+    /// The worst case of one tap, saturating at the Program core's ceiling.
+    pub worst_case: i64,
+}
+
+/// A panel's figure: per named quantity and unit, the worst case of any single
+/// tap. Sorted by quantity, then unit, in byte order. Empty when no handler
+/// reaches a quantity, which is a priced answer, not an absent one.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Figure {
+    pub spends: Vec<SpendSpec>,
+}
+
+/// Price every handler a compiled panel registers, and emit its figure.
+///
+/// Every registration must name an entry of the panel's handler table
+/// (`UNREACHABLE_HANDLER` otherwise), and every entry must be priced exactly once
+/// (`UNPRICED_HANDLER`, `DUPLICATE_REGISTRATION`): the set priced is the set a tap
+/// can reach, no more and no less. Each handler's compute stages are priced
+/// together by the Program core ([`handler_quantities`]: D54's rules, saturating,
+/// with nothing run); the figure is, per (quantity, unit), the maximum over the
+/// handlers, naming the handler that reaches it, the first name in byte order on
+/// a tie, so the figure does not depend on the order the registrations are listed
+/// in. The device's vocabulary is the witness's: this crate holds none.
+pub fn price<D: DispatchFold, Op>(
+    compiled: &CompiledPanel,
+    fold: &D,
+    registrations: &[Registration<'_, D::Action, Op>],
+) -> Result<Figure, CompileError> {
+    for r in registrations {
+        if !compiled
+            .handlers
+            .iter()
+            .any(|(node, event)| node == r.node && event == r.event)
+        {
+            return refuse(
+                "UNREACHABLE_HANDLER",
+                format!(
+                    "'{}' on '{}' is no entry of the panel's handler table",
+                    r.event, r.node
+                ),
+            );
+        }
+    }
+    for (node, event) in &compiled.handlers {
+        match registrations
+            .iter()
+            .filter(|r| r.node == node && r.event == event)
+            .count()
+        {
+            0 => {
+                return refuse(
+                    "UNPRICED_HANDLER",
+                    format!("'{event}' on '{node}' has no handler to price"),
+                );
+            }
+            1 => {}
+            _ => {
+                return refuse(
+                    "DUPLICATE_REGISTRATION",
+                    format!("'{event}' on '{node}' is registered more than once"),
+                );
+            }
+        }
+    }
+
+    let mut spends: Vec<SpendSpec> = Vec::new();
+    for r in registrations {
+        let name = &r.handler.name;
+        for demand in handler_quantities(fold, r.handler) {
+            let unit = unit::render(&demand.unit);
+            match spends
+                .iter_mut()
+                .find(|s| s.quantity == demand.name && s.unit == unit)
+            {
+                Some(s) => {
+                    if demand.worst_case > s.worst_case
+                        || (demand.worst_case == s.worst_case && *name < s.handler)
+                    {
+                        s.worst_case = demand.worst_case;
+                        s.handler = name.clone();
+                    }
+                }
+                None => spends.push(SpendSpec {
+                    handler: name.clone(),
+                    quantity: demand.name,
+                    unit,
+                    worst_case: demand.worst_case,
+                }),
+            }
+        }
+    }
+    spends.sort_by(|a, b| (&a.quantity, &a.unit).cmp(&(&b.quantity, &b.unit)));
+    Ok(Figure { spends })
+}
+
+impl Figure {
+    /// The figure as canonical JSON, the form a signed declaration carries it in:
+    /// `[{"handler":…,"quantity":…,"unit":…,"worstCase":…}, …]`, members in
+    /// ordinal order, integers only.
+    pub fn to_json(&self) -> String {
+        let mut s = String::from("[");
+        for (i, spend) in self.spends.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let _ = write!(
+                s,
+                "{{\"handler\":{},\"quantity\":{},\"unit\":{},\"worstCase\":{}}}",
+                escape_string(&spend.handler),
+                escape_string(&spend.quantity),
+                escape_string(&spend.unit),
+                spend.worst_case
+            );
+        }
+        s.push(']');
+        s
+    }
+
+    /// The figure as Rust source, `const <name>: &[Spend<'static>] = &[ … ];`,
+    /// naming `Spend` unqualified, one entry per line, to compile in beside the
+    /// panel's [`Image`].
+    pub fn to_rust_source(&self, name: &str) -> String {
+        let mut s = String::new();
+        if self.spends.is_empty() {
+            let _ = writeln!(s, "const {name}: &[Spend<'static>] = &[];");
+            return s;
+        }
+        let _ = writeln!(s, "const {name}: &[Spend<'static>] = &[");
+        for spend in &self.spends {
+            let _ = writeln!(
+                s,
+                "    Spend {{ handler: {:?}, quantity: {:?}, unit: {:?}, worst_case: {} }},",
+                spend.handler, spend.quantity, spend.unit, spend.worst_case
+            );
+        }
+        s.push_str("];\n");
         s
     }
 }

@@ -411,6 +411,57 @@ Program core's recogniser image measures flash 55 100, static RAM 11 548 and sta
 rather than in the corpus; and this host's own emitter-acceptance leg as a codec
 host (§11.4's table) is a separate adoption.
 
+### The single-tap figure, priced at build time (Phase 2454)
+
+Because the program algebra has only sequence, choice, bounded repeat, bounded
+iteration, guards and leaves, one walk prices any handler; and because a panel's
+handler table is fixed when the panel is compiled, the whole set of handlers a tap can
+reach is known on the desktop. `emitter::price` (`std` only) takes a
+`CompiledPanel`, the device's dispatch witness (any `fuaran_program::witness::DispatchFold`)
+and one `Registration` per entry of the handler table — a Program handler document
+read at that witness — and emits the panel's **figure**: per named quantity and unit,
+the worst case of any SINGLE tap, and the handler whose tap it is. Each handler's
+compute stages are priced together by the Program core's quantity walk (a sequence
+sums, a choice takes its dearer arm, a repeat multiplies by its bound, saturating at
+the core's 32-bit ceiling; nothing runs), and the figure is the maximum over the
+handlers. It is emitted beside the image as canonical JSON (`Figure::to_json`, the
+form a signed device declaration carries) and as Rust source
+(`Figure::to_rust_source`, a `&[Spend]` constant compiled in beside the `Image`), so
+"no single tap exceeds the device's limits" is a checked artefact of the firmware
+rather than a figure the device works out.
+
+**Its boundary.** The figure bounds one tap. A sequence of taps, each within every
+limit, is the run-time time windows' to bound and never this walk's. The walk prices
+compute stages; an effect stage spends nothing here, which is the whole of a panel's
+effects, since a panel handler's only effect stage is the `EmitPatch` carrying its
+ops. And this crate holds no device vocabulary: what an act spends is the witness's to
+declare.
+
+**Certification.** `tests/serverdriven.rs` supplies a test witness over a device
+domain's corpus panels — their handler documents copied byte for byte — and holds the
+walk to the figures that domain's validator recomputes from the same documents, pinned
+under the same strings on both sides: the two hosts agree by vector, across the
+language boundary, not by trust. The same file pins the compiled-in figure constant
+to the walk's own Rust source, as it does the image.
+
+**Decision record (Phase 2454, taken by the implementer and pending the maintainers'
+ratification).**
+
+1. **The figure is beside the image, not a field of it.** `Image`, `CompiledPanel`
+   and `PanelSpec` keep their field sets, so the change is additive; a device that
+   compiles in a figure holds a second constant. Nothing the device does at run time
+   reads it.
+2. **The set priced is exactly the set a tap reaches.** A registration naming no
+   entry of the handler table is refused (`UNREACHABLE_HANDLER`), an entry with no
+   handler is refused (`UNPRICED_HANDLER`), and an entry registered twice is refused
+   (`DUPLICATE_REGISTRATION`). Registrations use the image's event spelling
+   (`click`, `submit`, `change`).
+3. **The figure is deterministic in the face of order.** Entries are sorted by
+   quantity, then unit, and a tie between handlers names the first name in byte
+   order, so two hosts listing the same handlers differently emit the same bytes. A
+   panel whose taps reach no quantity has an EMPTY figure, which is a priced answer;
+   a panel nobody priced has none at all.
+
 ## WASM client
 
 The client module compiles to a dependency-free `.wasm`:
