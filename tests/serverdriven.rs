@@ -181,3 +181,428 @@ fn client_events_decode_from_the_control_wire() {
     assert_eq!(ev.last_seq, 4);
     assert!(decode_event("not json").is_err());
 }
+
+// ─── The constrained emitter (Phase 2452) ────────────────────────────────────
+//
+// The device half of a panel. `tests/conformance.rs` certifies its output against
+// the corpus's `panel@1.1` vectors; these tests hold the mechanics: the compiled-in
+// image, the chain, the byte pipe's replay, the event decoder's limits and
+// admission, and every refusal.
+
+use fuaran_rs::serverdriven::emitter::{
+    self, Actor, BytePipe, CompileError, EVENT_LIMITS, EmitError, Emitter, EventRefusal, Fragment,
+    Handler, Image, PanelSpec, PipeChannel, Resync, Value, ValueKind, Write, WriteSpec,
+};
+
+/// The panel as a device compiles it in — the tree compiler's own output,
+/// verbatim (`compiled_in_image_is_the_compilers_output` holds the two equal).
+#[rustfmt::skip]
+const PANEL: Image<'static> = Image {
+    revision: "panel@1.1",
+    root: "{\"id\":\"emitter-panel\",\"kind\":{\"$type\":\"Box\",\"children\":[{\"id\":\"panel-title\",\"kind\":{\"$type\":\"Heading\",\"level\":2,\"text\":\"Cold room 3\"}},{\"id\":\"panel-temp\",\"kind\":{\"$type\":\"Metric\",\"label\":\"Temperature\",\"value\":{\"$type\":\"Static\",\"value\":4}}},{\"id\":\"panel-status\",\"kind\":{\"$type\":\"Badge\",\"label\":\"Cooling\",\"variant\":\"Success\"}},{\"id\":\"panel-defrost\",\"kind\":{\"$type\":\"Button\",\"label\":\"Start defrost\",\"onClick\":{\"$type\":\"Dispatch\"}}},{\"id\":\"panel-schedule\",\"kind\":{\"$type\":\"Form\",\"fields\":[{\"id\":\"minutes\",\"kind\":{\"$type\":\"Number\",\"value\":{\"$type\":\"Static\",\"value\":45}},\"label\":\"Minutes\",\"required\":true},{\"id\":\"start\",\"kind\":{\"$type\":\"DateTime\",\"value\":{\"$type\":\"Static\",\"value\":\"06:00\"},\"variant\":\"Time\"},\"label\":\"Start at\"}],\"onSubmit\":{\"$type\":\"Dispatch\"},\"submitLabel\":\"Schedule\"}}],\"layout\":{\"$type\":\"Flex\",\"direction\":\"Vertical\"},\"role\":\"Group\"}}",
+    nodes: &[
+        "emitter-panel",
+        "panel-title",
+        "panel-temp",
+        "panel-status",
+        "panel-defrost",
+        "panel-schedule",
+        "panel-alarm",
+    ],
+    fragments: &[
+        Fragment { parent: "emitter-panel", id: "panel-alarm", node: "{\"id\":\"panel-alarm\",\"kind\":{\"$type\":\"Callout\",\"body\":\"Door open\",\"tone\":\"Critical\"}}" },
+    ],
+    readings: &[
+        Write { target: "panel-temp", field: "Value", kind: ValueKind::Int },
+    ],
+    props: &[
+        Write { target: "panel-status", field: "Label", kind: ValueKind::Str },
+    ],
+    handlers: &[
+        Handler { node: "panel-defrost", event: "click" },
+        Handler { node: "panel-schedule", event: "submit" },
+    ],
+    state_keys: &[],
+};
+
+fn panel_spec() -> PanelSpec {
+    PanelSpec {
+        root: decode_node(PANEL.root).expect("the panel decodes"),
+        fragments: vec![(
+            PANEL.fragments[0].parent.to_string(),
+            decode_node(PANEL.fragments[0].node).expect("the alarm decodes"),
+        )],
+        readings: vec![WriteSpec::new("panel-temp", "Value", ValueKind::Int)],
+        props: vec![WriteSpec::new("panel-status", "Label", ValueKind::Str)],
+    }
+}
+
+fn device() -> Actor {
+    Actor::Agent {
+        model: "device".to_string(),
+        version: emitter::PROFILE_REVISION.to_string(),
+        id: "cold-room-3".to_string(),
+    }
+}
+
+#[test]
+fn compiled_in_image_is_the_compilers_output() {
+    let compiled = emitter::compile(&panel_spec()).expect("the panel certifies");
+    compiled.with_image(|image| assert_eq!(*image, PANEL));
+    // The constant above IS the compiler's Rust source, character for character.
+    let this_file = include_str!("serverdriven.rs").replace("\r\n", "\n");
+    assert!(
+        this_file.contains(&compiled.to_rust_source("PANEL")),
+        "the compiled-in PANEL is not the compiler's current output:\n{}",
+        compiled.to_rust_source("PANEL")
+    );
+}
+
+#[test]
+fn compile_refuses_what_the_device_could_not_write_conformantly() {
+    let refuse = |spec: PanelSpec| -> CompileError {
+        emitter::compile(&spec).expect_err("the compiler must refuse")
+    };
+    let node = |json: &str| decode_node(json).expect("decodes");
+
+    // A kind outside the declared subset.
+    let mut spec = panel_spec();
+    spec.fragments.push((
+        "emitter-panel".to_string(),
+        node(r#"{"id":"fact-1","kind":{"$type":"Fact","emphasis":true,"help":"Primary insured","icon":"user","label":"Patient","tone":"Brand","value":"Alice Smith"}}"#),
+    ));
+    assert_eq!(refuse(spec).code, "OUTSIDE_SUBSET");
+
+    // A non-integer number token.
+    let mut spec = panel_spec();
+    spec.fragments.push((
+        "emitter-panel".to_string(),
+        node(r#"{"id":"probe","kind":{"$type":"Metric","label":"T","value":{"$type":"Static","value":4.5}}}"#),
+    ));
+    assert_eq!(refuse(spec).code, "NOT_INTEGER_ONLY");
+
+    // A fragment reusing a panel id.
+    let mut spec = panel_spec();
+    spec.fragments.push((
+        "emitter-panel".to_string(),
+        node(r#"{"id":"panel-temp","kind":{"$type":"Callout","body":"x","tone":"Info"}}"#),
+    ));
+    assert_eq!(refuse(spec).code, "DUPLICATE_ID");
+
+    // A write the panel cannot take.
+    let mut spec = panel_spec();
+    spec.readings
+        .push(WriteSpec::new("ghost", "Value", ValueKind::Int));
+    assert_eq!(refuse(spec).code, "WRITE_DOES_NOT_APPLY");
+
+    // A fragment whose parent the panel does not hold.
+    let mut spec = panel_spec();
+    spec.fragments[0].0 = "ghost".to_string();
+    assert_eq!(refuse(spec).code, "WRITE_DOES_NOT_APPLY");
+
+    // The unperturbed panel certifies, so each refusal above is its perturbation's.
+    assert!(emitter::compile(&panel_spec()).is_ok());
+}
+
+#[test]
+fn every_frame_is_chained_and_a_tamper_breaks_the_chain() {
+    let mut em = Emitter::new(&PANEL, &device());
+    assert_eq!(em.seq(), 0);
+    let frames = vec![
+        em.replace_root(),
+        em.reading(0, Value::Int(-7)).unwrap(),
+        em.insert(0).unwrap(),
+        em.prop(0, Value::Str("Line \"two\"\n")).unwrap(),
+        em.remove(0).unwrap(),
+    ];
+    assert_eq!(
+        frames.iter().map(|f| f.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5]
+    );
+    let mut records: Vec<_> = frames.iter().map(|f| f.record(em.actor())).collect();
+    let genesis = fuaran_core::chain::Anchor::genesis();
+    let end = fuaran_core::chain::walk(&genesis, &records).expect("the chain verifies");
+    assert_eq!(end.prev_hash, em.head());
+    assert_eq!(frames[4].hash, em.head());
+
+    // Every frame is canonical (escapes included) and its body is the driver's.
+    for f in &frames {
+        let op = decode_op(&f.op).expect("decodes");
+        assert_eq!(fuaran_rs::wire::encode_op(&op), f.op);
+        assert_eq!(
+            f.body(),
+            encode_frame_json(&Frame {
+                seq: f.seq,
+                ops: vec![op]
+            })
+        );
+    }
+
+    // Rewriting a past reading breaks the chain at that record.
+    records[1].op = records[1].op.replace("-7", "7");
+    assert!(fuaran_core::chain::walk(&genesis, &records).is_err());
+}
+
+#[test]
+fn a_refused_write_writes_nothing() {
+    let mut em = Emitter::new(&PANEL, &device());
+    em.replace_root();
+    let head = em.head().to_string();
+    assert_eq!(
+        em.reading(0, Value::Str("4")),
+        Err(EmitError::WrongValueKind {
+            expected: ValueKind::Int,
+            actual: ValueKind::Str
+        })
+    );
+    assert_eq!(
+        em.reading(0, Value::Int(emitter::MAX_SAFE_INTEGER + 1)),
+        Err(EmitError::IntegerOutOfRange(emitter::MAX_SAFE_INTEGER + 1))
+    );
+    assert_eq!(
+        em.reading(1, Value::Int(1)),
+        Err(EmitError::NoSuchReading(1))
+    );
+    assert_eq!(em.prop(1, Value::Str("x")), Err(EmitError::NoSuchProp(1)));
+    assert_eq!(em.insert(1), Err(EmitError::NoSuchFragment(1)));
+    assert_eq!(em.remove(1), Err(EmitError::NoSuchFragment(1)));
+    assert_eq!((em.seq(), em.head()), (1, head.as_str()));
+    // The bounds themselves are writable.
+    assert!(em.reading(0, Value::Int(emitter::MAX_SAFE_INTEGER)).is_ok());
+    assert!(
+        em.reading(0, Value::Int(-emitter::MAX_SAFE_INTEGER))
+            .is_ok()
+    );
+}
+
+#[derive(Default)]
+struct Uart(Vec<u8>);
+
+impl BytePipe for Uart {
+    type Error = ();
+    fn write(&mut self, bytes: &[u8]) -> Result<(), ()> {
+        self.0.extend_from_slice(bytes);
+        Ok(())
+    }
+}
+
+fn lines(pipe: &Uart) -> Vec<String> {
+    String::from_utf8(pipe.0.clone())
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn the_byte_pipe_writes_one_frame_per_line_and_replays_within_its_budget() {
+    let mut em = Emitter::new(&PANEL, &device());
+    let first = em.replace_root();
+    let root_cost = first.op.len() + first.prev_hash.len() + first.hash.len() + 32;
+    // A budget that holds the first frame and three readings, not four.
+    let reading_cost = {
+        let probe = Emitter::new(&PANEL, &device())
+            .reading(0, Value::Int(10))
+            .unwrap();
+        probe.op.len() + 64 + 64 + 32
+    };
+    let budget = root_cost + 3 * reading_cost;
+    let mut ch = PipeChannel::new(Uart::default(), budget);
+    ch.push(first).unwrap();
+    for v in 10..14 {
+        ch.push(em.reading(0, Value::Int(v)).unwrap()).unwrap();
+    }
+    assert!(ch.retained_bytes() <= budget);
+    assert_eq!(ch.retained_seqs().collect::<Vec<_>>(), vec![2, 3, 4, 5]);
+
+    // One line per frame, each a frame body every server-driven client reads.
+    let written = lines(ch.pipe());
+    assert_eq!(written.len(), 5);
+    for l in &written {
+        let v = fuaran_rs::canonical::parse(l).expect("a line is one JSON document");
+        assert!(v.field("ops").is_some() && v.field("seq").is_some());
+    }
+
+    // Current, replayed from inside the window, and behind it.
+    assert_eq!(ch.resync(5, em.seq()).unwrap(), Resync::Current);
+    assert_eq!(ch.resync(3, em.seq()).unwrap(), Resync::Replayed(2));
+    let replayed = lines(ch.pipe());
+    assert_eq!(&replayed[5..], &written[3..]);
+    assert_eq!(ch.resync(1, em.seq()).unwrap(), Resync::Replayed(4));
+    assert_eq!(ch.resync(0, em.seq()).unwrap(), Resync::Gap);
+
+    // A frame larger than the whole budget is written and not retained.
+    let mut tiny = PipeChannel::new(Uart::default(), 16);
+    tiny.push(Emitter::new(&PANEL, &device()).replace_root())
+        .unwrap();
+    assert_eq!(tiny.retained_bytes(), 0);
+    assert_eq!(lines(tiny.pipe()).len(), 1);
+}
+
+#[test]
+fn the_device_admits_only_registered_events_under_its_limits() {
+    let decode = |raw: &str| emitter::decode_event(&PANEL, raw, &EVENT_LIMITS);
+
+    let click =
+        r#"{"connId":"c1","event":"click","lastSeq":4,"nodeId":"panel-defrost","payload":""}"#;
+    let admitted = decode(click).expect("a registered click is admitted");
+    assert_eq!((admitted.handler, admitted.last_seq), (0, 4));
+    // The host driver reads the same event the same way.
+    let hosted = decode_event(click).unwrap();
+    assert_eq!(
+        (PANEL.handlers[admitted.handler].node, hosted.last_seq),
+        (hosted.node_id.as_str(), 4)
+    );
+
+    let submit = r#"{"event":"submit","nodeId":"panel-schedule","payload":"{\"minutes\":30}"}"#;
+    let s = decode(submit).expect("a registered submit is admitted");
+    assert_eq!(
+        (s.handler, s.payload.as_str(), s.last_seq),
+        (1, "{\"minutes\":30}", 0)
+    );
+
+    // Not registered: a known node with another event, an unknown node.
+    for raw in [
+        r#"{"event":"submit","nodeId":"panel-defrost"}"#,
+        r#"{"event":"click","nodeId":"panel-temp"}"#,
+        r#"{"event":"click","nodeId":"ghost"}"#,
+    ] {
+        assert_eq!(decode(raw), Err(EventRefusal::UnknownHandler), "{raw}");
+    }
+    // Wrong member types.
+    assert_eq!(
+        decode(r#"{"event":"click","lastSeq":-1,"nodeId":"panel-defrost"}"#),
+        Err(EventRefusal::BadMember("lastSeq"))
+    );
+    assert_eq!(
+        decode(r#"{"event":"click","lastSeq":1.5,"nodeId":"panel-defrost"}"#),
+        Err(EventRefusal::BadMember("lastSeq"))
+    );
+    assert_eq!(
+        decode(r#"{"event":7,"nodeId":"panel-defrost"}"#),
+        Err(EventRefusal::BadMember("event"))
+    );
+    assert_eq!(decode(r#""click""#), Err(EventRefusal::NotAnObject));
+    // The declared limits: a nested container, an over-long string, too many
+    // members, too many bytes — each refused by the reader before anything is read.
+    let over = "x".repeat(300);
+    let many = (0..9)
+        .map(|i| format!("\"m{i}\":0"))
+        .collect::<Vec<_>>()
+        .join(",");
+    for raw in [
+        r#"{"event":"click","nodeId":"panel-defrost","payload":{"a":1}}"#.to_string(),
+        format!(r#"{{"event":"click","nodeId":"panel-defrost","payload":"{over}"}}"#),
+        format!("{{{many}}}"),
+        format!(
+            r#"{{"connId":"{}","{}":"{}"}}"#,
+            "c".repeat(200),
+            "k".repeat(200),
+            "v".repeat(200)
+        ),
+    ] {
+        assert!(
+            matches!(
+                decode(&raw),
+                Err(EventRefusal::Read(
+                    fuaran_core::json::JsonRefusal::LimitExceeded(_)
+                ))
+            ),
+            "{raw}"
+        );
+    }
+    assert!(matches!(
+        decode("{\"event\":"),
+        Err(EventRefusal::Read(
+            fuaran_core::json::JsonRefusal::Malformed(_)
+        ))
+    ));
+}
+
+/// The emitter's `no_std` claim, on a target that has no standard library at all.
+/// Runs whenever that target is installed (`rustup target add
+/// thumbv7em-none-eabihf`) and says NOT RUN otherwise; the CI `no-std` job
+/// installs it, so there it cannot skip.
+#[test]
+fn the_emitter_builds_no_std_for_a_microcontroller() {
+    use std::path::Path;
+    use std::process::Command;
+    const TARGET: &str = "thumbv7em-none-eabihf";
+    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    let sysroot = Command::new(&rustc)
+        .args(["--print", "sysroot"])
+        .output()
+        .expect("rustc runs");
+    let sysroot = String::from_utf8_lossy(&sysroot.stdout).trim().to_string();
+    if !Path::new(&sysroot)
+        .join("lib/rustlib")
+        .join(TARGET)
+        .exists()
+    {
+        eprintln!("NOT RUN: the {TARGET} target is not installed");
+        return;
+    }
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let out = Command::new(cargo)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args([
+            "rustc",
+            "--lib",
+            "--no-default-features",
+            "--target",
+            TARGET,
+            "--crate-type",
+            "lib",
+            "--target-dir",
+            "target/no-std",
+            "--quiet",
+        ])
+        .output()
+        .expect("cargo runs");
+    assert!(
+        out.status.success(),
+        "the no_std build failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// The `fuaran-go` driver's committed frame and event vectors
+/// (`serverdriven/frame_test.go`): the emitter writes that frame's two ops byte for
+/// byte, and admits that event.
+#[test]
+fn the_emitter_writes_the_go_drivers_frame_ops_and_reads_its_event() {
+    const GO_FRAME: &str = r#"{"ops":[{"$type":"UpdateProp","path":"Source","target":"count","value":1},{"$type":"RemoveNode","target":"x"}],"seq":7}"#;
+    const GO_EVENT: &str =
+        r#"{"connId":"c1","nodeId":"inc","event":"click","payload":"","lastSeq":4}"#;
+    let image = Image {
+        revision: emitter::PROFILE_REVISION,
+        root: r#"{"id":"root","kind":{"$type":"Box","children":[],"layout":{"$type":"Auto"},"role":"Group"}}"#,
+        nodes: &["root", "x"],
+        fragments: &[Fragment {
+            parent: "root",
+            id: "x",
+            node: r#"{"id":"x","kind":{"$type":"Heading","level":2,"text":"x"}}"#,
+        }],
+        readings: &[],
+        props: &[Write {
+            target: "count",
+            field: "Source",
+            kind: ValueKind::Int,
+        }],
+        handlers: &[Handler {
+            node: "inc",
+            event: "click",
+        }],
+        state_keys: &[],
+    };
+    let ops = [
+        emitter::update_prop(&image, 0, Value::Int(1)).unwrap(),
+        emitter::remove_node(&image, 0).unwrap(),
+    ];
+    assert_eq!(
+        GO_FRAME,
+        format!("{{\"ops\":[{}],\"seq\":7}}", ops.join(","))
+    );
+    let ev = emitter::decode_event(&image, GO_EVENT, &EVENT_LIMITS).expect("admitted");
+    assert_eq!((ev.handler, ev.last_seq, ev.payload.as_str()), (0, 4, ""));
+}

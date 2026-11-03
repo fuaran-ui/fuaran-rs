@@ -58,7 +58,9 @@ pub type Handler = Box<dyn Fn(&Node, &Event) -> Result<Vec<TreeOp>, String>>;
 
 /// The event names a node's kind accepts (the legitimacy check). A kind not
 /// listed accepts nothing (default-deny — only interactive kinds take events).
-fn legitimate_event(kind: &str, event: &str) -> bool {
+/// The emitter's tree compiler builds its handler table against the same table,
+/// so a device registers no handler this driver would refuse.
+pub(crate) fn legitimate_event(kind: &str, event: &str) -> bool {
     matches!(
         (kind, event),
         ("Button", "click")

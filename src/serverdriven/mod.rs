@@ -16,13 +16,27 @@
 //!
 //! The frame wire shape (`{"ops":[…],"seq":N}` / the SSE `id/event/data` framing)
 //! is byte-interoperable with the `fuaran-go` `serverdriven` driver.
+//!
+//! [`emitter`] is the other end of a device panel (Phase 2452): a constrained
+//! emitter (WIRE_FORMAT §11.4) that writes a desktop-compiled tree and the frames
+//! after it in canonical bytes, and decodes only this driver's client event. It is
+//! the one part of this module that builds `no_std` + `alloc`.
 
+#[cfg(feature = "std")]
 mod channel;
+#[cfg(feature = "std")]
 mod connection;
+#[cfg(feature = "std")]
 mod driver;
+pub mod emitter;
+#[cfg(feature = "std")]
 mod frame;
 
+#[cfg(feature = "std")]
 pub use channel::{Channel, ChannelError, InMemoryChannel, SseChannel};
+#[cfg(feature = "std")]
 pub use connection::{Connection, DEFAULT_REJECT_TRAIL_CAPACITY, DEFAULT_REPLAY_BUFFER_CAPACITY};
+#[cfg(feature = "std")]
 pub use driver::{Handler, Reject, RejectReason, Session, op_gate_decision};
+#[cfg(feature = "std")]
 pub use frame::{Event, EventDecodeError, Frame, decode_event, encode_frame_json, encode_sse};

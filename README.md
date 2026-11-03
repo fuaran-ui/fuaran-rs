@@ -303,6 +303,114 @@ rather than skipping — a conformance check that passes without its oracle
 reports the same green as one that ran. Where none is claimed at all, it reports
 that it did not run and asserts nothing.
 
+## Constrained emitter — the device side of a panel (Phase 2452)
+
+`serverdriven::emitter` is a **constrained emitter** in the sense of WIRE_FORMAT
+§11.4: a producer that writes a declared subset of the vocabulary in canonical
+bytes and decodes nothing of this wire but the one client event its placement
+reads. It is the device end of a panel served by this host's server-driven driver
+(or the `fuaran-go` one): a microcontroller that never builds a node.
+
+> **The claim.** `fuaran-rs`'s emitter writes the corpus's `panel` lineage at
+> revision **`panel@1.1`** (wire `core@1.0`, axes `canonical-bytes` and
+> `integer-only`; subset kinds `Badge`, `Box`, `Button`, `Callout`, `Form`,
+> `Heading`, `Metric`, controls `DateTime`, `Number`, ops `InsertChild`,
+> `RemoveNode`, `ReplaceBinding`, `ReplaceRoot`, `UpdateProp`). The constants
+> carrying it (`emitter::PROFILE_REVISION` and the subset) are pinned against the
+> corpus manifest's declaration by `tests/conformance.rs`, which goes red when the
+> lineage gains a revision this emitter has not adopted. The event limits it reads
+> under (`EVENT_LIMITS`) are tighter than §21's and are deployment policy, never
+> part of the profile.
+
+**Decision record (Phase 2452, taken by the implementer and pending the
+maintainers' ratification).**
+
+1. **Placement: a feature of this crate, not a sibling crate.** The default `std`
+   feature is the whole host; with it off (`--no-default-features`) the crate is
+   `no_std` + `alloc` and compiles exactly the emitter and the stored-block
+   teleport encoder (`teleport::stored`, with `teleport::base64url`), over the
+   Core spine and nothing else. The emitter needed nothing from this crate's `std`
+   modules, so gating them was smaller than a second crate, and the desktop half
+   (the tree compiler) stays beside the codec, validator and apply engine it uses
+   as oracles. **Consequence, measured:** this crate declares `cdylib` and
+   `staticlib` crate types (the browser module and the native surfaces), and Cargo
+   builds every declared type of a dependency, so a bare-metal *binary* that
+   depends on this crate fails to build: a `staticlib` for `thumbv7em-none-eabihf`
+   needs a panic handler and an allocator, which a library leaves to its binary.
+   The crate itself builds `no_std` (`cargo rustc --lib --no-default-features
+   --target thumbv7em-none-eabihf --crate-type lib`, run by
+   `tests/serverdriven.rs` whenever the target is installed and by the CI `no-std`
+   job), and the size line below was measured against an rlib-only copy. Linking
+   the emitter into a device image therefore needs either an rlib-only crate over
+   these sources or the crate types moved to a wrapper; that is a decision for the
+   phase that links the device image, and it is recorded here so it is taken
+   knowingly.
+2. **The subset is `panel@1.1`'s**, because that is the claim the corpus can
+   already falsify: the emitter's scenario must reproduce the revision's vectors
+   byte for byte.
+3. **A reading is `ReplaceBinding`, never `UpdateState`.** On this wire
+   `UpdateState` replaces a node's loading, empty and error presentations (§3); a
+   value lives in a binding, so a reading is a `ReplaceBinding` of a `Static`
+   value on the reading's slot (§11.4).
+
+**How it works.**
+
+- **The tree is compiled on the desktop.** `emitter::compile` (`std` only) takes
+  the panel, the fragments that come and go, and the declared writes (each reading
+  and property names its node, its slot or path, and its value kind), and
+  certifies with this host's own codec, validator and apply engine: canonical
+  bytes, no validator error, every kind / control / op inside the subset, no
+  number token with a fraction or exponent, every handler one the server-driven
+  driver admits for its kind, and every write the device can make — written by the
+  device's own op writers — applies to the panel. The output is an `Image`: the
+  panel document as a constant string plus the node-id, fragment, write, handler
+  and state-key tables, available as Rust source (`to_rust_source`) to compile in.
+- **The device writes ops canonical by construction.** Each writer spells its
+  members in ordinal order, escapes every string through the Core spine's one
+  escape and writes integers only within ±(2⁵³ − 1). A write names a table entry,
+  never a node id, and the table fixes its value kind, so a device cannot target
+  an uncertified node or put a non-integer token on the wire.
+- **Inbound, one document, under declared limits.** The server-driven client
+  event is read by the Core spine's reader under `EVENT_LIMITS` (one object of
+  scalar members, at most eight, strings of at most 256 code points, 512 bytes)
+  and admitted only when its node and event name a registered handler.
+- **Frames are chained.** Each frame's op document is a record of the Core
+  spine's op-stream chain (canonical profile), attributed to the device's actor;
+  the head commits to every frame before it and is what a device signs on demand.
+  A frame travels as the server-driven frame body `{"ops":[<op>],"seq":N}`.
+- **The byte pipe.** `PipeChannel` specialises the channel to a byte pipe (UART
+  first): one frame body per newline-terminated line, with a reconnect-replay
+  buffer bounded in bytes so it is sized to RAM. A client behind the retained
+  window gets `Resync::Gap`, and the device answers with a fresh `ReplaceRoot`.
+- **Teleport without a compressor.** `teleport::stored` writes a §17 bundle over
+  stored deflate blocks: valid deflate that every inflater accepts, no Huffman
+  coder and no window. It decodes to the same bundle as this host's compressing
+  encoder.
+
+**Certification.** `tests/conformance.rs` compiles the corpus's panel, drives the
+emitter through the panel scenario (first frame, a reading, a property, the alarm
+row in and out) and asserts every document and frame equals the revision's
+vectors byte for byte, applies on this host, chains under the Core verifier, and
+that the session's stored-block bundle decodes. Setting `FUARAN_EMITTER_OUT=<dir>`
+writes those artefacts out, for decoding by the other hosts; the reference and the
+TypeScript hosts decode every one of them and re-encode each document and frame
+byte-identical. The `fuaran-go` driver's committed frame and event vectors are
+checked in `tests/serverdriven.rs`.
+
+**Size line** (an order, measured, not a gate). A probe image linking the emitter
+the way a panel device would — the first frame, a reading, a property, the alarm
+in and out through the byte pipe, one event decode and one stored-block bundle per
+loop, with a 12 KB bump arena as its heap — measured with the Program core's
+embedded-gate method for `thumbv7em-none-eabihf`: **flash 73 832 bytes, static RAM
+12 828 bytes (12 288 of them the arena), worst-case stack 6 016 bytes.** The
+Program core's recogniser image measures flash 55 100, static RAM 11 548 and stack
+6 640 under the same method.
+
+**Not claimed.** The manifest records which hosts ACCEPT a revision
+(`oldestAccepted`), not which emitters CLAIM one, so this claim is written here
+rather than in the corpus; and this host's own emitter-acceptance leg as a codec
+host (§11.4's table) is a separate adoption.
+
 ## WASM client
 
 The client module compiles to a dependency-free `.wasm`:
@@ -553,6 +661,9 @@ fuaran-rs/
 │   ├── render/          # server-HTML renderer + islands + markdown + sanitise floor
 │   ├── bounded/         # the bounded program loop — interpreter, budget, effects, re-resolve
 │   ├── client/          # wasm32 client — ClientSession (mod.rs) + C-ABI shim (wasm.rs)
+│   ├── serverdriven/    # server-driven driver + emitter/ (the no_std constrained emitter
+│   │                    #   and, under std, its desktop tree compiler)
+│   ├── teleport/        # §17 bundle codec + stored.rs (the no_std stored-block encoder)
 │   └── edge/            # edge hosting — EdgeSession + the DurableSessionStore obligations
 ├── css/
 │   └── fuaran.css       # byte-copy of the reference stylesheet (parity-tested)

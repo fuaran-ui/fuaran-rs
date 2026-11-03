@@ -23,12 +23,21 @@
 //! uniformly, and this host is a *headless and WASM* host — it holds no
 //! server-side session state beyond what [`edge`] journals.
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
+// The emitter (Phase 2452) builds `no_std` + `alloc`; every other module needs the
+// standard library and compiles under the default `std` feature only.
+extern crate alloc;
+
 /// The bounded program loop (client placement) — behaviour carried as data:
 /// the closed action walk, the per-interaction budget, the default-deny effect
 /// vocabulary, and the binding re-resolution pass that makes a state write
 /// visible. Carries this host's bounded-path conformance declaration.
+#[cfg(feature = "std")]
 pub mod bounded;
+#[cfg(feature = "std")]
 pub mod canonical;
+#[cfg(feature = "std")]
 pub mod client;
 /// The Core boundary (Phase 1863) — this host's twins of the Core reference
 /// subsystems (the dataframe model, the Transform evaluator, the function
@@ -37,37 +46,55 @@ pub mod client;
 /// decimal were lifted (Phase 463). Private: [`transform`], [`function`], [`wire`]
 /// and [`canonical`] re-export it under their published paths. The rule is held
 /// by `tests/core_boundary.rs`.
+#[cfg(feature = "std")]
 mod core;
+#[cfg(feature = "std")]
 pub mod dag;
+#[cfg(feature = "std")]
 pub mod diff;
 /// Edge hosting of the certified core — a single-owner session whose op-stream
 /// is journaled to the platform's durable store before its held tree moves, and
 /// which rehydrates from that journal after an eviction. The store is a trait
 /// with a reference implementation, so the tier names obligations rather than a
 /// platform.
+#[cfg(feature = "std")]
 pub mod edge;
+#[cfg(feature = "std")]
 pub mod elicitation;
+#[cfg(feature = "std")]
 pub mod envelope;
 /// The target-neutral C-ABI export surface (Phase 537) — `extern "C"`
 /// `fuaran_*` functions over an opaque [`client::ClientSession`], compiled for
 /// the `wasm32` browser client *and* native staticlib / cdylib consumers (the
 /// Swift / Kotlin native surfaces). See `include/fuaran.h`.
+#[cfg(feature = "std")]
 pub mod ffi;
 /// The signature-searchable function registry (Phase 558) — `findBySignature`
 /// (EXACT/SUBSUMES) + deterministic compose-path resolution, the Rust twin of
 /// the F# `Fuaran.Core.FunctionRegistry` reference.
+#[cfg(feature = "std")]
 pub mod function;
+#[cfg(feature = "std")]
 pub mod gate;
+#[cfg(feature = "std")]
 pub mod introspect;
+#[cfg(feature = "std")]
 pub mod limits;
+#[cfg(feature = "std")]
 pub mod ops;
+#[cfg(feature = "std")]
 pub mod opstream;
+#[cfg(feature = "std")]
 pub mod render;
 pub mod serverdriven;
 pub mod teleport;
+#[cfg(feature = "std")]
 pub mod theme;
+#[cfg(feature = "std")]
 pub mod transform;
+#[cfg(feature = "std")]
 pub mod validator;
+#[cfg(feature = "std")]
 pub mod wire;
 
 /// The pre-release version of this host — DERIVED from `Cargo.toml`, never

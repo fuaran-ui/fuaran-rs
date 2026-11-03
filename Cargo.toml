@@ -180,6 +180,13 @@ lto = true
 strip = true
 
 [features]
+# ON by default: the whole host. Turned OFF (`--no-default-features`), the crate is
+# `no_std` + `alloc` and compiles exactly the constrained emitter (Phase 2452,
+# `serverdriven::emitter`) and the stored-block teleport encoder it uses
+# (`teleport::stored`, with `teleport::base64url`) — the device side of a panel, over
+# the Core spine and nothing else. Every other module needs the standard library.
+default = ["std"]
+std = []
 # OFF by default. Adds one `extern "C"` entry point that runs the bounded
 # loop's driver-semantics comparison inside the module, so the `wasm32` target
 # can be certified by EXECUTION rather than by the fact that it compiles.

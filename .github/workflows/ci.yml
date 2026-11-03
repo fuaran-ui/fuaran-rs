@@ -252,3 +252,43 @@ jobs:
             exit 1
           fi
           echo "go-red proof: the perturbed fixture was refused."
+
+  # The constrained emitter (Phase 2452) claims to build `no_std` + `alloc`. That
+  # claim is only tested on a target with no standard library at all, so this job
+  # installs one (thumbv7em-none-eabihf, a Cortex-M4F) and builds the crate there
+  # with the default `std` feature off. `--crate-type lib` because the manifest's
+  # cdylib / staticlib types are final artefacts that want a panic handler, which a
+  # library leaves to the device binary that links it. The suite's own
+  # `the_emitter_builds_no_std_for_a_microcontroller` runs the same build whenever
+  # the target is installed; here it is installed, so it cannot skip.
+  no-std:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fuaran-rs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: fuaran-rs
+
+      - name: Check out the Core spine
+        uses: actions/checkout@v4
+        with:
+          repository: Fuaran-Core/fuaran-core-rs
+          path: fuaran-core-rs
+
+      - name: Check out the Program core
+        uses: actions/checkout@v4
+        with:
+          repository: Fuaran-Core/fuaran-program-rs
+          path: fuaran-program-rs
+
+      - name: Set up Rust + a target with no standard library
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add thumbv7em-none-eabihf
+          rustc --version && cargo --version
+
+      - name: Build the emitter no_std (thumbv7em-none-eabihf)
+        run: cargo rustc --lib --no-default-features --target thumbv7em-none-eabihf --crate-type lib --release
