@@ -848,7 +848,8 @@ the wire when `false`, aligning with `Fact`'s identical flag."#,
         r#"The labeled TEXT fact — `Metric`'s complementary type. `value` is a
 [`TextSource`] (the same vocabulary the labels use, so `Bound` / `I18n`
 values ride through); `emphasis` is the behavioural bool (omit-when-false),
-`tone` omit-when-default; `help` / `icon` optional."#,
+`tone` omit-when-default; `help` / `icon` optional; `reference` the Fact a
+figure cites, opaque to the language (WIRE_FORMAT 3.6.31)."#,
     ),
     (
         "LinkSpec.protection",

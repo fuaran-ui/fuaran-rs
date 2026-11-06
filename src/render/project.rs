@@ -295,6 +295,7 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             tone: spec.tone,
             help: map_opt_text(sources, &spec.help),
             icon: spec.icon.clone(),
+            reference: spec.reference.clone(),
         }),
         NodeKind::Link(spec) => NodeKind::Link(LinkSpec {
             href: spec.href.clone(),

@@ -2363,3 +2363,17 @@ fn every_other_binding_still_resolves_or_says_not_yet() {
         other => panic!("an unwritten Query is absence, not an error: {other:?}"),
     }
 }
+
+// Phase 2535 - a cited figure (WIRE_FORMAT 3.6.31): `data-fact` on the tile's root, encoded.
+#[test]
+fn a_cited_fact_stamps_data_fact_on_its_tile() {
+    let html = render(
+        r#"{"id":"f","kind":{"$type":"Fact","label":"Revenue","reference":"fact:a\"b","value":"1"}}"#,
+    );
+    assert!(
+        html.contains(r#"<div class="fuaran-fact fuaran-fact-default" data-fact="fact:a&quot;b">"#),
+        "{html}"
+    );
+    let uncited = render(r#"{"id":"f","kind":{"$type":"Fact","label":"Revenue","value":"1"}}"#);
+    assert!(!uncited.contains("data-fact"), "{uncited}");
+}

@@ -855,15 +855,20 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
                     )
                 })
                 .unwrap_or_default();
+            let mut tile_attrs = vec![(
+                "class",
+                s(format!(
+                    "fuaran-fact fuaran-fact-{}{emphasis_suffix}",
+                    tone_var(spec.tone)
+                )),
+            )];
+            if let Some(reference) = &spec.reference {
+                // WIRE_FORMAT 3.6.31: the citation, through the ordinary attribute encoder.
+                tile_attrs.push(("data-fact", s(reference.as_str())));
+            }
             el(
                 "div",
-                &[(
-                    "class",
-                    s(format!(
-                        "fuaran-fact fuaran-fact-{}{emphasis_suffix}",
-                        tone_var(spec.tone)
-                    )),
-                )],
+                &tile_attrs,
                 &format!(
                     "{}{value}{help}",
                     text_el(

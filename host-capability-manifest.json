@@ -581,6 +581,7 @@
     "Kind.Fact.help",
     "Kind.Fact.icon",
     "Kind.Fact.label",
+    "Kind.Fact.reference",
     "Kind.Fact.tone",
     "Kind.Fact.value",
     "Kind.FileUpload",

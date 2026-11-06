@@ -722,6 +722,12 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
                     ..s.clone()
                 })
             }),
+            "Reference" => patch(coerce::string(value), |x| {
+                NodeKind::Fact(crate::wire::FactSpec {
+                    reference: Some(x),
+                    ..s.clone()
+                })
+            }),
             "Icon" => patch(coerce::icon_source(value), |x| {
                 NodeKind::Fact(crate::wire::FactSpec {
                     icon: Some(x),

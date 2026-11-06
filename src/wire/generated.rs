@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "514121018ffc157776d234c63295c8686f399d42a55f589a2756fe3974968f18";
+pub const IDL_SHA256: &str = "3ce196fda6ce09924bd2a9f38c97c2a0c4492e99411169fbccaeff8c66d73b33";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -700,7 +700,8 @@ pub struct ErrorBoundarySpec {
 /// The labeled TEXT fact — `Metric`'s complementary type. `value` is a
 /// [`TextSource`] (the same vocabulary the labels use, so `Bound` / `I18n`
 /// values ride through); `emphasis` is the behavioural bool (omit-when-false),
-/// `tone` omit-when-default; `help` / `icon` optional.
+/// `tone` omit-when-default; `help` / `icon` optional; `reference` the Fact a
+/// figure cites, opaque to the language (WIRE_FORMAT 3.6.31).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FactSpec {
     pub emphasis: bool,
@@ -709,6 +710,7 @@ pub struct FactSpec {
     pub label: TextSource,
     pub tone: ToneVariant,
     pub value: TextSource,
+    pub reference: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2715,7 +2717,7 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn fact_spec(v: &FactSpec) -> String {
-        let FactSpec { emphasis: m_emphasis, help: m_help, icon: m_icon, label: m_label, tone: m_tone, value: m_value } = v;
+        let FactSpec { emphasis: m_emphasis, help: m_help, icon: m_icon, label: m_label, tone: m_tone, value: m_value, reference: m_reference } = v;
         let mut f: Vec<Field> = vec![];
         if *m_emphasis != defaults::FACT_EMPHASIS {
             f.push(field("emphasis", boolean(*m_emphasis)));
@@ -2731,6 +2733,9 @@ pub(super) mod gen_encode {
             f.push(field("tone", s(m_tone.as_str())));
         }
         f.push(field("value", text_source(m_value)));
+        if let Some(x) = m_reference {
+            f.push(field("reference", s(x)));
+        }
         obj(f)
     }
 
@@ -4415,7 +4420,8 @@ pub(super) mod gen_decode {
         let m_label = field_req(path, fields, "label", &[], "Fact.label: TextSource", decode_text_source)?;
         let m_tone = field_or(path, fields, "tone", &[], defaults::FACT_TONE, decode_tone_variant)?;
         let m_value = field_req(path, fields, "value", &[], "Fact.value: TextSource", decode_text_source)?;
-        Ok(FactSpec { emphasis: m_emphasis, help: m_help, icon: m_icon, label: m_label, tone: m_tone, value: m_value })
+        let m_reference = field_opt(path, fields, "reference", &[], dec_string)?;
+        Ok(FactSpec { emphasis: m_emphasis, help: m_help, icon: m_icon, label: m_label, tone: m_tone, value: m_value, reference: m_reference })
     }
 
     pub(in super::super) fn decode_file_upload_spec(path: &str, j: &JVal) -> DResult<FileUploadSpec> {
@@ -6865,6 +6871,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Kind.Fact.help",
     "Kind.Fact.icon",
     "Kind.Fact.label",
+    "Kind.Fact.reference",
     "Kind.Fact.tone",
     "Kind.Fact.value",
     "Kind.FileUpload",
