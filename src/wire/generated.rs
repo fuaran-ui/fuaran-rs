@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "59b30bfa4b6bf50e0623f6672dc27a23170dead76c4cbda6c181bd7e6e704c59";
+pub const IDL_SHA256: &str = "5defc2bc8886228c73a3f41b4b225de6df5b9e0068db44ac74378471ff9a6665";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -1367,6 +1367,7 @@ pub struct StateBehaviour {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StaticRows {
+    pub citations: Vec<TableCitation>,
     /// Phase 801 — the table's initial order. Configuration, distinct from the
     /// transform pipeline's data `sort`.
     pub default_sort: Option<DefaultSort>,
@@ -1414,6 +1415,14 @@ pub struct TabHeader {
     pub label: TextSource,
     pub icon: Option<String>,
     pub disabled: Option<Binding>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableCitation {
+    pub column: i64,
+    pub label: Option<TextSource>,
+    pub reference: String,
+    pub row: i64,
 }
 
 /// Phase 1110 - one timed-text track (WIRE_FORMAT.md 3.6.6). Four of the five
@@ -3519,8 +3528,11 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn static_rows(v: &StaticRows) -> String {
-        let StaticRows { default_sort: m_default_sort, headers: m_headers, rows: m_rows, sortable: m_sortable } = v;
+        let StaticRows { citations: m_citations, default_sort: m_default_sort, headers: m_headers, rows: m_rows, sortable: m_sortable } = v;
         let mut f: Vec<Field> = vec![];
+        if !m_citations.is_empty() {
+            f.push(field("citations", enc_list(m_citations, table_citation)));
+        }
         if let Some(x) = m_default_sort {
             f.push(field("defaultSort", default_sort(x)));
         }
@@ -3570,6 +3582,17 @@ pub(super) mod gen_encode {
         if let Some(x) = m_disabled {
             f.push(field("disabled", binding(x)));
         }
+        obj(f)
+    }
+
+    pub(in super::super) fn table_citation(v: &TableCitation) -> String {
+        let TableCitation { column: m_column, label: m_label, reference: m_reference, row: m_row } = v;
+        let mut f: Vec<Field> = vec![field("column", int(*m_column))];
+        if let Some(x) = m_label {
+            f.push(field("label", text_source(x)));
+        }
+        f.push(field("reference", s(m_reference)));
+        f.push(field("row", int(*m_row)));
         obj(f)
     }
 
@@ -5186,11 +5209,14 @@ pub(super) mod gen_decode {
 
     pub(in super::super) fn decode_static_rows(path: &str, j: &JVal) -> DResult<StaticRows> {
         let fields = as_obj(path, j)?;
+        let m_citations = field_or(path, fields, "citations", &[], Vec::new(), |p, j| dec_list(p, j, decode_table_citation))?;
         let m_default_sort = field_opt(path, fields, "defaultSort", &[], decode_default_sort)?;
         let m_headers = field_req(path, fields, "headers", &[], "StaticRows.headers: list of TextSource", |p, j| dec_list(p, j, decode_text_source))?;
         let m_rows = field_req(path, fields, "rows", &[], "StaticRows.rows: list of list of TextSource", |p, j| dec_list(p, j, |p, j| dec_list(p, j, decode_text_source)))?;
         let m_sortable = field_opt(path, fields, "sortable", &[], as_bool)?;
-        Ok(StaticRows { default_sort: m_default_sort, headers: m_headers, rows: m_rows, sortable: m_sortable })
+        let v = StaticRows { citations: m_citations, default_sort: m_default_sort, headers: m_headers, rows: m_rows, sortable: m_sortable };
+        check_static_rows(path, fields, &v)?;
+        Ok(v)
     }
 
     pub(in super::super) fn decode_style_delta(path: &str, j: &JVal) -> DResult<StyleDelta> {
@@ -5216,6 +5242,15 @@ pub(super) mod gen_decode {
         let m_icon = field_opt(path, fields, "icon", &[], dec_string)?;
         let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
         Ok(TabHeader { label: m_label, icon: m_icon, disabled: m_disabled })
+    }
+
+    pub(in super::super) fn decode_table_citation(path: &str, j: &JVal) -> DResult<TableCitation> {
+        let fields = as_obj(path, j)?;
+        let m_column = field_req(path, fields, "column", &[], "TableCitation.column: integer", as_int)?;
+        let m_label = field_opt(path, fields, "label", &[], decode_text_source)?;
+        let m_reference = field_req(path, fields, "reference", &[], "TableCitation.reference: string", dec_string)?;
+        let m_row = field_req(path, fields, "row", &[], "TableCitation.row: integer", as_int)?;
+        Ok(TableCitation { column: m_column, label: m_label, reference: m_reference, row: m_row })
     }
 
     pub(in super::super) fn decode_track_entry(path: &str, j: &JVal) -> DResult<TrackEntry> {
@@ -7168,6 +7203,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "StateBehaviour.onEmpty",
     "StateBehaviour.onError",
     "StateBehaviour.onLoading",
+    "StaticRows.citations",
     "StaticRows.defaultSort",
     "StaticRows.headers",
     "StaticRows.rows",
@@ -7184,6 +7220,10 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "TabHeader.disabled",
     "TabHeader.icon",
     "TabHeader.label",
+    "TableCitation.column",
+    "TableCitation.label",
+    "TableCitation.reference",
+    "TableCitation.row",
     "TextSource.Bound",
     "TextSource.Bound.binding",
     "TextSource.I18n",

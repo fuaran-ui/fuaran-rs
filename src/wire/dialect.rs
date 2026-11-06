@@ -2354,6 +2354,12 @@ pub(super) const DECODE_CHECKS: &[(&str, &str, Check, &str)] = &[
         "a non-negative header index",
     ),
     (
+        "StaticRows",
+        "check_static_rows",
+        Check::Post,
+        "a citation list is absent or non-empty, names cells that exist, and names each once (3.6.33)",
+    ),
+    (
         "DataGrid",
         "check_grid",
         Check::Post,

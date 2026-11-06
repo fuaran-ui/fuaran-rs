@@ -3951,6 +3951,43 @@ pub(super) fn check_default_sort(path: &str, _fields: &Fields, ds: &DefaultSort)
     Ok(())
 }
 
+/// `StaticRows` — a citation list is absent or non-empty, each coordinate names a cell that
+/// exists, read against the rows, and a cell is cited once (WIRE_FORMAT 3.6.33).
+pub(super) fn check_static_rows(path: &str, fields: &Fields, spec: &StaticRows) -> DResult<()> {
+    if spec.citations.is_empty() {
+        if fields.iter().any(|(k, _)| k == "citations") {
+            return Err(wrong_type(
+                &format!("{path}.citations"),
+                "a non-empty citation list, or no member at all",
+            ));
+        }
+        return Ok(());
+    }
+    for (i, c) in spec.citations.iter().enumerate() {
+        let at = format!("{path}.citations[{i}]");
+        let row = usize::try_from(c.row)
+            .ok()
+            .and_then(|row| spec.rows.get(row))
+            .ok_or_else(|| wrong_type(&format!("{at}.row"), "a row index this table has"))?;
+        if usize::try_from(c.column).map_or(true, |column| column >= row.len()) {
+            return Err(wrong_type(
+                &format!("{at}.column"),
+                "a column index the cited row has",
+            ));
+        }
+        if spec.citations[..i]
+            .iter()
+            .any(|earlier| earlier.row == c.row && earlier.column == c.column)
+        {
+            return Err(wrong_type(
+                &at,
+                "a cell no other citation in this list names",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `DataGrid` — the grid-behaviour near misses, before any field is read.
 pub(super) fn check_grid_near_misses(path: &str, fields: &Fields) -> DResult<()> {
     check_near_misses(path, fields, GRID_NEAR_MISSES)

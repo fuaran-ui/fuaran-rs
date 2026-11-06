@@ -41,7 +41,7 @@ use crate::wire::{
     FragmentRefSpec, GridSpec, HeadingSpec, LabelValueRowSpec, LinkSpec, ListSpec, MarkdownSpec,
     MetricComparison, MetricSpec, ModalSpec, MountSpec, Node, NodeKind, ProgressSpec,
     ScrollAreaSpec, SelectSpec, Shape, SplitPanelSpec, StaticRows, StaticValue, StepperSpec,
-    SummaryListSpec, SwitchSpec, TabHeader, TabsSpec, TextSource, ToastSpec,
+    SummaryListSpec, SwitchSpec, TabHeader, TableCitation, TabsSpec, TextSource, ToastSpec,
 };
 
 /// Project a resolved copy of `tree` against the live `sources` — the entry
@@ -504,6 +504,15 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
                 // untouched (this pass maps TextSource chrome only).
                 sortable: sr.sortable,
                 default_sort: sr.default_sort.clone(),
+                // Phase 2592 — a citation's label is text; the rest of it is not.
+                citations: sr
+                    .citations
+                    .iter()
+                    .map(|c| TableCitation {
+                        label: c.label.as_ref().map(|t| map_text(sources, t)),
+                        ..c.clone()
+                    })
+                    .collect(),
             }),
             keep_rows_together: spec.keep_rows_together,
             repeat_header: spec.repeat_header,

@@ -4489,7 +4489,8 @@ fn render_static_table(ctx: &Ctx<'_>, spec: &StaticRows, grid: &GridSpec) -> Str
     let body_rows: String = spec
         .rows
         .iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(i, row)| {
             let texts: Vec<String> = row
                 .iter()
                 .map(|cell| render_text(ctx.sources, cell))
@@ -4498,11 +4499,38 @@ fn render_static_table(ctx: &Ctx<'_>, spec: &StaticRows, grid: &GridSpec) -> Str
                 .iter()
                 .enumerate()
                 .map(|(j, text)| {
-                    el(
-                        "td",
-                        &[("class", s("fuaran-table-cell"))],
-                        &static_cell(&grid.columns, &texts, j, text),
-                    )
+                    let content = static_cell(&grid.columns, &texts, j, text);
+                    // Phase 2592 — the reference on the cell, a label as its first child.
+                    match spec
+                        .citations
+                        .iter()
+                        .find(|c| c.row == i as i64 && c.column == j as i64)
+                    {
+                        None => el("td", &[("class", s("fuaran-table-cell"))], &content),
+                        Some(c) => {
+                            let label = c
+                                .label
+                                .as_ref()
+                                .map(|l| render_text(ctx.sources, l))
+                                .filter(|l| !l.is_empty())
+                                .map(|l| {
+                                    text_el(
+                                        "span",
+                                        &[("class", s("fuaran-cited-label"))],
+                                        &format!("{l} "),
+                                    )
+                                })
+                                .unwrap_or_default();
+                            el(
+                                "td",
+                                &[
+                                    ("class", s("fuaran-table-cell")),
+                                    ("data-fact", s(c.reference.clone())),
+                                ],
+                                &format!("{label}{content}"),
+                            )
+                        }
+                    }
                 })
                 .collect();
             el("tr", &[("class", s("fuaran-table-row"))], &cells)

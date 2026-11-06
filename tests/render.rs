@@ -2394,3 +2394,27 @@ fn a_cited_figure_is_a_span_in_the_sentence() {
     assert!(!html.contains("fuaran-kind-fact"), "{html}");
     assert!(!html.contains("<a "), "{html}");
 }
+
+// Phase 2592 - a table cell cites its figure (WIRE_FORMAT 3.6.33).
+#[test]
+fn a_cited_cell_stamps_the_td_with_the_label_first() {
+    let plain = render(
+        r#"{"id":"t","kind":{"$type":"DataGrid","columns":[],"source":{"$type":"Static","value":[]},"staticRows":{"headers":["A","B"],"rows":[["x","1"]]}}}"#,
+    );
+    let html = render(
+        r#"{"id":"t","kind":{"$type":"DataGrid","columns":[],"source":{"$type":"Static","value":[]},"staticRows":{"citations":[{"column":1,"label":"One","reference":"fact:one","row":0}],"headers":["A","B"],"rows":[["x","1"]]}}}"#,
+    );
+    assert!(
+        html.contains(
+            r#"<td class="fuaran-table-cell" data-fact="fact:one"><span class="fuaran-cited-label">One </span>1</td>"#
+        ),
+        "{html}"
+    );
+    assert!(!html.contains("fuaran-kind-fact"), "{html}");
+    assert_eq!(
+        html.replace(r#" data-fact="fact:one""#, "")
+            .replace(r#"<span class="fuaran-cited-label">One </span>"#, ""),
+        plain,
+        "a citation adds the attribute and the span and nothing else"
+    );
+}
