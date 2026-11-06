@@ -57,7 +57,7 @@ use super::egress::{
     sanitize_url_for_egress,
 };
 use super::html::{Attr, AttrVal, el, entity_encode, escape_attr, escape_text, text_el, void_el};
-use super::markdown::to_html_with_egress as markdown_to_html_with_egress;
+use super::markdown::{Citation, to_html_cited as markdown_to_html_cited};
 use super::sanitize::{
     CSS_REFUSAL_ATTRIBUTE, is_safe_css_value, sanitize_link_anchor, sanitize_paint_value,
 };
@@ -552,7 +552,19 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
         NodeKind::Markdown(spec) => el(
             "div",
             &[("class", s("fuaran-markdown"))],
-            &markdown_to_html_with_egress(ctx.policy, &render_text(ctx.sources, &spec.text)),
+            &markdown_to_html_cited(
+                ctx.policy,
+                &spec
+                    .citations
+                    .iter()
+                    .map(|c| Citation {
+                        name: c.name.clone(),
+                        reference: c.reference.clone(),
+                        label: c.label.as_ref().map(|l| render_text(ctx.sources, l)),
+                    })
+                    .collect::<Vec<_>>(),
+                &render_text(ctx.sources, &spec.text),
+            ),
         ),
         NodeKind::Metric(spec) => {
             // Phase 632/649 — the Metric value is a scalar slot: a
@@ -3939,6 +3951,7 @@ fn render_grid_cell(ctx: &Ctx<'_>, col: &ColumnErased, row: &JVal) -> String {
             let placeholder = Node {
                 id: "<closure>".to_string(),
                 kind: NodeKind::Markdown(crate::wire::MarkdownSpec {
+                    citations: Vec::new(),
                     text: TextSource::Literal("<closure>".to_string()),
                 }),
                 state: StateBehaviour::default(),

@@ -17,7 +17,7 @@ use fuaran_rs::canonical::{JVal, parse, render_canonical};
 use fuaran_rs::render::egress::{
     EgressClass, EgressOrigin, EgressPolicy, deny_non_local_egress, permissive_egress,
 };
-use fuaran_rs::render::markdown::{to_html, to_html_with_egress};
+use fuaran_rs::render::markdown::{Citation, to_html, to_html_cited};
 use fuaran_rs::render::{BindingSources, render_to_html, render_to_html_with_egress};
 use fuaran_rs::wire::decode_node;
 
@@ -104,7 +104,19 @@ fn markdown_corpus_renders_byte_identical() {
         if named.as_deref().is_some_and(|n| n != "permissive") {
             non_permissive += 1;
         }
-        let actual = to_html_with_egress(&policy, &source);
+        // Phase 2591 — a fixture may declare the figures its text cites (WIRE_FORMAT 3.6.32).
+        let citations: Vec<Citation> = match fixture.field("citations") {
+            Some(JVal::Arr(entries)) => entries
+                .iter()
+                .map(|c| Citation {
+                    name: str_field(c, "name").expect("citation name"),
+                    reference: str_field(c, "reference").expect("citation reference"),
+                    label: str_field(c, "label"),
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let actual = to_html_cited(&policy, &citations, &source);
         if actual != expected {
             failures.push(format!(
                 "{id} (policy {}):\n  source   {source:?}\n  expected {expected:?}\n  actual   {actual:?}",
@@ -113,7 +125,7 @@ fn markdown_corpus_renders_byte_identical() {
             continue;
         }
         // The pure form IS the permissive case — asserted, not merely intended.
-        if named.as_deref().is_none_or(|n| n == "permissive") {
+        if citations.is_empty() && named.as_deref().is_none_or(|n| n == "permissive") {
             let pure = to_html(&source);
             if pure != expected {
                 failures.push(format!(
@@ -158,9 +170,12 @@ fn markdown_corpus_renders_byte_identical() {
 // caller has to opt in, this leg goes red.
 
 /// A one-node `Markdown` tree carrying `source` as its literal text.
-fn markdown_node_json(source: &str) -> String {
+fn markdown_node_json(source: &str, citations: Option<&JVal>) -> String {
+    let citations = citations
+        .map(|c| format!(r#""citations":{},"#, render_canonical(c)))
+        .unwrap_or_default();
     format!(
-        r#"{{"id":"md","kind":{{"$type":"Markdown","text":{{"$type":"Literal","text":{}}}}}}}"#,
+        r#"{{"id":"md","kind":{{"$type":"Markdown",{citations}"text":{{"$type":"Literal","text":{}}}}}}}"#,
         render_canonical(&JVal::Str(source.to_string()))
     )
 }
@@ -189,7 +204,8 @@ fn the_markdown_corpus_renders_the_same_through_the_ambient_render_path() {
         let source = str_field(fixture, "source").expect("fixture source");
         let expected = wrap(&str_field(fixture, "html").expect("fixture html"));
         let named = str_field(fixture, "policy");
-        let tree = decode_node(&markdown_node_json(&source)).expect("the markdown node decodes");
+        let tree = decode_node(&markdown_node_json(&source, fixture.field("citations")))
+            .expect("the markdown node decodes");
         let sources = BindingSources::default();
 
         // The load-bearing branch. A `denyNonLocal` fixture renders through the

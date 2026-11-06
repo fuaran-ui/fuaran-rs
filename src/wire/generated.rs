@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "3ce196fda6ce09924bd2a9f38c97c2a0c4492e99411169fbccaeff8c66d73b33";
+pub const IDL_SHA256: &str = "59b30bfa4b6bf50e0623f6672dc27a23170dead76c4cbda6c181bd7e6e704c59";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -884,6 +884,7 @@ pub struct MapSpec {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MarkdownSpec {
+    pub citations: Vec<MarkdownCitation>,
     pub text: TextSource,
 }
 
@@ -1300,6 +1301,13 @@ pub struct MapMarker {
     pub label: TextSource,
     pub latitude: f64,
     pub longitude: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkdownCitation {
+    pub label: Option<TextSource>,
+    pub name: String,
+    pub reference: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2907,8 +2915,13 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn markdown_spec(v: &MarkdownSpec) -> String {
-        let MarkdownSpec { text: m_text } = v;
-        obj(vec![field("text", text_source(m_text))])
+        let MarkdownSpec { citations: m_citations, text: m_text } = v;
+        let mut f: Vec<Field> = vec![];
+        if !m_citations.is_empty() {
+            f.push(field("citations", enc_list(m_citations, markdown_citation)));
+        }
+        f.push(field("text", text_source(m_text)));
+        obj(f)
     }
 
     pub(in super::super) fn math_spec(v: &MathSpec) -> String {
@@ -3420,6 +3433,17 @@ pub(super) mod gen_encode {
         }
         f.push(field("latitude", num(*m_latitude)));
         f.push(field("longitude", num(*m_longitude)));
+        obj(f)
+    }
+
+    pub(in super::super) fn markdown_citation(v: &MarkdownCitation) -> String {
+        let MarkdownCitation { label: m_label, name: m_name, reference: m_reference } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(x) = m_label {
+            f.push(field("label", text_source(x)));
+        }
+        f.push(field("name", s(m_name)));
+        f.push(field("reference", s(m_reference)));
         obj(f)
     }
 
@@ -4538,8 +4562,11 @@ pub(super) mod gen_decode {
 
     pub(in super::super) fn decode_markdown_spec(path: &str, j: &JVal) -> DResult<MarkdownSpec> {
         let fields = as_obj(path, j)?;
+        let m_citations = field_or(path, fields, "citations", &[], Vec::new(), |p, j| dec_list(p, j, decode_markdown_citation))?;
         let m_text = field_req(path, fields, "text", &[], "Markdown.text: TextSource", decode_text_source)?;
-        Ok(MarkdownSpec { text: m_text })
+        let v = MarkdownSpec { citations: m_citations, text: m_text };
+        check_markdown(path, fields, &v)?;
+        Ok(v)
     }
 
     pub(in super::super) fn decode_math_spec(path: &str, j: &JVal) -> DResult<MathSpec> {
@@ -5095,6 +5122,14 @@ pub(super) mod gen_decode {
         let m_latitude = field_req(path, fields, "latitude", &[], "MapMarker.latitude: number", as_float)?;
         let m_longitude = field_req(path, fields, "longitude", &[], "MapMarker.longitude: number", as_float)?;
         Ok(MapMarker { label: m_label, latitude: m_latitude, longitude: m_longitude })
+    }
+
+    pub(in super::super) fn decode_markdown_citation(path: &str, j: &JVal) -> DResult<MarkdownCitation> {
+        let fields = as_obj(path, j)?;
+        let m_label = field_opt(path, fields, "label", &[], decode_text_source)?;
+        let m_name = field_req(path, fields, "name", &[], "MarkdownCitation.name: string", dec_string)?;
+        let m_reference = field_req(path, fields, "reference", &[], "MarkdownCitation.reference: string", dec_string)?;
+        Ok(MarkdownCitation { label: m_label, name: m_name, reference: m_reference })
     }
 
     pub(in super::super) fn decode_metric_comparison(path: &str, j: &JVal) -> DResult<MetricComparison> {
@@ -6943,6 +6978,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Kind.Map.source",
     "Kind.Map.zoom",
     "Kind.Markdown",
+    "Kind.Markdown.citations",
     "Kind.Markdown.text",
     "Kind.Math",
     "Kind.Math.display",
@@ -7055,6 +7091,9 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "MapMarker.label",
     "MapMarker.latitude",
     "MapMarker.longitude",
+    "MarkdownCitation.label",
+    "MarkdownCitation.name",
+    "MarkdownCitation.reference",
     "MediaKind.Audio",
     "MediaKind.Video",
     "MediaKind.Video.autoplay",

@@ -190,6 +190,33 @@ type Refs = HashMap<String, (String, Option<String>)>;
 struct Ctx<'a> {
     refs: &'a Refs,
     policy: &'a EgressPolicy,
+    citations: &'a [Citation],
+}
+
+/// Phase 2591 (WIRE_FORMAT.md §3.6.32): one figure a text cites, its label already a string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Citation {
+    pub name: String,
+    pub reference: String,
+    pub label: Option<String>,
+}
+
+/// The span a cited figure draws, in the line of text. The reference stylesheet hides the
+/// label visually, so it reaches a screen reader without being printed in the sentence.
+fn cited_span(citation: &Citation, title_attr: &str, inner: &str) -> String {
+    let label = match citation.label.as_deref() {
+        Some(l) if !l.is_empty() => {
+            format!(
+                "<span class=\"fuaran-cited-label\">{} </span>",
+                escape_html(l)
+            )
+        }
+        _ => String::new(),
+    };
+    format!(
+        "<span class=\"fuaran-cited\" data-fact=\"{}\"{title_attr}>{label}{inner}</span>",
+        escape_html(&citation.reference)
+    )
 }
 
 /// The `href` / `src` a markdown destination emits under `policy`, plus the
@@ -618,6 +645,26 @@ fn tokenize(ctx: Ctx<'_>, text: &[char]) -> Vec<Tok> {
                         Some((url, title, next)) => {
                             flush!();
                             let label_chars: Vec<char> = label_text.chars().collect();
+                            let citation = if is_image {
+                                None
+                            } else {
+                                ctx.citations
+                                    .iter()
+                                    .find(|c| url.strip_prefix("cite:") == Some(c.name.as_str()))
+                            };
+                            if let Some(citation) = citation {
+                                let inner = render_inlines(&parse_inlines(ctx, &label_chars));
+                                let title_attr = title
+                                    .map(|t| format!(" title=\"{}\"", escape_html(&t)))
+                                    .unwrap_or_default();
+                                toks.push(Tok::Node(Inline::Raw(cited_span(
+                                    citation,
+                                    &title_attr,
+                                    &inner,
+                                ))));
+                                i = next;
+                                continue;
+                            }
                             let class = if is_image {
                                 EgressClass::Media
                             } else {
@@ -1464,7 +1511,7 @@ fn render_items(ctx: Ctx<'_>, tight: bool, items: &[ListItem]) -> String {
 ///
 /// Escaped by construction; the result still passes through the markdown-HTML
 /// sanitiser.
-pub fn to_html_with_egress(policy: &EgressPolicy, source: &str) -> String {
+pub fn to_html_cited(policy: &EgressPolicy, citations: &[Citation], source: &str) -> String {
     if source.is_empty() {
         return String::new();
     }
@@ -1475,9 +1522,15 @@ pub fn to_html_with_egress(policy: &EgressPolicy, source: &str) -> String {
     let ctx = Ctx {
         refs: &refs,
         policy,
+        citations,
     };
     let html = render_blocks(ctx, &blocks);
     sanitize_markdown_html(&html)
+}
+
+/// [`to_html_cited`] for a text that declares no citation: every link is a link.
+pub fn to_html_with_egress(policy: &EgressPolicy, source: &str) -> String {
+    to_html_cited(policy, &[], source)
 }
 
 /// Render GFM markdown `source` with **every destination permitted** — the pure

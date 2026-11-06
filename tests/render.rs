@@ -2377,3 +2377,20 @@ fn a_cited_fact_stamps_data_fact_on_its_tile() {
     let uncited = render(r#"{"id":"f","kind":{"$type":"Fact","label":"Revenue","value":"1"}}"#);
     assert!(!uncited.contains("data-fact"), "{uncited}");
 }
+
+// Phase 2591 - a figure cited inside a sentence (WIRE_FORMAT 3.6.32). The render bytes are
+// pinned by the shared markdown corpus; this reaches the node path.
+#[test]
+fn a_cited_figure_is_a_span_in_the_sentence() {
+    let html = render(
+        r#"{"id":"m","kind":{"$type":"Markdown","citations":[{"label":"Online share","name":"share","reference":"fact:share"},{"name":"spend","reference":"fact:spend"}],"text":"It took [23%](cite:share) of [12](cite:spend)."}}"#,
+    );
+    assert!(
+        html.contains(
+            r#"<p>It took <span class="fuaran-cited" data-fact="fact:share"><span class="fuaran-cited-label">Online share </span>23%</span> of <span class="fuaran-cited" data-fact="fact:spend">12</span>.</p>"#
+        ),
+        "{html}"
+    );
+    assert!(!html.contains("fuaran-kind-fact"), "{html}");
+    assert!(!html.contains("<a "), "{html}");
+}

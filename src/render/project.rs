@@ -223,6 +223,15 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             variant: spec.variant,
         }),
         NodeKind::Markdown(spec) => NodeKind::Markdown(MarkdownSpec {
+            citations: spec
+                .citations
+                .iter()
+                .map(|c| crate::wire::MarkdownCitation {
+                    label: c.label.as_ref().map(|l| map_text(sources, l)),
+                    name: c.name.clone(),
+                    reference: c.reference.clone(),
+                })
+                .collect(),
             text: map_text(sources, &spec.text),
         }),
         NodeKind::Metric(spec) => NodeKind::Metric(MetricSpec {

@@ -2318,6 +2318,12 @@ pub(super) const DECODE_CHECKS: &[(&str, &str, Check, &str)] = &[
         "a rule constrains something, and its length bounds are not inverted",
     ),
     (
+        "Markdown",
+        "check_markdown",
+        Check::Post,
+        "a citation list is absent or non-empty, and each name is a token used once (3.6.32)",
+    ),
+    (
         "FileUpload",
         "check_file_upload",
         Check::Post,

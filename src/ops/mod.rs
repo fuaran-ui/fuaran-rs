@@ -537,9 +537,12 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
             }),
             _ => UnknownField,
         },
-        NodeKind::Markdown(_) => match field {
+        NodeKind::Markdown(s) => match field {
             "Text" => patch(coerce::text_source(value), |x| {
-                NodeKind::Markdown(crate::wire::MarkdownSpec { text: x })
+                NodeKind::Markdown(crate::wire::MarkdownSpec {
+                    citations: s.citations.clone(),
+                    text: x,
+                })
             }),
             _ => UnknownField,
         },

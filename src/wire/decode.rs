@@ -3750,6 +3750,43 @@ pub(super) fn decode_filters_kind(path: &str, j: &JVal) -> DResult<Vec<FilterSpe
     })
 }
 
+/// `Markdown` — a citation list is absent or non-empty, and each name is a token used once
+/// (WIRE_FORMAT 3.6.32).
+pub(super) fn check_markdown(path: &str, fields: &Fields, spec: &MarkdownSpec) -> DResult<()> {
+    if spec.citations.is_empty() {
+        if fields.iter().any(|(k, _)| k == "citations") {
+            return Err(wrong_type(
+                &format!("{path}.citations"),
+                "a non-empty citation list, or no member at all",
+            ));
+        }
+        return Ok(());
+    }
+    for (i, c) in spec.citations.iter().enumerate() {
+        let name = c.name.as_str();
+        let is_token = !name.is_empty()
+            && name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
+        if !is_token {
+            return Err(wrong_type(
+                &format!("{path}.citations[{i}].name"),
+                "a citation name of letters, digits, '-' and '_'",
+            ));
+        }
+        if spec.citations[..i]
+            .iter()
+            .any(|earlier| earlier.name == c.name)
+        {
+            return Err(wrong_type(
+                &format!("{path}.citations[{i}].name"),
+                "a citation name no other citation in this list uses",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `FileUpload` — a named destination is non-empty, and each ceiling positive.
 pub(super) fn check_file_upload(
     path: &str,

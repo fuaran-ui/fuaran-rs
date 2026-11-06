@@ -230,6 +230,10 @@ fn resolve_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
         NodeKind::Markdown(spec) => {
             let mut spec = spec.clone();
             spec.text = resolve_text(sources, &spec.text);
+            // Phase 2591 — each citation's label.
+            for c in &mut spec.citations {
+                c.label = resolve_text_opt(sources, &c.label);
+            }
             NodeKind::Markdown(spec)
         }
         NodeKind::Badge(spec) => {
