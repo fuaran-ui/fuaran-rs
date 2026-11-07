@@ -476,6 +476,11 @@ fn an_unknown_invariant_kind_round_trips_with_its_members_and_weight() {
 #[test]
 fn an_object_with_no_string_kind_is_still_not_an_invariant() {
     assert!(
+        invariants(r#"{"kind":"","role":"x"}"#)
+            .invariants
+            .is_empty()
+    );
+    assert!(
         invariants(r#"{"role":"x","minRatio":7}"#)
             .invariants
             .is_empty()

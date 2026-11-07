@@ -282,8 +282,8 @@ fn parse_role_binding(j: &JVal) -> Option<RoleBinding> {
 fn parse_invariant(j: &JVal) -> Option<Invariant> {
     let fields = as_obj(j)?;
     let weight = num_or(get(fields, "weight"), DEFAULT_WEIGHT);
-    // An object with no string `kind` is not an invariant of any kind.
-    let kind_name = as_str(get(fields, "kind"))?;
+    // An object with no non-empty string `kind` is not an invariant of any kind.
+    let kind_name = as_str(get(fields, "kind")).filter(|k| !k.is_empty())?;
     let kind = match kind_name.as_str() {
         "ContrastFloor" => InvariantKind::ContrastFloor {
             role: str_or(get(fields, "role"), ""),
