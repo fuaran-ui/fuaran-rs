@@ -73,7 +73,9 @@ pub struct MotionBudget {
     pub easing: Option<String>,
 }
 
-/// A declared invariant's payload (closed DU).
+/// A declared invariant's payload. Closed for the kinds this host enforces; a
+/// kind it does not know is kept as [`InvariantKind::Unknown`] rather than
+/// dropped (Phase 2133).
 #[derive(Debug, Clone, PartialEq)]
 pub enum InvariantKind {
     /// A named role's resolved contrast must be at least `min_ratio`.
@@ -86,15 +88,27 @@ pub enum InvariantKind {
     },
     /// The theme's motion must stay within the declared budget.
     MotionVoice { budget: MotionBudget },
+    /// Phase 2133 — an invariant whose `kind` this host does not know: a newer
+    /// constraint, or one another host enforces. It is KEPT, so it round-trips
+    /// through [`decode`] and [`encode`] with its members intact, and
+    /// [`validate`] reports it as `INVARIANT_KIND_UNKNOWN` — declared, and
+    /// enforced by nothing here. `members` are the invariant's members other
+    /// than `kind` and `weight` (the weight is on the [`Invariant`]).
+    Unknown {
+        kind: String,
+        members: Vec<(String, JVal)>,
+    },
 }
 
 impl InvariantKind {
-    /// The stable discriminator string for an invariant.
-    pub fn kind_name(&self) -> &'static str {
+    /// The stable discriminator string for an invariant — the wire `kind`, as
+    /// written, for an [`InvariantKind::Unknown`].
+    pub fn kind_name(&self) -> &str {
         match self {
             InvariantKind::ContrastFloor { .. } => "ContrastFloor",
             InvariantKind::UsageBudget { .. } => "UsageBudget",
             InvariantKind::MotionVoice { .. } => "MotionVoice",
+            InvariantKind::Unknown { kind, .. } => kind,
         }
     }
 }
@@ -268,7 +282,9 @@ fn parse_role_binding(j: &JVal) -> Option<RoleBinding> {
 fn parse_invariant(j: &JVal) -> Option<Invariant> {
     let fields = as_obj(j)?;
     let weight = num_or(get(fields, "weight"), DEFAULT_WEIGHT);
-    let kind = match str_or(get(fields, "kind"), "").as_str() {
+    // An object with no string `kind` is not an invariant of any kind.
+    let kind_name = as_str(get(fields, "kind"))?;
+    let kind = match kind_name.as_str() {
         "ContrastFloor" => InvariantKind::ContrastFloor {
             role: str_or(get(fields, "role"), ""),
             min_ratio: num_or(get(fields, "minRatio"), 0.0),
@@ -284,7 +300,16 @@ fn parse_invariant(j: &JVal) -> Option<Invariant> {
                 easing: as_str(get(fields, "easing")),
             },
         },
-        _ => return None,
+        // Phase 2133 — kept with its members, never dropped: `validate` reports
+        // it unenforced.
+        _ => InvariantKind::Unknown {
+            members: fields
+                .iter()
+                .filter(|(k, _)| k != "kind" && k != "weight")
+                .cloned()
+                .collect(),
+            kind: kind_name,
+        },
     };
     Some(Invariant { kind, weight })
 }
@@ -486,6 +511,7 @@ fn invariant_json(inv: &Invariant) -> JVal {
                 fields.push(("easing".to_string(), JVal::Str(e.clone())));
             }
         }
+        InvariantKind::Unknown { members, .. } => fields.extend(members.iter().cloned()),
     }
     put_num(&mut fields, "weight", inv.weight, DEFAULT_WEIGHT);
     JVal::Obj(fields)
@@ -817,7 +843,115 @@ fn invariant_key(inv: &Invariant) -> String {
             budget.easing.as_deref().unwrap_or(""),
             inv.weight
         ),
+        InvariantKind::Unknown { members, .. } => format!(
+            "{name}|{}|{}",
+            render_canonical(&JVal::Obj(members.clone())),
+            inv.weight
+        ),
     }
+}
+
+// ─── Validation — what the decoded values MEAN (Phase 2133) ──────────────────
+
+/// One shared validation defect code — the table in the corpus's WIRE_FORMAT
+/// §13 (the style-observer family's `manifest-validation` tier), identical on
+/// every manifest host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManifestDefectCode {
+    /// A `ContrastFloor`'s `minRatio` lies outside [1, 21] (an omitted one is 0).
+    ContrastFloorOutOfRange,
+    /// A `ContrastFloor`'s `role` is empty.
+    ContrastFloorRoleEmpty,
+    /// No role binding binds the floor's non-empty `role`.
+    ContrastFloorRoleUnbound,
+    /// A `UsageBudget`'s `token` names no declared token.
+    UsageBudgetTokenUndeclared,
+    /// The invariant's kind is outside this host's vocabulary — kept, and
+    /// enforced by nothing.
+    InvariantKindUnknown,
+}
+
+impl ManifestDefectCode {
+    /// The wire spelling — the shared table's first column.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ManifestDefectCode::ContrastFloorOutOfRange => "CONTRAST_FLOOR_OUT_OF_RANGE",
+            ManifestDefectCode::ContrastFloorRoleEmpty => "CONTRAST_FLOOR_ROLE_EMPTY",
+            ManifestDefectCode::ContrastFloorRoleUnbound => "CONTRAST_FLOOR_ROLE_UNBOUND",
+            ManifestDefectCode::UsageBudgetTokenUndeclared => "USAGE_BUDGET_TOKEN_UNDECLARED",
+            ManifestDefectCode::InvariantKindUnknown => "INVARIANT_KIND_UNKNOWN",
+        }
+    }
+}
+
+/// One validation finding: which rule, which invariant (its position in the
+/// decoded `invariants`), and the role, token or kind it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestDefect {
+    pub code: ManifestDefectCode,
+    pub index: usize,
+    pub subject: String,
+}
+
+/// The canonical JSON of one defect — `{"code":…,"index":…,"subject":…}` — the
+/// bytes the corpus's `manifest-validation` vectors pin on every host.
+pub fn encode_manifest_defect(d: &ManifestDefect) -> String {
+    render_canonical(&JVal::Obj(vec![
+        ("code".to_string(), JVal::Str(d.code.as_str().to_string())),
+        ("index".to_string(), JVal::Num(d.index as f64)),
+        ("subject".to_string(), JVal::Str(d.subject.clone())),
+    ]))
+}
+
+/// The range WCAG's contrast formula produces: a floor below it passes every
+/// pair, one above it no pair can pass.
+const CONTRAST_RANGE: std::ops::RangeInclusive<f64> = 1.0..=21.0;
+
+/// Does any role binding bind `role`? A tone binding binds its tone's wire
+/// name, a named binding its name.
+fn binds(m: &ThemeManifest, role: &str) -> bool {
+    m.roles.iter().any(|b| match &b.role {
+        ManifestRole::Tone(t) | ManifestRole::Named(t) => t == role,
+    })
+}
+
+/// Phase 2133 — the validation pass, run after the tolerant [`decode`]: every
+/// declared invariant that cannot mean what it says, as one shared code.
+/// Invariant by invariant in list order, and within one in the table's order.
+/// Never refuses and never repairs; a host decides what a defect costs it.
+pub fn validate(m: &ThemeManifest) -> Vec<ManifestDefect> {
+    let mut out = vec![];
+    let mut push = |code, index, subject: &str| {
+        out.push(ManifestDefect {
+            code,
+            index,
+            subject: subject.to_string(),
+        })
+    };
+    for (i, inv) in m.invariants.iter().enumerate() {
+        match &inv.kind {
+            InvariantKind::ContrastFloor { role, min_ratio } => {
+                if !CONTRAST_RANGE.contains(min_ratio) {
+                    push(ManifestDefectCode::ContrastFloorOutOfRange, i, role);
+                }
+                if role.is_empty() {
+                    push(ManifestDefectCode::ContrastFloorRoleEmpty, i, "");
+                } else if !binds(m, role) {
+                    push(ManifestDefectCode::ContrastFloorRoleUnbound, i, role);
+                }
+            }
+            InvariantKind::UsageBudget { token, .. } => {
+                if m.try_get_token(token).is_none() {
+                    push(ManifestDefectCode::UsageBudgetTokenUndeclared, i, token);
+                }
+            }
+            InvariantKind::Unknown { kind, .. } => {
+                push(ManifestDefectCode::InvariantKindUnknown, i, kind);
+            }
+            InvariantKind::MotionVoice { .. } => {}
+        }
+    }
+    out
 }
 
 // ─── Contrast bridge (projected token → resolved contrast) ───────────────────

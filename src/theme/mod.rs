@@ -12,10 +12,11 @@ pub use contrast::{
     effective_background, foreground_contrast, relative_luminance, verdict,
 };
 pub use manifest::{
-    DEFAULT_WEIGHT, Invariant, InvariantKind, ManifestMeta, ManifestRole, ManifestToken,
-    MotionBudget, RoleBinding, TONES, ThemeManifest, decode, encode, merge, of_json,
-    project_from_css_custom_properties, project_from_dtcg, project_from_fuaran_tone_vars,
-    scan_css_blocks, to_json, tone_contrast, tone_of_string, tone_rgba,
+    DEFAULT_WEIGHT, Invariant, InvariantKind, ManifestDefect, ManifestDefectCode, ManifestMeta,
+    ManifestRole, ManifestToken, MotionBudget, RoleBinding, TONES, ThemeManifest, decode, encode,
+    encode_manifest_defect, merge, of_json, project_from_css_custom_properties, project_from_dtcg,
+    project_from_fuaran_tone_vars, scan_css_blocks, to_json, tone_contrast, tone_of_string,
+    tone_rgba, validate,
 };
 
 // The style-observer pure tier — resolved-style FACTS in, typed `StyleFlag`s

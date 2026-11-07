@@ -435,3 +435,122 @@ fn a_tone_outside_the_canonical_palette_decodes_back_as_a_named_role() {
     };
     assert_eq!(decode(&encode(&named_brand)).unwrap(), named_brand);
 }
+
+// ─── Phase 2133 — unknown kinds are kept; the validation pass ────────────────
+
+fn invariants(json: &str) -> ThemeManifest {
+    decode(&format!(r#"{{"tokens":{{}},"invariants":[{json}]}}"#)).expect("decodes")
+}
+
+fn defects(m: &ThemeManifest) -> Vec<String> {
+    manifest::validate(m)
+        .iter()
+        .map(manifest::encode_manifest_defect)
+        .collect()
+}
+
+#[test]
+fn an_unknown_invariant_kind_round_trips_with_its_members_and_weight() {
+    let m = decode(
+        r#"{"invariants":[{"kind":"FocusRing","minWidthPx":2,"nested":{"b":1,"a":[true,"s"]},"weight":3}],"tokens":{}}"#,
+    )
+    .expect("decodes");
+    match &m.invariants[..] {
+        [inv] => {
+            assert_eq!(inv.kind.kind_name(), "FocusRing");
+            assert_eq!(inv.weight, 3.0);
+            let InvariantKind::Unknown { members, .. } = &inv.kind else {
+                panic!("expected an unknown invariant, got {:?}", inv.kind);
+            };
+            let keys: Vec<&str> = members.iter().map(|(k, _)| k.as_str()).collect();
+            assert_eq!(keys, ["minWidthPx", "nested"]);
+        }
+        other => panic!("expected one invariant, got {other:?}"),
+    }
+    assert_eq!(
+        encode(&m),
+        r#"{"invariants":[{"kind":"FocusRing","minWidthPx":2,"nested":{"a":[true,"s"],"b":1},"weight":3}],"tokens":{}}"#
+    );
+}
+
+#[test]
+fn an_object_with_no_string_kind_is_still_not_an_invariant() {
+    assert!(
+        invariants(r#"{"role":"x","minRatio":7}"#)
+            .invariants
+            .is_empty()
+    );
+}
+
+#[test]
+fn the_omitted_default_floor_decodes_tolerantly_and_is_flagged_by_validation() {
+    let m = invariants(r#"{"kind":"ContrastFloor","role":"x"}"#);
+    assert_eq!(
+        defects(&m),
+        [
+            r#"{"code":"CONTRAST_FLOOR_OUT_OF_RANGE","index":0,"subject":"x"}"#,
+            r#"{"code":"CONTRAST_FLOOR_ROLE_UNBOUND","index":0,"subject":"x"}"#,
+        ]
+    );
+}
+
+#[test]
+fn an_explicit_sub_1_floor_is_out_of_range_and_1_and_21_are_the_bounds() {
+    let floor = |ratio: &str| {
+        let mut m = invariants(&format!(
+            r#"{{"kind":"ContrastFloor","role":"Brand","minRatio":{ratio}}}"#
+        ));
+        m.roles.push(RoleBinding {
+            role: ManifestRole::Tone("Brand".into()),
+            token_name: "t".into(),
+        });
+        defects(&m)
+    };
+    let out = [r#"{"code":"CONTRAST_FLOOR_OUT_OF_RANGE","index":0,"subject":"Brand"}"#];
+    assert_eq!(floor("0.5"), out);
+    assert_eq!(floor("21.5"), out);
+    assert!(floor("1").is_empty());
+    assert!(floor("21").is_empty());
+}
+
+#[test]
+fn an_empty_role_is_empty_and_an_unbound_one_is_unbound() {
+    assert_eq!(
+        defects(&invariants(r#"{"kind":"ContrastFloor","minRatio":7}"#)),
+        [r#"{"code":"CONTRAST_FLOOR_ROLE_EMPTY","index":0,"subject":""}"#]
+    );
+    let mut m = invariants(r#"{"kind":"ContrastFloor","minRatio":7,"role":"body-text"}"#);
+    assert_eq!(
+        defects(&m),
+        [r#"{"code":"CONTRAST_FLOOR_ROLE_UNBOUND","index":0,"subject":"body-text"}"#]
+    );
+    m.roles.push(RoleBinding {
+        role: ManifestRole::Named("body-text".into()),
+        token_name: "t".into(),
+    });
+    assert!(defects(&m).is_empty(), "a named binding binds its name");
+}
+
+#[test]
+fn a_budget_on_an_undeclared_token_and_an_unknown_kind_are_reported() {
+    assert_eq!(
+        defects(&invariants(
+            r#"{"kind":"UsageBudget","targetPct":10,"token":"color.ghost"}"#
+        )),
+        [r#"{"code":"USAGE_BUDGET_TOKEN_UNDECLARED","index":0,"subject":"color.ghost"}"#]
+    );
+    assert_eq!(
+        defects(&invariants(
+            r#"{"kind":"MotionVoice"},{"kind":"FocusRing","minWidthPx":2}"#
+        )),
+        [r#"{"code":"INVARIANT_KIND_UNKNOWN","index":1,"subject":"FocusRing"}"#]
+    );
+}
+
+#[test]
+fn merge_keeps_an_unknown_invariant_and_dedupes_it_by_its_members() {
+    let a = invariants(r#"{"kind":"FocusRing","minWidthPx":2}"#);
+    let b =
+        invariants(r#"{"kind":"FocusRing","minWidthPx":2},{"kind":"FocusRing","minWidthPx":3}"#);
+    assert_eq!(merge(&a, &b).invariants.len(), 2);
+}
