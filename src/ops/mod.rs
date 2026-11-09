@@ -115,7 +115,7 @@ fn fail<T>(code: ApplyErrorCode, message: impl Into<String>) -> AResult<T> {
 /// The ordered `children` list of a child-bearing layout kind, or `None` — the
 /// discriminator every structural child op checks. Exhaustive over `NodeKind`
 /// so a future child-bearing kind cannot be silently skipped.
-fn layout_children(n: &Node) -> Option<&Vec<Node>> {
+pub(crate) fn layout_children(n: &Node) -> Option<&Vec<Node>> {
     match &n.kind {
         NodeKind::Box(s) => Some(&s.children),
         NodeKind::SplitPanel(s) => Some(&s.children),
@@ -207,7 +207,7 @@ fn child_nodes(n: &Node) -> Vec<&Node> {
 /// The sub-nodes a KIND holds — `child_nodes` without the node's `state`
 /// surfaces. What an `EditNode` puts below the node it rewrites, since the
 /// rewritten node keeps its existing `state`.
-fn kind_child_nodes(kind: &NodeKind) -> Vec<&Node> {
+pub(crate) fn kind_child_nodes(kind: &NodeKind) -> Vec<&Node> {
     let mut out: Vec<&Node> = Vec::new();
     match kind {
         NodeKind::Box(s) => out.extend(&s.children),
@@ -1817,7 +1817,7 @@ fn op_can_grow(op: &TreeOp) -> bool {
 /// The subtree roots `op` puts INTO the tree, in the order it names them: an
 /// inserted child, a replacement root, the nodes a new kind holds, a new
 /// `state` block's alternatives, and a `Batch`'s members' insertions.
-fn inserted_nodes(op: &TreeOp) -> Vec<&Node> {
+pub(crate) fn inserted_nodes(op: &TreeOp) -> Vec<&Node> {
     match op {
         TreeOp::InsertChild { child, .. } => vec![child],
         TreeOp::ReplaceRoot { node } => vec![node],

@@ -11,13 +11,18 @@ mod common;
 
 use std::path::Path;
 
-use fuaran_rs::canonical::{JVal, ordinal_cmp, parse};
+use fuaran_rs::canonical::{JVal, ordinal_cmp, parse, render_canonical};
 use fuaran_rs::dag::{
-    MergeConflict, MergeResult, decode_record, encode_envelope, encode_record, merge3_way,
+    ConflictShape, FoldFault, FoldReconciled, FoldRefusal, FoldRefusalClass, FoldSide,
+    GatedFoldFault, MergeConflict, MergeResult, OpConflict, decode_record, encode_envelope,
+    encode_fold_envelope, encode_record, merge3_way, reconcile_fold, reconcile_fold_gated,
     sort_canonical,
 };
 use fuaran_rs::opstream::{Actor, sha256_hex};
-use fuaran_rs::wire::{DecodeErrorCode, Node, NodeKind, ToneVariant, decode_node, encode_node};
+use fuaran_rs::wire::{
+    DecodeErrorCode, Node, NodeKind, ToneVariant, TreeOp, decode_node, decode_op, encode_node,
+    encode_op,
+};
 
 fn str_field(v: &JVal, key: &str) -> Option<String> {
     match v.field(key) {
@@ -689,5 +694,286 @@ fn a_record_with_no_actor_at_all_is_refused() {
         !err.message.contains("userId"),
         "must not blame userId when there was none: {}",
         err.message
+    );
+}
+
+// ─── Merge by fold: the `foldFixtures` family (WIRE_FORMAT §34.6, Phase 2644) ──
+//
+// Every entry of `merge-conformance/manifest.json`'s `foldFixtures`, read under
+// its own key BY NAME, each dispatched on its kind:
+//
+// - `merge-fold-derive`: `reconcile_fold` derives, the tree is byte-identical to
+//   `expectedFile` and its sha256 is `outcomeHash` — in BOTH branch orders.
+// - `merge-fold-refusal`: the policy refuses, the envelope is byte-identical to
+//   `envelopeFile` and its sha256 is `envelopeHash`; the swapped reconcile
+//   refuses with every entry's left and right swapped and nothing else changed.
+// - `merge-fold-gated`: the fold derives and the sample validator above finds
+//   defects neither head carries; the verdict is byte-identical to `verdictFile`
+//   and its sha256 is `verdictHash`, in both branch orders, and ungated the same
+//   deltas derive.
+//
+// An empty family FAILS rather than skips: this host certifies it, so an empty
+// list means the corpus moved out from under the leg.
+
+/// A canonical `TreeOp` array file, decoded op by op.
+fn fold_ops(root: &Path, fixture: &JVal, key: &str) -> Vec<TreeOp> {
+    let rel = str_field(fixture, key).unwrap_or_else(|| panic!("fixture has no {key}"));
+    let text = read(root, &format!("merge-conformance/{rel}"));
+    let Ok(JVal::Arr(items)) = parse(&text) else {
+        panic!("{rel} is not a JSON array");
+    };
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            decode_op(&render_canonical(item))
+                .unwrap_or_else(|e| panic!("{rel}[{i}] decodes: {e:?}"))
+        })
+        .collect()
+}
+
+fn fold_base(root: &Path, fixture: &JVal) -> Node {
+    let rel = str_field(fixture, "baseFile").expect("baseFile");
+    decode_node(&read(root, &format!("merge-conformance/{rel}")))
+        .unwrap_or_else(|e| panic!("{rel} decodes: {e:?}"))
+}
+
+fn refused(r: Result<FoldReconciled, FoldFault>, what: &str) -> Vec<FoldRefusal> {
+    match r {
+        Err(FoldFault::Refused(refusals)) => refusals,
+        other => panic!("{what}: expected a refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn every_fold_fixture_is_certified_in_both_orders() {
+    let root = common::corpus_root();
+    let manifest =
+        parse(&read(&root, "merge-conformance/manifest.json")).expect("merge manifest parses");
+    let Some(JVal::Arr(entries)) = manifest.field("foldFixtures") else {
+        panic!("merge manifest has no foldFixtures — the family this leg certifies is gone");
+    };
+    assert!(!entries.is_empty(), "foldFixtures is empty");
+
+    let (mut derived, mut refusals, mut gated) = (0usize, 0usize, 0usize);
+    for fixture in entries {
+        let id = str_field(fixture, "id").expect("id");
+        let kind = str_field(fixture, "kind").unwrap_or_else(|| panic!("{id}: no kind"));
+        let base = fold_base(&root, fixture);
+        let (a, b) = (
+            fold_ops(&root, fixture, "aOpsFile"),
+            fold_ops(&root, fixture, "bOpsFile"),
+        );
+        match kind.as_str() {
+            "merge-fold-derive" => {
+                let expected = fixture_file(&root, fixture, "expectedFile");
+                let hash = str_field(fixture, "outcomeHash").expect("outcomeHash");
+                for (order, d1, d2) in [("a,b", &a, &b), ("b,a", &b, &a)] {
+                    let r = reconcile_fold(&base, d1, d2)
+                        .unwrap_or_else(|f| panic!("{id} ({order}): refused: {f:?}"));
+                    let encoded = encode_node(&r.tree);
+                    assert_eq!(
+                        encoded, expected,
+                        "{id} ({order}): derived tree byte-identical"
+                    );
+                    assert_eq!(sha256_hex(&encoded), hash, "{id} ({order}): outcomeHash");
+                }
+                derived += 1;
+            }
+            "merge-fold-refusal" => {
+                let expected = fixture_file(&root, fixture, "envelopeFile");
+                let hash = str_field(fixture, "envelopeHash").expect("envelopeHash");
+                let forward = refused(reconcile_fold(&base, &a, &b), &id);
+                let envelope = encode_fold_envelope(&forward);
+                assert_eq!(envelope, expected, "{id}: envelope byte-identical");
+                assert_eq!(sha256_hex(&envelope), hash, "{id}: envelopeHash");
+
+                // Swap symmetry: the swapped reconcile's refusals, mirrored back
+                // (left <-> right) and re-sorted, are the committed envelope.
+                let mirrored: Vec<FoldRefusal> =
+                    refused(reconcile_fold(&base, &b, &a), &format!("{id} (swapped)"))
+                        .into_iter()
+                        .map(|r| FoldRefusal {
+                            conflict: OpConflict {
+                                left: r.conflict.right,
+                                right: r.conflict.left,
+                                ..r.conflict
+                            },
+                            class: r.class,
+                        })
+                        .collect();
+                assert_eq!(
+                    encode_fold_envelope(&mirrored),
+                    expected,
+                    "{id}: the swapped envelope is the mirror"
+                );
+                refusals += 1;
+            }
+            "merge-fold-gated" => {
+                let expected = fixture_file(&root, fixture, "verdictFile");
+                let hash = str_field(fixture, "verdictHash").expect("verdictHash");
+                for (order, d1, d2) in [("a,b", &a, &b), ("b,a", &b, &a)] {
+                    let defects = match reconcile_fold_gated(introduced_defects, &base, d1, d2) {
+                        Err(GatedFoldFault::IntroducedDefects(d)) => d,
+                        Err(GatedFoldFault::Fold(f)) => {
+                            panic!("{id} ({order}): the fold refused: {f:?}")
+                        }
+                        Ok(_) => panic!("{id} ({order}): expected the gate to refuse"),
+                    };
+                    let verdict = encode_verdict(&defects);
+                    assert_eq!(verdict, expected, "{id} ({order}): verdict byte-identical");
+                    assert_eq!(sha256_hex(&verdict), hash, "{id} ({order}): verdictHash");
+                }
+                assert!(
+                    reconcile_fold(&base, &a, &b).is_ok(),
+                    "{id}: ungated, the gated fixture must derive"
+                );
+                gated += 1;
+            }
+            other => panic!(
+                "{id}: foldFixtures kind '{other}' is not certified by this host — a family must \
+                 be asserted or skipped BY NAME, never passed over silently"
+            ),
+        }
+    }
+    for (ran, kind) in [
+        (derived, "merge-fold-derive"),
+        (refusals, "merge-fold-refusal"),
+        (gated, "merge-fold-gated"),
+    ] {
+        assert_eq!(
+            ran,
+            manifest_count(&manifest, "foldFixtures", kind),
+            "every {kind} ran"
+        );
+        assert!(ran > 0, "foldFixtures holds no {kind} fixture");
+    }
+    eprintln!(
+        "fold corpus: {derived} derivations, {refusals} refusal envelopes, {gated} gated verdicts \
+         — byte-identical + hash-verified in both orders (0 skipped)"
+    );
+}
+
+// ─── policy cases the foldFixtures corpus does not pin ──────────────────────
+
+fn op(text: &str) -> TreeOp {
+    decode_op(text).unwrap_or_else(|e| panic!("{text}: {e:?}"))
+}
+
+fn pane(id: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","kind":{{"$type":"Markdown","text":{{"$type":"Literal","text":"x"}}}}}}"#
+    )
+}
+
+/// A Box "root" holding the given panes.
+fn box_of(panes: &[&str]) -> Node {
+    let children: Vec<String> = panes.iter().map(|p| pane(p)).collect();
+    decode_node(&format!(
+        r#"{{"id":"root","kind":{{"$type":"Box","children":[{}],"layout":{{"$type":"Flex","direction":"Vertical","wrap":false}},"role":"Group"}}}}"#,
+        children.join(",")
+    ))
+    .expect("box decodes")
+}
+
+fn insert(id: &str) -> TreeOp {
+    op(&format!(
+        r#"{{"$type":"InsertChild","child":{},"parentId":"root"}}"#,
+        pane(id)
+    ))
+}
+
+const BRAND_P: &str = r#"{"$type":"PatchStyle","style":{"tone":"Brand"},"target":"p"}"#;
+
+/// A delta whose own op does not apply is refused before anything is judged,
+/// naming the side and the index of the first failing op.
+#[test]
+fn a_delta_that_does_not_apply_names_its_side_and_index() {
+    let base = box_of(&["p"]);
+    let good = vec![op(BRAND_P)];
+    let bad = vec![
+        op(BRAND_P),
+        op(r#"{"$type":"RemoveNode","target":"absent"}"#),
+    ];
+    for (d1, d2, want) in [(&good, &bad, FoldSide::B), (&bad, &good, FoldSide::A)] {
+        match reconcile_fold(&base, d1, d2) {
+            Err(FoldFault::DeltaDoesNotApply { side, index, .. }) => {
+                assert_eq!((side, index), (want, 1));
+            }
+            other => panic!("want DeltaDoesNotApply, got {other:?}"),
+        }
+    }
+}
+
+/// Two empty deltas derive the base, with no script.
+#[test]
+fn two_empty_deltas_derive_the_base() {
+    let base = box_of(&["p"]);
+    let r = reconcile_fold(&base, &[], &[]).expect("derives");
+    assert_eq!(encode_node(&r.tree), encode_node(&base));
+    assert!(r.script.is_empty());
+    assert_eq!((r.agreements, r.interleaves), (0, 0));
+}
+
+/// Two appends under one parent interleave by the child-order rule. Where the
+/// fold's order (A then B) differs from the rule's, the merge records one
+/// ReorderChildren, and the derivation is the same whichever delta is first.
+#[test]
+fn an_interleave_records_its_script_and_is_symmetric() {
+    let base = box_of(&["k"]);
+    let (a, b) = (vec![insert("z")], vec![insert("m")]);
+    let r = reconcile_fold(&base, &a, &b).expect("derives");
+    assert_eq!((r.interleaves, r.script.len()), (1, 1));
+    assert_eq!(
+        encode_op(&r.script[0]),
+        r#"{"$type":"ReorderChildren","newOrder":["k","m","z"],"parentId":"root"}"#
+    );
+    assert_eq!(encode_node(&r.tree), encode_node(&box_of(&["k", "m", "z"])));
+
+    // Named the other way round, the fold's order is already the rule's.
+    let swapped = reconcile_fold(&base, &b, &a).expect("swapped derives");
+    assert!(swapped.script.is_empty());
+    assert_eq!(encode_node(&swapped.tree), encode_node(&r.tree));
+}
+
+/// An agreement is counted once per distinct op, however many addresses the
+/// pair collides on.
+#[test]
+fn an_agreement_counts_distinct_ops() {
+    let base = box_of(&["p"]);
+    let same = vec![op(r#"{"$type":"RemoveNode","target":"p"}"#)];
+    let r = reconcile_fold(&base, &same, &same).expect("derives");
+    assert_eq!(r.agreements, 1);
+}
+
+/// The envelope's entries are ordered canonically and exact duplicates are
+/// removed, so the input order of the refusals does not reach the bytes.
+#[test]
+fn the_fold_envelope_is_canonical_and_deduplicated() {
+    let (l, r) = (
+        op(BRAND_P),
+        op(r#"{"$type":"PatchStyle","style":{"tone":"Success"},"target":"p"}"#),
+    );
+    let refusal = |shape, slot: Option<&str>| FoldRefusal {
+        conflict: OpConflict {
+            left: l.clone(),
+            right: r.clone(),
+            address: "p".into(),
+            shape,
+            slot: slot.map(str::to_owned),
+        },
+        class: FoldRefusalClass::Conflict,
+    };
+    let slot = refusal(ConflictShape::SlotClash, Some("style.tone"));
+    let whole = refusal(ConflictShape::ConcurrentUpdate, None);
+    let x = encode_fold_envelope(&[slot.clone(), whole.clone(), slot.clone()]);
+    let y = encode_fold_envelope(&[whole, slot]);
+    assert_eq!(x, y, "the envelope depends on input order");
+    let (left, right) = (encode_op(&l), encode_op(&r));
+    assert_eq!(
+        x,
+        format!(
+            r#"[{{"address":"p","class":"Conflict","left":{left},"right":{right},"shape":"ConcurrentUpdate"}},{{"address":"p","class":"Conflict","left":{left},"right":{right},"shape":"SlotClash","slot":"style.tone"}}]"#
+        )
     );
 }
