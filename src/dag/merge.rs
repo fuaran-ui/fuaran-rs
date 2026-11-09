@@ -22,7 +22,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::canonical::ordinal_cmp;
+use crate::canonical::{escape_string, ordinal_cmp};
 use crate::wire::{
     Accessibility, BoxSpec, DisclosureSpec, Emphasis, FontVoice, ModalSpec, Node, NodeKind,
     ScrollAreaSpec, SemanticStyle, SplitPanelSpec, StateBehaviour, StepperSpec, StyleRole,
@@ -185,22 +185,6 @@ wire_spelled_facet!(
     TextDirection,
 );
 
-/// Mirror of the canonical encoder's string escape, kept local so the merge
-/// module takes no codec dependency for the envelope (only `"`, `\` and the
-/// control characters need escaping; non-ASCII rides through as UTF-8).
-fn append_escaped(out: &mut String, s: &str) {
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-}
-
 fn append_side(out: &mut String, side: Option<&MergeSide>) {
     match side {
         None => out.push_str("null"),
@@ -208,10 +192,10 @@ fn append_side(out: &mut String, side: Option<&MergeSide>) {
             out.push_str("{\"tag\":");
             match &s.tag {
                 None => out.push_str("null"),
-                Some(t) => append_escaped(out, t),
+                Some(t) => out.push_str(&escape_string(t)),
             }
             out.push_str(",\"value\":");
-            append_escaped(out, &s.value);
+            out.push_str(&escape_string(&s.value));
             out.push('}');
         }
     }
@@ -249,13 +233,13 @@ pub fn encode_envelope(conflicts: &[MergeConflict]) -> String {
         out.push_str(",\"b\":");
         append_side(&mut out, c.b.as_ref());
         out.push_str(",\"base\":");
-        append_escaped(&mut out, &c.base);
+        out.push_str(&escape_string(&c.base));
         out.push_str(",\"class\":");
-        append_escaped(&mut out, c.class.as_str());
+        out.push_str(&escape_string(c.class.as_str()));
         out.push_str(",\"facet\":");
-        append_escaped(&mut out, &c.facet);
+        out.push_str(&escape_string(&c.facet));
         out.push_str(",\"nodeId\":");
-        append_escaped(&mut out, &c.node_id);
+        out.push_str(&escape_string(&c.node_id));
         out.push_str(",\"primacyHeld\":");
         out.push_str(if c.primacy_held { "true" } else { "false" });
         out.push('}');
