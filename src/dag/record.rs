@@ -1,8 +1,18 @@
 //! The DAG-record wire form — the multi-parent op record a branching op-stream
 //! persists (the substrate for fork / merge topology). A record nests the
-//! canonical `TreeOp`, the typed `Actor` that authored it, its parent hashes
-//! (0 = genesis, 1 = linear step, 2 = a merge node), and the merge outcome hash
-//! + tombstone flag. Round-trip byte-identical to the shared `dag/` corpus.
+//! canonical `TreeOp`, the typed `Actor` that authored it, and its parent
+//! hashes (0 = genesis, 1 = linear step, 2 = a merge node, whose op is its
+//! reconciliation script as a `Batch`). Round-trip byte-identical to the shared
+//! `dag/` corpus.
+//!
+//! # The cut (Phase 2645)
+//!
+//! Since fuaran#2645 a DAG record is a Fuaran Core DAG node over the linear
+//! chain's provenance entry (WIRE_FORMAT §5.3.3): `hash` is Core's `Dag.nodeId`
+//! over the sorted parents, the actor and the v2 stream entry. The
+//! `outcomeHash` and `tombstoned` members were retired at the cut, and a record
+//! carrying either is a pre-2645 record whose address does not recompute — it
+//! is refused BY NAME (fuaran#2646), never lifted.
 //!
 //! # The typed actor (Phase 1144), and what this host does NOT do
 //!
@@ -25,8 +35,8 @@
 //! carry forward** — a pre-1144 `hash` is not reproducible under the new
 //! pre-image and is not a valid parent link for a post-1144 node.
 //!
-//! `fuaran-rs` is a CODEC host for this artefact: it mints no DAG content
-//! address and verifies none (the only pre-images this crate computes are the
+//! `fuaran-rs` is a CODEC host for this artefact (§5.3.5 — it does not claim
+//! the address profile): it mints no DAG content address and verifies none (the only pre-images this crate computes are the
 //! LINEAR chain's, in [`crate::opstream::chain`]), so `hash` is an opaque
 //! string it round-trips. There was no Rust pre-image to re-derive; the
 //! reference envelope above is recorded rather than implemented, and a Rust DAG
@@ -41,10 +51,10 @@ use crate::canonical::{JVal, render_canonical};
 use crate::opstream::{Actor, encode_actor};
 use crate::wire::{DecodeError, TreeOp, decode_op, encode_op};
 
-/// A DAG op-record. Optional fields (`outcome_hash`, `prompt_id`) are omitted
-/// on the wire when absent; the canonical key order is
-/// `actor < hash < op < outcomeHash < parents < promptId < resultEnvelope <
-/// streamId < timestamp < tombstoned`.
+/// A DAG op-record. The optional `prompt_id` is omitted on the wire when
+/// absent; the canonical key order is
+/// `actor < hash < op < parents < promptId < resultEnvelope < streamId <
+/// timestamp`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DagRecord {
     /// Who authored the op — the typed actor (Phase 1144, replacing the bare
@@ -52,8 +62,6 @@ pub struct DagRecord {
     pub actor: Actor,
     pub hash: String,
     pub op: TreeOp,
-    /// The merged-tree outcome hash — present on a merge node (2 parents).
-    pub outcome_hash: Option<String>,
     /// Parent record hashes (author order): `[]` genesis, `[p]` linear, `[a,b]`
     /// merge.
     pub parents: Vec<String>,
@@ -63,7 +71,6 @@ pub struct DagRecord {
     pub result_envelope: JVal,
     pub stream_id: String,
     pub timestamp: i64,
-    pub tombstoned: bool,
 }
 
 fn require_str(fields: &JVal, key: &str) -> Result<String, DecodeError> {
@@ -153,6 +160,21 @@ pub fn decode_record(json: &str) -> Result<DagRecord, DecodeError> {
         return Err(decode_err("$", "JSON object"));
     };
 
+    // A pre-2645 envelope is refused BY NAME: its address folded a merge
+    // outcome or a pre-cut pre-image, so it cannot recompute under the cut.
+    if let Some(member) = ["tombstoned", "outcomeHash"]
+        .into_iter()
+        .find(|k| v.field(k).is_some())
+    {
+        return Err(DecodeError {
+            code: crate::wire::DecodeErrorCode::WrongType,
+            path: format!("$.{member}"),
+            message: "DAG record: pre-2645 record — 'tombstoned' / 'outcomeHash' were retired                       at the cut, and DAG content addresses do not carry forward (re-mint the store)"
+                .to_string(),
+            expected_shape: Some("a post-2645 DAG record".to_string()),
+        });
+    }
+
     // A pre-1144 envelope is refused BY NAME, never lifted — see the module doc.
     let actor = match v.field("actor") {
         Some(a) => decode_actor(a)?,
@@ -194,20 +216,11 @@ pub fn decode_record(json: &str) -> Result<DagRecord, DecodeError> {
         Some(JVal::Num(n)) => *n as i64,
         _ => return Err(decode_err("$.timestamp", "unix-seconds number")),
     };
-    let tombstoned = match v.field("tombstoned") {
-        Some(JVal::Bool(b)) => *b,
-        _ => return Err(decode_err("$.tombstoned", "boolean")),
-    };
 
     Ok(DagRecord {
         actor,
         hash: require_str(&v, "hash")?,
         op,
-        outcome_hash: match v.field("outcomeHash") {
-            None => None,
-            Some(JVal::Str(s)) => Some(s.clone()),
-            Some(_) => return Err(decode_err("$.outcomeHash", "hash string")),
-        },
         parents,
         prompt_id: match v.field("promptId") {
             None => None,
@@ -217,7 +230,6 @@ pub fn decode_record(json: &str) -> Result<DagRecord, DecodeError> {
         result_envelope,
         stream_id: require_str(&v, "streamId")?,
         timestamp,
-        tombstoned,
     })
 }
 
@@ -249,14 +261,7 @@ pub fn encode_record(record: &DagRecord) -> String {
         ),
         ("streamId".to_string(), escape_string(&record.stream_id)),
         ("timestamp".to_string(), record.timestamp.to_string()),
-        (
-            "tombstoned".to_string(),
-            if record.tombstoned { "true" } else { "false" }.to_string(),
-        ),
     ];
-    if let Some(outcome) = &record.outcome_hash {
-        fields.push(("outcomeHash".to_string(), escape_string(outcome)));
-    }
     if let Some(prompt) = &record.prompt_id {
         fields.push(("promptId".to_string(), escape_string(prompt)));
     }

@@ -32,16 +32,24 @@
 //!   out. Anything the walk does not locate takes the pure arm. A `Batch` is
 //!   threaded member by member, and from an op that does not apply onwards every
 //!   op takes the pure arm.
+//! - THE CHILD LIST (fuaran#2691, Core 0.42.0 D246). Core compares a structure
+//!   write of `p` against a slot access as a read and a write of
+//!   `(p, "#children")`, so every arm that reads or rewrites a node's structural
+//!   children by slot declares that slot: a resolved reorder and a resolved
+//!   move's source parent (beside the `kind` slot the tier holds the list in),
+//!   an `EditNode`, and any in-place edit whose held set moved.
+//! - A resolved MOVE (fuaran#2651, #2670, #2691) touches no parent whole: the
+//!   target is read and written at its `parent` slot, the source parent at its
+//!   `kind` and child-list slots, the destination and every ancestor above it
+//!   are read at their `parent` slots (the cycle check reads the chain), and
+//!   the destination keeps Core's named structure write and read. A resolved
+//!   REORDER (fuaran#2670) reads and writes its parent at the `kind` and
+//!   child-list slots and reads each listed child at its `parent` slot.
 //!
 //! Ids are counted over every position a node holds another in ([`held_nodes`],
 //! the reference's keyed walk); the base-aware arms LOCATE through the ordered
 //! child lists alone (the apply engine's `layout_children`), as Core's resolution
 //! does, so a node held only in a keyed position takes the pure arm.
-//!
-//! The move rule is the one the reference ships today: a move's source parent is
-//! read and structure-written. fuaran#2651 re-emits
-//! `fold-refusal-move-and-source-edit` when it changes the reference's rule; the
-//! `MoveNode` arm of [`resolved_at`] is the one place that follows it.
 //!
 //! Sets are ordered maps; wherever order is observable (the conflict report)
 //! they enumerate in ordinal (UTF-16) order. Pure, total, no IO.
@@ -316,6 +324,41 @@ fn one(slot: &str) -> [String; 1] {
     [slot.to_owned()]
 }
 
+/// Core's child-list slot (`Footprint.childListSlot`, fuaran-core Phase 625).
+const CHILD_LIST_SLOT: &str = "#children";
+
+/// Core's `slotEdit`: a read and a write of one slot of a node.
+fn slot_edit(node: &str, slot: &str) -> Footprint {
+    let pair = (node.to_owned(), slot.to_owned());
+    Footprint {
+        slot_reads: SlotSet::from([pair.clone()]),
+        slot_writes: SlotSet::from([pair]),
+        ..Footprint::default()
+    }
+}
+
+/// Core's `readingSlot`: a read of one slot of a node and no write.
+fn reading_slot(node: &str, slot: &str) -> Footprint {
+    Footprint {
+        slot_reads: SlotSet::from([(node.to_owned(), slot.to_owned())]),
+        ..Footprint::default()
+    }
+}
+
+/// `f` with a read and a write of `node`'s child-list slot beside it.
+fn child_list(node: &str, f: Footprint) -> Footprint {
+    f.union(slot_edit(node, CHILD_LIST_SLOT))
+}
+
+/// [`slotted`] for an op whose contract moves no node: where its held set moved
+/// anyway (`touched` non-empty), the child list is written too. Empty for every
+/// such op the engine has, so the slot is a guard, not an arm.
+fn guarded(writes: &[String], read_slots: &[&str], target: &str, touched: IdSet) -> Footprint {
+    let empty = touched.is_empty();
+    let f = slotted(writes, read_slots, target, touched);
+    if empty { f } else { child_list(target, f) }
+}
+
 /// The base-aware arm of one non-batch op at `state`, given the tree it reaches
 /// (`None` when it does not apply).
 fn resolved_at(state: &Node, after: Option<&Node>, op: &TreeOp) -> Footprint {
@@ -354,6 +397,16 @@ fn resolved_at(state: &Node, after: Option<&Node>, op: &TreeOp) -> Footprint {
                 _ => footprint_of(op),
             }
         }
+        // A resolved move (fuaran#2651, #2670, #2691) touches no parent WHOLE.
+        // The source parent's child list, held in its `kind`, is the only part
+        // of it the move changes: a read and a write of its `kind` and
+        // child-list slots. The destination and every ancestor above it are
+        // read at their `parent` slot (the cycle check reads the chain), and the
+        // destination keeps Core's named read and structure write — the address
+        // the fold interleaves two appends at. The target changes its position
+        // and nothing of itself: a read and a write of its `parent` slot. A move
+        // within one parent keeps the parent whole; an unresolved move is the
+        // pure arm.
         TreeOp::MoveNode {
             target,
             new_parent_id,
@@ -365,28 +418,54 @@ fn resolved_at(state: &Node, after: Option<&Node>, op: &TreeOp) -> Footprint {
                 structural_path(state, new_parent_id),
             ) {
                 (true, Some(parent), Some(destination)) => {
-                    let mut reads = id_set([target, new_parent_id, &parent.id]);
-                    for n in &destination[..destination.len() - 1] {
-                        reads.insert(n.id.clone());
-                    }
-                    Footprint {
-                        reads,
-                        structure_writes: id_set([&parent.id, new_parent_id]),
-                        content_writes: id_set([target]),
+                    let source = (parent.id != *new_parent_id).then_some(parent.id.as_str());
+                    let mut f = Footprint {
+                        reads: id_set([new_parent_id]),
+                        structure_writes: id_set([new_parent_id]),
                         ..Footprint::default()
                     }
+                    .union(slot_edit(target, "parent"))
+                    .union(reading_slot(new_parent_id, "parent"));
+                    for n in &destination[..destination.len() - 1] {
+                        if n.id != *target && Some(n.id.as_str()) != source {
+                            f = f.union(reading_slot(&n.id, "parent"));
+                        }
+                    }
+                    if let Some(p) = source {
+                        f = f.union(child_list(p, slot_edit(p, "kind")));
+                    }
+                    f
                 }
                 _ => footprint_of(op),
             }
         }
+        // A resolved reorder (fuaran#2670, #2691) permutes the parent's child
+        // list, held in its `kind`, and touches no child: the parent is read and
+        // written at its `kind` and child-list slots, and each listed child is
+        // read at its `parent` slot. An unresolved reorder is the pure arm.
+        TreeOp::ReorderChildren {
+            parent_id,
+            new_order,
+        } => match (after, find_structural(state, parent_id)) {
+            (Some(_), Some(_)) => new_order.iter().fold(
+                child_list(parent_id, slot_edit(parent_id, "kind")),
+                |acc, c| acc.union(reading_slot(c, "parent")),
+            ),
+            _ => footprint_of(op),
+        },
         TreeOp::EditNode { target, .. } => vertical_at(target, &|node| {
             let mut touched = ids_of(&kind_child_nodes(&node.kind));
             touched.extend(ids_of(&inserted_nodes(op)));
-            slotted(&one("kind"), &[], target, touched)
+            slotted(
+                &["kind".to_owned(), CHILD_LIST_SLOT.to_owned()],
+                &[],
+                target,
+                touched,
+            )
         }),
         TreeOp::UpdateProp { target, .. } | TreeOp::ReplaceBinding { target, .. } => {
             vertical_at(target, &|node| {
-                slotted(&one("kind"), &[], target, held_change(target, node))
+                guarded(&one("kind"), &[], target, held_change(target, node))
             })
         }
         TreeOp::UpdateState { target, .. } => vertical_at(target, &|node| {
@@ -395,10 +474,10 @@ fn resolved_at(state: &Node, after: Option<&Node>, op: &TreeOp) -> Footprint {
             slotted(&one("state"), &[], target, touched)
         }),
         TreeOp::UpdateStyle { target, .. } => vertical_at(target, &|node| {
-            slotted(&one("style"), &[], target, held_change(target, node))
+            guarded(&one("style"), &[], target, held_change(target, node))
         }),
         TreeOp::UpdateAccessibility { target, .. } => vertical_at(target, &|node| {
-            slotted(
+            guarded(
                 &one("accessibility"),
                 &[],
                 target,
@@ -406,10 +485,10 @@ fn resolved_at(state: &Node, after: Option<&Node>, op: &TreeOp) -> Footprint {
             )
         }),
         TreeOp::UpdateTooltip { target, .. } => vertical_at(target, &|node| {
-            slotted(&one("tooltip"), &[], target, held_change(target, node))
+            guarded(&one("tooltip"), &[], target, held_change(target, node))
         }),
         TreeOp::PatchStyle { target, style } => vertical_at(target, &|node| {
-            slotted(
+            guarded(
                 &style_fields(style),
                 &["style"],
                 target,
@@ -424,11 +503,9 @@ fn resolved_at(state: &Node, after: Option<&Node>, op: &TreeOp) -> Footprint {
             plain.structure_writes.insert(state.id.clone());
             plain
         }
-        // InsertChild, ReorderChildren: the pure arm names everything they
-        // touch. A Batch never reaches here (`threaded` walks its members).
-        TreeOp::InsertChild { .. } | TreeOp::ReorderChildren { .. } | TreeOp::Batch(_) => {
-            footprint_of(op)
-        }
+        // InsertChild: the pure arm names everything it touches. A Batch never
+        // reaches here (`threaded` walks its members).
+        TreeOp::InsertChild { .. } | TreeOp::Batch(_) => footprint_of(op),
     }
 }
 
@@ -524,13 +601,38 @@ fn meet(a: &IdSet, b: &IdSet) -> IdSet {
     a.intersection(b).cloned().collect()
 }
 
-/// The slots one side writes and the other reads or writes — Core's
-/// `Footprint.slotClash`, ordered by node then slot.
+/// The child-list slots a footprint's structure writes denote — Core's
+/// `Footprint.childListSlots` (fuaran-core Phase 625).
+fn child_list_slots(f: &Footprint) -> SlotSet {
+    f.structure_writes
+        .iter()
+        .map(|p| (p.clone(), CHILD_LIST_SLOT.to_owned()))
+        .collect()
+}
+
+/// Every slot a footprint reads or writes.
+fn accessed_slots(f: &Footprint) -> SlotSet {
+    f.slot_writes.union(&f.slot_reads).cloned().collect()
+}
+
+/// The slots one side writes and the other reads or writes, and the child-list
+/// slot of each parent one side structure-writes that the other accesses as a
+/// slot — Core's `Footprint.slotClash` (0.42.0), ordered by node then slot.
 fn slot_clash(a: &Footprint, b: &Footprint) -> Vec<(String, String)> {
     let mut hits = SlotSet::new();
     hits.extend(a.slot_writes.intersection(&b.slot_writes).cloned());
     hits.extend(a.slot_writes.intersection(&b.slot_reads).cloned());
     hits.extend(a.slot_reads.intersection(&b.slot_writes).cloned());
+    hits.extend(
+        child_list_slots(a)
+            .intersection(&accessed_slots(b))
+            .cloned(),
+    );
+    hits.extend(
+        accessed_slots(a)
+            .intersection(&child_list_slots(b))
+            .cloned(),
+    );
     let mut out: Vec<(String, String)> = hits.into_iter().collect();
     out.sort_by(|x, y| ordinal_cmp(&x.0, &y.0).then_with(|| ordinal_cmp(&x.1, &y.1)));
     out
@@ -540,22 +642,24 @@ fn slot_nodes(s: &SlotSet) -> IdSet {
     s.iter().map(|(node, _)| node.clone()).collect()
 }
 
-/// The nodes `a` accesses through a slot that `b` touches whole — Core's
-/// `slotsAgainstNode`.
+/// The nodes `a` accesses through a slot that `b` WRITES WHOLE — Core's
+/// `slotsAgainstNode` (0.42.0): a read of the node is of its existence and a
+/// structure write is compared at the child-list slot, so only a content write
+/// collides here.
 fn slots_against_node(into: &mut IdSet, a: &Footprint, b: &Footprint) {
-    let whole: IdSet = b
-        .content_writes
-        .iter()
-        .chain(&b.reads)
-        .chain(&b.structure_writes)
-        .cloned()
-        .collect();
-    into.extend(meet(&slot_nodes(&a.slot_writes), &whole));
-    into.extend(meet(&slot_nodes(&a.slot_reads), &b.content_writes));
+    into.extend(meet(&slot_nodes(&accessed_slots(a)), &b.content_writes));
 }
 
+/// Does `f` touch structure — a named parent's child list, an unknown source
+/// parent, or a child-list slot it reads or writes? Core's
+/// `Footprint.structural` non-empty (0.42.0), the set the unknown-parent clause
+/// meets.
 fn writes_structure(f: &Footprint) -> bool {
-    !f.structure_writes.is_empty() || !f.unknown_parent_writes.is_empty()
+    !f.structure_writes.is_empty()
+        || !f.unknown_parent_writes.is_empty()
+        || accessed_slots(f)
+            .iter()
+            .any(|(_, slot)| slot == CHILD_LIST_SLOT)
 }
 
 /// Core's `Dag.conflicts`: every op pair (a ∈ left, b ∈ right) whose footprints

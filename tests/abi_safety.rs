@@ -58,7 +58,7 @@ mod common;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
-use fuaran_rs::dag::merge::merge3_way;
+use fuaran_rs::dag::reconcile_fold;
 use fuaran_rs::ffi::{
     FuaranBuf, abi_guard, fuaran_abi_panic_probe, fuaran_alloc, fuaran_dealloc, fuaran_last_error,
     fuaran_session_apply_op, fuaran_session_free, fuaran_session_new, fuaran_session_place,
@@ -67,7 +67,7 @@ use fuaran_rs::ffi::{
     fuaran_session_tree_json,
 };
 use fuaran_rs::teleport;
-use fuaran_rs::wire::decode_node;
+use fuaran_rs::wire::{TreeOp, decode_node, decode_op};
 
 // ─── Marshalling helpers (the caller-side dance a native binding performs) ───
 
@@ -517,24 +517,26 @@ fn drive(tree: &str, payload: &str, seed_must_decode: bool) -> Result<(), String
     }
 
     // --- MERGE, through its crate API (it is not on the C-ABI) ---------------
+    // Merge by fold is the DAG's only merge (fuaran#2645): the reshaped tree is
+    // installed by a ReplaceRoot on one branch, both branches, or beside the op
+    // the payload decodes to, which is where a mutated child list reaches the
+    // footprint walk and the child-order rule.
     let merged = quietly(|| {
-        let base = decode_node(tree).ok();
-        let side = decode_node(payload).ok();
-        if let (Some(base), Some(side)) = (base, side)
-            // `merge3_way` documents its inputs as three trees sharing a root
-            // id, so the leg stays inside that contract: what it probes is the
-            // CHILDREN a mutation reshapes, which is where the vanished-child
-            // arm lived. Driving it outside its documented domain would be
-            // measuring an undefined case, not a defect.
-            && base.id == side.id
-        {
-            let _ = merge3_way(&base, &side, &base);
-            let _ = merge3_way(&base, &base, &side);
-            let _ = merge3_way(&side, &side, &side);
+        if let Ok(base) = decode_node(tree) {
+            let side = decode_node(payload).ok();
+            let replace: Vec<TreeOp> = side
+                .map(|node| vec![TreeOp::ReplaceRoot { node }])
+                .unwrap_or_default();
+            let op: Vec<TreeOp> = decode_op(payload).ok().into_iter().collect();
+            let _ = reconcile_fold(&base, &replace, &[]);
+            let _ = reconcile_fold(&base, &[], &replace);
+            let _ = reconcile_fold(&base, &replace, &replace);
+            let _ = reconcile_fold(&base, &op, &op);
+            let _ = reconcile_fold(&base, &op, &replace);
         }
     });
     if merged.is_err() {
-        return Err("a panic escaped merge3_way".to_string());
+        return Err("a panic escaped reconcile_fold".to_string());
     }
 
     // --- TELEPORT, through its crate API ------------------------------------

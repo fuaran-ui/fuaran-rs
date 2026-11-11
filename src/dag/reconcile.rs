@@ -13,14 +13,28 @@
 //!    appends a node to `p` (an `InsertChild` under it, or a `MoveNode` to it)
 //!    and the two appended ids differ. Admitted, ordered by the child-order rule
 //!    below.
-//! 3. A REFUSAL — anything else. `DeleteModify` when exactly one of the two ops
+//! 3. A REBASE (fuaran#2671) — one op is a `ReorderChildren(p, order)` and the
+//!    other changes `p`'s child list: an `InsertChild` under `p`, a `MoveNode`
+//!    to `p`, or a `RemoveNode` or `MoveNode` of a child `order` lists. Neither
+//!    may be a `Batch`. Admitted: the fold applies the reorder REBASED to the
+//!    children `p` holds when it is reached (the listed children still there, in
+//!    the declared order, then the rest in held order), and the child-order rule
+//!    places the appends.
+//! 4. A REFUSAL — anything else. `DeleteModify` when exactly one of the two ops
 //!    removes (a `RemoveNode`, or a `Batch` holding one), `Conflict` otherwise.
+//!    Two reorders of one parent that differ stay refused.
 //!
-//! THE CHILD-ORDER RULE (§34.4). Under an interleaved parent the children
-//! neither branch appended keep the fold's order and the appended ones follow:
-//! each branch's appends in its own order, the two runs merged by comparing
-//! heads ordinally by NodeId, the smaller first. Where that differs from the
-//! fold's order the merge records `ReorderChildren(p, order)`.
+//! THE CHILD-ORDER RULE (§34.4). Under an interleaved or rebased parent the
+//! children neither branch appended keep the fold's order (the rebased
+//! reorder's, where a branch reordered the parent) and the appended ones
+//! follow: each branch's run of appends in its own order, the two runs merged
+//! by comparing heads ordinally by NodeId, the smaller first, and a node both
+//! runs hold (two agreeing moves of it) listed once, where the merge first
+//! reaches it. An append a later reorder of the same parent on the same branch
+//! lists is settled by that reorder and leaves the run. The merge records
+//! `ReorderChildren(p, order)` for EVERY interleaved or rebased parent
+//! (fuaran#2645): a merge node is replayed by Core's closure fold in its own
+//! drain order, so the script — not the order a reconcile checked — fixes it.
 //!
 //! CHECKED, not assumed: the admitted classes lie outside Core's independence
 //! theorem, so the fold runs in both orders, each followed by the script, and
@@ -29,9 +43,9 @@
 //! Every op and tree this host holds has a canonical encoding (the encoder is
 //! total), so the policy has no "unencodable" refusal.
 //!
-//! The tree merge ([`super::merge3_way`]) is untouched and stays normative for
-//! the other merge-conformance keys; the `foldFixtures` family certifies this
-//! module.
+//! Since fuaran#2645 this is the DAG's ONLY merge (the three-way tree merge was
+//! retired with its merge-conformance keys, fuaran#2646); the `foldFixtures`
+//! family certifies it.
 
 use std::collections::BTreeSet;
 
@@ -100,9 +114,10 @@ pub enum GatedFoldFault<D> {
     IntroducedDefects(Vec<D>),
 }
 
-/// A derived merge: the tree, the script the merge records, how many distinct
-/// agreeing ops the fold applied as no change, and how many parents it
-/// interleaved.
+/// A derived merge: the tree, the script the merge records (one
+/// `ReorderChildren` per interleaved or rebased parent, parents in ordinal
+/// order), how many distinct agreeing ops the fold applied as no change, and
+/// how many parents it interleaved or rebased.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FoldReconciled {
     pub tree: Node,
@@ -143,9 +158,48 @@ pub fn apply_held(op: &TreeOp, tree: &Node) -> Result<Node, ApplyError> {
 }
 
 fn fold_held(script: &[TreeOp], start: &Node) -> Result<Node, ApplyError> {
-    script
+    fold_rebased(&BTreeSet::new(), script, start)
+}
+
+/// A reorder of `parent` rebased to the children it holds in `tree`: the listed
+/// children still there, in the declared order, then the others in the order
+/// they hold. `None` where the parent is not in the tree.
+fn rebased(tree: &Node, parent: &str, order: &[String]) -> Option<TreeOp> {
+    let kids: Vec<&String> = structural_children(find_structural(tree, parent)?)
         .iter()
-        .try_fold(start.clone(), |t, op| apply_held(op, &t))
+        .map(|c| &c.id)
+        .collect();
+    let mut listed: Vec<String> = Vec::new();
+    for c in order {
+        if kids.contains(&c) && !listed.contains(c) {
+            listed.push(c.clone());
+        }
+    }
+    let rest = kids.into_iter().filter(|k| !listed.contains(k)).cloned();
+    let new_order: Vec<String> = listed.iter().cloned().chain(rest).collect();
+    Some(TreeOp::ReorderChildren {
+        new_order,
+        parent_id: parent.to_owned(),
+    })
+}
+
+/// The fold: [`apply_held`] op by op, with a reorder of a parent in `rebase`
+/// applied rebased to the children the parent holds when the fold reaches it.
+fn fold_rebased(
+    rebase: &BTreeSet<String>,
+    script: &[TreeOp],
+    start: &Node,
+) -> Result<Node, ApplyError> {
+    script.iter().try_fold(start.clone(), |t, op| match op {
+        TreeOp::ReorderChildren {
+            parent_id,
+            new_order,
+        } if rebase.contains(parent_id) => {
+            let op = rebased(&t, parent_id, new_order).unwrap_or_else(|| op.clone());
+            apply_held(&op, &t)
+        }
+        _ => apply_held(op, &t),
+    })
 }
 
 /// The index and error of the first op of `delta` that does not apply from
@@ -181,9 +235,33 @@ fn append_into<'a>(parent: &str, op: &'a TreeOp) -> Option<&'a str> {
     }
 }
 
+/// The parent whose child list `reorder` and `other` both change, when
+/// `reorder` is a `ReorderChildren` and `other` an append to its parent or a
+/// removal or move of a child it lists.
+fn rebase_of(reorder: &TreeOp, other: &TreeOp) -> Option<String> {
+    let TreeOp::ReorderChildren {
+        parent_id,
+        new_order,
+    } = reorder
+    else {
+        return None;
+    };
+    let listed = |c: &String| new_order.contains(c);
+    match other {
+        TreeOp::InsertChild { parent_id: q, .. } if q == parent_id => Some(parent_id.clone()),
+        TreeOp::MoveNode {
+            target,
+            new_parent_id,
+        } if new_parent_id == parent_id || listed(target) => Some(parent_id.clone()),
+        TreeOp::RemoveNode { target } if listed(target) => Some(parent_id.clone()),
+        _ => None,
+    }
+}
+
 enum Verdict {
     Agreement,
     Interleave,
+    Rebase(String),
     Refuse(FoldRefusalClass),
 }
 
@@ -199,6 +277,9 @@ fn judge(c: &OpConflict) -> Verdict {
         && l != r
     {
         return Verdict::Interleave;
+    }
+    if let Some(p) = rebase_of(&c.left, &c.right).or_else(|| rebase_of(&c.right, &c.left)) {
+        return Verdict::Rebase(p);
     }
     if removes(&c.left) != removes(&c.right) {
         Verdict::Refuse(FoldRefusalClass::DeleteModify)
@@ -238,7 +319,8 @@ pub fn sort_fold_refusals(refusals: &[FoldRefusal]) -> Vec<FoldRefusal> {
 }
 
 /// The child-order rule's run-merge: each run in its own order, heads compared
-/// ordinally.
+/// ordinally. An id both runs hold appears twice; [`reorder_for`] keeps its
+/// first occurrence.
 fn interleave(a: &[String], b: &[String]) -> Vec<String> {
     let mut out = Vec::with_capacity(a.len() + b.len());
     let (mut i, mut j) = (0, 0);
@@ -256,8 +338,10 @@ fn interleave(a: &[String], b: &[String]) -> Vec<String> {
     out
 }
 
-/// The `ReorderChildren` the rule asks of `parent`, or none when the fold's
-/// order is already the rule's.
+/// The `ReorderChildren` the rule asks of `parent`, or none when the parent is
+/// not in the tree. Recorded even where the fold already gives the rule's order
+/// (fuaran#2645): a merge node's replay applies the branches in Core's drain
+/// order, so the script has to fix the order.
 fn reorder_for(tree: &Node, parent: &str, run_a: &[String], run_b: &[String]) -> Option<TreeOp> {
     let p = find_structural(tree, parent)?;
     let kids: Vec<String> = structural_children(p)
@@ -278,18 +362,40 @@ fn reorder_for(tree: &Node, parent: &str, run_a: &[String], run_b: &[String]) ->
         .filter(|k| !appended.contains(k))
         .cloned()
         .collect();
-    order.extend(interleave(&keep(run_a), &keep(run_b)));
-    (order != kids).then(|| TreeOp::ReorderChildren {
+    // A node both runs hold (two agreeing moves of it) is listed once, where
+    // the merge first reaches it — the same whichever run is named first.
+    for id in interleave(&keep(run_a), &keep(run_b)) {
+        if !order.contains(&id) {
+            order.push(id);
+        }
+    }
+    Some(TreeOp::ReorderChildren {
         new_order: order,
         parent_id: parent.to_owned(),
     })
 }
 
+/// A branch's run of appends into `parent`, in branch order. An append a later
+/// reorder of the same parent on the branch lists is settled by that reorder:
+/// the branch placed it, so it leaves the run.
 fn appends_of(parent: &str, delta: &[TreeOp]) -> Vec<String> {
-    delta
-        .iter()
-        .filter_map(|op| append_into(parent, op).map(str::to_owned))
-        .collect()
+    let mut run: Vec<String> = Vec::new();
+    for op in delta {
+        match op {
+            TreeOp::ReorderChildren {
+                parent_id,
+                new_order,
+            } if parent_id == parent => run.retain(|id| !new_order.contains(id)),
+            _ => {
+                if let Some(id) = append_into(parent, op)
+                    && !run.iter().any(|r| r == id)
+                {
+                    run.push(id.to_owned());
+                }
+            }
+        }
+    }
+    run
 }
 
 /// Reconciles two branch deltas from their common base under the §34 policy:
@@ -308,6 +414,7 @@ pub fn reconcile_fold(
 
     let mut refusals = Vec::new();
     let mut interleaved: BTreeSet<String> = BTreeSet::new();
+    let mut rebase: BTreeSet<String> = BTreeSet::new();
     let mut agreed: BTreeSet<String> = BTreeSet::new();
     for c in conflicts_in(base, delta_a, delta_b) {
         match judge(&c) {
@@ -318,6 +425,10 @@ pub fn reconcile_fold(
             }
             Verdict::Interleave => {
                 interleaved.insert(c.address.clone());
+            }
+            Verdict::Rebase(p) => {
+                interleaved.insert(p.clone());
+                rebase.insert(p);
             }
             Verdict::Refuse(class) => refusals.push(FoldRefusal { conflict: c, class }),
         }
@@ -330,7 +441,7 @@ pub fn reconcile_fold(
     parents.sort_by(|x, y| ordinal_cmp(x, y));
     let derive = |first: &[TreeOp], second: &[TreeOp]| -> Result<(Node, Vec<TreeOp>), ApplyError> {
         let script: Vec<TreeOp> = first.iter().chain(second).cloned().collect();
-        let folded = fold_held(&script, base)?;
+        let folded = fold_rebased(&rebase, &script, base)?;
         let reorders: Vec<TreeOp> = parents
             .iter()
             .filter_map(|p| {

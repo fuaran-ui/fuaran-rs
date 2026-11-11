@@ -21,7 +21,7 @@ render, verify a chain, merge, evaluate a transform, introspect, …).
 | `validator` (pre-emit structural defects) | ✅ | `validator/` | per-rule fire/stay-silent |
 | `client` (wasm32 decode→render→drive) | ✅ | `client/` | native session suite + in-browser ABI verify |
 | `opstream-hashchain` (SHA-256 chain, verify, tamper) | ✅ | `opstream/` | `chain/chain-corpus.json` golden (byte-identical) + NIST SHA-256 vectors |
-| `merge-dag` (3-way tree merge) | ✅ | `dag/merge.rs` | `merge-conformance/` (byte-identical tree + outcome hash) |
+| `merge-dag` (merge by fold, WIRE_FORMAT §34 — the only merge since fuaran#2645) | ✅ | `dag/reconcile.rs` + `dag/footprint.rs` | `merge-conformance/` `foldFixtures` (byte-identical derived tree / refusal envelope / gated verdict + hash, both orders) |
 | `dag-record` (DAG record wire form) | ✅ | `dag/record.rs` | `dag/` round-trip byte-identical |
 | `introspection` (getNodeState / assertions over the tree) | ✅ | `introspect/` | behaviour suite (facts, restyle-proof assertions) |
 | `search-pattern` (structural search over trees) | ✅ | `introspect/` | behaviour suite (structural query → matched ids) |
@@ -94,7 +94,7 @@ fail if either had introduced an unpropagated kind; it is green.
 
 **Demo parity is reached: the host runs the mechanic of all 21 demos.** The spine
 (`codec` + `apply` + `render` + `validator` + `client` + `opstream` +
-`dag/merge` + `introspect` + `theme` + `transform` + `teleport` + `gate` +
+`dag` + `introspect` + `theme` + `transform` + `teleport` + `gate` +
 `diff` + `render/email`) covers every demo on the site — a Rust service, edge
 worker, or in-browser `wasm32` client can decode, apply, render, verify, merge,
 evaluate a transform, introspect, contrast-audit, teleport, capability-gate, and
