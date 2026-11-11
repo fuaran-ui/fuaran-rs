@@ -46,8 +46,10 @@
 //!   REORDER (fuaran#2670) reads and writes its parent at the `kind` and
 //!   child-list slots and reads each listed child at its `parent` slot.
 //!
-//! Ids are counted over every position a node holds another in ([`held_nodes`],
-//! the reference's keyed walk); the base-aware arms LOCATE through the ordered
+//! Ids are counted over every position a node holds another in (the apply
+//! engine's `child_nodes`, the reference's keyed walk: what the kind holds, the
+//! subtree of every slot argument, the envelope's `state` alternatives and its
+//! `fallback`); the base-aware arms LOCATE through the ordered
 //! child lists alone (the apply engine's `layout_children`), as Core's resolution
 //! does, so a node held only in a keyed position takes the pure arm.
 //!
@@ -57,8 +59,8 @@
 use std::collections::BTreeSet;
 
 use crate::canonical::ordinal_cmp;
-use crate::ops::{apply, inserted_nodes, kind_child_nodes, layout_children};
-use crate::wire::{FragmentArg, Node, NodeKind, StyleDelta, TreeOp};
+use crate::ops::{apply, child_nodes, inserted_nodes, kind_child_nodes, layout_children};
+use crate::wire::{Node, StyleDelta, TreeOp};
 
 /// A set of node ids.
 pub type IdSet = BTreeSet<String>;
@@ -102,30 +104,6 @@ pub(crate) fn structural_children(n: &Node) -> &[Node] {
     layout_children(n).map_or(&[], Vec::as_slice)
 }
 
-/// Every node `n` holds another in: what its kind holds (the ordered child list,
-/// the `ErrorBoundary` and `Switch` arms, a `FragmentDecl`'s body), the subtree
-/// of every slot argument (a `FragmentRef`'s `args`, a `Mount`'s `inputs`), the
-/// envelope's `state` alternatives and its `fallback`. The reference's
-/// `Reach.keyed`.
-fn held_nodes(n: &Node) -> Vec<&Node> {
-    let mut out = kind_child_nodes(&n.kind);
-    let args = match &n.kind {
-        NodeKind::FragmentRef(s) => s.args.as_slice(),
-        NodeKind::Mount(s) => s.inputs.as_slice(),
-        _ => &[],
-    };
-    for (_, arg) in args {
-        if let FragmentArg::Slot { tree } = arg {
-            out.push(tree);
-        }
-    }
-    out.extend(state_alternatives(n));
-    if let Some(f) = &n.fallback {
-        out.push(f);
-    }
-    out
-}
-
 fn state_alternatives(n: &Node) -> Vec<&Node> {
     [&n.state.on_loading, &n.state.on_empty]
         .into_iter()
@@ -133,10 +111,12 @@ fn state_alternatives(n: &Node) -> Vec<&Node> {
         .collect()
 }
 
-/// Adds every id in `n`'s subtree, `n` included, through every position.
+/// Adds every id in `n`'s subtree, `n` included, through every position — the
+/// apply engine's own lookup walk (Phase 2706), so the footprint and the apply
+/// agree on which positions hold a node.
 fn keyed_ids_into(n: &Node, into: &mut IdSet) {
     into.insert(n.id.clone());
-    for c in held_nodes(n) {
+    for c in child_nodes(n) {
         keyed_ids_into(c, into);
     }
 }

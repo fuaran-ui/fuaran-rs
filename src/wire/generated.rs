@@ -975,6 +975,7 @@ pub struct MountSpec {
     pub capabilities: Vec<String>,
     pub channel: MountChannel,
     pub inputs: Vec<(String, FragmentArg)>,
+    pub on_bubble: Option<Closure>,
     pub scope_id: String,
 }
 
@@ -3018,12 +3019,14 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn mount_spec(v: &MountSpec) -> String {
-        let MountSpec { capabilities: m_capabilities, channel: m_channel, inputs: m_inputs, scope_id: m_scope_id } = v;
+        let MountSpec { capabilities: m_capabilities, channel: m_channel, inputs: m_inputs, on_bubble: m_on_bubble, scope_id: m_scope_id } = v;
         let mut f: Vec<Field> = vec![field("capabilities", enc_list(m_capabilities, |v| s(v))), field("channel", mount_channel(m_channel))];
         if let Some(j) = encode_fragment_args(m_inputs) {
             f.push(field("inputs", j));
         }
-        f.push(field("onBubble", CLOSURE.to_string()));
+        if m_on_bubble.is_some() {
+            f.push(field("onBubble", CLOSURE.to_string()));
+        }
         f.push(field("scopeId", s(m_scope_id)));
         obj(f)
     }
@@ -4645,8 +4648,9 @@ pub(super) mod gen_decode {
         let m_capabilities = field_req(path, fields, "capabilities", &[], "Mount.capabilities: list of string", |p, j| dec_list(p, j, dec_string))?;
         let m_channel = field_req(path, fields, "channel", &[], "Mount.channel: GuestChannel", decode_mount_channel)?;
         let m_inputs = decode_mount_inputs(path, fields)?;
+        let m_on_bubble = field_opt(path, fields, "onBubble", &[], dec_closure)?;
         let m_scope_id = field_req(path, fields, "scopeId", &[], "Mount.scopeId: string", dec_string)?;
-        Ok(MountSpec { capabilities: m_capabilities, channel: m_channel, inputs: m_inputs, scope_id: m_scope_id })
+        Ok(MountSpec { capabilities: m_capabilities, channel: m_channel, inputs: m_inputs, on_bubble: m_on_bubble, scope_id: m_scope_id })
     }
 
     pub(in super::super) fn decode_progress_spec(path: &str, j: &JVal) -> DResult<ProgressSpec> {

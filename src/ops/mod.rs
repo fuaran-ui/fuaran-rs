@@ -23,7 +23,7 @@ pub mod placement;
 use crate::canonical::{JVal, ordinal_cmp};
 use crate::limits::{MAX_NODE_DEPTH, MAX_NODES};
 use crate::wire::coerce;
-use crate::wire::{Accessibility, Binding, Node, NodeKind, TreeOp};
+use crate::wire::{Accessibility, Binding, FragmentArg, Node, NodeKind, TreeOp};
 
 // ─── Error + result surface ──────────────────────────────────────────────────
 
@@ -191,9 +191,13 @@ fn kind_label(n: &Node) -> &'static str {
     }
 }
 
-/// Every immediate sub-node, in the shared traversal order: layout children /
-/// structural sub-trees first, then the `state` surfaces.
-fn child_nodes(n: &Node) -> Vec<&Node> {
+/// Every immediate sub-node, through every position a node holds another in
+/// (the reference's keyed walk, WIRE_FORMAT.md §34.2): what the kind holds
+/// (`kind_child_nodes`), then the `state` surfaces, then the envelope's
+/// author-declared `fallback`. The node and parent lookups, the id census and
+/// the size limits all walk this, so an op addressed to a node held in a slot
+/// argument or a `fallback` applies (Phase 2706).
+pub(crate) fn child_nodes(n: &Node) -> Vec<&Node> {
     let mut out = kind_child_nodes(&n.kind);
     if let Some(b) = &n.state.on_loading {
         out.push(b);
@@ -201,12 +205,52 @@ fn child_nodes(n: &Node) -> Vec<&Node> {
     if let Some(b) = &n.state.on_empty {
         out.push(b);
     }
+    if let Some(f) = &n.fallback {
+        out.push(f);
+    }
     out
 }
 
-/// The sub-nodes a KIND holds — `child_nodes` without the node's `state`
-/// surfaces. What an `EditNode` puts below the node it rewrites, since the
-/// rewritten node keeps its existing `state`.
+/// The slot arguments a kind carries — a `FragmentRef`'s `args`, a `Mount`'s
+/// `inputs` — with their positions sorted by key (ordinal), the order the
+/// canonical encoding writes them in.
+fn slot_args(kind: &NodeKind) -> &[(String, FragmentArg)] {
+    match kind {
+        NodeKind::FragmentRef(s) => &s.args,
+        NodeKind::Mount(s) => &s.inputs,
+        _ => &[],
+    }
+}
+
+/// The subtree of every `SlotArg` in key order; a value argument holds no node.
+fn slot_trees(args: &[(String, FragmentArg)]) -> Vec<&Node> {
+    let mut keyed: Vec<(&str, &Node)> = args
+        .iter()
+        .filter_map(|(k, a)| match a {
+            FragmentArg::Slot { tree } => Some((k.as_str(), &**tree)),
+            FragmentArg::Value(_) => None,
+        })
+        .collect();
+    keyed.sort_by(|x, y| ordinal_cmp(x.0, y.0));
+    keyed.into_iter().map(|(_, t)| t).collect()
+}
+
+fn slot_trees_mut(args: &mut [(String, FragmentArg)]) -> Vec<&mut Node> {
+    let mut keyed: Vec<(&str, &mut Node)> = args
+        .iter_mut()
+        .filter_map(|(k, a)| match a {
+            FragmentArg::Slot { tree } => Some((k.as_str(), &mut **tree)),
+            FragmentArg::Value(_) => None,
+        })
+        .collect();
+    keyed.sort_by(|x, y| ordinal_cmp(x.0, y.0));
+    keyed.into_iter().map(|(_, t)| t).collect()
+}
+
+/// The sub-nodes a KIND holds — `child_nodes` without the node's envelope
+/// (`state` surfaces, `fallback`): the ordered child list, the single-node arms,
+/// and the subtree of every slot argument. What an `EditNode` puts below the
+/// node it rewrites, since the rewritten node keeps its existing envelope.
 pub(crate) fn kind_child_nodes(kind: &NodeKind) -> Vec<&Node> {
     let mut out: Vec<&Node> = Vec::new();
     match kind {
@@ -263,6 +307,7 @@ pub(crate) fn kind_child_nodes(kind: &NodeKind) -> Vec<&Node> {
         | NodeKind::Drawing(_)
         | NodeKind::Mount(_) => {}
     }
+    out.extend(slot_trees(slot_args(kind)));
     out
 }
 
@@ -286,14 +331,20 @@ fn child_nodes_mut(n: &mut Node) -> Vec<&mut Node> {
             out.push(&mut s.default);
         }
         NodeKind::FragmentDecl(s) => out.push(&mut s.body),
+        NodeKind::FragmentRef(s) => out.extend(slot_trees_mut(&mut s.args)),
+        NodeKind::Mount(s) => out.extend(slot_trees_mut(&mut s.inputs)),
         _ => {}
     }
-    // `state` is a distinct field from `kind`; the borrows are disjoint.
+    // `state` and `fallback` are distinct fields from `kind`; the borrows are
+    // disjoint.
     if let Some(b) = n.state.on_loading.as_deref_mut() {
         out.push(b);
     }
     if let Some(b) = n.state.on_empty.as_deref_mut() {
         out.push(b);
+    }
+    if let Some(f) = n.fallback.as_deref_mut() {
+        out.push(f);
     }
     out
 }

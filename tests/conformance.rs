@@ -372,10 +372,7 @@ fn corpus_control_kinds_are_all_recognised() {
 /// is deleted the moment the host learns the case (the round-trip test goes red on
 /// an entry that passes), and the claim read-back below does not count it against
 /// the tokens it exercises. Nothing else is skipped.
-const UNCERTIFIED_ROUND_TRIPS: &[(&str, &str)] = &[(
-    "mount-no-onbubble",
-    "the dialect implies Mount.onBubble (CLOSURE_IMPLIED) and always writes the sentinel, so a      Mount with no bubble handler re-encodes with one; certified once the dialect or the      generated-type cut carries the member as an Option (fuaran#2298, #2315)",
-)];
+const UNCERTIFIED_ROUND_TRIPS: &[(&str, &str)] = &[];
 
 fn uncertified_round_trip(id: &str) -> bool {
     UNCERTIFIED_ROUND_TRIPS.iter().any(|(f, _)| *f == id)

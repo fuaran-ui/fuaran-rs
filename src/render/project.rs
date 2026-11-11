@@ -608,6 +608,7 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
                 .collect(),
             channel: spec.channel.clone(),
             capabilities: spec.capabilities.clone(),
+            on_bubble: spec.on_bubble,
         }),
     }
 }

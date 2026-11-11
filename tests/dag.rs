@@ -546,86 +546,28 @@ fn every_fold_fixture_is_certified_in_both_orders() {
     assert!(!entries.is_empty(), "foldFixtures is empty");
 
     let (mut derived, mut refusals, mut gated) = (0usize, 0usize, 0usize);
+    // Every fixture runs and every failure is named in ONE report, so a corpus
+    // addition this host does not yet meet reads as the whole list of what it
+    // fails, never as the first of an unknown number (Phase 2706).
+    let mut failures: Vec<String> = Vec::new();
     for fixture in entries {
         let id = str_field(fixture, "id").expect("id");
-        let kind = str_field(fixture, "kind").unwrap_or_else(|| panic!("{id}: no kind"));
-        let base = fold_base(&root, fixture);
-        let (a, b) = (
-            fold_ops(&root, fixture, "aOpsFile"),
-            fold_ops(&root, fixture, "bOpsFile"),
-        );
-        match kind.as_str() {
-            "merge-fold-derive" => {
-                let expected = fixture_file(&root, fixture, "expectedFile");
-                let hash = str_field(fixture, "outcomeHash").expect("outcomeHash");
-                for (order, d1, d2) in [("a,b", &a, &b), ("b,a", &b, &a)] {
-                    let r = reconcile_fold(&base, d1, d2)
-                        .unwrap_or_else(|f| panic!("{id} ({order}): refused: {f:?}"));
-                    let encoded = encode_node(&r.tree);
-                    assert_eq!(
-                        encoded, expected,
-                        "{id} ({order}): derived tree byte-identical"
-                    );
-                    assert_eq!(sha256_hex(&encoded), hash, "{id} ({order}): outcomeHash");
-                }
-                derived += 1;
-            }
-            "merge-fold-refusal" => {
-                let expected = fixture_file(&root, fixture, "envelopeFile");
-                let hash = str_field(fixture, "envelopeHash").expect("envelopeHash");
-                let forward = refused(reconcile_fold(&base, &a, &b), &id);
-                let envelope = encode_fold_envelope(&forward);
-                assert_eq!(envelope, expected, "{id}: envelope byte-identical");
-                assert_eq!(sha256_hex(&envelope), hash, "{id}: envelopeHash");
-
-                // Swap symmetry: the swapped reconcile's refusals, mirrored back
-                // (left <-> right) and re-sorted, are the committed envelope.
-                let mirrored: Vec<FoldRefusal> =
-                    refused(reconcile_fold(&base, &b, &a), &format!("{id} (swapped)"))
-                        .into_iter()
-                        .map(|r| FoldRefusal {
-                            conflict: OpConflict {
-                                left: r.conflict.right,
-                                right: r.conflict.left,
-                                ..r.conflict
-                            },
-                            class: r.class,
-                        })
-                        .collect();
-                assert_eq!(
-                    encode_fold_envelope(&mirrored),
-                    expected,
-                    "{id}: the swapped envelope is the mirror"
-                );
-                refusals += 1;
-            }
-            "merge-fold-gated" => {
-                let expected = fixture_file(&root, fixture, "verdictFile");
-                let hash = str_field(fixture, "verdictHash").expect("verdictHash");
-                for (order, d1, d2) in [("a,b", &a, &b), ("b,a", &b, &a)] {
-                    let defects = match reconcile_fold_gated(introduced_defects, &base, d1, d2) {
-                        Err(GatedFoldFault::IntroducedDefects(d)) => d,
-                        Err(GatedFoldFault::Fold(f)) => {
-                            panic!("{id} ({order}): the fold refused: {f:?}")
-                        }
-                        Ok(_) => panic!("{id} ({order}): expected the gate to refuse"),
-                    };
-                    let verdict = encode_verdict(&defects);
-                    assert_eq!(verdict, expected, "{id} ({order}): verdict byte-identical");
-                    assert_eq!(sha256_hex(&verdict), hash, "{id} ({order}): verdictHash");
-                }
-                assert!(
-                    reconcile_fold(&base, &a, &b).is_ok(),
-                    "{id}: ungated, the gated fixture must derive"
-                );
-                gated += 1;
-            }
-            other => panic!(
-                "{id}: foldFixtures kind '{other}' is not certified by this host — a family must \
-                 be asserted or skipped BY NAME, never passed over silently"
-            ),
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            certify_fold_fixture(&root, fixture, &id)
+        })) {
+            Ok(FoldKind::Derive) => derived += 1,
+            Ok(FoldKind::Refusal) => refusals += 1,
+            Ok(FoldKind::Gated) => gated += 1,
+            Err(payload) => failures.push(format!("{id}: {}", panic_text(payload.as_ref()))),
         }
     }
+    assert!(
+        failures.is_empty(),
+        "{} of {} foldFixtures failed:\n  {}",
+        failures.len(),
+        entries.len(),
+        failures.join("\n  ")
+    );
     for (ran, kind) in [
         (derived, "merge-fold-derive"),
         (refusals, "merge-fold-refusal"),
@@ -642,6 +584,103 @@ fn every_fold_fixture_is_certified_in_both_orders() {
         "fold corpus: {derived} derivations, {refusals} refusal envelopes, {gated} gated verdicts \
          — byte-identical + hash-verified in both orders (0 skipped)"
     );
+}
+
+/// The `foldFixtures` kind a fixture certified as.
+enum FoldKind {
+    Derive,
+    Refusal,
+    Gated,
+}
+
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_else(|| "a non-text panic".to_owned())
+}
+
+/// One `foldFixtures` entry, certified per its kind (the rules above). A
+/// failure panics; the leg collects it beside every other.
+fn certify_fold_fixture(root: &Path, fixture: &JVal, id: &str) -> FoldKind {
+    let kind = str_field(fixture, "kind").unwrap_or_else(|| panic!("{id}: no kind"));
+    let base = fold_base(root, fixture);
+    let (a, b) = (
+        fold_ops(root, fixture, "aOpsFile"),
+        fold_ops(root, fixture, "bOpsFile"),
+    );
+    match kind.as_str() {
+        "merge-fold-derive" => {
+            let expected = fixture_file(root, fixture, "expectedFile");
+            let hash = str_field(fixture, "outcomeHash").expect("outcomeHash");
+            for (order, d1, d2) in [("a,b", &a, &b), ("b,a", &b, &a)] {
+                let r = reconcile_fold(&base, d1, d2)
+                    .unwrap_or_else(|f| panic!("{id} ({order}): refused: {f:?}"));
+                let encoded = encode_node(&r.tree);
+                assert_eq!(
+                    encoded, expected,
+                    "{id} ({order}): derived tree byte-identical"
+                );
+                assert_eq!(sha256_hex(&encoded), hash, "{id} ({order}): outcomeHash");
+            }
+            FoldKind::Derive
+        }
+        "merge-fold-refusal" => {
+            let expected = fixture_file(root, fixture, "envelopeFile");
+            let hash = str_field(fixture, "envelopeHash").expect("envelopeHash");
+            let forward = refused(reconcile_fold(&base, &a, &b), id);
+            let envelope = encode_fold_envelope(&forward);
+            assert_eq!(envelope, expected, "{id}: envelope byte-identical");
+            assert_eq!(sha256_hex(&envelope), hash, "{id}: envelopeHash");
+
+            // Swap symmetry: the swapped reconcile's refusals, mirrored back
+            // (left <-> right) and re-sorted, are the committed envelope.
+            let mirrored: Vec<FoldRefusal> =
+                refused(reconcile_fold(&base, &b, &a), &format!("{id} (swapped)"))
+                    .into_iter()
+                    .map(|r| FoldRefusal {
+                        conflict: OpConflict {
+                            left: r.conflict.right,
+                            right: r.conflict.left,
+                            ..r.conflict
+                        },
+                        class: r.class,
+                    })
+                    .collect();
+            assert_eq!(
+                encode_fold_envelope(&mirrored),
+                expected,
+                "{id}: the swapped envelope is the mirror"
+            );
+            FoldKind::Refusal
+        }
+        "merge-fold-gated" => {
+            let expected = fixture_file(root, fixture, "verdictFile");
+            let hash = str_field(fixture, "verdictHash").expect("verdictHash");
+            for (order, d1, d2) in [("a,b", &a, &b), ("b,a", &b, &a)] {
+                let defects = match reconcile_fold_gated(introduced_defects, &base, d1, d2) {
+                    Err(GatedFoldFault::IntroducedDefects(d)) => d,
+                    Err(GatedFoldFault::Fold(f)) => {
+                        panic!("{id} ({order}): the fold refused: {f:?}")
+                    }
+                    Ok(_) => panic!("{id} ({order}): expected the gate to refuse"),
+                };
+                let verdict = encode_verdict(&defects);
+                assert_eq!(verdict, expected, "{id} ({order}): verdict byte-identical");
+                assert_eq!(sha256_hex(&verdict), hash, "{id} ({order}): verdictHash");
+            }
+            assert!(
+                reconcile_fold(&base, &a, &b).is_ok(),
+                "{id}: ungated, the gated fixture must derive"
+            );
+            FoldKind::Gated
+        }
+        other => panic!(
+            "{id}: foldFixtures kind '{other}' is not certified by this host — a family must \
+             be asserted or skipped BY NAME, never passed over silently"
+        ),
+    }
 }
 
 // ─── policy cases the foldFixtures corpus does not pin ──────────────────────
@@ -793,5 +832,43 @@ fn the_fold_envelope_is_canonical_and_deduplicated() {
         format!(
             r#"[{{"address":"p","class":"Conflict","left":{left},"right":{right},"shape":"ConcurrentUpdate"}},{{"address":"p","class":"Conflict","left":{left},"right":{right},"shape":"SlotClash","slot":"style.tone"}}]"#
         )
+    );
+}
+
+// ─── the apply walk reaches every keyed position (Phase 2706) ───────────────
+
+/// The reference's keyed walk holds a node in an envelope `fallback` as well as
+/// in a slot argument, and the corpus draws only the slot arguments: an op
+/// addressed to a node held only in a `fallback` applies, and a node held only
+/// in a FragmentRef's slot argument (beside a value argument, which holds none)
+/// takes an insert. Both fail on a lookup that walks the kind's arms alone.
+#[test]
+fn an_op_reaches_a_node_held_in_a_fallback_or_a_slot_argument() {
+    use fuaran_rs::ops::apply;
+    let tree = decode_node(
+        r#"{"id":"root","kind":{"$type":"Box","children":[{"fallback":{"id":"fb","kind":{"$type":"Markdown","text":"Behind"}},"id":"m","kind":{"$type":"Markdown","text":"x"}},{"id":"ref","kind":{"$type":"FragmentRef","args":{"body":{"$type":"SlotArg","tree":{"id":"slot","kind":{"$type":"Box","children":[],"layout":{"$type":"Auto"},"role":"Dashboard"}}},"n":{"$type":"Int","value":1}},"name":"card"}}],"layout":{"$type":"Auto"},"role":"Dashboard"}}"#,
+    )
+    .expect("base decodes");
+    let styled = apply(
+        &tree,
+        &op(r#"{"$type":"PatchStyle","style":{"tone":"Brand"},"target":"fb"}"#),
+    )
+    .expect("an op addressed inside a fallback applies");
+    assert!(
+        encode_node(&styled.new_tree).contains(r#""fallback":{"id":"fb","kind":{"$type":"Markdown","text":"Behind"},"style":{"tone":"Brand"}}"#),
+        "the fallback node carries the patch"
+    );
+    let inserted = apply(
+        &tree,
+        &op(&format!(
+            r#"{{"$type":"InsertChild","child":{},"parentId":"slot"}}"#,
+            pane("new")
+        )),
+    )
+    .expect("an insert into a slot argument's subtree applies");
+    assert!(
+        encode_node(&inserted.new_tree)
+            .contains(r#""id":"slot","kind":{"$type":"Box","children":[{"id":"new""#),
+        "the slot argument's subtree takes the child"
     );
 }

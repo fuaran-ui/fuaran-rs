@@ -114,7 +114,6 @@ pub(super) const DERIVES: &[(&str, &[&str], &str)] = &[
     ),
 ];
 
-const CLOSURE_IMPLIED: &str = "the IDL declares this closure slot optional, but this host carries no member for      it: its presence is implied and the encoder always writes the sentinel. No corpus      fixture omits it, so an Option<Closure> member would change a public type with      nothing to certify the absent case; it waits for that fixture";
 const CLOSURE_UNMODELLED: &str = "a closure slot this host does not carry: the closure is a host-side function the \
      wire never shows (only its sentinel), and nothing here reads its presence";
 const NODE_ID: &str = "spelled with the NodeId alias (the same type as String), which documents that the \
@@ -155,7 +154,6 @@ pub(super) const FIELDS: &[FieldEntry] = &[
         &[("inputs", "Vec<(String, FragmentArg)>")],
         "an absent map decodes as the empty map and the encoder omits an empty one",
     ),
-    ("Mount", "onBubble", &[], CLOSURE_IMPLIED),
     (
         "Switch",
         "on",

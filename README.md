@@ -678,6 +678,41 @@ pinned by `tests/decode_determinism.rs` and the parser's own unit tests in `src/
 This host declares no stability policy yet (pre-1.0), so the change is recorded here rather than
 in a `STABILITY.md` it does not have; it rides the current unreleased version.
 
+## The apply engine reaches a node held in a slot argument — Phase 2706
+
+A `FragmentRef`'s `args` and a `Mount`'s `inputs` hold nodes (a `SlotArg`'s `tree`), and the
+specification's node walk includes them (WIRE_FORMAT.md §34.2). This host's apply engine looked
+nodes and parents up through the kind's arms and the `state` alternatives alone, so an op addressed
+to a node held only in a slot argument stopped as `NodeNotFound` / `ParentNotFound`, and the merge
+fold reported it as `DeltaDoesNotApply` before judging anything. The lookup now walks every
+position the reference's keyed walk does: what the kind holds (the ordered child list, the single-node
+arms, and the subtree of every `SlotArg` in key order — a value argument holds no node), the `state`
+alternatives, and the envelope's author-declared `fallback`. One walk serves the node and parent
+lookups, the id census, the size limits and the merge footprint, so the footprint and the apply
+cannot disagree about which positions hold a node. An `EditNode` that rewrites a `Mount` or a
+`FragmentRef` now counts the nodes its slot arguments hold, on both the old and the new kind.
+
+`Mount.onBubble` is now carried as `Option<Closure>` on `MountSpec` (`on_bubble`), like every other
+optional handler slot: the encoder writes the sentinel only when one rode the wire. It used to be
+implied and always written, a dialect entry that said it waited for a fixture omitting the slot;
+the four fixtures below are such fixtures, and the node round-trip fixture `mount-no-onbubble`,
+which this host listed as uncertified for exactly that reason, now round-trips byte-identically.
+
+Certified by the merge-conformance fixtures `fold-mount-input-insert` (derives),
+`fold-refusal-mount-input-tone`, `fold-refusal-mount-input-disjoint` and
+`fold-refusal-mount-input-delete-modify` (refusal envelopes), added at specification commit
+`0b2ec20` and certified here at `d33b87d`. Two in-place edits to different nodes inside one Mount's
+inputs are refused, as the reference refuses them (`fold-refusal-mount-input-disjoint`); this host
+certifies that answer and sets no policy of its own. `tests/dag.rs` also pins a node held only in a
+`fallback`, which the corpus does not draw. The fold leg now runs every fixture and names every
+failure in one report rather than stopping at the first.
+
+This host declares no stability policy yet (pre-1.0), so the change is recorded here rather than
+in a `STABILITY.md` it does not have. It is additive on the wire (an op that did not apply now
+applies; a document that omits `onBubble` now re-encodes without it). In Rust, `MountSpec` gains a
+public field, so a struct literal built outside this crate must name `on_bubble`. It rides the
+current unreleased version.
+
 ## The Core boundary — `src/core/`
 
 The subsystems this host reimplements from the `Fuaran.Core` reference live in one
