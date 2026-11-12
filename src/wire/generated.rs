@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "08ca738ed16bd740e160879588ee8aa778a2d6724beffc08126fedf462d47019";
+pub const IDL_SHA256: &str = "c694bd27beacf7d3f6a9c794ec15f03e02b78ca98bbbe56333b648410d14ef19";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -434,9 +434,11 @@ pub(crate) const TREE_OP_TAGS: &[&str] = &[
     "ReorderChildren",
     "ReplaceBinding",
     "ReplaceRoot",
+    "UpdateAccessibility",
     "UpdateProp",
     "UpdateState",
     "UpdateStyle",
+    "UpdateTooltip",
 ];
 
 // ─── Wire types ─────────────────────────────────────────────────────────────
@@ -478,6 +480,7 @@ pub struct ButtonSpec {
     pub variant: ButtonVariant,
     pub icon: Option<String>,
     pub disabled: Option<Binding>,
+    pub affordance: Option<Affordance>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -697,7 +700,8 @@ pub struct ErrorBoundarySpec {
 /// The labeled TEXT fact — `Metric`'s complementary type. `value` is a
 /// [`TextSource`] (the same vocabulary the labels use, so `Bound` / `I18n`
 /// values ride through); `emphasis` is the behavioural bool (omit-when-false),
-/// `tone` omit-when-default; `help` / `icon` optional.
+/// `tone` omit-when-default; `help` / `icon` optional; `reference` the Fact a
+/// figure cites, opaque to the language (WIRE_FORMAT 3.6.31).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FactSpec {
     pub emphasis: bool,
@@ -706,6 +710,7 @@ pub struct FactSpec {
     pub label: TextSource,
     pub tone: ToneVariant,
     pub value: TextSource,
+    pub reference: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -879,6 +884,7 @@ pub struct MapSpec {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MarkdownSpec {
+    pub citations: Vec<MarkdownCitation>,
     pub text: TextSource,
 }
 
@@ -969,6 +975,7 @@ pub struct MountSpec {
     pub capabilities: Vec<String>,
     pub channel: MountChannel,
     pub inputs: Vec<(String, FragmentArg)>,
+    pub on_bubble: Option<Closure>,
     pub scope_id: String,
 }
 
@@ -1001,6 +1008,8 @@ pub struct SelectSpec {
     /// Emitted only when `true` (Phase 291), so single-select stays byte-identical.
     pub multiple: Option<bool>,
     pub values: Option<Binding>,
+    pub affordance: Option<Affordance>,
+    pub groups: Vec<SelectOptionGroup>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1107,6 +1116,22 @@ pub struct Accessibility {
     /// `TextSource` (bare-string canonical for a literal, as `tooltip`). Inert to
     /// every visual renderer: it MUST reach no attribute and no visible text.
     pub speak: Option<TextSource>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Affordance {
+    pub patterns: Vec<String>,
+    pub read_patterns: Vec<String>,
+    pub aliases: Vec<AffordanceAlias>,
+    pub description: Option<String>,
+    pub clearable: bool,
+    pub never_controllable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AffordanceAlias {
+    pub alias: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1257,6 +1282,7 @@ pub struct FormField {
     pub required: bool,
     pub help: Option<TextSource>,
     pub rule: Option<FieldRule>,
+    pub affordance: Option<Affordance>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1279,6 +1305,13 @@ pub struct MapMarker {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct MarkdownCitation {
+    pub label: Option<TextSource>,
+    pub name: String,
+    pub reference: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct MetricComparison {
     pub label: TextSource,
     pub value: Binding,
@@ -1290,6 +1323,12 @@ pub struct MetricComparison {
 pub struct SelectOption {
     pub label: TextSource,
     pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectOptionGroup {
+    pub label: String,
+    pub values: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1329,6 +1368,7 @@ pub struct StateBehaviour {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StaticRows {
+    pub citations: Vec<TableCitation>,
     /// Phase 801 — the table's initial order. Configuration, distinct from the
     /// transform pipeline's data `sort`.
     pub default_sort: Option<DefaultSort>,
@@ -1376,6 +1416,14 @@ pub struct TabHeader {
     pub label: TextSource,
     pub icon: Option<String>,
     pub disabled: Option<Binding>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableCitation {
+    pub column: i64,
+    pub label: Option<TextSource>,
+    pub reference: String,
+    pub row: i64,
 }
 
 /// Phase 1110 - one timed-text track (WIRE_FORMAT.md 3.6.6). Four of the five
@@ -2333,6 +2381,12 @@ pub enum TreeOp {
     ReplaceRoot {
         node: Node,
     },
+    /// Phase 2527 — replaces the target's whole `accessibility` trait; a record
+    /// setting no member removes it.
+    UpdateAccessibility {
+        accessibility: Accessibility,
+        target: NodeId,
+    },
     /// `value` is a structured-JSON position (rule 12); `path` is a plain
     /// string at codec level (grammar violations surface at apply time, §3.4).
     UpdateProp {
@@ -2347,6 +2401,11 @@ pub enum TreeOp {
     UpdateStyle {
         style: SemanticStyle,
         target: NodeId,
+    },
+    /// Phase 2527 — sets the target's `tooltip`, or clears it on `None`.
+    UpdateTooltip {
+        target: NodeId,
+        tooltip: Option<TextSource>,
     },
 }
 
@@ -2405,6 +2464,8 @@ pub(crate) mod defaults {
     pub(crate) const TABS_ORIENTATION: Orientation = Orientation::Horizontal;
     pub(crate) const TOAST_DISMISSABLE: bool = true;
     pub(crate) const TOAST_TONE: ToneVariant = ToneVariant::Default;
+    pub(crate) const AFFORDANCE_CLEARABLE: bool = false;
+    pub(crate) const AFFORDANCE_NEVER_CONTROLLABLE: bool = false;
     pub(crate) const COLUMN_ERASED_FORMAT: CellFormat = CellFormat::None;
     pub(crate) const COLUMN_ERASED_WIDTH: ColumnWidth = ColumnWidth::Auto;
     pub(crate) const FORM_FIELD_REQUIRED: bool = false;
@@ -2464,7 +2525,7 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn button_spec(v: &ButtonSpec) -> String {
-        let ButtonSpec { label: m_label, on_click: m_on_click, variant: m_variant, icon: m_icon, disabled: m_disabled } = v;
+        let ButtonSpec { label: m_label, on_click: m_on_click, variant: m_variant, icon: m_icon, disabled: m_disabled, affordance: m_affordance } = v;
         let mut f: Vec<Field> = vec![field("label", text_source(m_label)), field("onClick", action(m_on_click))];
         if *m_variant != defaults::BUTTON_VARIANT {
             f.push(field("variant", s(m_variant.as_str())));
@@ -2474,6 +2535,9 @@ pub(super) mod gen_encode {
         }
         if let Some(x) = m_disabled {
             f.push(field("disabled", binding(x)));
+        }
+        if let Some(x) = m_affordance {
+            f.push(field("affordance", affordance(x)));
         }
         obj(f)
     }
@@ -2671,7 +2735,7 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn fact_spec(v: &FactSpec) -> String {
-        let FactSpec { emphasis: m_emphasis, help: m_help, icon: m_icon, label: m_label, tone: m_tone, value: m_value } = v;
+        let FactSpec { emphasis: m_emphasis, help: m_help, icon: m_icon, label: m_label, tone: m_tone, value: m_value, reference: m_reference } = v;
         let mut f: Vec<Field> = vec![];
         if *m_emphasis != defaults::FACT_EMPHASIS {
             f.push(field("emphasis", boolean(*m_emphasis)));
@@ -2687,6 +2751,9 @@ pub(super) mod gen_encode {
             f.push(field("tone", s(m_tone.as_str())));
         }
         f.push(field("value", text_source(m_value)));
+        if let Some(x) = m_reference {
+            f.push(field("reference", s(x)));
+        }
         obj(f)
     }
 
@@ -2858,8 +2925,13 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn markdown_spec(v: &MarkdownSpec) -> String {
-        let MarkdownSpec { text: m_text } = v;
-        obj(vec![field("text", text_source(m_text))])
+        let MarkdownSpec { citations: m_citations, text: m_text } = v;
+        let mut f: Vec<Field> = vec![];
+        if !m_citations.is_empty() {
+            f.push(field("citations", enc_list(m_citations, markdown_citation)));
+        }
+        f.push(field("text", text_source(m_text)));
+        obj(f)
     }
 
     pub(in super::super) fn math_spec(v: &MathSpec) -> String {
@@ -2947,12 +3019,14 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn mount_spec(v: &MountSpec) -> String {
-        let MountSpec { capabilities: m_capabilities, channel: m_channel, inputs: m_inputs, scope_id: m_scope_id } = v;
+        let MountSpec { capabilities: m_capabilities, channel: m_channel, inputs: m_inputs, on_bubble: m_on_bubble, scope_id: m_scope_id } = v;
         let mut f: Vec<Field> = vec![field("capabilities", enc_list(m_capabilities, |v| s(v))), field("channel", mount_channel(m_channel))];
         if let Some(j) = encode_fragment_args(m_inputs) {
             f.push(field("inputs", j));
         }
-        f.push(field("onBubble", CLOSURE.to_string()));
+        if m_on_bubble.is_some() {
+            f.push(field("onBubble", CLOSURE.to_string()));
+        }
         f.push(field("scopeId", s(m_scope_id)));
         obj(f)
     }
@@ -2988,7 +3062,7 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn select_spec(v: &SelectSpec) -> String {
-        let SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values } = v;
+        let SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values, affordance: m_affordance, groups: m_groups } = v;
         let mut f: Vec<Field> = vec![field("label", text_source(m_label))];
         if m_on_change.is_some() {
             f.push(field("onChange", CLOSURE.to_string()));
@@ -3011,6 +3085,12 @@ pub(super) mod gen_encode {
         }
         if let Some(x) = m_values {
             f.push(field("values", binding(x)));
+        }
+        if let Some(x) = m_affordance {
+            f.push(field("affordance", affordance(x)));
+        }
+        if !m_groups.is_empty() {
+            f.push(field("groups", enc_list(m_groups, select_option_group)));
         }
         obj(f)
     }
@@ -3190,6 +3270,35 @@ pub(super) mod gen_encode {
         obj(f)
     }
 
+    pub(in super::super) fn affordance(v: &Affordance) -> String {
+        let Affordance { patterns: m_patterns, read_patterns: m_read_patterns, aliases: m_aliases, description: m_description, clearable: m_clearable, never_controllable: m_never_controllable } = v;
+        let mut f: Vec<Field> = vec![];
+        if !m_patterns.is_empty() {
+            f.push(field("patterns", enc_list(m_patterns, |v| s(v))));
+        }
+        if !m_read_patterns.is_empty() {
+            f.push(field("readPatterns", enc_list(m_read_patterns, |v| s(v))));
+        }
+        if !m_aliases.is_empty() {
+            f.push(field("aliases", enc_list(m_aliases, affordance_alias)));
+        }
+        if let Some(x) = m_description {
+            f.push(field("description", s(x)));
+        }
+        if *m_clearable != defaults::AFFORDANCE_CLEARABLE {
+            f.push(field("clearable", boolean(*m_clearable)));
+        }
+        if *m_never_controllable != defaults::AFFORDANCE_NEVER_CONTROLLABLE {
+            f.push(field("neverControllable", boolean(*m_never_controllable)));
+        }
+        obj(f)
+    }
+
+    pub(in super::super) fn affordance_alias(v: &AffordanceAlias) -> String {
+        let AffordanceAlias { alias: m_alias, value: m_value } = v;
+        obj(vec![field("alias", s(m_alias)), field("value", s(m_value))])
+    }
+
     pub(in super::super) fn column_erased(v: &ColumnErased) -> String {
         let ColumnErased { field: m_field, sortable: m_sortable, editable: m_editable, format: m_format, kind: m_kind, label: m_label, value: m_value, width: m_width } = v;
         let mut f: Vec<Field> = vec![];
@@ -3310,8 +3419,8 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn form_field(v: &FormField) -> String {
-        let FormField { id: m_id, kind: m_kind, label: m_label, required: m_required, help: m_help, rule: m_rule } = v;
-        encode_form_field(m_id, m_kind, m_label, m_required, m_help, m_rule)
+        let FormField { id: m_id, kind: m_kind, label: m_label, required: m_required, help: m_help, rule: m_rule, affordance: m_affordance } = v;
+        encode_form_field(m_id, m_kind, m_label, m_required, m_help, m_rule, m_affordance)
     }
 
     pub(in super::super) fn mount_channel(v: &MountChannel) -> String {
@@ -3339,6 +3448,17 @@ pub(super) mod gen_encode {
         obj(f)
     }
 
+    pub(in super::super) fn markdown_citation(v: &MarkdownCitation) -> String {
+        let MarkdownCitation { label: m_label, name: m_name, reference: m_reference } = v;
+        let mut f: Vec<Field> = vec![];
+        if let Some(x) = m_label {
+            f.push(field("label", text_source(x)));
+        }
+        f.push(field("name", s(m_name)));
+        f.push(field("reference", s(m_reference)));
+        obj(f)
+    }
+
     pub(in super::super) fn metric_comparison(v: &MetricComparison) -> String {
         let MetricComparison { label: m_label, value: m_value, format: m_format, polarity: m_polarity } = v;
         let mut f: Vec<Field> = vec![field("label", text_source(m_label)), field("value", binding(m_value))];
@@ -3359,6 +3479,11 @@ pub(super) mod gen_encode {
         }
         f.push(field("value", s(m_value)));
         obj(f)
+    }
+
+    pub(in super::super) fn select_option_group(v: &SelectOptionGroup) -> String {
+        let SelectOptionGroup { label: m_label, values: m_values } = v;
+        obj(vec![field("label", s(m_label)), field("values", enc_list(m_values, |v| s(v)))])
     }
 
     pub(in super::super) fn semantic_style(v: &SemanticStyle) -> String {
@@ -3406,8 +3531,11 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn static_rows(v: &StaticRows) -> String {
-        let StaticRows { default_sort: m_default_sort, headers: m_headers, rows: m_rows, sortable: m_sortable } = v;
+        let StaticRows { citations: m_citations, default_sort: m_default_sort, headers: m_headers, rows: m_rows, sortable: m_sortable } = v;
         let mut f: Vec<Field> = vec![];
+        if !m_citations.is_empty() {
+            f.push(field("citations", enc_list(m_citations, table_citation)));
+        }
         if let Some(x) = m_default_sort {
             f.push(field("defaultSort", default_sort(x)));
         }
@@ -3457,6 +3585,17 @@ pub(super) mod gen_encode {
         if let Some(x) = m_disabled {
             f.push(field("disabled", binding(x)));
         }
+        obj(f)
+    }
+
+    pub(in super::super) fn table_citation(v: &TableCitation) -> String {
+        let TableCitation { column: m_column, label: m_label, reference: m_reference, row: m_row } = v;
+        let mut f: Vec<Field> = vec![field("column", int(*m_column))];
+        if let Some(x) = m_label {
+            f.push(field("label", text_source(x)));
+        }
+        f.push(field("reference", s(m_reference)));
+        f.push(field("row", int(*m_row)));
         obj(f)
     }
 
@@ -4151,6 +4290,9 @@ pub(super) mod gen_encode {
             TreeOp::ReplaceRoot { node: m_node } => {
             case_obj("ReplaceRoot", vec![field("node", node(m_node))])
             }
+            TreeOp::UpdateAccessibility { accessibility: m_accessibility, target: m_target } => {
+            case_obj("UpdateAccessibility", vec![field("accessibility", accessibility(m_accessibility)), field("target", s(m_target))])
+            }
             TreeOp::UpdateProp { path: m_path, target: m_target, value: m_value } => {
             case_obj("UpdateProp", vec![field("path", s(m_path)), field("target", s(m_target)), field("value", json_value(m_value))])
             }
@@ -4159,6 +4301,13 @@ pub(super) mod gen_encode {
             }
             TreeOp::UpdateStyle { style: m_style, target: m_target } => {
             case_obj("UpdateStyle", vec![field("style", semantic_style(m_style)), field("target", s(m_target))])
+            }
+            TreeOp::UpdateTooltip { target: m_target, tooltip: m_tooltip } => {
+            let mut f: Vec<Field> = vec![field("target", s(m_target))];
+            if let Some(x) = m_tooltip {
+                f.push(field("tooltip", text_source(x)));
+            }
+            case_obj("UpdateTooltip", f)
             }
         }
     }
@@ -4193,7 +4342,10 @@ pub(super) mod gen_decode {
         let m_variant = field_or(path, fields, "variant", &[], defaults::BUTTON_VARIANT, decode_button_variant)?;
         let m_icon = field_opt(path, fields, "icon", &[], dec_string)?;
         let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
-        Ok(ButtonSpec { label: m_label, on_click: m_on_click, variant: m_variant, icon: m_icon, disabled: m_disabled })
+        let m_affordance = field_opt(path, fields, "affordance", &[], decode_affordance)?;
+        let v = ButtonSpec { label: m_label, on_click: m_on_click, variant: m_variant, icon: m_icon, disabled: m_disabled, affordance: m_affordance };
+        check_button_affordance(path, fields, &v)?;
+        Ok(v)
     }
 
     pub(in super::super) fn decode_callout_spec(path: &str, j: &JVal) -> DResult<CalloutSpec> {
@@ -4318,7 +4470,8 @@ pub(super) mod gen_decode {
         let m_label = field_req(path, fields, "label", &[], "Fact.label: TextSource", decode_text_source)?;
         let m_tone = field_or(path, fields, "tone", &[], defaults::FACT_TONE, decode_tone_variant)?;
         let m_value = field_req(path, fields, "value", &[], "Fact.value: TextSource", decode_text_source)?;
-        Ok(FactSpec { emphasis: m_emphasis, help: m_help, icon: m_icon, label: m_label, tone: m_tone, value: m_value })
+        let m_reference = field_opt(path, fields, "reference", &[], dec_string)?;
+        Ok(FactSpec { emphasis: m_emphasis, help: m_help, icon: m_icon, label: m_label, tone: m_tone, value: m_value, reference: m_reference })
     }
 
     pub(in super::super) fn decode_file_upload_spec(path: &str, j: &JVal) -> DResult<FileUploadSpec> {
@@ -4435,8 +4588,11 @@ pub(super) mod gen_decode {
 
     pub(in super::super) fn decode_markdown_spec(path: &str, j: &JVal) -> DResult<MarkdownSpec> {
         let fields = as_obj(path, j)?;
+        let m_citations = field_or(path, fields, "citations", &[], Vec::new(), |p, j| dec_list(p, j, decode_markdown_citation))?;
         let m_text = field_req(path, fields, "text", &[], "Markdown.text: TextSource", decode_text_source)?;
-        Ok(MarkdownSpec { text: m_text })
+        let v = MarkdownSpec { citations: m_citations, text: m_text };
+        check_markdown(path, fields, &v)?;
+        Ok(v)
     }
 
     pub(in super::super) fn decode_math_spec(path: &str, j: &JVal) -> DResult<MathSpec> {
@@ -4492,8 +4648,9 @@ pub(super) mod gen_decode {
         let m_capabilities = field_req(path, fields, "capabilities", &[], "Mount.capabilities: list of string", |p, j| dec_list(p, j, dec_string))?;
         let m_channel = field_req(path, fields, "channel", &[], "Mount.channel: GuestChannel", decode_mount_channel)?;
         let m_inputs = decode_mount_inputs(path, fields)?;
+        let m_on_bubble = field_opt(path, fields, "onBubble", &[], dec_closure)?;
         let m_scope_id = field_req(path, fields, "scopeId", &[], "Mount.scopeId: string", dec_string)?;
-        Ok(MountSpec { capabilities: m_capabilities, channel: m_channel, inputs: m_inputs, scope_id: m_scope_id })
+        Ok(MountSpec { capabilities: m_capabilities, channel: m_channel, inputs: m_inputs, on_bubble: m_on_bubble, scope_id: m_scope_id })
     }
 
     pub(in super::super) fn decode_progress_spec(path: &str, j: &JVal) -> DResult<ProgressSpec> {
@@ -4526,7 +4683,11 @@ pub(super) mod gen_decode {
         let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
         let m_multiple = field_opt(path, fields, "multiple", &[], as_bool)?;
         let m_values = field_opt(path, fields, "values", &[], |p, j| decode_binding_slot(p, j, StaticSlot::StringList))?;
-        Ok(SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values })
+        let m_affordance = field_opt(path, fields, "affordance", &[], decode_affordance)?;
+        let m_groups = field_or(path, fields, "groups", &[], Vec::new(), |p, j| dec_list(p, j, decode_select_option_group))?;
+        let v = SelectSpec { label: m_label, on_change: m_on_change, on_change_multi: m_on_change_multi, source: m_source, value: m_value, placeholder: m_placeholder, disabled: m_disabled, multiple: m_multiple, values: m_values, affordance: m_affordance, groups: m_groups };
+        check_select(path, fields, &v)?;
+        Ok(v)
     }
 
     pub(in super::super) fn decode_skeleton_spec(path: &str, j: &JVal) -> DResult<SkeletonSpec> {
@@ -4846,6 +5007,24 @@ pub(super) mod gen_decode {
         Ok(Accessibility { described_by: m_described_by, hidden: m_hidden, label: m_label, labelled_by: m_labelled_by, live_region: m_live_region, role: m_role, speak: m_speak })
     }
 
+    pub(in super::super) fn decode_affordance(path: &str, j: &JVal) -> DResult<Affordance> {
+        let fields = as_obj(path, j)?;
+        let m_patterns = field_or(path, fields, "patterns", &[], Vec::new(), |p, j| dec_list(p, j, dec_string))?;
+        let m_read_patterns = field_or(path, fields, "readPatterns", &[], Vec::new(), |p, j| dec_list(p, j, dec_string))?;
+        let m_aliases = field_or(path, fields, "aliases", &[], Vec::new(), |p, j| dec_list(p, j, decode_affordance_alias))?;
+        let m_description = field_opt(path, fields, "description", &[], dec_string)?;
+        let m_clearable = field_or(path, fields, "clearable", &[], defaults::AFFORDANCE_CLEARABLE, as_bool)?;
+        let m_never_controllable = field_or(path, fields, "neverControllable", &[], defaults::AFFORDANCE_NEVER_CONTROLLABLE, as_bool)?;
+        Ok(Affordance { patterns: m_patterns, read_patterns: m_read_patterns, aliases: m_aliases, description: m_description, clearable: m_clearable, never_controllable: m_never_controllable })
+    }
+
+    pub(in super::super) fn decode_affordance_alias(path: &str, j: &JVal) -> DResult<AffordanceAlias> {
+        let fields = as_obj(path, j)?;
+        let m_alias = field_req(path, fields, "alias", &[], "AffordanceAlias.alias: string", dec_string)?;
+        let m_value = field_req(path, fields, "value", &[], "AffordanceAlias.value: string", dec_string)?;
+        Ok(AffordanceAlias { alias: m_alias, value: m_value })
+    }
+
     pub(in super::super) fn decode_column_erased(path: &str, j: &JVal) -> DResult<ColumnErased> {
         let fields = as_obj(path, j)?;
         check_column_near_misses(path, fields)?;
@@ -4944,7 +5123,10 @@ pub(super) mod gen_decode {
         let m_required = field_or(path, fields, "required", &[], defaults::FORM_FIELD_REQUIRED, as_bool)?;
         let m_help = field_opt(path, fields, "help", &[], decode_text_source)?;
         let m_rule = field_opt(path, fields, "rule", &[], decode_field_rule)?;
-        Ok(FormField { id: m_id, kind: m_kind, label: m_label, required: m_required, help: m_help, rule: m_rule })
+        let m_affordance = field_opt(path, fields, "affordance", &[], decode_affordance)?;
+        let v = FormField { id: m_id, kind: m_kind, label: m_label, required: m_required, help: m_help, rule: m_rule, affordance: m_affordance };
+        check_form_field_affordance(path, fields, &v)?;
+        Ok(v)
     }
 
     pub(in super::super) fn decode_mount_channel(path: &str, j: &JVal) -> DResult<MountChannel> {
@@ -4969,6 +5151,14 @@ pub(super) mod gen_decode {
         Ok(MapMarker { label: m_label, latitude: m_latitude, longitude: m_longitude })
     }
 
+    pub(in super::super) fn decode_markdown_citation(path: &str, j: &JVal) -> DResult<MarkdownCitation> {
+        let fields = as_obj(path, j)?;
+        let m_label = field_opt(path, fields, "label", &[], decode_text_source)?;
+        let m_name = field_req(path, fields, "name", &[], "MarkdownCitation.name: string", dec_string)?;
+        let m_reference = field_req(path, fields, "reference", &[], "MarkdownCitation.reference: string", dec_string)?;
+        Ok(MarkdownCitation { label: m_label, name: m_name, reference: m_reference })
+    }
+
     pub(in super::super) fn decode_metric_comparison(path: &str, j: &JVal) -> DResult<MetricComparison> {
         let fields = as_obj(path, j)?;
         let m_label = field_req(path, fields, "label", &[], "MetricComparison.label: TextSource", decode_text_source)?;
@@ -4986,6 +5176,13 @@ pub(super) mod gen_decode {
         let m_label = decode_text_label(path, fields)?;
         let m_value = field_req(path, fields, "value", &[], "SelectOption.value: string", dec_string)?;
         Ok(SelectOption { label: m_label, value: m_value })
+    }
+
+    pub(in super::super) fn decode_select_option_group(path: &str, j: &JVal) -> DResult<SelectOptionGroup> {
+        let fields = as_obj(path, j)?;
+        let m_label = field_req(path, fields, "label", &[], "SelectOptionGroup.label: string", dec_string)?;
+        let m_values = field_req(path, fields, "values", &[], "SelectOptionGroup.values: list of string", |p, j| dec_list(p, j, dec_string))?;
+        Ok(SelectOptionGroup { label: m_label, values: m_values })
     }
 
     pub(in super::super) fn decode_semantic_style(path: &str, j: &JVal) -> DResult<SemanticStyle> {
@@ -5016,11 +5213,14 @@ pub(super) mod gen_decode {
 
     pub(in super::super) fn decode_static_rows(path: &str, j: &JVal) -> DResult<StaticRows> {
         let fields = as_obj(path, j)?;
+        let m_citations = field_or(path, fields, "citations", &[], Vec::new(), |p, j| dec_list(p, j, decode_table_citation))?;
         let m_default_sort = field_opt(path, fields, "defaultSort", &[], decode_default_sort)?;
         let m_headers = field_req(path, fields, "headers", &[], "StaticRows.headers: list of TextSource", |p, j| dec_list(p, j, decode_text_source))?;
         let m_rows = field_req(path, fields, "rows", &[], "StaticRows.rows: list of list of TextSource", |p, j| dec_list(p, j, |p, j| dec_list(p, j, decode_text_source)))?;
         let m_sortable = field_opt(path, fields, "sortable", &[], as_bool)?;
-        Ok(StaticRows { default_sort: m_default_sort, headers: m_headers, rows: m_rows, sortable: m_sortable })
+        let v = StaticRows { citations: m_citations, default_sort: m_default_sort, headers: m_headers, rows: m_rows, sortable: m_sortable };
+        check_static_rows(path, fields, &v)?;
+        Ok(v)
     }
 
     pub(in super::super) fn decode_style_delta(path: &str, j: &JVal) -> DResult<StyleDelta> {
@@ -5046,6 +5246,15 @@ pub(super) mod gen_decode {
         let m_icon = field_opt(path, fields, "icon", &[], dec_string)?;
         let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
         Ok(TabHeader { label: m_label, icon: m_icon, disabled: m_disabled })
+    }
+
+    pub(in super::super) fn decode_table_citation(path: &str, j: &JVal) -> DResult<TableCitation> {
+        let fields = as_obj(path, j)?;
+        let m_column = field_req(path, fields, "column", &[], "TableCitation.column: integer", as_int)?;
+        let m_label = field_opt(path, fields, "label", &[], decode_text_source)?;
+        let m_reference = field_req(path, fields, "reference", &[], "TableCitation.reference: string", dec_string)?;
+        let m_row = field_req(path, fields, "row", &[], "TableCitation.row: integer", as_int)?;
+        Ok(TableCitation { column: m_column, label: m_label, reference: m_reference, row: m_row })
     }
 
     pub(in super::super) fn decode_track_entry(path: &str, j: &JVal) -> DResult<TrackEntry> {
@@ -5983,9 +6192,11 @@ pub(super) mod gen_decode {
             "ReorderChildren" => decode_tree_op_ast_reorder_children(path, fields),
             "ReplaceBinding" => decode_tree_op_ast_replace_binding(path, fields),
             "ReplaceRoot" => decode_tree_op_ast_replace_root(path, fields),
+            "UpdateAccessibility" => decode_tree_op_ast_update_accessibility(path, fields),
             "UpdateProp" => decode_tree_op_ast_update_prop(path, fields),
             "UpdateState" => decode_tree_op_ast_update_state(path, fields),
             "UpdateStyle" => decode_tree_op_ast_update_style(path, fields),
+            "UpdateTooltip" => decode_tree_op_ast_update_tooltip(path, fields),
             other => Err(unknown_du_case(path, other, TREE_OP_TAGS)),
         }
     }
@@ -6044,6 +6255,12 @@ pub(super) mod gen_decode {
         Ok(TreeOp::ReplaceRoot { node: m_node })
     }
 
+    pub(in super::super) fn decode_tree_op_ast_update_accessibility(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        let m_accessibility = field_req(path, fields, "accessibility", &[], "TreeOp.UpdateAccessibility.accessibility: Accessibility", decode_accessibility)?;
+        let m_target = field_req(path, fields, "target", &[], "TreeOp.UpdateAccessibility.target: string", dec_string)?;
+        Ok(TreeOp::UpdateAccessibility { accessibility: m_accessibility, target: m_target })
+    }
+
     pub(in super::super) fn decode_tree_op_ast_update_prop(path: &str, fields: &Fields) -> DResult<TreeOp> {
         let m_path = field_req(path, fields, "path", &[], "TreeOp.UpdateProp.path: string", dec_string)?;
         let m_target = field_req(path, fields, "target", &[], "TreeOp.UpdateProp.target: string", dec_string)?;
@@ -6061,6 +6278,12 @@ pub(super) mod gen_decode {
         let m_style = field_req(path, fields, "style", &[], "TreeOp.UpdateStyle.style: SemanticStyle", decode_semantic_style)?;
         let m_target = field_req(path, fields, "target", &[], "TreeOp.UpdateStyle.target: string", dec_string)?;
         Ok(TreeOp::UpdateStyle { style: m_style, target: m_target })
+    }
+
+    pub(in super::super) fn decode_tree_op_ast_update_tooltip(path: &str, fields: &Fields) -> DResult<TreeOp> {
+        let m_target = field_req(path, fields, "target", &[], "TreeOp.UpdateTooltip.target: string", dec_string)?;
+        let m_tooltip = field_opt(path, fields, "tooltip", &[], decode_text_source)?;
+        Ok(TreeOp::UpdateTooltip { target: m_target, tooltip: m_tooltip })
     }
 
 
@@ -6299,6 +6522,14 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Action.SetState.valueFrom",
     "Action.WriteToClipboard",
     "Action.WriteToClipboard.text",
+    "Affordance.aliases",
+    "Affordance.clearable",
+    "Affordance.description",
+    "Affordance.neverControllable",
+    "Affordance.patterns",
+    "Affordance.readPatterns",
+    "AffordanceAlias.alias",
+    "AffordanceAlias.value",
     "Binding.Computed",
     "Binding.Computed.fn",
     "Binding.Expr",
@@ -6488,6 +6719,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "FilterSpec.kind",
     "FilterSpec.label",
     "FilterSpec.name",
+    "FormField.affordance",
     "FormField.help",
     "FormField.id",
     "FormField.kind",
@@ -6627,6 +6859,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Kind.Box.layout",
     "Kind.Box.role",
     "Kind.Button",
+    "Kind.Button.affordance",
     "Kind.Button.disabled",
     "Kind.Button.icon",
     "Kind.Button.label",
@@ -6712,6 +6945,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Kind.Fact.help",
     "Kind.Fact.icon",
     "Kind.Fact.label",
+    "Kind.Fact.reference",
     "Kind.Fact.tone",
     "Kind.Fact.value",
     "Kind.FileUpload",
@@ -6783,6 +7017,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Kind.Map.source",
     "Kind.Map.zoom",
     "Kind.Markdown",
+    "Kind.Markdown.citations",
     "Kind.Markdown.text",
     "Kind.Math",
     "Kind.Math.display",
@@ -6834,7 +7069,9 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Kind.ScrollArea.maxWidth",
     "Kind.ScrollArea.orientation",
     "Kind.Select",
+    "Kind.Select.affordance",
     "Kind.Select.disabled",
+    "Kind.Select.groups",
     "Kind.Select.label",
     "Kind.Select.multiple",
     "Kind.Select.onChange",
@@ -6893,6 +7130,9 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "MapMarker.label",
     "MapMarker.latitude",
     "MapMarker.longitude",
+    "MarkdownCitation.label",
+    "MarkdownCitation.name",
+    "MarkdownCitation.reference",
     "MediaKind.Audio",
     "MediaKind.Video",
     "MediaKind.Video.autoplay",
@@ -6913,6 +7153,8 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Scalar.Str.value",
     "SelectOption.label",
     "SelectOption.value",
+    "SelectOptionGroup.label",
+    "SelectOptionGroup.values",
     "SemanticStyle.direction",
     "SemanticStyle.emphasis",
     "SemanticStyle.role",
@@ -6965,6 +7207,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "StateBehaviour.onEmpty",
     "StateBehaviour.onError",
     "StateBehaviour.onLoading",
+    "StaticRows.citations",
     "StaticRows.defaultSort",
     "StaticRows.headers",
     "StaticRows.rows",
@@ -6981,6 +7224,10 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "TabHeader.disabled",
     "TabHeader.icon",
     "TabHeader.label",
+    "TableCitation.column",
+    "TableCitation.label",
+    "TableCitation.reference",
+    "TableCitation.row",
     "TextSource.Bound",
     "TextSource.Bound.binding",
     "TextSource.I18n",

@@ -25,8 +25,8 @@ mod common;
 use fuaran_rs::canonical::{JVal, parse};
 use fuaran_rs::theme::{
     FontRole, NodeArea, Rgba, StyleFlag, StyleInput, StyleObservation, StyleObserverOptions,
-    decode, derive_style_flags, encode_style_flag, encode_style_observation, per_node_flags,
-    to_style_observation, verify_usage_budgets,
+    decode, derive_style_flags, encode_manifest_defect, encode_style_flag,
+    encode_style_observation, per_node_flags, to_style_observation, validate, verify_usage_budgets,
 };
 
 fn field<'a>(v: &'a JVal, key: &str) -> &'a JVal {
@@ -218,6 +218,20 @@ fn every_style_observer_vector_matches_this_host_byte_for_byte() {
                     encoded(&verify_usage_budgets(&manifest, &nodes)),
                     expected(case, "expectedBudgetFlags"),
                     "{id}: the usage-budget flags do not encode to the family's bytes"
+                );
+            }
+            "manifest-validation" => {
+                // Phase 2133 — the tolerant decode, then the shared validation pass.
+                let manifest = decode(as_str(field(case, "manifest")))
+                    .unwrap_or_else(|| panic!("{id}: the vector's manifest does not decode here"));
+                let defects: Vec<String> = validate(&manifest)
+                    .iter()
+                    .map(encode_manifest_defect)
+                    .collect();
+                assert_eq!(
+                    defects,
+                    expected(case, "expectedManifestDefects"),
+                    "{id}: the manifest validation defects do not encode to the family's bytes"
                 );
             }
             other => panic!("{id}: tier {other:?} is outside this host's vocabulary"),

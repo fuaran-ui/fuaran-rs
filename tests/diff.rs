@@ -180,3 +180,41 @@ fn a_root_restyle_beside_a_child_change_recurses() {
     ));
     assert_eq!(encode_node(&apply_all(&a, &ops)), encode_node(&b));
 }
+
+// Phase 2527 — a trait-only edit is one op, and the seat replace is not reached.
+#[test]
+fn a_trait_only_change_is_one_trait_op() {
+    let node = |envelope: &str| {
+        n(&format!(
+            r#"{{{envelope}"id":"m","kind":{{"$type":"Markdown","text":"x"}}}}"#
+        ))
+    };
+    let cases = [
+        (
+            "",
+            r#""accessibility":{"role":"status"},"#,
+            r#"{"$type":"UpdateAccessibility","accessibility":{"role":"status"},"target":"m"}"#,
+        ),
+        (
+            r#""accessibility":{"role":"status"},"#,
+            "",
+            r#"{"$type":"UpdateAccessibility","accessibility":{},"target":"m"}"#,
+        ),
+        (
+            "",
+            r#""tooltip":"t","#,
+            r#"{"$type":"UpdateTooltip","target":"m","tooltip":"t"}"#,
+        ),
+        (
+            r#""tooltip":"t","#,
+            "",
+            r#"{"$type":"UpdateTooltip","target":"m"}"#,
+        ),
+    ];
+    for (before, after, want) in cases {
+        let (a, b) = (node(before), node(after));
+        let ops = diff(&a, &b);
+        assert_eq!(op_bytes(&ops), vec![want.to_string()]);
+        assert_eq!(encode_node(&apply_all(&a, &ops)), encode_node(&b));
+    }
+}

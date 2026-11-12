@@ -433,6 +433,49 @@ fn data_grid_projects_declarative_fields() {
     assert!(html.contains(">GBP 1234.50<"));
 }
 
+// Phase 2571 — option groups (WIRE_FORMAT §3.6.30): one <optgroup> per group in list order, a
+// group's options in `source` order, the ungrouped remainder after the last group.
+#[test]
+fn select_option_groups_render_as_optgroups_with_the_remainder_last() {
+    let html = render(
+        r#"{"id":"s","kind":{"$type":"Select","groups":[{"label":"Second","values":["d","b"]},{"label":"First","values":["a"]}],"label":"Pick","source":{"$type":"Static","value":[{"label":"A","value":"a"},{"label":"B","value":"b"},{"label":"C","value":"c"},{"label":"D","value":"d"}]},"value":{"$type":"Static","value":"b"}}}"#,
+    );
+    assert!(
+        html.contains(r#"<optgroup label="Second"><option value="b">B</option><option value="d">D</option></optgroup><optgroup label="First"><option value="a">A</option></optgroup><option value="c">C</option></select>"#),
+        "{html}"
+    );
+}
+
+#[test]
+fn an_ungrouped_select_renders_no_optgroup() {
+    let html = render(
+        r#"{"id":"s","kind":{"$type":"Select","label":"Pick","source":{"$type":"Static","value":[{"label":"A","value":"a"}]},"value":{"$type":"Static","value":"a"}}}"#,
+    );
+    assert!(!html.contains("optgroup"), "{html}");
+}
+
+#[test]
+fn select_option_groups_are_refused_where_they_name_an_option_twice_or_none() {
+    let refused = |json: &str| match decode_node(json) {
+        Ok(_) => panic!("accepted {json}"),
+        Err(e) => (format!("{:?}", e.code), e.path),
+    };
+    let src = r#""source":{"$type":"Static","value":[{"label":"A","value":"a"},{"label":"B","value":"b"}]},"value":{"$type":"Static","value":"a"}"#;
+    let twice = format!(
+        r#"{{"id":"s","kind":{{"$type":"Select","groups":[{{"label":"One","values":["a","a"]}}],"label":"Pick",{src}}}}}"#
+    );
+    assert_eq!(refused(&twice).1, "$.kind.groups[0].values[1]");
+    let unknown = format!(
+        r#"{{"id":"s","kind":{{"$type":"Select","groups":[{{"label":"One","values":["zz"]}}],"label":"Pick",{src}}}}}"#
+    );
+    assert_eq!(refused(&unknown).1, "$.kind.groups[0].values[0]");
+    let bound = r#"{"id":"s","kind":{"$type":"Select","groups":[{"label":"One","values":["zz"]}],"label":"Pick","source":{"$type":"State","key":"k"},"value":{"$type":"Static","value":"a"}}}"#;
+    assert!(
+        decode_node(bound).is_ok(),
+        "a bound source is not judged at decode"
+    );
+}
+
 #[test]
 fn select_drops_the_opaque_placeholder_option() {
     // An opaque options source renders no concrete <option> (§5 render contract).
@@ -2319,4 +2362,59 @@ fn every_other_binding_still_resolves_or_says_not_yet() {
         Resolution::NotResolved => (),
         other => panic!("an unwritten Query is absence, not an error: {other:?}"),
     }
+}
+
+// Phase 2535 - a cited figure (WIRE_FORMAT 3.6.31): `data-fact` on the tile's root, encoded.
+#[test]
+fn a_cited_fact_stamps_data_fact_on_its_tile() {
+    let html = render(
+        r#"{"id":"f","kind":{"$type":"Fact","label":"Revenue","reference":"fact:a\"b","value":"1"}}"#,
+    );
+    assert!(
+        html.contains(r#"<div class="fuaran-fact fuaran-fact-default" data-fact="fact:a&quot;b">"#),
+        "{html}"
+    );
+    let uncited = render(r#"{"id":"f","kind":{"$type":"Fact","label":"Revenue","value":"1"}}"#);
+    assert!(!uncited.contains("data-fact"), "{uncited}");
+}
+
+// Phase 2591 - a figure cited inside a sentence (WIRE_FORMAT 3.6.32). The render bytes are
+// pinned by the shared markdown corpus; this reaches the node path.
+#[test]
+fn a_cited_figure_is_a_span_in_the_sentence() {
+    let html = render(
+        r#"{"id":"m","kind":{"$type":"Markdown","citations":[{"label":"Online share","name":"share","reference":"fact:share"},{"name":"spend","reference":"fact:spend"}],"text":"It took [23%](cite:share) of [12](cite:spend)."}}"#,
+    );
+    assert!(
+        html.contains(
+            r#"<p>It took <span class="fuaran-cited" data-fact="fact:share"><span class="fuaran-cited-label">Online share </span>23%</span> of <span class="fuaran-cited" data-fact="fact:spend">12</span>.</p>"#
+        ),
+        "{html}"
+    );
+    assert!(!html.contains("fuaran-kind-fact"), "{html}");
+    assert!(!html.contains("<a "), "{html}");
+}
+
+// Phase 2592 - a table cell cites its figure (WIRE_FORMAT 3.6.33).
+#[test]
+fn a_cited_cell_stamps_the_td_with_the_label_first() {
+    let plain = render(
+        r#"{"id":"t","kind":{"$type":"DataGrid","columns":[],"source":{"$type":"Static","value":[]},"staticRows":{"headers":["A","B"],"rows":[["x","1"]]}}}"#,
+    );
+    let html = render(
+        r#"{"id":"t","kind":{"$type":"DataGrid","columns":[],"source":{"$type":"Static","value":[]},"staticRows":{"citations":[{"column":1,"label":"One","reference":"fact:one","row":0}],"headers":["A","B"],"rows":[["x","1"]]}}}"#,
+    );
+    assert!(
+        html.contains(
+            r#"<td class="fuaran-table-cell" data-fact="fact:one"><span class="fuaran-cited-label">One </span>1</td>"#
+        ),
+        "{html}"
+    );
+    assert!(!html.contains("fuaran-kind-fact"), "{html}");
+    assert_eq!(
+        html.replace(r#" data-fact="fact:one""#, "")
+            .replace(r#"<span class="fuaran-cited-label">One </span>"#, ""),
+        plain,
+        "a citation adds the attribute and the span and nothing else"
+    );
 }

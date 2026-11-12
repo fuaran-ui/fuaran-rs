@@ -41,7 +41,7 @@ use crate::wire::{
     FragmentRefSpec, GridSpec, HeadingSpec, LabelValueRowSpec, LinkSpec, ListSpec, MarkdownSpec,
     MetricComparison, MetricSpec, ModalSpec, MountSpec, Node, NodeKind, ProgressSpec,
     ScrollAreaSpec, SelectSpec, Shape, SplitPanelSpec, StaticRows, StaticValue, StepperSpec,
-    SummaryListSpec, SwitchSpec, TabHeader, TabsSpec, TextSource, ToastSpec,
+    SummaryListSpec, SwitchSpec, TabHeader, TableCitation, TabsSpec, TextSource, ToastSpec,
 };
 
 /// Project a resolved copy of `tree` against the live `sources` — the entry
@@ -223,6 +223,15 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             variant: spec.variant,
         }),
         NodeKind::Markdown(spec) => NodeKind::Markdown(MarkdownSpec {
+            citations: spec
+                .citations
+                .iter()
+                .map(|c| crate::wire::MarkdownCitation {
+                    label: c.label.as_ref().map(|l| map_text(sources, l)),
+                    name: c.name.clone(),
+                    reference: c.reference.clone(),
+                })
+                .collect(),
             text: map_text(sources, &spec.text),
         }),
         NodeKind::Metric(spec) => NodeKind::Metric(MetricSpec {
@@ -295,6 +304,7 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             tone: spec.tone,
             help: map_opt_text(sources, &spec.help),
             icon: spec.icon.clone(),
+            reference: spec.reference.clone(),
         }),
         NodeKind::Link(spec) => NodeKind::Link(LinkSpec {
             href: spec.href.clone(),
@@ -408,6 +418,7 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
                     // prose is shown on violation, which this projection does not
                     // model. Carried through unchanged rather than silently mapped.
                     rule: f.rule.clone(),
+                    affordance: f.affordance.clone(),
                 })
                 .collect(),
             on_submit: spec.on_submit.clone(),
@@ -430,6 +441,7 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             variant: spec.variant,
             icon: spec.icon.clone(),
             disabled: spec.disabled.clone(),
+            affordance: spec.affordance.clone(),
         }),
         NodeKind::FileUpload(spec) => NodeKind::FileUpload(crate::wire::FileUploadSpec {
             accept: spec.accept.clone(),
@@ -456,6 +468,9 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             multiple: spec.multiple,
             values: spec.values.clone(),
             on_change_multi: spec.on_change_multi,
+            affordance: spec.affordance.clone(),
+            // Phase 2571 — option groups carry plain labels, no bindable text.
+            groups: spec.groups.clone(),
         }),
         // ── Visualisation (map chrome text; collection sources left as-is) ───
         NodeKind::DataGrid(spec) => NodeKind::DataGrid(GridSpec {
@@ -489,6 +504,15 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
                 // untouched (this pass maps TextSource chrome only).
                 sortable: sr.sortable,
                 default_sort: sr.default_sort.clone(),
+                // Phase 2592 — a citation's label is text; the rest of it is not.
+                citations: sr
+                    .citations
+                    .iter()
+                    .map(|c| TableCitation {
+                        label: c.label.as_ref().map(|t| map_text(sources, t)),
+                        ..c.clone()
+                    })
+                    .collect(),
             }),
             keep_rows_together: spec.keep_rows_together,
             repeat_header: spec.repeat_header,
@@ -584,6 +608,7 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
                 .collect(),
             channel: spec.channel.clone(),
             capabilities: spec.capabilities.clone(),
+            on_bubble: spec.on_bubble,
         }),
     }
 }

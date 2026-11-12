@@ -101,6 +101,19 @@ name = "fuaran-ui"
 # entry states (the unit in its canonical text). New public items:
 # `SchemaEntry::new`, `SchemaEntry::has_metadata`, `wire::unit` (the spine's unit
 # algebra) and `wire::schema` (fingerprint, diff, patch, classify, encode_delta).
+#
+# Phase 2571 rides it, BREAKING in surface (the class the draft already carries):
+# `SelectSpec` gains `groups: Vec<SelectOptionGroup>` (WIRE_FORMAT §3.6.30), so a
+# struct literal naming every other member no longer compiles; add `groups:
+# vec![]`. WIRE-VISIBLE: the member decodes and encodes omit-at-default, and two
+# refusals land (a value named twice; over static options, a value naming no
+# option). The server renderer draws `<optgroup>`s. New public item:
+# `SelectOptionGroup`.
+#
+# Phase 2454 rides it, ADDITIVE: the constrained emitter's tree compiler gains a
+# pricing walk. New public items: `serverdriven::emitter::{price, Registration,
+# Figure, SpendSpec, Spend}`. No existing type's field set moved (`Image`,
+# `CompiledPanel` and `PanelSpec` are unchanged), and the wire is untouched.
 version = "0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"
@@ -172,6 +185,13 @@ lto = true
 strip = true
 
 [features]
+# ON by default: the whole host. Turned OFF (`--no-default-features`), the crate is
+# `no_std` + `alloc` and compiles exactly the constrained emitter (Phase 2452,
+# `serverdriven::emitter`) and the stored-block teleport encoder it uses
+# (`teleport::stored`, with `teleport::base64url`) — the device side of a panel, over
+# the Core spine and nothing else. Every other module needs the standard library.
+default = ["std"]
+std = []
 # OFF by default. Adds one `extern "C"` entry point that runs the bounded
 # loop's driver-semantics comparison inside the module, so the `wasm32` target
 # can be certified by EXECUTION rather than by the fact that it compiles.

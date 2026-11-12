@@ -538,3 +538,50 @@ fn update_prop_refuses_the_reserved_polarity_case() {
     // The apply envelope law holds across the refusal.
     assert!(!can_apply(&tree, &up), "can_apply agrees with apply");
 }
+
+// Phase 2527 — the two trait ops replace their slot, and each has a spelling
+// that removes it.
+#[test]
+fn the_trait_ops_replace_and_remove_their_slot() {
+    let plain = r#"{"id":"m","kind":{"$type":"Markdown","text":"x"}}"#;
+    let trait_ =
+        r#"{"accessibility":{"describedBy":"h"},"id":"m","kind":{"$type":"Markdown","text":"x"}}"#;
+    let hinted = r#"{"id":"m","kind":{"$type":"Markdown","text":"x"},"tooltip":"t"}"#;
+    let cases = [
+        (
+            r#"{"$type":"UpdateAccessibility","accessibility":{"describedBy":"h"},"target":"m"}"#,
+            plain,
+            trait_.to_string(),
+        ),
+        (
+            r#"{"$type":"UpdateAccessibility","accessibility":{"labelledBy":"l"},"target":"m"}"#,
+            trait_,
+            r#"{"accessibility":{"labelledBy":"l"},"id":"m","kind":{"$type":"Markdown","text":"x"}}"#
+                .to_string(),
+        ),
+        (
+            r#"{"$type":"UpdateAccessibility","accessibility":{},"target":"m"}"#,
+            trait_,
+            plain.to_string(),
+        ),
+        (
+            r#"{"$type":"UpdateTooltip","target":"m","tooltip":"t"}"#,
+            plain,
+            hinted.to_string(),
+        ),
+        (r#"{"$type":"UpdateTooltip","target":"m"}"#, hinted, plain.to_string()),
+    ];
+    for (edit, tree, want) in cases {
+        let out = apply(&node(tree), &op(edit)).expect("the op applies");
+        assert_eq!(encode_node(&out.new_tree), want, "{edit}");
+    }
+    for ghost in [
+        r#"{"$type":"UpdateAccessibility","accessibility":{},"target":"ghost"}"#,
+        r#"{"$type":"UpdateTooltip","target":"ghost"}"#,
+    ] {
+        assert_code(
+            apply(&node(plain), &op(ghost)),
+            ApplyErrorCode::NodeNotFound,
+        );
+    }
+}

@@ -406,7 +406,13 @@ impl Walker {
             // Text-slot-only kinds: bound text sources still carry bindings
             // worth linting.
             NodeKind::Heading(s) => self.check_text(id, &s.text),
-            NodeKind::Markdown(s) => self.check_text(id, &s.text),
+            NodeKind::Markdown(s) => {
+                self.check_text(id, &s.text);
+                // Phase 2591 — each citation's label is a text like any other.
+                for label in s.citations.iter().filter_map(|c| c.label.as_ref()) {
+                    self.check_text(id, label);
+                }
+            }
             NodeKind::Badge(s) => self.check_text(id, &s.label),
             NodeKind::Callout(s) => {
                 self.check_text(id, &s.body);
@@ -1177,6 +1183,8 @@ pub fn validate_op(op: &TreeOp) -> Vec<Finding> {
         | TreeOp::ReplaceBinding { .. }
         | TreeOp::UpdateStyle { .. }
         | TreeOp::PatchStyle { .. }
+        | TreeOp::UpdateAccessibility { .. }
+        | TreeOp::UpdateTooltip { .. }
         | TreeOp::UpdateState { .. }
         | TreeOp::RemoveNode { .. }
         | TreeOp::MoveNode { .. }

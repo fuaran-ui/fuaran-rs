@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:7107ead40c2f7960
+/* fuaran-vocabulary-fingerprint: fv1:984e63f4c4bdfab0
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -1044,6 +1044,26 @@ body {
 
 .fuaran-markdown p {
   margin: 0 0 var(--fuaran-space-sm, 8px) 0;
+}
+
+/* Phase 2591 — a cited figure inside a sentence. It stays in the line of text: no box, no
+   padding, nothing to break the run of words. The label says what the figure is for a screen
+   reader; the sentence already says it for everyone else, so it is never printed. */
+.fuaran-cited {
+  display: inline;
+  font-variant-numeric: tabular-nums;
+}
+
+.fuaran-cited-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .fuaran-heading {

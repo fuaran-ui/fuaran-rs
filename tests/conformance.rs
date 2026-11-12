@@ -372,10 +372,7 @@ fn corpus_control_kinds_are_all_recognised() {
 /// is deleted the moment the host learns the case (the round-trip test goes red on
 /// an entry that passes), and the claim read-back below does not count it against
 /// the tokens it exercises. Nothing else is skipped.
-const UNCERTIFIED_ROUND_TRIPS: &[(&str, &str)] = &[(
-    "mount-no-onbubble",
-    "the dialect implies Mount.onBubble (CLOSURE_IMPLIED) and always writes the sentinel, so a      Mount with no bubble handler re-encodes with one; certified once the dialect or the      generated-type cut carries the member as an Option (fuaran#2298, #2315)",
-)];
+const UNCERTIFIED_ROUND_TRIPS: &[(&str, &str)] = &[];
 
 fn uncertified_round_trip(id: &str) -> bool {
     UNCERTIFIED_ROUND_TRIPS.iter().any(|(f, _)| *f == id)
@@ -1073,6 +1070,16 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
     ("merge-conformance", FamilyAnswer::Covered),
     ("node-round-trip", FamilyAnswer::Covered),
     ("op-round-trip", FamilyAnswer::Covered),
+    (
+        "operability",
+        FamilyAnswer::Pending(
+            "the codec round-trips and refuses the affordance member (WIRE_FORMAT 31.1, 31.2) and its suite runs the family wire section; the derivation and the matcher (31.3-31.5) are not yet ported",
+        ),
+    ),
+    (
+        "page-document",
+        FamilyAnswer::NotApplicable("this host renders no stored page"),
+    ),
     ("reject", FamilyAnswer::Covered),
     (
         "repair",
@@ -1085,6 +1092,12 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
         ),
     ),
     ("sanitization", FamilyAnswer::Covered),
+    (
+        "server-driven",
+        FamilyAnswer::NotApplicable(
+            "this host neither produces nor applies a server-driven frame (WIRE_FORMAT section 33); only the reference host does today",
+        ),
+    ),
     (
         "stored-emissions",
         FamilyAnswer::Pending("this host's suite does not yet run the stored-emission fixtures"),
@@ -1847,4 +1860,230 @@ fn the_evaluator_matches_the_reference_on_every_dataframe_parity_vector() {
         "dataframeParity leg: {} vectors agree with the reference",
         vectors.len()
     );
+}
+
+// ─── The constrained emitter (Phase 2452, WIRE_FORMAT §11.4) ─────────────────
+//
+// `serverdriven::emitter` claims the corpus's `panel` lineage at its newest
+// revision. Two legs certify the claim here. The declaration leg pins the
+// emitter's own profile constants to the manifest's `emitterProfiles` entry, so a
+// revision the corpus mints cannot pass unnoticed. The scenario leg compiles the
+// corpus's panel with the desktop tree compiler, drives the device emitter through
+// the panel's scenario (first frame, a reading, a property, an alarm row in and
+// out) and asserts every document and frame it writes is BYTE-IDENTICAL to the
+// revision's vectors: the rows every codec host's round-trip leg, and the
+// reference's and the TypeScript host's emitter-acceptance legs, already accept.
+// Equality with those bytes is what makes "accepted by every codec host" a
+// property of this emitter's output rather than of hand-written vectors.
+
+use fuaran_rs::serverdriven::emitter::{
+    self, Emitter, PanelSpec, PipeChannel, Value, ValueKind, WriteSpec,
+};
+use fuaran_rs::teleport::stored;
+
+/// Set to a directory, the scenario leg also WRITES what the emitter produced
+/// there (the document, each frame's op document, the byte-pipe stream and the
+/// stored-block teleport bundle), for decoding by the other hosts.
+const EMITTER_OUT_ENV: &str = "FUARAN_EMITTER_OUT";
+
+fn emitter_profile_revision(corpus: &Path, id: &str) -> JVal {
+    let raw = std::fs::read_to_string(corpus.join("manifest.json")).expect("reading manifest");
+    let manifest = parse(&raw).expect("manifest.json parses");
+    let Some(JVal::Arr(revisions)) = manifest
+        .field("emitterProfiles")
+        .and_then(|p| p.field("panel"))
+        .and_then(|l| l.field("revisions"))
+    else {
+        panic!("manifest.json declares no emitterProfiles.panel.revisions");
+    };
+    let newest = revisions.last().expect("a lineage has a revision");
+    assert_eq!(
+        str_field(newest, "id").as_deref(),
+        Some(id),
+        "the emitter claims {id}, but the lineage's newest revision is another: \
+         a new revision was minted and the emitter has not adopted it"
+    );
+    newest.clone()
+}
+
+fn strings(v: Option<&JVal>) -> Vec<String> {
+    match v {
+        Some(JVal::Arr(items)) => items
+            .iter()
+            .map(|i| match i {
+                JVal::Str(s) => s.clone(),
+                other => panic!("expected a string, got {other:?}"),
+            })
+            .collect(),
+        _ => panic!("expected an array of strings"),
+    }
+}
+
+#[test]
+fn the_emitter_claims_the_newest_panel_revision_as_declared() {
+    let corpus = common::corpus_root();
+    let rev = emitter_profile_revision(&corpus, emitter::PROFILE_REVISION);
+    assert_eq!(
+        str_field(&rev, "wire").as_deref(),
+        Some(emitter::PROFILE_WIRE)
+    );
+    assert_eq!(strings(rev.field("axes")), emitter::PROFILE_AXES);
+    let subset = rev.field("subset").expect("a revision declares its subset");
+    assert_eq!(strings(subset.field("kinds")), emitter::SUBSET_KINDS);
+    assert_eq!(
+        strings(subset.field("formFieldKinds")),
+        emitter::SUBSET_FORM_FIELD_KINDS
+    );
+    assert_eq!(strings(subset.field("ops")), emitter::SUBSET_OPS);
+}
+
+/// The bytes of one named vector: its expected file.
+fn vector(corpus: &Path, fixtures: &[Fixture], id: &str) -> String {
+    let f = fixtures
+        .iter()
+        .find(|f| f.id == id)
+        .unwrap_or_else(|| panic!("the manifest names no fixture '{id}'"));
+    read_fixture(
+        corpus,
+        f.expected_file.as_deref().expect("a round-trip row"),
+    )
+    .trim_end()
+    .to_string()
+}
+
+/// The panel as its author hands it to the compiler: the revision's document,
+/// the alarm row its `InsertChild` frame carries, one reading and one property.
+fn panel_spec(corpus: &Path, fixtures: &[Fixture]) -> PanelSpec {
+    let root = decode_node(&vector(corpus, fixtures, "emitter-panel")).expect("the panel decodes");
+    let insert = parse(&vector(corpus, fixtures, "op-emitter-insertchild")).expect("parses");
+    let alarm = fuaran_rs::canonical::render_canonical(insert.field("child").expect("a child"));
+    PanelSpec {
+        root,
+        fragments: vec![(
+            "emitter-panel".to_string(),
+            decode_node(&alarm).expect("the alarm row decodes"),
+        )],
+        readings: vec![WriteSpec::new("panel-temp", "Value", ValueKind::Int)],
+        props: vec![WriteSpec::new("panel-status", "Label", ValueKind::Str)],
+    }
+}
+
+struct Uart(Vec<u8>);
+
+impl emitter::BytePipe for Uart {
+    type Error = ();
+    fn write(&mut self, bytes: &[u8]) -> Result<(), ()> {
+        self.0.extend_from_slice(bytes);
+        Ok(())
+    }
+}
+
+#[test]
+fn the_emitter_writes_the_panel_revisions_vectors_byte_for_byte() {
+    let corpus = common::corpus_root();
+    let fixtures = load_manifest(&corpus);
+    let rev = emitter_profile_revision(&corpus, emitter::PROFILE_REVISION);
+    let spec = panel_spec(&corpus, &fixtures);
+    let compiled = emitter::compile(&spec).unwrap_or_else(|e| panic!("compile refused: {e:?}"));
+
+    // The compiled-in document IS the revision's document vector.
+    assert_eq!(compiled.root, vector(&corpus, &fixtures, "emitter-panel"));
+    assert_eq!(
+        compiled.handlers,
+        vec![
+            ("panel-defrost".to_string(), "click".to_string()),
+            ("panel-schedule".to_string(), "submit".to_string()),
+        ]
+    );
+
+    compiled.with_image(|image| {
+        let actor = fuaran_rs::opstream::Actor::Agent {
+            model: "device".to_string(),
+            version: emitter::PROFILE_REVISION.to_string(),
+            id: "cold-room-3".to_string(),
+        };
+        let mut em = Emitter::new(image, &actor);
+        let mut pipe = PipeChannel::new(Uart(Vec::new()), 4096);
+        let frames = vec![
+            (em.replace_root(), "op-emitter-replaceroot"),
+            (
+                em.reading(0, Value::Int(5)).expect("a reading"),
+                "op-emitter-replacebinding",
+            ),
+            (
+                em.prop(0, Value::Str("Defrosting")).expect("a property"),
+                "op-emitter-updateprop",
+            ),
+            (em.insert(0).expect("the alarm"), "op-emitter-insertchild"),
+            (
+                em.remove(0).expect("the alarm goes"),
+                "op-emitter-removenode",
+            ),
+        ];
+
+        // Every frame is a vector of the revision, byte for byte; together with
+        // the document, the scenario writes exactly the vectors the revision names.
+        let mut written = vec!["emitter-panel".to_string()];
+        let mut tree = decode_node(&compiled.root).expect("decodes");
+        for (frame, id) in &frames {
+            assert_eq!(frame.op, vector(&corpus, &fixtures, id), "frame {id}");
+            written.push(id.to_string());
+            // This host accepts it: it decodes, re-encodes identical, applies, and
+            // its frame body is the driver's own encoding of it.
+            let op = decode_op(&frame.op).expect("the frame decodes");
+            assert_eq!(encode_op(&op), frame.op);
+            tree = fuaran_rs::ops::apply(&tree, &op)
+                .unwrap_or_else(|e| panic!("frame {id} does not apply: {e:?}"))
+                .new_tree;
+            assert_eq!(
+                frame.body(),
+                fuaran_rs::serverdriven::encode_frame_json(&fuaran_rs::serverdriven::Frame {
+                    seq: frame.seq,
+                    ops: vec![op],
+                })
+            );
+            pipe.push(frame.clone()).expect("the pipe takes it");
+        }
+        written.sort();
+        let mut declared = strings(rev.field("vectors"));
+        declared.sort();
+        assert_eq!(
+            written, declared,
+            "the scenario writes exactly the revision's vectors"
+        );
+
+        // The frames chain under the Core spine's verifier, head and all.
+        let records: Vec<_> = frames.iter().map(|(f, _)| f.record(em.actor())).collect();
+        let end = fuaran_core::chain::walk(&fuaran_core::chain::Anchor::genesis(), &records)
+            .expect("the frame chain verifies");
+        assert_eq!(end.prev_hash, em.head());
+
+        // The stored-block teleport bundle of the session decodes on this host.
+        let history: Vec<&str> = frames[1..].iter().map(|(f, _)| f.op.as_str()).collect();
+        let bundle = stored::encode(&stored::Envelope {
+            tree: image.root,
+            state: &[],
+            history: &history,
+            chain_head: Some(em.head()),
+        })
+        .expect("the bundle fits");
+        let back = fuaran_rs::teleport::decode(&bundle).expect("the stored bundle decodes");
+        assert_eq!(encode_node(&back.tree), compiled.root);
+        assert_eq!(back.history.len(), 4);
+        assert_eq!(back.chain_head.as_deref(), Some(em.head()));
+
+        if let Ok(dir) = std::env::var(EMITTER_OUT_ENV) {
+            let dir = PathBuf::from(dir);
+            std::fs::create_dir_all(dir.join("frames")).expect("creating the output dir");
+            std::fs::write(dir.join("panel.json"), &compiled.root).expect("writing");
+            for (frame, id) in &frames {
+                std::fs::write(dir.join("frames").join(format!("{id}.json")), &frame.op)
+                    .expect("writing");
+            }
+            std::fs::write(dir.join("uart.ndjson"), &pipe.pipe().0).expect("writing");
+            std::fs::write(dir.join("teleport.txt"), &bundle).expect("writing");
+            std::fs::write(dir.join("chain-head.txt"), em.head()).expect("writing");
+            eprintln!("emitter artefacts written to {}", dir.display());
+        }
+    });
 }

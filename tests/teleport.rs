@@ -207,3 +207,115 @@ fn an_empty_state_omits_the_field() {
     assert!(back.state.is_empty());
     assert!(back.chain_head.is_none());
 }
+
+// ─── The stored-block encoder (Phase 2452) ───────────────────────────────────
+//
+// A device writes a bundle with no compressor: stored deflate blocks, framed and
+// digested exactly as §17 says. These tests hold it to the decoder every host
+// runs, and to this host's own compressing encoder: the two bundles of one
+// running app are different strings that decode to the same bundle.
+
+use fuaran_rs::teleport::stored::{self, Envelope, STORED_BLOCK_MAX, StoredError};
+use fuaran_rs::wire::{decode_op, encode_node};
+
+const DEVICE_TREE: &str = r#"{"id":"panel","kind":{"$type":"Box","children":[{"id":"temp","kind":{"$type":"Metric","label":"Temperature","value":{"$type":"Static","value":4}}}],"layout":{"$type":"Flex","direction":"Vertical"},"role":"Group"}}"#;
+const DEVICE_OP: &str = r#"{"$type":"ReplaceBinding","binding":{"$type":"Static","value":5},"slot":"Value","target":"temp"}"#;
+const HEAD: &str = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+
+#[test]
+fn stored_blocks_frame_any_length_and_inflate_back() {
+    for len in [
+        0,
+        1,
+        STORED_BLOCK_MAX - 1,
+        STORED_BLOCK_MAX,
+        STORED_BLOCK_MAX + 1,
+        2 * STORED_BLOCK_MAX + 7,
+    ] {
+        let data: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
+        let stream = stored::deflate_stored(&data);
+        let blocks = len.div_ceil(STORED_BLOCK_MAX).max(1);
+        assert_eq!(
+            stream.len(),
+            len + 5 * blocks,
+            "{len}: five header bytes a block"
+        );
+        assert_eq!(inflate(&stream).expect("inflates"), data, "{len}");
+        // Exactly the last block is final.
+        assert_eq!(stream[0], u8::from(blocks == 1));
+    }
+}
+
+#[test]
+fn a_stored_bundle_decodes_to_the_same_bundle_as_a_compressed_one() {
+    let tree = decode_node(DEVICE_TREE).unwrap();
+    let compressed = encode(&Bundle {
+        tree: tree.clone(),
+        state: vec![
+            ("setpoint".to_string(), JVal::Num(3.0)),
+            ("mode".to_string(), JVal::Str("auto".to_string())),
+        ],
+        history: vec![decode_op(DEVICE_OP).unwrap()],
+        chain_head: Some(HEAD.to_string()),
+    })
+    .unwrap();
+    let stored_bundle = stored::encode(&Envelope {
+        tree: &encode_node(&tree),
+        state: &[("setpoint", "3"), ("mode", "\"auto\"")],
+        history: &[DEVICE_OP],
+        chain_head: Some(HEAD),
+    })
+    .unwrap();
+    assert_ne!(stored_bundle, compressed, "different deflate streams");
+    assert_eq!(
+        decode(&stored_bundle).expect("the stored bundle decodes"),
+        decode(&compressed).unwrap()
+    );
+    // And the minimal bundle: a tree and nothing else.
+    let bare = stored::encode(&Envelope {
+        tree: DEVICE_TREE,
+        state: &[],
+        history: &[],
+        chain_head: None,
+    })
+    .unwrap();
+    let back = decode(&bare).unwrap();
+    assert_eq!(back.tree, tree);
+    assert!(back.state.is_empty() && back.history.is_empty() && back.chain_head.is_none());
+}
+
+#[test]
+fn a_tampered_stored_bundle_fails_its_digest() {
+    let good = stored::encode(&Envelope {
+        tree: DEVICE_TREE,
+        state: &[],
+        history: &[DEVICE_OP],
+        chain_head: Some(HEAD),
+    })
+    .unwrap();
+    let body = base64url::decode(good.strip_prefix("FT1.").unwrap()).unwrap();
+    let json = String::from_utf8(inflate(&body).unwrap()).unwrap();
+    // Same length, so the stored block's own length check still holds.
+    let forged = json.replace("\"value\":5", "\"value\":6");
+    assert_ne!(forged, json);
+    let forged = format!(
+        "FT1.{}",
+        base64url::encode(&stored::deflate_stored(forged.as_bytes()))
+    );
+    assert_eq!(decode(&forged), Err(TeleportError::DigestMismatch));
+    assert!(decode(&good).is_ok());
+}
+
+#[test]
+fn a_stored_bundle_over_the_size_gate_is_not_written() {
+    let history: Vec<&str> = std::iter::repeat_n(DEVICE_OP, 200).collect();
+    let refused = stored::encode(&Envelope {
+        tree: DEVICE_TREE,
+        state: &[],
+        history: &history,
+        chain_head: None,
+    });
+    assert!(
+        matches!(refused, Err(StoredError::Oversize { encoded }) if encoded > fuaran_rs::teleport::MAX_ENCODED)
+    );
+}

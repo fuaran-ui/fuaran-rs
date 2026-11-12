@@ -85,6 +85,12 @@
     "merge-conformance": "covered",
     "node-round-trip": "covered",
     "op-round-trip": "covered",
+    "operability": {
+      "pending": "the codec round-trips and refuses the affordance member (WIRE_FORMAT 31.1, 31.2) and its suite runs the family wire section; the derivation and the matcher (31.3-31.5) are not yet ported"
+    },
+    "page-document": {
+      "notApplicable": "this host renders no stored page"
+    },
     "reject": "covered",
     "repair": {
       "pending": "this host has no §28 repair function yet"
@@ -93,6 +99,9 @@
       "notApplicable": "a row cell's only number is an f64 and the wire model holds no date value, so neither §5 encode refusal can arise here"
     },
     "sanitization": "covered",
+    "server-driven": {
+      "notApplicable": "this host neither produces nor applies a server-driven frame (WIRE_FORMAT section 33); only the reference host does today"
+    },
     "stored-emissions": {
       "pending": "this host's suite does not yet run the stored-emission fixtures"
     },
@@ -150,6 +159,14 @@
     "Action.SetState.valueFrom",
     "Action.WriteToClipboard",
     "Action.WriteToClipboard.text",
+    "Affordance.aliases",
+    "Affordance.clearable",
+    "Affordance.description",
+    "Affordance.neverControllable",
+    "Affordance.patterns",
+    "Affordance.readPatterns",
+    "AffordanceAlias.alias",
+    "AffordanceAlias.value",
     "Binding.Computed",
     "Binding.Computed.fn",
     "Binding.Expr",
@@ -339,6 +356,7 @@
     "FilterSpec.kind",
     "FilterSpec.label",
     "FilterSpec.name",
+    "FormField.affordance",
     "FormField.help",
     "FormField.id",
     "FormField.kind",
@@ -478,6 +496,7 @@
     "Kind.Box.layout",
     "Kind.Box.role",
     "Kind.Button",
+    "Kind.Button.affordance",
     "Kind.Button.disabled",
     "Kind.Button.icon",
     "Kind.Button.label",
@@ -563,6 +582,7 @@
     "Kind.Fact.help",
     "Kind.Fact.icon",
     "Kind.Fact.label",
+    "Kind.Fact.reference",
     "Kind.Fact.tone",
     "Kind.Fact.value",
     "Kind.FileUpload",
@@ -634,6 +654,7 @@
     "Kind.Map.source",
     "Kind.Map.zoom",
     "Kind.Markdown",
+    "Kind.Markdown.citations",
     "Kind.Markdown.text",
     "Kind.Math",
     "Kind.Math.display",
@@ -685,7 +706,9 @@
     "Kind.ScrollArea.maxWidth",
     "Kind.ScrollArea.orientation",
     "Kind.Select",
+    "Kind.Select.affordance",
     "Kind.Select.disabled",
+    "Kind.Select.groups",
     "Kind.Select.label",
     "Kind.Select.multiple",
     "Kind.Select.onChange",
@@ -744,6 +767,9 @@
     "MapMarker.label",
     "MapMarker.latitude",
     "MapMarker.longitude",
+    "MarkdownCitation.label",
+    "MarkdownCitation.name",
+    "MarkdownCitation.reference",
     "MediaKind.Audio",
     "MediaKind.Video",
     "MediaKind.Video.autoplay",
@@ -764,6 +790,8 @@
     "Scalar.Str.value",
     "SelectOption.label",
     "SelectOption.value",
+    "SelectOptionGroup.label",
+    "SelectOptionGroup.values",
     "SemanticStyle.direction",
     "SemanticStyle.emphasis",
     "SemanticStyle.role",
@@ -816,6 +844,7 @@
     "StateBehaviour.onEmpty",
     "StateBehaviour.onError",
     "StateBehaviour.onLoading",
+    "StaticRows.citations",
     "StaticRows.defaultSort",
     "StaticRows.headers",
     "StaticRows.rows",
@@ -832,6 +861,10 @@
     "TabHeader.disabled",
     "TabHeader.icon",
     "TabHeader.label",
+    "TableCitation.column",
+    "TableCitation.label",
+    "TableCitation.reference",
+    "TableCitation.row",
     "TextSource.Bound",
     "TextSource.Bound.binding",
     "TextSource.I18n",

@@ -1,23 +1,25 @@
 //! Certifies the DAG record codec against `wire-format-fixtures/dag/`
-//! (round-trip byte-equal) and the 3-way tree merge against
-//! `merge-conformance/` — EVERY family the manifest enumerates: the
-//! `merge-3way` auto-merges (merged tree byte-equal + `sha256(tree)` outcome
-//! hash), the `merge-validator-gated` verdicts (introduced-defect set
-//! byte-equal + `sha256(verdict)`), and the `merge-refusal` two-sided
-//! envelopes (refusal envelope byte-equal + `sha256(envelope)`, and the
-//! swapped merge transposes it).
+//! (round-trip byte-equal, the post-2645 records) and merge by fold against
+//! `merge-conformance/`'s `foldFixtures` — since fuaran#2645 the manifest's only
+//! family (version 2): derived trees, refusal envelopes and gated verdicts,
+//! byte-equal and hash-verified in both branch orders. The three-way tree merge
+//! and its triad families were retired with it (fuaran#2646).
 
 mod common;
 
 use std::path::Path;
 
-use fuaran_rs::canonical::{JVal, ordinal_cmp, parse};
+use fuaran_rs::canonical::{JVal, ordinal_cmp, parse, render_canonical};
 use fuaran_rs::dag::{
-    MergeConflict, MergeResult, decode_record, encode_envelope, encode_record, merge3_way,
-    sort_canonical,
+    ConflictShape, FoldFault, FoldReconciled, FoldRefusal, FoldRefusalClass, FoldSide,
+    GatedFoldFault, OpConflict, decode_record, encode_fold_envelope, encode_record, reconcile_fold,
+    reconcile_fold_gated,
 };
 use fuaran_rs::opstream::{Actor, sha256_hex};
-use fuaran_rs::wire::{DecodeErrorCode, Node, NodeKind, ToneVariant, decode_node, encode_node};
+use fuaran_rs::wire::{
+    DecodeErrorCode, Node, NodeKind, ToneVariant, TreeOp, decode_node, decode_op, encode_node,
+    encode_op,
+};
 
 fn str_field(v: &JVal, key: &str) -> Option<String> {
     match v.field(key) {
@@ -56,14 +58,74 @@ fn dag_records_round_trip_byte_identical() {
     eprintln!("dag corpus: {ran} records round-trip byte-identical");
 }
 
-// ─── the merge-conformance corpus: EVERY family the manifest enumerates ──────
-//
-// The manifest holds two arrays — `fixtures` (auto-merge + validator-gated) and
-// `refusalFixtures` (the Phase 1497 refusal envelopes, deliberately under their
-// own key so a host that iterates `fixtures` expecting every entry to auto-merge
-// stays correct). Both are walked here, each entry dispatched on its `kind`, and
-// an UNRECOGNISED kind fails: a family this host cannot certify must announce
-// itself, never pass by falling through a filter.
+/// The merge-conformance manifest is version 2 (fuaran#2645): `foldFixtures`
+/// alone. A triad family reappearing would be a family this host no longer
+/// certifies, so it fails here BY NAME rather than passing unread.
+#[test]
+fn the_merge_corpus_is_the_fold_family_alone() {
+    let root = common::corpus_root();
+    let manifest =
+        parse(&read(&root, "merge-conformance/manifest.json")).expect("merge manifest parses");
+    assert!(
+        matches!(manifest.field("version"), Some(JVal::Num(v)) if *v == 2.0),
+        "merge-conformance manifest is version 2"
+    );
+    for retired in ["fixtures", "refusalFixtures", "totalityFixtures"] {
+        assert!(
+            manifest.field(retired).is_none(),
+            "merge-conformance carries the retired tree-merge family '{retired}'"
+        );
+    }
+}
+
+/// A merge node's op is its reconciliation script as a `Batch` (§5.3.3): the
+/// `dag-merge-script` record carries a one-op script, `dag-merge` an empty one.
+#[test]
+fn a_merge_record_carries_its_script_as_a_batch() {
+    let root = common::corpus_root();
+    for (file, ops) in [("dag/dag-merge.json", 0), ("dag/dag-merge-script.json", 1)] {
+        let record = decode_record(&read(&root, file)).expect("decodes");
+        assert_eq!(
+            record.parents.len(),
+            2,
+            "{file}: a merge node has two parents"
+        );
+        match &record.op {
+            TreeOp::Batch(members) => assert_eq!(members.len(), ops, "{file}: script length"),
+            other => panic!("{file}: a merge node's op is a Batch, got {other:?}"),
+        }
+    }
+}
+
+/// A pre-2645 record — one carrying the retired `outcomeHash` or `tombstoned`
+/// member — is refused BY NAME: its address does not recompute under the cut.
+#[test]
+fn a_pre_2645_record_is_refused_by_name() {
+    let post = concat!(
+        r#"{"actor":{"kind":"human","id":"u1"},"hash":"h","#,
+        r#""op":{"$type":"RemoveNode","target":"x"},"parents":[],"#,
+        r#""resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1"#
+    );
+    for (member, extra) in [
+        ("tombstoned", r#","tombstoned":false}"#),
+        ("outcomeHash", r#","outcomeHash":"o1"}"#),
+    ] {
+        let err = decode_record(&format!("{post}{extra}"))
+            .expect_err(&format!("a record carrying {member} is refused"));
+        assert_eq!(err.path, format!("$.{member}"));
+        assert!(
+            err.message.contains("pre-2645") && err.message.contains("do not carry forward"),
+            "the refusal names the cut, got: {}",
+            err.message
+        );
+    }
+    assert!(
+        decode_record(&format!("{post}}}")).is_ok(),
+        "the post-cut record decodes"
+    );
+}
+
+// ─── the sample validator the `merge-fold-gated` fixtures certify against ──
 
 /// A defect found by a domain validator over a candidate tree — the port of the
 /// reference host's `MergeDefect`, diffed on `(code, node_id, facet)`.
@@ -166,16 +228,6 @@ fn encode_verdict(defects: &[MergeDefect]) -> String {
     out
 }
 
-/// The `(base, a, b)` triad of a merge-conformance fixture.
-fn triad(root: &Path, fixture: &JVal) -> (Node, Node, Node) {
-    let load = |key: &str| {
-        let rel = str_field(fixture, key).unwrap_or_else(|| panic!("fixture has no {key}"));
-        decode_node(&read(root, &format!("merge-conformance/{rel}")))
-            .unwrap_or_else(|e| panic!("{rel} decodes: {e:?}"))
-    };
-    (load("baseFile"), load("aFile"), load("bFile"))
-}
-
 fn fixture_file(root: &Path, fixture: &JVal, key: &str) -> String {
     let rel = str_field(fixture, key).unwrap_or_else(|| panic!("fixture has no {key}"));
     read(root, &format!("merge-conformance/{rel}"))
@@ -194,259 +246,6 @@ fn manifest_count(manifest: &JVal, key: &str, kind: &str) -> usize {
         .iter()
         .filter(|f| str_field(f, "kind").as_deref() == Some(kind))
         .count()
-}
-
-#[test]
-fn every_merge_conformance_family_is_certified() {
-    let root = common::corpus_root();
-    let manifest =
-        parse(&read(&root, "merge-conformance/manifest.json")).expect("merge manifest parses");
-
-    let (mut auto, mut gated, mut refused) = (0usize, 0usize, 0usize);
-
-    for (key, entries) in ["fixtures", "refusalFixtures"].map(|key| {
-        let Some(JVal::Arr(entries)) = manifest.field(key) else {
-            panic!("merge manifest has no {key}");
-        };
-        (key, entries)
-    }) {
-        for fixture in entries {
-            let id = str_field(fixture, "id").expect("id");
-            let kind = str_field(fixture, "kind")
-                .unwrap_or_else(|| panic!("{id}: fixture carries no kind"));
-            let (base, a, b) = triad(&root, fixture);
-
-            match kind.as_str() {
-                "merge-3way" => {
-                    let expected = fixture_file(&root, fixture, "expectedFile");
-                    let outcome_hash = str_field(fixture, "outcomeHash").expect("outcomeHash");
-                    let MergeResult::Merged(tree) = merge3_way(&base, &a, &b) else {
-                        panic!("{id}: expected a clean auto-merge, got a refusal");
-                    };
-                    let encoded = encode_node(&tree);
-                    assert_eq!(encoded, expected, "{id}: merged tree byte-identical");
-                    assert_eq!(
-                        sha256_hex(&encoded),
-                        outcome_hash,
-                        "{id}: outcome hash matches the cross-host golden"
-                    );
-                    auto += 1;
-                }
-                "merge-validator-gated" => {
-                    let expected = fixture_file(&root, fixture, "verdictFile");
-                    let verdict_hash = str_field(fixture, "verdictHash").expect("verdictHash");
-                    let MergeResult::Merged(tree) = merge3_way(&base, &a, &b) else {
-                        panic!("{id}: gated fixture is not structurally clean");
-                    };
-                    let defects = introduced_defects(&a, &b, &tree);
-                    assert!(
-                        !defects.is_empty(),
-                        "{id}: the fixture must INTRODUCE a defect — an empty verdict asserts nothing"
-                    );
-                    let encoded = encode_verdict(&defects);
-                    assert_eq!(encoded, expected, "{id}: verdict byte-identical");
-                    assert_eq!(
-                        sha256_hex(&encoded),
-                        verdict_hash,
-                        "{id}: verdict hash matches the cross-host golden"
-                    );
-                    gated += 1;
-                }
-                "merge-refusal" => {
-                    let expected = fixture_file(&root, fixture, "envelopeFile");
-                    let envelope_hash = str_field(fixture, "envelopeHash").expect("envelopeHash");
-                    let forward = refusal_of(&base, &a, &b, &id);
-                    let encoded = encode_envelope(&forward);
-                    assert_eq!(encoded, expected, "{id}: refusal envelope byte-identical");
-                    assert_eq!(
-                        sha256_hex(&encoded),
-                        envelope_hash,
-                        "{id}: envelope hash matches the cross-host golden"
-                    );
-
-                    // Swapping the branches TRANSPOSES each entry's sides and
-                    // rewrites nothing else. Asserted rather than committed
-                    // twice: two files that were transpositions of each other
-                    // would pin the same fact in a form a host could satisfy by
-                    // emitting both from one side.
-                    let mut fwd = forward;
-                    let mut rev = refusal_of(&base, &b, &a, &id);
-                    sort_canonical(&mut fwd);
-                    sort_canonical(&mut rev);
-                    assert_eq!(fwd.len(), rev.len(), "{id}: same refusal set on the swap");
-                    for (f, r) in fwd.iter().zip(rev.iter()) {
-                        assert_eq!(
-                            (&f.node_id, &f.facet, f.class),
-                            (&r.node_id, &r.facet, r.class),
-                            "{id}: same cell"
-                        );
-                        assert_eq!(f.base, r.base, "{id}: same base");
-                        assert_eq!(f.a, r.b, "{id}: forward a == swapped b");
-                        assert_eq!(f.b, r.a, "{id}: forward b == swapped a");
-                    }
-                    refused += 1;
-                }
-                other => panic!(
-                    "{id}: merge-conformance kind '{other}' (manifest key '{key}') is not certified \
-                     by this host — a family must be asserted or skipped BY NAME with a reason, \
-                     never passed over silently"
-                ),
-            }
-        }
-    }
-
-    assert_eq!(
-        auto,
-        manifest_count(&manifest, "fixtures", "merge-3way"),
-        "every merge-3way fixture the manifest enumerates ran"
-    );
-    assert_eq!(
-        gated,
-        manifest_count(&manifest, "fixtures", "merge-validator-gated"),
-        "every merge-validator-gated fixture the manifest enumerates ran"
-    );
-    assert_eq!(
-        refused,
-        manifest_count(&manifest, "refusalFixtures", "merge-refusal"),
-        "every merge-refusal fixture the manifest enumerates ran"
-    );
-    assert!(
-        auto > 0 && gated > 0 && refused > 0,
-        "every family is non-empty"
-    );
-    eprintln!(
-        "merge corpus: {auto} auto-merges, {gated} gated verdicts, {refused} refusal envelopes \
-         — byte-identical + hash-verified (0 skipped)"
-    );
-}
-
-/// The refusal set for a triad. Fails loudly if the triad MERGES: a refusal
-/// fixture that stopped refusing would otherwise be compared as an empty
-/// envelope, which is a green assertion about nothing.
-fn refusal_of(base: &Node, a: &Node, b: &Node, id: &str) -> Vec<MergeConflict> {
-    match merge3_way(base, a, b) {
-        MergeResult::Conflicts(c) => c,
-        MergeResult::Merged(_) => panic!("{id}: refusal fixture auto-merged"),
-    }
-}
-
-#[test]
-fn a_genuine_facet_conflict_is_reported_not_silently_picked() {
-    // A and B set the SAME node's tone to DIFFERENT values → a style.tone
-    // conflict (not an auto-blend, which only happens on distinct sub-fields).
-    let base = decode_node(
-        r#"{"id":"n","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"x"}}}"#,
-    )
-    .unwrap();
-    let a = decode_node(
-        r#"{"id":"n","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"x"}},"style":{"emphasis":"Normal","tone":"Brand","weight":"Standard"}}"#,
-    )
-    .unwrap();
-    let b = decode_node(
-        r#"{"id":"n","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"x"}},"style":{"emphasis":"Normal","tone":"Success","weight":"Standard"}}"#,
-    )
-    .unwrap();
-    match merge3_way(&base, &a, &b) {
-        MergeResult::Conflicts(c) => {
-            assert_eq!(c.len(), 1);
-            assert_eq!(c[0].node_id, "n");
-            assert_eq!(c[0].facet, "style.tone");
-            // Two-sided: BOTH branches' values ride the refusal, and neither
-            // precedence slot is populated — a value in either IS a precedence
-            // claim, and the author-agnostic merge holds no pin.
-            assert_eq!(c[0].base, "Default");
-            assert_eq!(c[0].a.as_ref().map(|s| s.value.as_str()), Some("Brand"));
-            assert_eq!(c[0].b.as_ref().map(|s| s.value.as_str()), Some("Success"));
-            assert!(!c[0].primacy_held);
-            assert_eq!(c[0].primary, None);
-            assert_eq!(c[0].secondary, None);
-            assert_eq!(c[0].secondary_tag, None);
-        }
-        MergeResult::Merged(_) => panic!("expected a style.tone conflict"),
-    }
-}
-
-/// Both branches insert the SAME id with DIFFERENT content: refused NAMING the
-/// id, on the `insert` facet, with each side's content in its own slot — never
-/// an arrival-order-dependent A-side pick, and never a whole-parent `children`
-/// refusal that names the parent instead of the contended id.
-#[test]
-fn a_same_id_insert_with_different_content_is_refused_naming_the_id() {
-    let dash = |extra: &str| {
-        format!(
-            r#"{{"id":"dash","kind":{{"$type":"Box","children":[{{"id":"keep","kind":{{"$type":"Markdown","text":"K"}}}}{extra}],"layout":{{"$type":"Auto"}},"role":"Dashboard"}}}}"#
-        )
-    };
-    let base = decode_node(&dash("")).unwrap();
-    let a = decode_node(&dash(
-        r#",{"id":"new","kind":{"$type":"Markdown","text":"A wrote this"}}"#,
-    ))
-    .unwrap();
-    let b = decode_node(&dash(
-        r#",{"id":"new","kind":{"$type":"Markdown","text":"B wrote this"}}"#,
-    ))
-    .unwrap();
-    match merge3_way(&base, &a, &b) {
-        MergeResult::Conflicts(c) => {
-            assert_eq!(c.len(), 1, "one refusal, on the contended id: {c:?}");
-            assert_eq!(c[0].node_id, "new");
-            assert_eq!(c[0].facet, "insert");
-            // The id exists on neither side of the LCA, so it has no base value.
-            assert_eq!(c[0].base, "");
-            assert!(
-                c[0].a.as_ref().unwrap().value.contains("A wrote this")
-                    && c[0].b.as_ref().unwrap().value.contains("B wrote this"),
-                "each side carries its OWN content: {c:?}"
-            );
-        }
-        MergeResult::Merged(t) => panic!("expected an insert refusal, merged {}", encode_node(&t)),
-    }
-}
-
-/// Both branches reaching the SAME child-id list with agreeing content is
-/// AGREEMENT, not a conflict — the guard every other facet already had. Without
-/// it, `merge3_way base a a` refused for any branch that touched children.
-#[test]
-fn branches_that_agree_on_the_children_list_merge_rather_than_refuse() {
-    let dash = |extra: &str| {
-        format!(
-            r#"{{"id":"dash","kind":{{"$type":"Box","children":[{{"id":"keep","kind":{{"$type":"Markdown","text":"K"}}}}{extra}],"layout":{{"$type":"Auto"}},"role":"Dashboard"}}}}"#
-        )
-    };
-    let base = decode_node(&dash("")).unwrap();
-    let added = dash(r#",{"id":"new","kind":{"$type":"Markdown","text":"same"}}"#);
-    let a = decode_node(&added).unwrap();
-    let b = decode_node(&added).unwrap();
-    match merge3_way(&base, &a, &b) {
-        MergeResult::Merged(t) => assert_eq!(encode_node(&t), added.trim_end()),
-        MergeResult::Conflicts(c) => panic!("expected agreement, got {c:?}"),
-    }
-}
-
-#[test]
-fn distinct_style_subfields_auto_blend() {
-    // A sets tone, B sets voice on the same node → the sub-fields merge
-    // independently (no conflict) — the "you win the conflict" auto-blend.
-    let base = decode_node(
-        r#"{"id":"n","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"x"}}}"#,
-    )
-    .unwrap();
-    let a = decode_node(
-        r#"{"id":"n","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"x"}},"style":{"emphasis":"Normal","tone":"Brand","weight":"Standard"}}"#,
-    )
-    .unwrap();
-    let b = decode_node(
-        r#"{"id":"n","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"x"}},"style":{"emphasis":"Normal","tone":"Default","voice":"Display","weight":"Standard"}}"#,
-    )
-    .unwrap();
-    match merge3_way(&base, &a, &b) {
-        MergeResult::Merged(tree) => {
-            let encoded = encode_node(&tree);
-            assert!(encoded.contains("\"tone\":\"Brand\""));
-            assert!(encoded.contains("\"voice\":\"Display\""));
-        }
-        MergeResult::Conflicts(c) => panic!("expected an auto-blend, got {c:?}"),
-    }
 }
 
 // ─── The typed actor on the DAG record (Phase 1144 / 1168) ───────────────────
@@ -491,10 +290,10 @@ fn the_dag_corpus_exercises_both_actor_cases() {
 fn dag_record_top_level_keys_are_ordinal_sorted() {
     let json = concat!(
         r#"{"actor":{"kind":"agent","model":"claude","version":"4.8","id":"planner"},"#,
-        r#""hash":"h3","op":{"$type":"RemoveNode","target":"x"},"outcomeHash":"o1","#,
+        r#""hash":"h3","op":{"$type":"RemoveNode","target":"x"},"#,
         r#""parents":["h1","h2"],"promptId":"p-9","#,
         r#""resultEnvelope":{"$type":"Failure","code":"E","message":"m"},"#,
-        r#""streamId":"s","timestamp":1700000000,"tombstoned":true}"#
+        r#""streamId":"s","timestamp":1700000000}"#
     );
     let record = decode_record(json).expect("decodes");
     let encoded = encode_record(&record);
@@ -507,13 +306,11 @@ fn dag_record_top_level_keys_are_ordinal_sorted() {
             "actor",
             "hash",
             "op",
-            "outcomeHash",
             "parents",
             "promptId",
             "resultEnvelope",
             "streamId",
             "timestamp",
-            "tombstoned",
         ],
         "top-level key order"
     );
@@ -574,8 +371,7 @@ fn the_nested_actor_keeps_its_pinned_member_order() {
     let json = concat!(
         r#"{"actor":{"kind":"agent","model":"claude","version":"4.8","id":"planner"},"#,
         r#""hash":"h","op":{"$type":"RemoveNode","target":"x"},"parents":[],"#,
-        r#""resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1,"#,
-        r#""tombstoned":false}"#
+        r#""resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1}"#
     );
     let encoded = encode_record(&decode_record(json).expect("decodes"));
     assert!(
@@ -603,7 +399,7 @@ fn a_pre_1144_user_id_envelope_is_refused_by_name() {
     let json = concat!(
         r#"{"hash":"h","op":{"$type":"RemoveNode","target":"x"},"parents":[],"#,
         r#""resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1,"#,
-        r#""tombstoned":false,"userId":"u1"}"#
+        r#""userId":"u1"}"#
     );
     let err = decode_record(json).expect_err("a pre-1144 envelope is refused");
     assert_eq!(err.code, DecodeErrorCode::MissingField);
@@ -625,7 +421,7 @@ fn a_malformed_actor_is_named_never_defaulted() {
             concat!(
                 r#"{{"actor":{},"hash":"h","op":{{"$type":"RemoveNode","target":"x"}},"#,
                 r#""parents":[],"resultEnvelope":{{"$type":"Success"}},"streamId":"s","#,
-                r#""timestamp":1,"tombstoned":false}}"#
+                r#""timestamp":1}}"#
             ),
             actor
         )
@@ -679,8 +475,7 @@ fn a_malformed_actor_is_named_never_defaulted() {
 fn a_record_with_no_actor_at_all_is_refused() {
     let json = concat!(
         r#"{"hash":"h","op":{"$type":"RemoveNode","target":"x"},"parents":[],"#,
-        r#""resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1,"#,
-        r#""tombstoned":false}"#
+        r#""resultEnvelope":{"$type":"Success"},"streamId":"s","timestamp":1}"#
     );
     let err = decode_record(json).expect_err("a record with no actor is refused");
     assert_eq!(err.code, DecodeErrorCode::MissingField);
@@ -689,5 +484,391 @@ fn a_record_with_no_actor_at_all_is_refused() {
         !err.message.contains("userId"),
         "must not blame userId when there was none: {}",
         err.message
+    );
+}
+
+// ─── Merge by fold: the `foldFixtures` family (WIRE_FORMAT §34.6, Phase 2644) ──
+//
+// Every entry of `merge-conformance/manifest.json`'s `foldFixtures`, read under
+// its own key BY NAME, each dispatched on its kind:
+//
+// - `merge-fold-derive`: `reconcile_fold` derives, the tree is byte-identical to
+//   `expectedFile` and its sha256 is `outcomeHash` — in BOTH branch orders.
+// - `merge-fold-refusal`: the policy refuses, the envelope is byte-identical to
+//   `envelopeFile` and its sha256 is `envelopeHash`; the swapped reconcile
+//   refuses with every entry's left and right swapped and nothing else changed.
+// - `merge-fold-gated`: the fold derives and the sample validator above finds
+//   defects neither head carries; the verdict is byte-identical to `verdictFile`
+//   and its sha256 is `verdictHash`, in both branch orders, and ungated the same
+//   deltas derive.
+//
+// An empty family FAILS rather than skips: this host certifies it, so an empty
+// list means the corpus moved out from under the leg.
+
+/// A canonical `TreeOp` array file, decoded op by op.
+fn fold_ops(root: &Path, fixture: &JVal, key: &str) -> Vec<TreeOp> {
+    let rel = str_field(fixture, key).unwrap_or_else(|| panic!("fixture has no {key}"));
+    let text = read(root, &format!("merge-conformance/{rel}"));
+    let Ok(JVal::Arr(items)) = parse(&text) else {
+        panic!("{rel} is not a JSON array");
+    };
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            decode_op(&render_canonical(item))
+                .unwrap_or_else(|e| panic!("{rel}[{i}] decodes: {e:?}"))
+        })
+        .collect()
+}
+
+fn fold_base(root: &Path, fixture: &JVal) -> Node {
+    let rel = str_field(fixture, "baseFile").expect("baseFile");
+    decode_node(&read(root, &format!("merge-conformance/{rel}")))
+        .unwrap_or_else(|e| panic!("{rel} decodes: {e:?}"))
+}
+
+fn refused(r: Result<FoldReconciled, FoldFault>, what: &str) -> Vec<FoldRefusal> {
+    match r {
+        Err(FoldFault::Refused(refusals)) => refusals,
+        other => panic!("{what}: expected a refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn every_fold_fixture_is_certified_in_both_orders() {
+    let root = common::corpus_root();
+    let manifest =
+        parse(&read(&root, "merge-conformance/manifest.json")).expect("merge manifest parses");
+    let Some(JVal::Arr(entries)) = manifest.field("foldFixtures") else {
+        panic!("merge manifest has no foldFixtures — the family this leg certifies is gone");
+    };
+    assert!(!entries.is_empty(), "foldFixtures is empty");
+
+    let (mut derived, mut refusals, mut gated) = (0usize, 0usize, 0usize);
+    // Every fixture runs and every failure is named in ONE report, so a corpus
+    // addition this host does not yet meet reads as the whole list of what it
+    // fails, never as the first of an unknown number (Phase 2706).
+    let mut failures: Vec<String> = Vec::new();
+    for fixture in entries {
+        let id = str_field(fixture, "id").expect("id");
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            certify_fold_fixture(&root, fixture, &id)
+        })) {
+            Ok(FoldKind::Derive) => derived += 1,
+            Ok(FoldKind::Refusal) => refusals += 1,
+            Ok(FoldKind::Gated) => gated += 1,
+            Err(payload) => failures.push(format!("{id}: {}", panic_text(payload.as_ref()))),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} foldFixtures failed:\n  {}",
+        failures.len(),
+        entries.len(),
+        failures.join("\n  ")
+    );
+    for (ran, kind) in [
+        (derived, "merge-fold-derive"),
+        (refusals, "merge-fold-refusal"),
+        (gated, "merge-fold-gated"),
+    ] {
+        assert_eq!(
+            ran,
+            manifest_count(&manifest, "foldFixtures", kind),
+            "every {kind} ran"
+        );
+        assert!(ran > 0, "foldFixtures holds no {kind} fixture");
+    }
+    eprintln!(
+        "fold corpus: {derived} derivations, {refusals} refusal envelopes, {gated} gated verdicts \
+         — byte-identical + hash-verified in both orders (0 skipped)"
+    );
+}
+
+/// The `foldFixtures` kind a fixture certified as.
+enum FoldKind {
+    Derive,
+    Refusal,
+    Gated,
+}
+
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .unwrap_or_else(|| "a non-text panic".to_owned())
+}
+
+/// One `foldFixtures` entry, certified per its kind (the rules above). A
+/// failure panics; the leg collects it beside every other.
+fn certify_fold_fixture(root: &Path, fixture: &JVal, id: &str) -> FoldKind {
+    let kind = str_field(fixture, "kind").unwrap_or_else(|| panic!("{id}: no kind"));
+    let base = fold_base(root, fixture);
+    let (a, b) = (
+        fold_ops(root, fixture, "aOpsFile"),
+        fold_ops(root, fixture, "bOpsFile"),
+    );
+    match kind.as_str() {
+        "merge-fold-derive" => {
+            let expected = fixture_file(root, fixture, "expectedFile");
+            let hash = str_field(fixture, "outcomeHash").expect("outcomeHash");
+            for (order, d1, d2) in [("a,b", &a, &b), ("b,a", &b, &a)] {
+                let r = reconcile_fold(&base, d1, d2)
+                    .unwrap_or_else(|f| panic!("{id} ({order}): refused: {f:?}"));
+                let encoded = encode_node(&r.tree);
+                assert_eq!(
+                    encoded, expected,
+                    "{id} ({order}): derived tree byte-identical"
+                );
+                assert_eq!(sha256_hex(&encoded), hash, "{id} ({order}): outcomeHash");
+            }
+            FoldKind::Derive
+        }
+        "merge-fold-refusal" => {
+            let expected = fixture_file(root, fixture, "envelopeFile");
+            let hash = str_field(fixture, "envelopeHash").expect("envelopeHash");
+            let forward = refused(reconcile_fold(&base, &a, &b), id);
+            let envelope = encode_fold_envelope(&forward);
+            assert_eq!(envelope, expected, "{id}: envelope byte-identical");
+            assert_eq!(sha256_hex(&envelope), hash, "{id}: envelopeHash");
+
+            // Swap symmetry: the swapped reconcile's refusals, mirrored back
+            // (left <-> right) and re-sorted, are the committed envelope.
+            let mirrored: Vec<FoldRefusal> =
+                refused(reconcile_fold(&base, &b, &a), &format!("{id} (swapped)"))
+                    .into_iter()
+                    .map(|r| FoldRefusal {
+                        conflict: OpConflict {
+                            left: r.conflict.right,
+                            right: r.conflict.left,
+                            ..r.conflict
+                        },
+                        class: r.class,
+                    })
+                    .collect();
+            assert_eq!(
+                encode_fold_envelope(&mirrored),
+                expected,
+                "{id}: the swapped envelope is the mirror"
+            );
+            FoldKind::Refusal
+        }
+        "merge-fold-gated" => {
+            let expected = fixture_file(root, fixture, "verdictFile");
+            let hash = str_field(fixture, "verdictHash").expect("verdictHash");
+            for (order, d1, d2) in [("a,b", &a, &b), ("b,a", &b, &a)] {
+                let defects = match reconcile_fold_gated(introduced_defects, &base, d1, d2) {
+                    Err(GatedFoldFault::IntroducedDefects(d)) => d,
+                    Err(GatedFoldFault::Fold(f)) => {
+                        panic!("{id} ({order}): the fold refused: {f:?}")
+                    }
+                    Ok(_) => panic!("{id} ({order}): expected the gate to refuse"),
+                };
+                let verdict = encode_verdict(&defects);
+                assert_eq!(verdict, expected, "{id} ({order}): verdict byte-identical");
+                assert_eq!(sha256_hex(&verdict), hash, "{id} ({order}): verdictHash");
+            }
+            assert!(
+                reconcile_fold(&base, &a, &b).is_ok(),
+                "{id}: ungated, the gated fixture must derive"
+            );
+            FoldKind::Gated
+        }
+        other => panic!(
+            "{id}: foldFixtures kind '{other}' is not certified by this host — a family must \
+             be asserted or skipped BY NAME, never passed over silently"
+        ),
+    }
+}
+
+// ─── policy cases the foldFixtures corpus does not pin ──────────────────────
+
+fn op(text: &str) -> TreeOp {
+    decode_op(text).unwrap_or_else(|e| panic!("{text}: {e:?}"))
+}
+
+fn pane(id: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","kind":{{"$type":"Markdown","text":{{"$type":"Literal","text":"x"}}}}}}"#
+    )
+}
+
+/// A Box "root" holding the given panes.
+fn box_of(panes: &[&str]) -> Node {
+    let children: Vec<String> = panes.iter().map(|p| pane(p)).collect();
+    decode_node(&format!(
+        r#"{{"id":"root","kind":{{"$type":"Box","children":[{}],"layout":{{"$type":"Flex","direction":"Vertical","wrap":false}},"role":"Group"}}}}"#,
+        children.join(",")
+    ))
+    .expect("box decodes")
+}
+
+fn insert(id: &str) -> TreeOp {
+    op(&format!(
+        r#"{{"$type":"InsertChild","child":{},"parentId":"root"}}"#,
+        pane(id)
+    ))
+}
+
+const BRAND_P: &str = r#"{"$type":"PatchStyle","style":{"tone":"Brand"},"target":"p"}"#;
+
+/// A delta whose own op does not apply is refused before anything is judged,
+/// naming the side and the index of the first failing op.
+#[test]
+fn a_delta_that_does_not_apply_names_its_side_and_index() {
+    let base = box_of(&["p"]);
+    let good = vec![op(BRAND_P)];
+    let bad = vec![
+        op(BRAND_P),
+        op(r#"{"$type":"RemoveNode","target":"absent"}"#),
+    ];
+    for (d1, d2, want) in [(&good, &bad, FoldSide::B), (&bad, &good, FoldSide::A)] {
+        match reconcile_fold(&base, d1, d2) {
+            Err(FoldFault::DeltaDoesNotApply { side, index, .. }) => {
+                assert_eq!((side, index), (want, 1));
+            }
+            other => panic!("want DeltaDoesNotApply, got {other:?}"),
+        }
+    }
+}
+
+/// Two empty deltas derive the base, with no script.
+#[test]
+fn two_empty_deltas_derive_the_base() {
+    let base = box_of(&["p"]);
+    let r = reconcile_fold(&base, &[], &[]).expect("derives");
+    assert_eq!(encode_node(&r.tree), encode_node(&base));
+    assert!(r.script.is_empty());
+    assert_eq!((r.agreements, r.interleaves), (0, 0));
+}
+
+/// Two appends under one parent interleave by the child-order rule. The merge
+/// records the rule's ReorderChildren whichever delta is named first — even
+/// where the fold's order is already the rule's (fuaran#2645: the script, not
+/// the checked fold order, fixes the children a replay reaches).
+#[test]
+fn an_interleave_records_its_script_and_is_symmetric() {
+    let base = box_of(&["k"]);
+    let (a, b) = (vec![insert("z")], vec![insert("m")]);
+    let r = reconcile_fold(&base, &a, &b).expect("derives");
+    assert_eq!((r.interleaves, r.script.len()), (1, 1));
+    assert_eq!(
+        encode_op(&r.script[0]),
+        r#"{"$type":"ReorderChildren","newOrder":["k","m","z"],"parentId":"root"}"#
+    );
+    assert_eq!(encode_node(&r.tree), encode_node(&box_of(&["k", "m", "z"])));
+
+    // Named the other way round, the fold's order is already the rule's, and
+    // the script is recorded anyway, the same op.
+    let swapped = reconcile_fold(&base, &b, &a).expect("swapped derives");
+    assert_eq!(swapped.script.len(), 1);
+    assert_eq!(encode_op(&swapped.script[0]), encode_op(&r.script[0]));
+    assert_eq!(encode_node(&swapped.tree), encode_node(&r.tree));
+}
+
+/// A reorder beside an append to its parent is a REBASE (fuaran#2671): the
+/// reorder is applied to the children the parent holds when the fold reaches
+/// it, the append follows the reordered run, and both orders agree.
+#[test]
+fn a_reorder_beside_an_append_is_rebased() {
+    let base = box_of(&["a", "b"]);
+    let reorder = vec![op(
+        r#"{"$type":"ReorderChildren","newOrder":["b","a"],"parentId":"root"}"#,
+    )];
+    let append = vec![insert("c")];
+    for (d1, d2) in [(&reorder, &append), (&append, &reorder)] {
+        let r = reconcile_fold(&base, d1, d2).expect("a rebase derives");
+        assert_eq!(encode_node(&r.tree), encode_node(&box_of(&["b", "a", "c"])));
+        assert_eq!(r.interleaves, 1);
+    }
+    // Two reorders of one parent that differ still refuse.
+    let other = vec![op(
+        r#"{"$type":"ReorderChildren","newOrder":["a","b"],"parentId":"root"}"#,
+    )];
+    assert!(matches!(
+        reconcile_fold(&base, &reorder, &other),
+        Err(FoldFault::Refused(_))
+    ));
+}
+
+/// An agreement is counted once per distinct op, however many addresses the
+/// pair collides on.
+#[test]
+fn an_agreement_counts_distinct_ops() {
+    let base = box_of(&["p"]);
+    let same = vec![op(r#"{"$type":"RemoveNode","target":"p"}"#)];
+    let r = reconcile_fold(&base, &same, &same).expect("derives");
+    assert_eq!(r.agreements, 1);
+}
+
+/// The envelope's entries are ordered canonically and exact duplicates are
+/// removed, so the input order of the refusals does not reach the bytes.
+#[test]
+fn the_fold_envelope_is_canonical_and_deduplicated() {
+    let (l, r) = (
+        op(BRAND_P),
+        op(r#"{"$type":"PatchStyle","style":{"tone":"Success"},"target":"p"}"#),
+    );
+    let refusal = |shape, slot: Option<&str>| FoldRefusal {
+        conflict: OpConflict {
+            left: l.clone(),
+            right: r.clone(),
+            address: "p".into(),
+            shape,
+            slot: slot.map(str::to_owned),
+        },
+        class: FoldRefusalClass::Conflict,
+    };
+    let slot = refusal(ConflictShape::SlotClash, Some("style.tone"));
+    let whole = refusal(ConflictShape::ConcurrentUpdate, None);
+    let x = encode_fold_envelope(&[slot.clone(), whole.clone(), slot.clone()]);
+    let y = encode_fold_envelope(&[whole, slot]);
+    assert_eq!(x, y, "the envelope depends on input order");
+    let (left, right) = (encode_op(&l), encode_op(&r));
+    assert_eq!(
+        x,
+        format!(
+            r#"[{{"address":"p","class":"Conflict","left":{left},"right":{right},"shape":"ConcurrentUpdate"}},{{"address":"p","class":"Conflict","left":{left},"right":{right},"shape":"SlotClash","slot":"style.tone"}}]"#
+        )
+    );
+}
+
+// ─── the apply walk reaches every keyed position (Phase 2706) ───────────────
+
+/// The reference's keyed walk holds a node in an envelope `fallback` as well as
+/// in a slot argument, and the corpus draws only the slot arguments: an op
+/// addressed to a node held only in a `fallback` applies, and a node held only
+/// in a FragmentRef's slot argument (beside a value argument, which holds none)
+/// takes an insert. Both fail on a lookup that walks the kind's arms alone.
+#[test]
+fn an_op_reaches_a_node_held_in_a_fallback_or_a_slot_argument() {
+    use fuaran_rs::ops::apply;
+    let tree = decode_node(
+        r#"{"id":"root","kind":{"$type":"Box","children":[{"fallback":{"id":"fb","kind":{"$type":"Markdown","text":"Behind"}},"id":"m","kind":{"$type":"Markdown","text":"x"}},{"id":"ref","kind":{"$type":"FragmentRef","args":{"body":{"$type":"SlotArg","tree":{"id":"slot","kind":{"$type":"Box","children":[],"layout":{"$type":"Auto"},"role":"Dashboard"}}},"n":{"$type":"Int","value":1}},"name":"card"}}],"layout":{"$type":"Auto"},"role":"Dashboard"}}"#,
+    )
+    .expect("base decodes");
+    let styled = apply(
+        &tree,
+        &op(r#"{"$type":"PatchStyle","style":{"tone":"Brand"},"target":"fb"}"#),
+    )
+    .expect("an op addressed inside a fallback applies");
+    assert!(
+        encode_node(&styled.new_tree).contains(r#""fallback":{"id":"fb","kind":{"$type":"Markdown","text":"Behind"},"style":{"tone":"Brand"}}"#),
+        "the fallback node carries the patch"
+    );
+    let inserted = apply(
+        &tree,
+        &op(&format!(
+            r#"{{"$type":"InsertChild","child":{},"parentId":"slot"}}"#,
+            pane("new")
+        )),
+    )
+    .expect("an insert into a slot argument's subtree applies");
+    assert!(
+        encode_node(&inserted.new_tree)
+            .contains(r#""id":"slot","kind":{"$type":"Box","children":[{"id":"new""#),
+        "the slot argument's subtree takes the child"
     );
 }

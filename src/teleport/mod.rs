@@ -13,11 +13,17 @@
 //! from production.
 
 pub mod base64url;
+#[cfg(feature = "std")]
 pub mod deflate;
+pub mod stored;
 
+#[cfg(feature = "std")]
 use crate::canonical::{JVal, parse, render_canonical};
+#[cfg(feature = "std")]
 use crate::opstream::sha256_hex;
+#[cfg(feature = "std")]
 use crate::validator::{Severity, validate};
+#[cfg(feature = "std")]
 use crate::wire::{DecodeError, Node, TreeOp, decode_node, decode_op, encode_node, encode_op};
 
 /// The self-identifying format tag — Fuaran Teleport, format 1.
@@ -25,7 +31,7 @@ pub const PREFIX: &str = "FT1.";
 /// The envelope-shape version. An unrecognised version is refused by name.
 pub const BUNDLE_VERSION: &str = "teleport@1";
 /// The domain-separated digest preimage prefix (`§17.3`).
-const DIGEST_PREFIX: &str = "fuaran-teleport:v1|";
+pub(crate) const DIGEST_PREFIX: &str = "fuaran-teleport:v1|";
 
 /// A size gate on the *encoded* string, applied before any decompression work
 /// (`§17.4` step 1). The URL-fragment practical budget (`§17.5`) — generous, so
@@ -36,6 +42,7 @@ pub const MAX_ENCODED: usize = 16_384;
 /// A running application captured for teleport. On decode, `tree`/`history` are
 /// the standard wire forms; `state` is the raw JSON value map (rule-12 discipline
 /// — no `null`); `chain_head` anchors the bundle to a position in the op-stream.
+#[cfg(feature = "std")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bundle {
     pub tree: Node,
@@ -48,6 +55,7 @@ pub struct Bundle {
 }
 
 /// A typed, recoverable teleport failure (`§17.4` — never a panic).
+#[cfg(feature = "std")]
 #[derive(Debug, Clone, PartialEq)]
 pub enum TeleportError {
     /// Input over the size gate, or inflate output over the cap (a bomb).
@@ -75,6 +83,7 @@ pub enum TeleportError {
 
 // Build the envelope object (optionally including the digest). Sub-documents are
 // re-parsed so the whole envelope renders through the one canonical path.
+#[cfg(feature = "std")]
 fn envelope_obj(bundle: &Bundle, digest: Option<&str>) -> Result<JVal, TeleportError> {
     let tree =
         parse(&encode_node(&bundle.tree)).map_err(|e| TeleportError::InvalidJson(e.message))?;
@@ -102,6 +111,7 @@ fn envelope_obj(bundle: &Bundle, digest: Option<&str>) -> Result<JVal, TeleportE
 }
 
 // The §17.3 digest over the canonical envelope *without* its digest field.
+#[cfg(feature = "std")]
 fn compute_digest(bundle: &Bundle) -> Result<String, TeleportError> {
     let obj = envelope_obj(bundle, None)?;
     let preimage = format!("{DIGEST_PREFIX}{}", render_canonical(&obj));
@@ -111,6 +121,7 @@ fn compute_digest(bundle: &Bundle) -> Result<String, TeleportError> {
 /// Encode a running-app [`Bundle`] to its `FT1.` string. Deterministic: the same
 /// bundle always yields the same string (canonical render + deterministic
 /// deflate + base64url).
+#[cfg(feature = "std")]
 pub fn encode(bundle: &Bundle) -> Result<String, TeleportError> {
     let digest = compute_digest(bundle)?;
     let obj = envelope_obj(bundle, Some(&digest))?;
@@ -121,6 +132,7 @@ pub fn encode(bundle: &Bundle) -> Result<String, TeleportError> {
 
 /// Decode–validate–resume (`§17.4`): size gate → unwrap → envelope+version →
 /// digest → standard wire decode → identity re-check. Every failure is typed.
+#[cfg(feature = "std")]
 pub fn decode(s: &str) -> Result<Bundle, TeleportError> {
     // 1. Size gate — before any decompression work.
     if s.len() > MAX_ENCODED {

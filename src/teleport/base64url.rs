@@ -1,6 +1,10 @@
 //! RFC 4648 §5 base64url, unpadded — the ASCII framing a teleport bundle rides
 //! on (URL fragment / QR). Hand-written (stdlib has no base64); the encoded
-//! string is pure ASCII so its character count equals its byte count.
+//! string is pure ASCII so its character count equals its byte count. Builds
+//! `no_std` + `alloc`: the emitter's stored-block encoder frames with it too.
+
+use alloc::string::String;
+use alloc::vec::Vec;
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 

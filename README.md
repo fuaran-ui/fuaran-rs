@@ -303,6 +303,165 @@ rather than skipping — a conformance check that passes without its oracle
 reports the same green as one that ran. Where none is claimed at all, it reports
 that it did not run and asserts nothing.
 
+## Constrained emitter — the device side of a panel (Phase 2452)
+
+`serverdriven::emitter` is a **constrained emitter** in the sense of WIRE_FORMAT
+§11.4: a producer that writes a declared subset of the vocabulary in canonical
+bytes and decodes nothing of this wire but the one client event its placement
+reads. It is the device end of a panel served by this host's server-driven driver
+(or the `fuaran-go` one): a microcontroller that never builds a node.
+
+> **The claim.** `fuaran-rs`'s emitter writes the corpus's `panel` lineage at
+> revision **`panel@1.1`** (wire `core@1.0`, axes `canonical-bytes` and
+> `integer-only`; subset kinds `Badge`, `Box`, `Button`, `Callout`, `Form`,
+> `Heading`, `Metric`, controls `DateTime`, `Number`, ops `InsertChild`,
+> `RemoveNode`, `ReplaceBinding`, `ReplaceRoot`, `UpdateProp`). The constants
+> carrying it (`emitter::PROFILE_REVISION` and the subset) are pinned against the
+> corpus manifest's declaration by `tests/conformance.rs`, which goes red when the
+> lineage gains a revision this emitter has not adopted. The event limits it reads
+> under (`EVENT_LIMITS`) are tighter than §21's and are deployment policy, never
+> part of the profile.
+
+**Decision record (Phase 2452, taken by the implementer and pending the
+maintainers' ratification).**
+
+1. **Placement: a feature of this crate, not a sibling crate.** The default `std`
+   feature is the whole host; with it off (`--no-default-features`) the crate is
+   `no_std` + `alloc` and compiles exactly the emitter and the stored-block
+   teleport encoder (`teleport::stored`, with `teleport::base64url`), over the
+   Core spine and nothing else. The emitter needed nothing from this crate's `std`
+   modules, so gating them was smaller than a second crate, and the desktop half
+   (the tree compiler) stays beside the codec, validator and apply engine it uses
+   as oracles. **Consequence, measured:** this crate declares `cdylib` and
+   `staticlib` crate types (the browser module and the native surfaces), and Cargo
+   builds every declared type of a dependency, so a bare-metal *binary* that
+   depends on this crate fails to build: a `staticlib` for `thumbv7em-none-eabihf`
+   needs a panic handler and an allocator, which a library leaves to its binary.
+   The crate itself builds `no_std` (`cargo rustc --lib --no-default-features
+   --target thumbv7em-none-eabihf --crate-type lib`, run by
+   `tests/serverdriven.rs` whenever the target is installed and by the CI `no-std`
+   job), and the size line below was measured against an rlib-only copy. Linking
+   the emitter into a device image therefore needs either an rlib-only crate over
+   these sources or the crate types moved to a wrapper; that is a decision for the
+   phase that links the device image, and it is recorded here so it is taken
+   knowingly.
+2. **The subset is `panel@1.1`'s**, because that is the claim the corpus can
+   already falsify: the emitter's scenario must reproduce the revision's vectors
+   byte for byte.
+3. **A reading is `ReplaceBinding`, never `UpdateState`.** On this wire
+   `UpdateState` replaces a node's loading, empty and error presentations (§3); a
+   value lives in a binding, so a reading is a `ReplaceBinding` of a `Static`
+   value on the reading's slot (§11.4).
+
+**How it works.**
+
+- **The tree is compiled on the desktop.** `emitter::compile` (`std` only) takes
+  the panel, the fragments that come and go, and the declared writes (each reading
+  and property names its node, its slot or path, and its value kind), and
+  certifies with this host's own codec, validator and apply engine: canonical
+  bytes, no validator error, every kind / control / op inside the subset, no
+  number token with a fraction or exponent, every handler one the server-driven
+  driver admits for its kind, and every write the device can make — written by the
+  device's own op writers — applies to the panel. The output is an `Image`: the
+  panel document as a constant string plus the node-id, fragment, write, handler
+  and state-key tables, available as Rust source (`to_rust_source`) to compile in.
+- **The device writes ops canonical by construction.** Each writer spells its
+  members in ordinal order, escapes every string through the Core spine's one
+  escape and writes integers only within ±(2⁵³ − 1). A write names a table entry,
+  never a node id, and the table fixes its value kind, so a device cannot target
+  an uncertified node or put a non-integer token on the wire.
+- **Inbound, one document, under declared limits.** The server-driven client
+  event is read by the Core spine's reader under `EVENT_LIMITS` (one object of
+  scalar members, at most eight, strings of at most 256 code points, 512 bytes)
+  and admitted only when its node and event name a registered handler.
+- **Frames are chained.** Each frame's op document is a record of the Core
+  spine's op-stream chain (canonical profile), attributed to the device's actor;
+  the head commits to every frame before it and is what a device signs on demand.
+  A frame travels as the server-driven frame body `{"ops":[<op>],"seq":N}`.
+- **The byte pipe.** `PipeChannel` specialises the channel to a byte pipe (UART
+  first): one frame body per newline-terminated line, with a reconnect-replay
+  buffer bounded in bytes so it is sized to RAM. A client behind the retained
+  window gets `Resync::Gap`, and the device answers with a fresh `ReplaceRoot`.
+- **Teleport without a compressor.** `teleport::stored` writes a §17 bundle over
+  stored deflate blocks: valid deflate that every inflater accepts, no Huffman
+  coder and no window. It decodes to the same bundle as this host's compressing
+  encoder.
+
+**Certification.** `tests/conformance.rs` compiles the corpus's panel, drives the
+emitter through the panel scenario (first frame, a reading, a property, the alarm
+row in and out) and asserts every document and frame equals the revision's
+vectors byte for byte, applies on this host, chains under the Core verifier, and
+that the session's stored-block bundle decodes. Setting `FUARAN_EMITTER_OUT=<dir>`
+writes those artefacts out, for decoding by the other hosts; the reference and the
+TypeScript hosts decode every one of them and re-encode each document and frame
+byte-identical. The `fuaran-go` driver's committed frame and event vectors are
+checked in `tests/serverdriven.rs`.
+
+**Size line** (an order, measured, not a gate). A probe image linking the emitter
+the way a panel device would — the first frame, a reading, a property, the alarm
+in and out through the byte pipe, one event decode and one stored-block bundle per
+loop, with a 12 KB bump arena as its heap — measured with the Program core's
+embedded-gate method for `thumbv7em-none-eabihf`: **flash 73 832 bytes, static RAM
+12 828 bytes (12 288 of them the arena), worst-case stack 6 016 bytes.** The
+Program core's recogniser image measures flash 55 100, static RAM 11 548 and stack
+6 640 under the same method.
+
+**Not claimed.** The manifest records which hosts ACCEPT a revision
+(`oldestAccepted`), not which emitters CLAIM one, so this claim is written here
+rather than in the corpus; and this host's own emitter-acceptance leg as a codec
+host (§11.4's table) is a separate adoption.
+
+### The single-tap figure, priced at build time (Phase 2454)
+
+Because the program algebra has only sequence, choice, bounded repeat, bounded
+iteration, guards and leaves, one walk prices any handler; and because a panel's
+handler table is fixed when the panel is compiled, the whole set of handlers a tap can
+reach is known on the desktop. `emitter::price` (`std` only) takes a
+`CompiledPanel`, the device's dispatch witness (any `fuaran_program::witness::DispatchFold`)
+and one `Registration` per entry of the handler table — a Program handler document
+read at that witness — and emits the panel's **figure**: per named quantity and unit,
+the worst case of any SINGLE tap, and the handler whose tap it is. Each handler's
+compute stages are priced together by the Program core's quantity walk (a sequence
+sums, a choice takes its dearer arm, a repeat multiplies by its bound, saturating at
+the core's 32-bit ceiling; nothing runs), and the figure is the maximum over the
+handlers. It is emitted beside the image as canonical JSON (`Figure::to_json`, the
+form a signed device declaration carries) and as Rust source
+(`Figure::to_rust_source`, a `&[Spend]` constant compiled in beside the `Image`), so
+"no single tap exceeds the device's limits" is a checked artefact of the firmware
+rather than a figure the device works out.
+
+**Its boundary.** The figure bounds one tap. A sequence of taps, each within every
+limit, is the run-time time windows' to bound and never this walk's. The walk prices
+compute stages; an effect stage spends nothing here, which is the whole of a panel's
+effects, since a panel handler's only effect stage is the `EmitPatch` carrying its
+ops. And this crate holds no device vocabulary: what an act spends is the witness's to
+declare.
+
+**Certification.** `tests/serverdriven.rs` supplies a test witness over a device
+domain's corpus panels — their handler documents copied byte for byte — and holds the
+walk to the figures that domain's validator recomputes from the same documents, pinned
+under the same strings on both sides: the two hosts agree by vector, across the
+language boundary, not by trust. The same file pins the compiled-in figure constant
+to the walk's own Rust source, as it does the image.
+
+**Decision record (Phase 2454, taken by the implementer and pending the maintainers'
+ratification).**
+
+1. **The figure is beside the image, not a field of it.** `Image`, `CompiledPanel`
+   and `PanelSpec` keep their field sets, so the change is additive; a device that
+   compiles in a figure holds a second constant. Nothing the device does at run time
+   reads it.
+2. **The set priced is exactly the set a tap reaches.** A registration naming no
+   entry of the handler table is refused (`UNREACHABLE_HANDLER`), an entry with no
+   handler is refused (`UNPRICED_HANDLER`), and an entry registered twice is refused
+   (`DUPLICATE_REGISTRATION`). Registrations use the image's event spelling
+   (`click`, `submit`, `change`).
+3. **The figure is deterministic in the face of order.** Entries are sorted by
+   quantity, then unit, and a tie between handlers names the first name in byte
+   order, so two hosts listing the same handlers differently emit the same bytes. A
+   panel whose taps reach no quantity has an EMPTY figure, which is a priced answer;
+   a panel nobody priced has none at all.
+
 ## WASM client
 
 The client module compiles to a dependency-free `.wasm`:
@@ -519,6 +678,41 @@ pinned by `tests/decode_determinism.rs` and the parser's own unit tests in `src/
 This host declares no stability policy yet (pre-1.0), so the change is recorded here rather than
 in a `STABILITY.md` it does not have; it rides the current unreleased version.
 
+## The apply engine reaches a node held in a slot argument — Phase 2706
+
+A `FragmentRef`'s `args` and a `Mount`'s `inputs` hold nodes (a `SlotArg`'s `tree`), and the
+specification's node walk includes them (WIRE_FORMAT.md §34.2). This host's apply engine looked
+nodes and parents up through the kind's arms and the `state` alternatives alone, so an op addressed
+to a node held only in a slot argument stopped as `NodeNotFound` / `ParentNotFound`, and the merge
+fold reported it as `DeltaDoesNotApply` before judging anything. The lookup now walks every
+position the reference's keyed walk does: what the kind holds (the ordered child list, the single-node
+arms, and the subtree of every `SlotArg` in key order — a value argument holds no node), the `state`
+alternatives, and the envelope's author-declared `fallback`. One walk serves the node and parent
+lookups, the id census, the size limits and the merge footprint, so the footprint and the apply
+cannot disagree about which positions hold a node. An `EditNode` that rewrites a `Mount` or a
+`FragmentRef` now counts the nodes its slot arguments hold, on both the old and the new kind.
+
+`Mount.onBubble` is now carried as `Option<Closure>` on `MountSpec` (`on_bubble`), like every other
+optional handler slot: the encoder writes the sentinel only when one rode the wire. It used to be
+implied and always written, a dialect entry that said it waited for a fixture omitting the slot;
+the four fixtures below are such fixtures, and the node round-trip fixture `mount-no-onbubble`,
+which this host listed as uncertified for exactly that reason, now round-trips byte-identically.
+
+Certified by the merge-conformance fixtures `fold-mount-input-insert` (derives),
+`fold-refusal-mount-input-tone`, `fold-refusal-mount-input-disjoint` and
+`fold-refusal-mount-input-delete-modify` (refusal envelopes), added at specification commit
+`0b2ec20` and certified here at `d33b87d`. Two in-place edits to different nodes inside one Mount's
+inputs are refused, as the reference refuses them (`fold-refusal-mount-input-disjoint`); this host
+certifies that answer and sets no policy of its own. `tests/dag.rs` also pins a node held only in a
+`fallback`, which the corpus does not draw. The fold leg now runs every fixture and names every
+failure in one report rather than stopping at the first.
+
+This host declares no stability policy yet (pre-1.0), so the change is recorded here rather than
+in a `STABILITY.md` it does not have. It is additive on the wire (an op that did not apply now
+applies; a document that omits `onBubble` now re-encodes without it). In Rust, `MountSpec` gains a
+public field, so a struct literal built outside this crate must name `on_bubble`. It rides the
+current unreleased version.
+
 ## The Core boundary — `src/core/`
 
 The subsystems this host reimplements from the `Fuaran.Core` reference live in one
@@ -553,6 +747,9 @@ fuaran-rs/
 │   ├── render/          # server-HTML renderer + islands + markdown + sanitise floor
 │   ├── bounded/         # the bounded program loop — interpreter, budget, effects, re-resolve
 │   ├── client/          # wasm32 client — ClientSession (mod.rs) + C-ABI shim (wasm.rs)
+│   ├── serverdriven/    # server-driven driver + emitter/ (the no_std constrained emitter
+│   │                    #   and, under std, its desktop tree compiler)
+│   ├── teleport/        # §17 bundle codec + stored.rs (the no_std stored-block encoder)
 │   └── edge/            # edge hosting — EdgeSession + the DurableSessionStore obligations
 ├── css/
 │   └── fuaran.css       # byte-copy of the reference stylesheet (parity-tested)

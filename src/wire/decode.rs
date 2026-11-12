@@ -3757,6 +3757,43 @@ pub(super) fn decode_filters_kind(path: &str, j: &JVal) -> DResult<Vec<FilterSpe
     })
 }
 
+/// `Markdown` — a citation list is absent or non-empty, and each name is a token used once
+/// (WIRE_FORMAT 3.6.32).
+pub(super) fn check_markdown(path: &str, fields: &Fields, spec: &MarkdownSpec) -> DResult<()> {
+    if spec.citations.is_empty() {
+        if fields.iter().any(|(k, _)| k == "citations") {
+            return Err(wrong_type(
+                &format!("{path}.citations"),
+                "a non-empty citation list, or no member at all",
+            ));
+        }
+        return Ok(());
+    }
+    for (i, c) in spec.citations.iter().enumerate() {
+        let name = c.name.as_str();
+        let is_token = !name.is_empty()
+            && name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
+        if !is_token {
+            return Err(wrong_type(
+                &format!("{path}.citations[{i}].name"),
+                "a citation name of letters, digits, '-' and '_'",
+            ));
+        }
+        if spec.citations[..i]
+            .iter()
+            .any(|earlier| earlier.name == c.name)
+        {
+            return Err(wrong_type(
+                &format!("{path}.citations[{i}].name"),
+                "a citation name no other citation in this list uses",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `FileUpload` — a named destination is non-empty, and each ceiling positive.
 pub(super) fn check_file_upload(
     path: &str,
@@ -3782,6 +3819,129 @@ pub(super) fn check_file_upload(
     Ok(())
 }
 
+/// Phase 2517 — WIRE_FORMAT §31.2, the slot rule of an `affordance` member. A pattern is literal
+/// text with at most one slot, spelled exactly `{value}`; any other brace is refused, so the grammar
+/// stays closed. Which patterns must name the slot is the CARRYING kind's: a set (`Select`, a form
+/// field) names exactly one in each `patterns` entry, a click (`Button`) names none, and no
+/// `readPatterns` entry names one. A blank pattern is refused. Each refusal is `WRONG_TYPE` at the
+/// offending entry.
+fn check_affordance(path: &str, affordance: &Option<Affordance>, set: bool) -> DResult<()> {
+    const SLOT: &str = "{value}";
+    let slots = |pattern: &str| -> Option<usize> {
+        let stripped = pattern.replace(SLOT, "");
+        if stripped.contains(['{', '}']) {
+            return None;
+        }
+        Some((pattern.len() - stripped.len()) / SLOT.len())
+    };
+    let Some(affordance) = affordance else {
+        return Ok(());
+    };
+    let (want, expected) = if set {
+        (1, "a set pattern naming exactly one {value} slot")
+    } else {
+        (0, "a click pattern naming no slot")
+    };
+    for (i, p) in affordance.patterns.iter().enumerate() {
+        if slots(p) != Some(want) || p.trim().is_empty() {
+            return Err(wrong_type(
+                &format!("{path}.affordance.patterns[{i}]"),
+                expected,
+            ));
+        }
+    }
+    for (i, p) in affordance.read_patterns.iter().enumerate() {
+        if slots(p) != Some(0) || p.trim().is_empty() {
+            return Err(wrong_type(
+                &format!("{path}.affordance.readPatterns[{i}]"),
+                "a read pattern naming no slot",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A `Button` is a CLICK (§31.2).
+pub(super) fn check_button_affordance(
+    path: &str,
+    _fields: &Fields,
+    spec: &ButtonSpec,
+) -> DResult<()> {
+    check_affordance(path, &spec.affordance, false)
+}
+
+/// A `Select` is a SET (§31.2), and its option groups (Phase 2571, §3.6.30) name each option at
+/// most once and — over STATIC options — only options the select carries.
+pub(super) fn check_select(path: &str, _fields: &Fields, spec: &SelectSpec) -> DResult<()> {
+    check_affordance(path, &spec.affordance, true)?;
+    check_select_groups(path, spec)
+}
+
+/// Phase 2571 — WIRE_FORMAT §3.6.30, the two option-group refusals, both `WRONG_TYPE` at the
+/// offending `values` element: a value named more than once (by two groups, or twice by one), and
+/// over a STATIC source a value naming no option. A bound source resolves at render; the decoder
+/// cannot judge it.
+fn check_select_groups(path: &str, spec: &SelectSpec) -> DResult<()> {
+    if spec.groups.is_empty() {
+        return Ok(());
+    }
+    let known: Option<Vec<&str>> = match &spec.source {
+        Binding::Static {
+            value: StaticValue::Options(options),
+        } if !options.iter().any(|o| o.value == "<opaque>") => {
+            Some(options.iter().map(|o| o.value.as_str()).collect())
+        }
+        _ => None,
+    };
+    let mut seen: BTreeMap<&str, (usize, &str)> = BTreeMap::new();
+    for (gi, group) in spec.groups.iter().enumerate() {
+        for (vi, value) in group.values.iter().enumerate() {
+            let at = format!("{path}.groups[{gi}].values[{vi}]");
+            if let Some((first, first_label)) = seen.get(value.as_str()) {
+                return Err(make_error(
+                    DecodeErrorCode::WrongType,
+                    &at,
+                    format!(
+                        "option value '{value}' is already named by group {first} ('{first_label}'):                          an option belongs to at most one group"
+                    ),
+                    Some(
+                        "a value no other group (and no earlier entry of this group) names"
+                            .to_string(),
+                    ),
+                ));
+            }
+            if let Some(known) = &known {
+                if !known.contains(&value.as_str()) {
+                    let mut names: Vec<String> = known.iter().map(|v| format!("'{v}'")).collect();
+                    names.sort();
+                    return Err(make_error(
+                        DecodeErrorCode::WrongType,
+                        &at,
+                        format!(
+                            "option value '{value}' names no option of this Select:                              a group can only gather the options its Select carries"
+                        ),
+                        Some(format!(
+                            "the value of one of this Select's options: {}",
+                            names.join(", ")
+                        )),
+                    ));
+                }
+            }
+            seen.insert(value.as_str(), (gi, group.label.as_str()));
+        }
+    }
+    Ok(())
+}
+
+/// A form field is a SET (§31.2).
+pub(super) fn check_form_field_affordance(
+    path: &str,
+    _fields: &Fields,
+    field: &FormField,
+) -> DResult<()> {
+    check_affordance(path, &field.affordance, true)
+}
+
 /// `ColumnErased` — the grid vocabulary's near misses, before any field is read.
 pub(super) fn check_column_near_misses(path: &str, fields: &Fields) -> DResult<()> {
     check_near_misses(path, fields, COLUMN_NEAR_MISSES)
@@ -3794,6 +3954,43 @@ pub(super) fn check_default_sort(path: &str, _fields: &Fields, ds: &DefaultSort)
             &format!("{path}.column"),
             "JSON number (non-negative integer header index)",
         ));
+    }
+    Ok(())
+}
+
+/// `StaticRows` — a citation list is absent or non-empty, each coordinate names a cell that
+/// exists, read against the rows, and a cell is cited once (WIRE_FORMAT 3.6.33).
+pub(super) fn check_static_rows(path: &str, fields: &Fields, spec: &StaticRows) -> DResult<()> {
+    if spec.citations.is_empty() {
+        if fields.iter().any(|(k, _)| k == "citations") {
+            return Err(wrong_type(
+                &format!("{path}.citations"),
+                "a non-empty citation list, or no member at all",
+            ));
+        }
+        return Ok(());
+    }
+    for (i, c) in spec.citations.iter().enumerate() {
+        let at = format!("{path}.citations[{i}]");
+        let row = usize::try_from(c.row)
+            .ok()
+            .and_then(|row| spec.rows.get(row))
+            .ok_or_else(|| wrong_type(&format!("{at}.row"), "a row index this table has"))?;
+        if usize::try_from(c.column).map_or(true, |column| column >= row.len()) {
+            return Err(wrong_type(
+                &format!("{at}.column"),
+                "a column index the cited row has",
+            ));
+        }
+        if spec.citations[..i]
+            .iter()
+            .any(|earlier| earlier.row == c.row && earlier.column == c.column)
+        {
+            return Err(wrong_type(
+                &at,
+                "a cell no other citation in this list names",
+            ));
+        }
     }
     Ok(())
 }

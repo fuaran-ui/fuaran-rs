@@ -57,7 +57,7 @@ use super::egress::{
     sanitize_url_for_egress,
 };
 use super::html::{Attr, AttrVal, el, entity_encode, escape_attr, escape_text, text_el, void_el};
-use super::markdown::to_html_with_egress as markdown_to_html_with_egress;
+use super::markdown::{Citation, to_html_cited as markdown_to_html_cited};
 use super::sanitize::{
     CSS_REFUSAL_ATTRIBUTE, is_safe_css_value, sanitize_link_anchor, sanitize_paint_value,
 };
@@ -552,7 +552,19 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
         NodeKind::Markdown(spec) => el(
             "div",
             &[("class", s("fuaran-markdown"))],
-            &markdown_to_html_with_egress(ctx.policy, &render_text(ctx.sources, &spec.text)),
+            &markdown_to_html_cited(
+                ctx.policy,
+                &spec
+                    .citations
+                    .iter()
+                    .map(|c| Citation {
+                        name: c.name.clone(),
+                        reference: c.reference.clone(),
+                        label: c.label.as_ref().map(|l| render_text(ctx.sources, l)),
+                    })
+                    .collect::<Vec<_>>(),
+                &render_text(ctx.sources, &spec.text),
+            ),
         ),
         NodeKind::Metric(spec) => {
             // Phase 632/649 — the Metric value is a scalar slot: a
@@ -855,15 +867,20 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
                     )
                 })
                 .unwrap_or_default();
+            let mut tile_attrs = vec![(
+                "class",
+                s(format!(
+                    "fuaran-fact fuaran-fact-{}{emphasis_suffix}",
+                    tone_var(spec.tone)
+                )),
+            )];
+            if let Some(reference) = &spec.reference {
+                // WIRE_FORMAT 3.6.31: the citation, through the ordinary attribute encoder.
+                tile_attrs.push(("data-fact", s(reference.as_str())));
+            }
             el(
                 "div",
-                &[(
-                    "class",
-                    s(format!(
-                        "fuaran-fact fuaran-fact-{}{emphasis_suffix}",
-                        tone_var(spec.tone)
-                    )),
-                )],
+                &tile_attrs,
                 &format!(
                     "{}{value}{help}",
                     text_el(
@@ -2606,16 +2623,38 @@ fn render_select(ctx: &Ctx<'_>, spec: &SelectSpec) -> String {
         .as_ref()
         .map(|p| text_el("option", &[("value", s(""))], &render_text(ctx.sources, p)))
         .unwrap_or_default();
-    let opts: String = options
-        .iter()
-        .map(|o| {
-            text_el(
-                "option",
-                &[("value", s(o.value.clone()))],
-                &render_text(ctx.sources, &o.label),
-            )
-        })
-        .collect();
+    let option = |o: &&SelectOption| {
+        text_el(
+            "option",
+            &[("value", s(o.value.clone()))],
+            &render_text(ctx.sources, &o.label),
+        )
+    };
+    // Phase 2571 — option groups (WIRE_FORMAT §3.6.30): one `<optgroup label>` per group in list
+    // order holding the options it names in `source` order, then the options no group names. No
+    // groups: the flat list exactly as before.
+    let opts: String = if spec.groups.is_empty() {
+        options.iter().map(option).collect()
+    } else {
+        let grouped: String = spec
+            .groups
+            .iter()
+            .map(|g| {
+                let inner: String = options
+                    .iter()
+                    .filter(|o| g.values.contains(&o.value))
+                    .map(option)
+                    .collect();
+                el("optgroup", &[("label", s(g.label.clone()))], &inner)
+            })
+            .collect();
+        let rest: String = options
+            .iter()
+            .filter(|o| !spec.groups.iter().any(|g| g.values.contains(&o.value)))
+            .map(option)
+            .collect();
+        format!("{grouped}{rest}")
+    };
     let control = if spec.multiple == Some(true) {
         el(
             "select",
@@ -3716,6 +3755,7 @@ fn render_filter(ctx: &Ctx<'_>, spec: &FilterSpec) -> String {
                 // no authored rule, and inventing one here would render a
                 // constraint the tree never declared.
                 rule: None,
+                affordance: None,
             };
             render_form_control(ctx, &synthetic)
         }
@@ -3911,6 +3951,7 @@ fn render_grid_cell(ctx: &Ctx<'_>, col: &ColumnErased, row: &JVal) -> String {
             let placeholder = Node {
                 id: "<closure>".to_string(),
                 kind: NodeKind::Markdown(crate::wire::MarkdownSpec {
+                    citations: Vec::new(),
                     text: TextSource::Literal("<closure>".to_string()),
                 }),
                 state: StateBehaviour::default(),
@@ -4448,7 +4489,8 @@ fn render_static_table(ctx: &Ctx<'_>, spec: &StaticRows, grid: &GridSpec) -> Str
     let body_rows: String = spec
         .rows
         .iter()
-        .map(|row| {
+        .enumerate()
+        .map(|(i, row)| {
             let texts: Vec<String> = row
                 .iter()
                 .map(|cell| render_text(ctx.sources, cell))
@@ -4457,11 +4499,38 @@ fn render_static_table(ctx: &Ctx<'_>, spec: &StaticRows, grid: &GridSpec) -> Str
                 .iter()
                 .enumerate()
                 .map(|(j, text)| {
-                    el(
-                        "td",
-                        &[("class", s("fuaran-table-cell"))],
-                        &static_cell(&grid.columns, &texts, j, text),
-                    )
+                    let content = static_cell(&grid.columns, &texts, j, text);
+                    // Phase 2592 — the reference on the cell, a label as its first child.
+                    match spec
+                        .citations
+                        .iter()
+                        .find(|c| c.row == i as i64 && c.column == j as i64)
+                    {
+                        None => el("td", &[("class", s("fuaran-table-cell"))], &content),
+                        Some(c) => {
+                            let label = c
+                                .label
+                                .as_ref()
+                                .map(|l| render_text(ctx.sources, l))
+                                .filter(|l| !l.is_empty())
+                                .map(|l| {
+                                    text_el(
+                                        "span",
+                                        &[("class", s("fuaran-cited-label"))],
+                                        &format!("{l} "),
+                                    )
+                                })
+                                .unwrap_or_default();
+                            el(
+                                "td",
+                                &[
+                                    ("class", s("fuaran-table-cell")),
+                                    ("data-fact", s(c.reference.clone())),
+                                ],
+                                &format!("{label}{content}"),
+                            )
+                        }
+                    }
                 })
                 .collect();
             el("tr", &[("class", s("fuaran-table-row"))], &cells)

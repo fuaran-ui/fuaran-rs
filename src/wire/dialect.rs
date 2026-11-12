@@ -114,7 +114,6 @@ pub(super) const DERIVES: &[(&str, &[&str], &str)] = &[
     ),
 ];
 
-const CLOSURE_IMPLIED: &str = "the IDL declares this closure slot optional, but this host carries no member for      it: its presence is implied and the encoder always writes the sentinel. No corpus      fixture omits it, so an Option<Closure> member would change a public type with      nothing to certify the absent case; it waits for that fixture";
 const CLOSURE_UNMODELLED: &str = "a closure slot this host does not carry: the closure is a host-side function the \
      wire never shows (only its sentinel), and nothing here reads its presence";
 const NODE_ID: &str = "spelled with the NodeId alias (the same type as String), which documents that the \
@@ -155,7 +154,6 @@ pub(super) const FIELDS: &[FieldEntry] = &[
         &[("inputs", "Vec<(String, FragmentArg)>")],
         "an absent map decodes as the empty map and the encoder omits an empty one",
     ),
-    ("Mount", "onBubble", &[], CLOSURE_IMPLIED),
     (
         "Switch",
         "on",
@@ -504,6 +502,18 @@ pub(super) const FIELDS: &[FieldEntry] = &[
         NODE_ID,
     ),
     (
+        "TreeOp.UpdateAccessibility",
+        "target",
+        &[("target", "NodeId")],
+        NODE_ID,
+    ),
+    (
+        "TreeOp.UpdateTooltip",
+        "target",
+        &[("target", "NodeId")],
+        NODE_ID,
+    ),
+    (
         "TreeOp.RemoveNode",
         "target",
         &[("target", "NodeId")],
@@ -836,7 +846,8 @@ the wire when `false`, aligning with `Fact`'s identical flag."#,
         r#"The labeled TEXT fact — `Metric`'s complementary type. `value` is a
 [`TextSource`] (the same vocabulary the labels use, so `Bound` / `I18n`
 values ride through); `emphasis` is the behavioural bool (omit-when-false),
-`tone` omit-when-default; `help` / `icon` optional."#,
+`tone` omit-when-default; `help` / `icon` optional; `reference` the Fact a
+figure cites, opaque to the language (WIRE_FORMAT 3.6.31)."#,
     ),
     (
         "LinkSpec.protection",
@@ -1696,6 +1707,15 @@ string at codec level (grammar violations surface at apply time, §3.4)."#,
         r#"Phase 2291 — the field-level style edit: a patch over the target's
 current style, setting exactly the fields `style` names."#,
     ),
+    (
+        "TreeOp::UpdateAccessibility",
+        r#"Phase 2527 — replaces the target's whole `accessibility` trait; a record
+setting no member removes it."#,
+    ),
+    (
+        "TreeOp::UpdateTooltip",
+        r#"Phase 2527 — sets the target's `tooltip`, or clears it on `None`."#,
+    ),
 ];
 
 // ── Codec hooks (Phase 2333) ─────────────────────────────────────────────────
@@ -2296,16 +2316,46 @@ pub(super) const DECODE_CHECKS: &[(&str, &str, Check, &str)] = &[
         "a rule constrains something, and its length bounds are not inverted",
     ),
     (
+        "Markdown",
+        "check_markdown",
+        Check::Post,
+        "a citation list is absent or non-empty, and each name is a token used once (3.6.32)",
+    ),
+    (
         "FileUpload",
         "check_file_upload",
         Check::Post,
         "a named destination is non-empty and each ceiling positive",
     ),
     (
+        "Button",
+        "check_button_affordance",
+        Check::Post,
+        "a click names no slot (§31.2)",
+    ),
+    (
+        "Select",
+        "check_select",
+        Check::Post,
+        "a set names exactly one slot (§31.2); an option group names each option at most once and, over static options, only options the select carries (§3.6.30)",
+    ),
+    (
+        "FormField",
+        "check_form_field_affordance",
+        Check::Post,
+        "a set names exactly one slot (§31.2)",
+    ),
+    (
         "DefaultSort",
         "check_default_sort",
         Check::Post,
         "a non-negative header index",
+    ),
+    (
+        "StaticRows",
+        "check_static_rows",
+        Check::Post,
+        "a citation list is absent or non-empty, names cells that exist, and names each once (3.6.33)",
     ),
     (
         "DataGrid",

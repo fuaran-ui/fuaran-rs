@@ -23,7 +23,7 @@ pub mod placement;
 use crate::canonical::{JVal, ordinal_cmp};
 use crate::limits::{MAX_NODE_DEPTH, MAX_NODES};
 use crate::wire::coerce;
-use crate::wire::{Binding, Node, NodeKind, TreeOp};
+use crate::wire::{Accessibility, Binding, FragmentArg, Node, NodeKind, TreeOp};
 
 // ─── Error + result surface ──────────────────────────────────────────────────
 
@@ -115,7 +115,7 @@ fn fail<T>(code: ApplyErrorCode, message: impl Into<String>) -> AResult<T> {
 /// The ordered `children` list of a child-bearing layout kind, or `None` — the
 /// discriminator every structural child op checks. Exhaustive over `NodeKind`
 /// so a future child-bearing kind cannot be silently skipped.
-fn layout_children(n: &Node) -> Option<&Vec<Node>> {
+pub(crate) fn layout_children(n: &Node) -> Option<&Vec<Node>> {
     match &n.kind {
         NodeKind::Box(s) => Some(&s.children),
         NodeKind::SplitPanel(s) => Some(&s.children),
@@ -191,9 +191,13 @@ fn kind_label(n: &Node) -> &'static str {
     }
 }
 
-/// Every immediate sub-node, in the shared traversal order: layout children /
-/// structural sub-trees first, then the `state` surfaces.
-fn child_nodes(n: &Node) -> Vec<&Node> {
+/// Every immediate sub-node, through every position a node holds another in
+/// (the reference's keyed walk, WIRE_FORMAT.md §34.2): what the kind holds
+/// (`kind_child_nodes`), then the `state` surfaces, then the envelope's
+/// author-declared `fallback`. The node and parent lookups, the id census and
+/// the size limits all walk this, so an op addressed to a node held in a slot
+/// argument or a `fallback` applies (Phase 2706).
+pub(crate) fn child_nodes(n: &Node) -> Vec<&Node> {
     let mut out = kind_child_nodes(&n.kind);
     if let Some(b) = &n.state.on_loading {
         out.push(b);
@@ -201,13 +205,53 @@ fn child_nodes(n: &Node) -> Vec<&Node> {
     if let Some(b) = &n.state.on_empty {
         out.push(b);
     }
+    if let Some(f) = &n.fallback {
+        out.push(f);
+    }
     out
 }
 
-/// The sub-nodes a KIND holds — `child_nodes` without the node's `state`
-/// surfaces. What an `EditNode` puts below the node it rewrites, since the
-/// rewritten node keeps its existing `state`.
-fn kind_child_nodes(kind: &NodeKind) -> Vec<&Node> {
+/// The slot arguments a kind carries — a `FragmentRef`'s `args`, a `Mount`'s
+/// `inputs` — with their positions sorted by key (ordinal), the order the
+/// canonical encoding writes them in.
+fn slot_args(kind: &NodeKind) -> &[(String, FragmentArg)] {
+    match kind {
+        NodeKind::FragmentRef(s) => &s.args,
+        NodeKind::Mount(s) => &s.inputs,
+        _ => &[],
+    }
+}
+
+/// The subtree of every `SlotArg` in key order; a value argument holds no node.
+fn slot_trees(args: &[(String, FragmentArg)]) -> Vec<&Node> {
+    let mut keyed: Vec<(&str, &Node)> = args
+        .iter()
+        .filter_map(|(k, a)| match a {
+            FragmentArg::Slot { tree } => Some((k.as_str(), &**tree)),
+            FragmentArg::Value(_) => None,
+        })
+        .collect();
+    keyed.sort_by(|x, y| ordinal_cmp(x.0, y.0));
+    keyed.into_iter().map(|(_, t)| t).collect()
+}
+
+fn slot_trees_mut(args: &mut [(String, FragmentArg)]) -> Vec<&mut Node> {
+    let mut keyed: Vec<(&str, &mut Node)> = args
+        .iter_mut()
+        .filter_map(|(k, a)| match a {
+            FragmentArg::Slot { tree } => Some((k.as_str(), &mut **tree)),
+            FragmentArg::Value(_) => None,
+        })
+        .collect();
+    keyed.sort_by(|x, y| ordinal_cmp(x.0, y.0));
+    keyed.into_iter().map(|(_, t)| t).collect()
+}
+
+/// The sub-nodes a KIND holds — `child_nodes` without the node's envelope
+/// (`state` surfaces, `fallback`): the ordered child list, the single-node arms,
+/// and the subtree of every slot argument. What an `EditNode` puts below the
+/// node it rewrites, since the rewritten node keeps its existing envelope.
+pub(crate) fn kind_child_nodes(kind: &NodeKind) -> Vec<&Node> {
     let mut out: Vec<&Node> = Vec::new();
     match kind {
         NodeKind::Box(s) => out.extend(&s.children),
@@ -263,6 +307,7 @@ fn kind_child_nodes(kind: &NodeKind) -> Vec<&Node> {
         | NodeKind::Drawing(_)
         | NodeKind::Mount(_) => {}
     }
+    out.extend(slot_trees(slot_args(kind)));
     out
 }
 
@@ -286,14 +331,20 @@ fn child_nodes_mut(n: &mut Node) -> Vec<&mut Node> {
             out.push(&mut s.default);
         }
         NodeKind::FragmentDecl(s) => out.push(&mut s.body),
+        NodeKind::FragmentRef(s) => out.extend(slot_trees_mut(&mut s.args)),
+        NodeKind::Mount(s) => out.extend(slot_trees_mut(&mut s.inputs)),
         _ => {}
     }
-    // `state` is a distinct field from `kind`; the borrows are disjoint.
+    // `state` and `fallback` are distinct fields from `kind`; the borrows are
+    // disjoint.
     if let Some(b) = n.state.on_loading.as_deref_mut() {
         out.push(b);
     }
     if let Some(b) = n.state.on_empty.as_deref_mut() {
         out.push(b);
+    }
+    if let Some(f) = n.fallback.as_deref_mut() {
+        out.push(f);
     }
     out
 }
@@ -540,9 +591,12 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
             }),
             _ => UnknownField,
         },
-        NodeKind::Markdown(_) => match field {
+        NodeKind::Markdown(s) => match field {
             "Text" => patch(coerce::text_source(value), |x| {
-                NodeKind::Markdown(crate::wire::MarkdownSpec { text: x })
+                NodeKind::Markdown(crate::wire::MarkdownSpec {
+                    citations: s.citations.clone(),
+                    text: x,
+                })
             }),
             _ => UnknownField,
         },
@@ -728,6 +782,12 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
             "Help" => patch(coerce::text_source(value), |x| {
                 NodeKind::Fact(crate::wire::FactSpec {
                     help: Some(x),
+                    ..s.clone()
+                })
+            }),
+            "Reference" => patch(coerce::string(value), |x| {
+                NodeKind::Fact(crate::wire::FactSpec {
+                    reference: Some(x),
                     ..s.clone()
                 })
             }),
@@ -1471,6 +1531,42 @@ fn apply_one(op: &TreeOp, root: &Node, telem: &mut Vec<OpApplyTelemetryRecord>) 
             });
             Ok(new_tree)
         }
+        TreeOp::UpdateAccessibility {
+            target,
+            accessibility,
+        } => {
+            let mut new_tree = root.clone();
+            let Some(node) = find_node_mut(&mut new_tree, target) else {
+                return fail(
+                    ApplyErrorCode::NodeNotFound,
+                    format!("Node '{target}' not found in tree."),
+                );
+            };
+            // A record setting no member is the absent slot, which is how the
+            // trait is removed (Phase 2527).
+            node.accessibility =
+                (*accessibility != Accessibility::default()).then(|| accessibility.clone());
+            telem.push(OpApplyTelemetryRecord {
+                op: "UpdateAccessibility",
+                target_id: target.clone(),
+            });
+            Ok(new_tree)
+        }
+        TreeOp::UpdateTooltip { target, tooltip } => {
+            let mut new_tree = root.clone();
+            let Some(node) = find_node_mut(&mut new_tree, target) else {
+                return fail(
+                    ApplyErrorCode::NodeNotFound,
+                    format!("Node '{target}' not found in tree."),
+                );
+            };
+            node.tooltip = tooltip.clone();
+            telem.push(OpApplyTelemetryRecord {
+                op: "UpdateTooltip",
+                target_id: target.clone(),
+            });
+            Ok(new_tree)
+        }
         TreeOp::UpdateState { target, state } => {
             let mut new_tree = root.clone();
             let Some(node) = find_node_mut(&mut new_tree, target) else {
@@ -1773,8 +1869,8 @@ pub fn apply(tree: &Node, op: &TreeOp) -> Result<ApplyOutcome, ApplyError> {
 /// each passed. A `Batch` is checked when any member is.
 ///
 /// The rest cannot grow the tree and are not charged a walk: `UpdateProp`,
-/// `ReplaceBinding`, `UpdateStyle` and `PatchStyle` carry no node, `RemoveNode` shrinks, and
-/// `ReorderChildren` permutes. They still apply to a tree that is already over
+/// `ReplaceBinding`, `UpdateStyle`, `PatchStyle`, `UpdateAccessibility` and `UpdateTooltip`
+/// carry no node, `RemoveNode` shrinks, and `ReorderChildren` permutes. They still apply to a tree that is already over
 /// a limit, which they did not put there.
 fn op_can_grow(op: &TreeOp) -> bool {
     match op {
@@ -1787,7 +1883,7 @@ fn op_can_grow(op: &TreeOp) -> bool {
 /// The subtree roots `op` puts INTO the tree, in the order it names them: an
 /// inserted child, a replacement root, the nodes a new kind holds, a new
 /// `state` block's alternatives, and a `Batch`'s members' insertions.
-fn inserted_nodes(op: &TreeOp) -> Vec<&Node> {
+pub(crate) fn inserted_nodes(op: &TreeOp) -> Vec<&Node> {
     match op {
         TreeOp::InsertChild { child, .. } => vec![child],
         TreeOp::ReplaceRoot { node } => vec![node],
@@ -1801,6 +1897,8 @@ fn inserted_nodes(op: &TreeOp) -> Vec<&Node> {
         | TreeOp::ReplaceBinding { .. }
         | TreeOp::UpdateStyle { .. }
         | TreeOp::PatchStyle { .. }
+        | TreeOp::UpdateAccessibility { .. }
+        | TreeOp::UpdateTooltip { .. }
         | TreeOp::RemoveNode { .. }
         | TreeOp::MoveNode { .. }
         | TreeOp::ReorderChildren { .. } => Vec::new(),
