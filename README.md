@@ -713,6 +713,25 @@ applies; a document that omits `onBubble` now re-encodes without it). In Rust, `
 public field, so a struct literal built outside this crate must name `on_bubble`. It rides the
 current unreleased version.
 
+## An unchanged reorder writes nothing — Phase 2720
+
+A resolved `ReorderChildren` reads and writes its parent at the `kind` and child-list slots. One
+whose list is the parent's child order in the tree it applies to — the same ids, in the same order,
+of the same length — changes nothing there, so its footprint now reads both slots and writes
+neither, as the reference's does (WIRE_FORMAT.md §34.3, §34.6). Every op that changes the child
+list writes one of the two slots it still reads, so it stays ordered against each of them: a
+removal or move of a listed child, an insert into the parent, an edit of the parent's kind, and a
+real reorder of the same parent (applied after the real one, the restated order would put the old
+order back). What it frees is two reorders that each restate the order their own branch holds.
+
+Certified by the merge-conformance fixtures `fold-two-restated-orders` (derives),
+`fold-refusal-two-reorders` (a real reorder beside a restated one, still refused) and
+`fold-refusal-two-real-reorders` (refused), at specification commit `5a9b4bb`. Before the change
+this host refused `fold-two-restated-orders` and passed every other fold fixture. `tests/dag.rs`
+pins the footprint itself and that a removal of a listed child still meets the restated reorder.
+Additive: a merge that was refused now derives, and nothing that derived changes. It rides the
+current unreleased version.
+
 ## The Core boundary — `src/core/`
 
 The subsystems this host reimplements from the `Fuaran.Core` reference live in one

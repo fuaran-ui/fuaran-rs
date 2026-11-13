@@ -872,3 +872,66 @@ fn an_op_reaches_a_node_held_in_a_fallback_or_a_slot_argument() {
         "the slot argument's subtree takes the child"
     );
 }
+
+// ─── an unchanged reorder writes nothing (fuaran#2696, Phase 2720) ──────────
+
+const RESTATE_AB: &str = r#"{"$type":"ReorderChildren","newOrder":["a","b"],"parentId":"root"}"#;
+
+/// A reorder whose list is the parent's child order where it applies reads the
+/// parent's `kind` and child-list slots and writes neither; a reorder that
+/// changes the order writes both.
+#[test]
+fn an_unchanged_reorder_reads_the_list_and_writes_nothing() {
+    use fuaran_rs::dag::footprint_in;
+    let base = box_of(&["a", "b"]);
+    let restated = footprint_in(&base, &op(RESTATE_AB));
+    let slot = |s: &str| ("root".to_owned(), s.to_owned());
+    assert!(restated.slot_writes.is_empty(), "{restated:?}");
+    assert!(restated.structure_writes.is_empty(), "{restated:?}");
+    assert!(restated.slot_reads.contains(&slot("kind")));
+    assert!(restated.slot_reads.contains(&slot("#children")));
+
+    let real = footprint_in(
+        &base,
+        &op(r#"{"$type":"ReorderChildren","newOrder":["b","a"],"parentId":"root"}"#),
+    );
+    assert!(real.slot_writes.contains(&slot("kind")));
+    assert!(real.slot_writes.contains(&slot("#children")));
+}
+
+/// The unchanged reorder is still seen by a removal of a child it lists: the
+/// removal writes the parent's child list, which the reorder reads, so Core's
+/// report still holds the pair.
+#[test]
+fn an_unchanged_reorder_still_conflicts_with_a_removal_of_a_listed_child() {
+    use fuaran_rs::dag::conflicts_in;
+    let base = box_of(&["a", "b"]);
+    let (restate, remove) = (
+        vec![op(RESTATE_AB)],
+        vec![op(r#"{"$type":"RemoveNode","target":"b"}"#)],
+    );
+    for (d1, d2) in [(&restate, &remove), (&remove, &restate)] {
+        let report = conflicts_in(&base, d1, d2);
+        assert!(
+            report.iter().any(|c| c.address == "root"),
+            "the removal of a listed child meets the unchanged reorder: {report:?}"
+        );
+    }
+}
+
+/// Two reorders that each restate the order their own branch holds — one after
+/// an append — are not reported against each other, and the fold derives the
+/// append in both orders.
+#[test]
+fn two_restated_orders_derive() {
+    let base = box_of(&["a", "b"]);
+    let plain = vec![op(RESTATE_AB)];
+    let appended = vec![
+        insert("c"),
+        op(r#"{"$type":"ReorderChildren","newOrder":["a","b","c"],"parentId":"root"}"#),
+    ];
+    for (d1, d2) in [(&plain, &appended), (&appended, &plain)] {
+        let r = reconcile_fold(&base, d1, d2).expect("two restated orders derive");
+        assert_eq!(encode_node(&r.tree), encode_node(&box_of(&["a", "b", "c"])));
+    }
+}

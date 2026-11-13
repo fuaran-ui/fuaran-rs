@@ -44,7 +44,9 @@
 //!   are read at their `parent` slots (the cycle check reads the chain), and
 //!   the destination keeps Core's named structure write and read. A resolved
 //!   REORDER (fuaran#2670) reads and writes its parent at the `kind` and
-//!   child-list slots and reads each listed child at its `parent` slot.
+//!   child-list slots and reads each listed child at its `parent` slot; one
+//!   whose list is the parent's child order where it applies (fuaran#2696)
+//!   changes nothing, so it reads both slots and writes neither.
 //!
 //! Ids are counted over every position a node holds another in (the apply
 //! engine's `child_nodes`, the reference's keyed walk: what the kind holds, the
@@ -423,14 +425,33 @@ fn resolved_at(state: &Node, after: Option<&Node>, op: &TreeOp) -> Footprint {
         // list, held in its `kind`, and touches no child: the parent is read and
         // written at its `kind` and child-list slots, and each listed child is
         // read at its `parent` slot. An unresolved reorder is the pure arm.
+        //
+        // An UNCHANGED reorder (fuaran#2696) — its list is the parent's child
+        // order in `state`: the same ids, in the same order, of the same length —
+        // changes nothing where it applies, so it declares the reads above and no
+        // write. Every op that changes the child list writes one of the two slots
+        // it still reads, so it stays ordered against each of them, a real
+        // reorder of the same parent included (applied second, the unchanged
+        // reorder would restore the order it lists). What it frees is a pair of
+        // reorders that each restate their own order, and an op that only reads
+        // the list.
         TreeOp::ReorderChildren {
             parent_id,
             new_order,
         } => match (after, find_structural(state, parent_id)) {
-            (Some(_), Some(_)) => new_order.iter().fold(
-                child_list(parent_id, slot_edit(parent_id, "kind")),
-                |acc, c| acc.union(reading_slot(c, "parent")),
-            ),
+            (Some(_), Some(parent)) => {
+                let held = structural_children(parent);
+                let unchanged = held.len() == new_order.len()
+                    && held.iter().zip(new_order).all(|(c, id)| c.id == *id);
+                let list_slots = if unchanged {
+                    reading_slot(parent_id, "kind").union(reading_slot(parent_id, CHILD_LIST_SLOT))
+                } else {
+                    child_list(parent_id, slot_edit(parent_id, "kind"))
+                };
+                new_order
+                    .iter()
+                    .fold(list_slots, |acc, c| acc.union(reading_slot(c, "parent")))
+            }
             _ => footprint_of(op),
         },
         TreeOp::EditNode { target, .. } => vertical_at(target, &|node| {

@@ -22,7 +22,9 @@
 //!    places the appends.
 //! 4. A REFUSAL — anything else. `DeleteModify` when exactly one of the two ops
 //!    removes (a `RemoveNode`, or a `Batch` holding one), `Conflict` otherwise.
-//!    Two reorders of one parent that differ stay refused.
+//!    Two reorders of one parent that differ stay refused; two that each
+//!    restate the order their own branch holds write nothing, so Core does not
+//!    report the pair at all (fuaran#2696).
 //!
 //! THE CHILD-ORDER RULE (§34.4). Under an interleaved or rebased parent the
 //! children neither branch appended keep the fold's order (the rebased
