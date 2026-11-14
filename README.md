@@ -732,6 +732,28 @@ pins the footprint itself and that a removal of a listed child still meets the r
 Additive: a merge that was refused now derives, and nothing that derived changes. It rides the
 current unreleased version.
 
+## An unchanged reorder yields to a real one — Phase 2733
+
+`dag::reconcile_fold` now applies the yield rule before Core's conflict report (WIRE_FORMAT.md
+§34.3, §34.6): a top-level `ReorderChildren` whose list is its parent's child order in the tree its
+own branch applies it to (the same ids, in the same order) is dropped from its delta when the other
+delta holds a top-level `ReorderChildren` of the same parent that changes the order on its branch.
+The real order survives, and the merge script records it for that parent, because a merge node's
+replay still applies the dropped op. The rule yields only to a real reorder: two restatements
+already merge (Phase 2720), and a restatement beside an insert into the parent, a removal of a
+listed child, or a reorder inside a `Batch` is judged as before.
+`dag::reconcile::yield_unchanged_reorders` exposes the step on its own.
+
+Certified by the merge-conformance fixtures `fold-reorder-beside-restated-order`,
+`fold-restated-order-beside-reorder` and `fold-append-restated-beside-reorder` (all derive, in both
+branch orders), at specification commit `ff3b637`. They replace `fold-refusal-two-reorders`, which
+the manifest lists under `retiredFoldFixtures`; the Phase 2720 paragraph above describes the
+corpus before that retirement. Before the change this host refused the three new fixtures and passed
+every other fold fixture. This host offers no precedence merge, so its fold leg reads
+`foldFixtures` only and the manifest's `precedenceFixtures` stay unread (§34.6). Additive: a merge
+that was refused now derives, and nothing that derived changes. It rides the current unreleased
+version.
+
 ## A theme manifest is read under §21.1's syntactic limits — Phase 2721
 
 `theme::manifest::try_decode` (new) reads a manifest under WIRE_FORMAT.md §21.1's syntactic

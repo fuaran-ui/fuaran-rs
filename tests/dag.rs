@@ -783,14 +783,10 @@ fn a_reorder_beside_an_append_is_rebased() {
         assert_eq!(encode_node(&r.tree), encode_node(&box_of(&["b", "a", "c"])));
         assert_eq!(r.interleaves, 1);
     }
-    // Two reorders of one parent that differ still refuse.
-    let other = vec![op(
-        r#"{"$type":"ReorderChildren","newOrder":["a","b"],"parentId":"root"}"#,
-    )];
-    assert!(matches!(
-        reconcile_fold(&base, &reorder, &other),
-        Err(FoldFault::Refused(_))
-    ));
+    // Two real reorders of one parent that differ still refuse:
+    // `two_real_reorders_and_a_batched_reorder_still_refuse` (Phase 2733). The
+    // pair this test once pinned here — a restatement beside a real reorder —
+    // now yields (fuaran#2724).
 }
 
 /// An agreement is counted once per distinct op, however many addresses the
@@ -933,5 +929,121 @@ fn two_restated_orders_derive() {
     for (d1, d2) in [(&plain, &appended), (&appended, &plain)] {
         let r = reconcile_fold(&base, d1, d2).expect("two restated orders derive");
         assert_eq!(encode_node(&r.tree), encode_node(&box_of(&["a", "b", "c"])));
+    }
+}
+
+// ─── an unchanged reorder yields to a real one (fuaran#2724, Phase 2733) ────
+
+const REAL_BA: &str = r#"{"$type":"ReorderChildren","newOrder":["b","a"],"parentId":"root"}"#;
+
+/// The yield rule drops a restated reorder beside the other branch's REAL
+/// reorder of the same parent, from whichever branch holds it, and names the
+/// parent; beside anything else it drops nothing.
+#[test]
+fn an_unchanged_reorder_yields_only_to_a_real_reorder_of_its_parent() {
+    use fuaran_rs::dag::reconcile::yield_unchanged_reorders;
+    let base = box_of(&["a", "b"]);
+    let enc = |ops: &[TreeOp]| ops.iter().map(encode_op).collect::<Vec<_>>();
+    let (restated, real) = (vec![op(RESTATE_AB)], vec![op(REAL_BA)]);
+
+    let (ka, kb, parents) = yield_unchanged_reorders(&base, &restated, &real);
+    assert_eq!(
+        (enc(&ka), enc(&kb), parents),
+        (vec![], enc(&real), vec!["root".to_owned()])
+    );
+    let (ka, kb, parents) = yield_unchanged_reorders(&base, &real, &restated);
+    assert_eq!(
+        (enc(&ka), enc(&kb), parents),
+        (enc(&real), vec![], vec!["root".to_owned()])
+    );
+
+    for (name, other) in [
+        ("an insert into the parent", insert("c")),
+        (
+            "a removal of a child it lists",
+            op(r#"{"$type":"RemoveNode","target":"b"}"#),
+        ),
+        ("another restatement", op(RESTATE_AB)),
+        ("a real reorder inside a Batch", TreeOp::Batch(real.clone())),
+    ] {
+        let other = vec![other];
+        let (ka, kb, parents) = yield_unchanged_reorders(&base, &restated, &other);
+        assert_eq!(
+            (enc(&ka), enc(&kb), parents),
+            (enc(&restated), enc(&other), vec![]),
+            "beside {name} nothing is dropped"
+        );
+    }
+}
+
+/// A restated reorder beside a real reorder derives the real order in both
+/// branch orders; the script records the parent's surviving order, and no
+/// parent is counted as interleaved.
+#[test]
+fn a_restated_reorder_beside_a_real_one_derives_the_real_order() {
+    let base = box_of(&["a", "b"]);
+    let (restated, real) = (vec![op(RESTATE_AB)], vec![op(REAL_BA)]);
+    for (d1, d2) in [(&restated, &real), (&real, &restated)] {
+        let r = reconcile_fold(&base, d1, d2).expect("the restatement yields");
+        assert_eq!(encode_node(&r.tree), encode_node(&box_of(&["b", "a"])));
+        assert_eq!(
+            r.script.iter().map(encode_op).collect::<Vec<_>>(),
+            vec![REAL_BA.to_owned()]
+        );
+        assert_eq!(r.interleaves, 0);
+    }
+}
+
+/// An unchanged reorder beside a removal of a child it lists is judged as
+/// before the rule: Core still reports the pair, and the policy rebases it (one
+/// rebased parent) rather than dropping the reorder.
+#[test]
+fn an_unchanged_reorder_beside_a_removal_is_still_judged() {
+    use fuaran_rs::dag::conflicts_in;
+    let base = box_of(&["a", "b"]);
+    let (restated, remove) = (
+        vec![op(RESTATE_AB)],
+        vec![op(r#"{"$type":"RemoveNode","target":"b"}"#)],
+    );
+    for (d1, d2) in [(&restated, &remove), (&remove, &restated)] {
+        assert!(
+            conflicts_in(&base, d1, d2)
+                .iter()
+                .any(|c| c.address == "root"),
+            "the pair is still reported"
+        );
+        let r = reconcile_fold(&base, d1, d2).expect("a rebase derives");
+        assert_eq!(r.interleaves, 1, "the pair was judged, not dropped");
+        assert_eq!(encode_node(&r.tree), encode_node(&box_of(&["a"])));
+    }
+}
+
+/// Two real reorders of one parent that differ still refuse, and so does a
+/// restatement beside a real reorder held inside a `Batch` (the rule frees only
+/// the top-level pair).
+#[test]
+fn two_real_reorders_and_a_batched_reorder_still_refuse() {
+    let base = box_of(&["a", "b", "c"]);
+    let (x, y) = (
+        vec![op(
+            r#"{"$type":"ReorderChildren","newOrder":["b","a","c"],"parentId":"root"}"#,
+        )],
+        vec![op(
+            r#"{"$type":"ReorderChildren","newOrder":["c","b","a"],"parentId":"root"}"#,
+        )],
+    );
+    for (d1, d2) in [(&x, &y), (&y, &x)] {
+        assert!(matches!(
+            reconcile_fold(&base, d1, d2),
+            Err(FoldFault::Refused(_))
+        ));
+    }
+    let base = box_of(&["a", "b"]);
+    let (restated, batched) = (vec![op(RESTATE_AB)], vec![TreeOp::Batch(vec![op(REAL_BA)])]);
+    for (d1, d2) in [(&restated, &batched), (&batched, &restated)] {
+        assert!(matches!(
+            reconcile_fold(&base, d1, d2),
+            Err(FoldFault::Refused(_))
+        ));
     }
 }

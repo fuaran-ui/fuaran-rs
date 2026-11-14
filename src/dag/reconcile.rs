@@ -26,6 +26,12 @@
 //!    restate the order their own branch holds write nothing, so Core does not
 //!    report the pair at all (fuaran#2696).
 //!
+//! THE YIELD RULE (§34.3, fuaran#2724), before Core is asked: a reorder that
+//! leaves its parent's order as it was on its own branch yields to the other
+//! branch's REAL reorder of the same parent — it is dropped from its delta, the
+//! real order survives, and the script records it for that parent
+//! ([`yield_unchanged_reorders`]).
+//!
 //! THE CHILD-ORDER RULE (§34.4). Under an interleaved or rebased parent the
 //! children neither branch appended keep the fold's order (the rebased
 //! reorder's, where a branch reordered the parent) and the appended ones
@@ -400,6 +406,85 @@ fn appends_of(parent: &str, delta: &[TreeOp]) -> Vec<String> {
     run
 }
 
+/// The parent a top-level `ReorderChildren` reorders, with whether its list is
+/// the parent's child order in `tree` — the same ids, in the same order, of the
+/// same length: the equality the footprint's unchanged-reorder arm states
+/// (fuaran#2696). `None` for any other op, a `Batch` included, and for a reorder
+/// of a parent `tree` does not hold.
+fn reorder_in<'a>(tree: &Node, op: &'a TreeOp) -> Option<(&'a str, bool)> {
+    let TreeOp::ReorderChildren {
+        parent_id,
+        new_order,
+    } = op
+    else {
+        return None;
+    };
+    let p = find_structural(tree, parent_id)?;
+    let kids = structural_children(p);
+    let unchanged =
+        kids.len() == new_order.len() && kids.iter().zip(new_order).all(|(c, id)| &c.id == id);
+    Some((parent_id, unchanged))
+}
+
+/// Each op of `delta` paired with the tree its own branch applies it to,
+/// threaded from `base`. Called only once both deltas are known to apply.
+fn threaded<'a>(base: &Node, delta: &'a [TreeOp]) -> Vec<(&'a TreeOp, Node)> {
+    let mut t = base.clone();
+    let mut out = Vec::with_capacity(delta.len());
+    for op in delta {
+        let next = apply(&t, op).map_or_else(|_| t.clone(), |o| o.new_tree);
+        out.push((op, std::mem::replace(&mut t, next)));
+    }
+    out
+}
+
+/// THE YIELD RULE (§34.3, fuaran#2724), applied before anything is judged: a
+/// top-level `ReorderChildren` that leaves its parent's order as it was in the
+/// tree its own branch applies it to is dropped from its delta when the other
+/// delta holds a top-level `ReorderChildren` of the same parent that changes
+/// the order on its own branch. The dropped op carries no intent (on its own
+/// branch it is no change), so every later tree of its branch is as it was and
+/// the delta still applies op by op; replayed after the real reorder it would
+/// put the old order back. Nothing else is dropped: an unchanged reorder beside
+/// an append or a removal in its parent, beside another unchanged reorder, or
+/// beside a reorder inside a `Batch` is judged as before. Returns the two
+/// deltas without the yielded reorders and the parents they reordered
+/// (ordinal, distinct): the merge script records each such parent's surviving
+/// order, because a merge node's replay still applies the yielded op.
+pub fn yield_unchanged_reorders(
+    base: &Node,
+    delta_a: &[TreeOp],
+    delta_b: &[TreeOp],
+) -> (Vec<TreeOp>, Vec<TreeOp>, Vec<String>) {
+    let a = threaded(base, delta_a);
+    let b = threaded(base, delta_b);
+    let real = |ops: &[(&TreeOp, Node)]| -> BTreeSet<String> {
+        ops.iter()
+            .filter_map(|(op, t)| match reorder_in(t, op) {
+                Some((p, false)) => Some(p.to_owned()),
+                _ => None,
+            })
+            .collect()
+    };
+    let (real_a, real_b) = (real(&a), real(&b));
+    let mut yielded: Vec<String> = Vec::new();
+    let mut split = |ops: &[(&TreeOp, Node)], other_real: &BTreeSet<String>| -> Vec<TreeOp> {
+        let mut kept = Vec::with_capacity(ops.len());
+        for (op, t) in ops {
+            match reorder_in(t, op) {
+                Some((p, true)) if other_real.contains(p) => yielded.push(p.to_owned()),
+                _ => kept.push((*op).clone()),
+            }
+        }
+        kept
+    };
+    let kept_a = split(&a, &real_b);
+    let kept_b = split(&b, &real_a);
+    yielded.sort_by(|x, y| ordinal_cmp(x, y));
+    yielded.dedup();
+    (kept_a, kept_b, yielded)
+}
+
 /// Reconciles two branch deltas from their common base under the §34 policy:
 /// the derived tree and the script a merge records, or a typed refusal. Both
 /// deltas apply from `base`, op by op, as recorded on their branches.
@@ -413,6 +498,11 @@ pub fn reconcile_fold(
             return Err(FoldFault::DeltaDoesNotApply { side, index, error });
         }
     }
+
+    // The yield rule runs first (fuaran#2724): what follows judges and folds
+    // the deltas without the yielded reorders.
+    let (kept_a, kept_b, yielded) = yield_unchanged_reorders(base, delta_a, delta_b);
+    let (delta_a, delta_b) = (kept_a.as_slice(), kept_b.as_slice());
 
     let mut refusals = Vec::new();
     let mut interleaved: BTreeSet<String> = BTreeSet::new();
@@ -439,6 +529,10 @@ pub fn reconcile_fold(
         return Err(FoldFault::Refused(sort_fold_refusals(&refusals)));
     }
 
+    let interleaves = interleaved.len();
+    // A parent whose reorder yielded is scripted too: its order in the fold is
+    // the surviving reorder's, which the script fixes for a replay.
+    interleaved.extend(yielded);
     let mut parents: Vec<String> = interleaved.into_iter().collect();
     parents.sort_by(|x, y| ordinal_cmp(x, y));
     let derive = |first: &[TreeOp], second: &[TreeOp]| -> Result<(Node, Vec<TreeOp>), ApplyError> {
@@ -467,7 +561,7 @@ pub fn reconcile_fold(
         tree: ab,
         script,
         agreements: agreed.len(),
-        interleaves: parents.len(),
+        interleaves,
     })
 }
 
