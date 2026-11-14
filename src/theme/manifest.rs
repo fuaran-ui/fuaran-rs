@@ -9,6 +9,7 @@
 
 use crate::canonical::{JVal, parse, render_canonical};
 use crate::theme::contrast::{ContrastVerdict, Rgba, verdict};
+use crate::wire::{DecodeError, document_bytes_error, parse_failure};
 
 /// The canonical `ToneVariant` palette, as wire strings.
 pub const TONES: &[&str] = &[
@@ -211,10 +212,13 @@ fn num_or(v: Option<&JVal>, def: f64) -> f64 {
     as_num(v).unwrap_or(def)
 }
 
-fn sorted_keys(fields: &[(String, JVal)]) -> Vec<&str> {
-    let mut keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
-    keys.sort();
-    keys
+/// The members in key order. Sorting the pairs rather than the keys keeps the
+/// walk linear in the member count: a key-then-lookup walk is quadratic, and an
+/// object at §21.1's 100 000-member bound took minutes to decode (Phase 2721).
+fn sorted_members(fields: &[(String, JVal)]) -> Vec<(&str, &JVal)> {
+    let mut members: Vec<(&str, &JVal)> = fields.iter().map(|(k, v)| (k.as_str(), v)).collect();
+    members.sort_by(|a, b| a.0.cmp(b.0));
+    members
 }
 
 // ─── DTCG token-tree walk ────────────────────────────────────────────────────
@@ -238,7 +242,7 @@ fn walk_tokens(prefix: &str, node: &JVal) -> Vec<ManifestToken> {
         }];
     }
     let mut out = vec![];
-    for k in sorted_keys(fields) {
+    for (k, v) in sorted_members(fields) {
         if k.starts_with('$') {
             continue;
         }
@@ -247,7 +251,7 @@ fn walk_tokens(prefix: &str, node: &JVal) -> Vec<ManifestToken> {
         } else {
             format!("{prefix}.{k}")
         };
-        out.extend(walk_tokens(&next, get(fields, k).expect("key present")));
+        out.extend(walk_tokens(&next, v));
     }
     out
 }
@@ -365,9 +369,30 @@ pub fn of_json(root: &JVal) -> ThemeManifest {
     }
 }
 
-/// Decode a manifest from JSON; `None` on a parse failure.
+/// Decode a manifest from JSON, refusing by name.
+///
+/// A manifest is untrusted text, read under `WIRE_FORMAT.md` §21.1's syntactic
+/// limits — JSON depth, string length, array length, object members and
+/// document bytes (the node bounds do not apply: a manifest has no nodes). The
+/// document-bytes bound is checked BEFORE the parse, as §21.7 requires; the
+/// other four are enforced by the reader on the way down. A breach is a
+/// [`DecodeError`] with code `LIMIT_EXCEEDED` at `$`, malformed text is
+/// `INVALID_JSON` — the same refusal shape, built by the same functions, as a
+/// node document's (Phase 2721).
+pub fn try_decode(json: &str) -> Result<ThemeManifest, DecodeError> {
+    if let Some(e) = document_bytes_error(json) {
+        return Err(e);
+    }
+    parse(json)
+        .map(|root| of_json(&root))
+        .map_err(|e| parse_failure(&e))
+}
+
+/// Decode a manifest from JSON; `None` wherever [`try_decode`] refuses. Kept for
+/// callers that only need to know whether a manifest was read; the reason is
+/// [`try_decode`]'s.
 pub fn decode(json: &str) -> Option<ThemeManifest> {
-    parse(json).ok().map(|root| of_json(&root))
+    try_decode(json).ok()
 }
 
 /// Project a DTCG / tokens.json file into a manifest (values lossless; roles

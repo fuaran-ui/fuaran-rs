@@ -732,6 +732,31 @@ pins the footprint itself and that a removal of a listed child still meets the r
 Additive: a merge that was refused now derives, and nothing that derived changes. It rides the
 current unreleased version.
 
+## A theme manifest is read under §21.1's syntactic limits — Phase 2721
+
+`theme::manifest::try_decode` (new) reads a manifest under WIRE_FORMAT.md §21.1's syntactic
+limits — JSON depth 256, string length 1,048,576 code points, array length and object members
+100,000, and document bytes 33,554,432 — the sentence the specification carries under the Phase
+2133 byte law (the node bounds do not apply: a manifest has no nodes). A manifest at each bound
+decodes; one past it is refused with a `wire::DecodeError` of code `LIMIT_EXCEEDED` at `$` naming
+the limit, built by the same functions that refuse a node document. Malformed text is
+`INVALID_JSON`.
+
+Measured before the change: the depth, string, array and object bounds already held, enforced by
+the reader on the way down, but a refusal reached the caller only as `None`; and a
+33,554,433-byte manifest decoded. The byte bound is now checked before the parse, as §21.7
+requires. Measuring the member bound found a cost as well: the token walk looked each key up again
+by a linear scan, so a manifest object at the 100,000-member bound took over seven minutes to
+decode in a debug build. It walks the sorted members directly now, in the same key order, and the
+same document decodes in seconds.
+
+**Conformance statement — additive.** `decode` keeps its signature, `Option<ThemeManifest>`,
+and is now `try_decode(json).ok()`: it returns `None` for exactly what `try_decode` refuses,
+which adds the one refusal past the byte bound. `try_decode` is the new, named-error entry
+point. The C ABI carries no manifest entry, so nothing a native binding calls moves. Pinned by
+`tests/manifest_limits.rs` (each bound, at it and one past it, through both entry points).
+Host-local vectors, as §21.7 prescribes. It rides the current unreleased version.
+
 ## The Core boundary — `src/core/`
 
 The subsystems this host reimplements from the `Fuaran.Core` reference live in one

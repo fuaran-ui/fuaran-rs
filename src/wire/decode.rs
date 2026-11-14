@@ -4296,7 +4296,7 @@ pub(super) fn invalid_json(parse_message: &str) -> DecodeError {
 /// limit breach is `LIMIT_EXCEEDED`, never `INVALID_JSON`. Only the parser knows
 /// which of the two happened, so it flags the distinction rather than leaving it
 /// to be re-derived from a message string.
-pub(super) fn parse_failure(e: &crate::canonical::ParseError) -> DecodeError {
+pub(crate) fn parse_failure(e: &crate::canonical::ParseError) -> DecodeError {
     if e.limit {
         make_error(
             DecodeErrorCode::LimitExceeded,
@@ -4333,7 +4333,7 @@ pub(super) fn limit_error(path: &str, breach: crate::limits::LimitBreach) -> Dec
 /// `&str` is UTF-8 by construction, so `len()` IS the measured unit and there
 /// is nothing to convert. The path is `$`: the breach is a property of the
 /// document, not of a position in it.
-pub(super) fn document_bytes_error(json: &str) -> Option<DecodeError> {
+pub(crate) fn document_bytes_error(json: &str) -> Option<DecodeError> {
     if json.len() <= crate::limits::MAX_DOCUMENT_BYTES {
         return None;
     }

@@ -21,6 +21,7 @@ mod result;
 pub(crate) use decode::coerce;
 pub(crate) use decode::live_data_source;
 pub use decode::{decode_node, decode_op, is_hex_colour};
+pub(crate) use decode::{document_bytes_error, parse_failure};
 pub use encode::{encode_node, encode_op};
 pub use model::*;
 // The schema operations and the unit algebra a schema entry's metadata is
