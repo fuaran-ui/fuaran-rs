@@ -26,8 +26,14 @@ pub struct ParseError {
     /// syntax error. §21.2 rule 2 forbids reporting a limit breach as
     /// `INVALID_JSON` — the input is well-formed and merely too large to walk,
     /// and calling it malformed sends the author to repair the wrong thing.
-    /// `decode_node` reads this to choose between the two codes.
+    /// Always `breach.is_some()`; the decoders read `breach`, which also names
+    /// the bound.
     pub limit: bool,
+    /// WHICH §21.1 bound was breached, when `limit` is true (Phase 2739). The
+    /// refusal's `expected_shape` hint is derived from this, so a string,
+    /// array, object or document-bytes breach names its own bound rather than
+    /// the depth one, and no hint is re-derived from the message text.
+    pub(crate) breach: Option<JsonLimit>,
 }
 
 /// The §21.1 bounds this host's reader enforces on the way down (§21.2 rule
@@ -50,6 +56,7 @@ pub fn parse(input: &str) -> Result<JVal, ParseError> {
             message: e.message,
             offset: e.offset,
             limit: false,
+            breach: None,
         },
         JsonRefusal::LimitExceeded(b) => {
             let message = match b.limit {
@@ -80,6 +87,7 @@ pub fn parse(input: &str) -> Result<JVal, ParseError> {
                 message,
                 offset: b.offset,
                 limit: true,
+                breach: Some(b.limit),
             }
         }
     })

@@ -779,6 +779,33 @@ point. The C ABI carries no manifest entry, so nothing a native binding calls mo
 `tests/manifest_limits.rs` (each bound, at it and one past it, through both entry points).
 Host-local vectors, as §21.7 prescribes. It rides the current unreleased version.
 
+## The spine's head, and a limit refusal that names its own limit — Phase 2739
+
+The crate requires the Core spine `fuaran-core` at `0.0.3-alpha.1`, its head, where it required
+`0.0.1-alpha.1`. The two versions between moved the spine's capability registry and policy gate
+(a host-chosen decision context, grants bound to the invocation's identity, a declared result,
+and a decision path that allocates nothing). This host calls none of that surface — what it uses
+of the spine is the JSON reader and writer, the number form, the exact decimal, units, fields,
+SHA-256 and the op-stream chain's pre-image — so the raise is the requirement alone: no call site
+moved, and the full suite passes against the head unchanged. CI checks the spine out unpinned,
+so a spine that moves past the requirement again fails at resolution, as it should.
+
+A §21.1 limit refusal now names the limit that was breached in its `expected_shape`. It used to
+carry the depth hint whatever the bound, so a string, array, object or document-bytes breach was
+answered with "a document nesting no more than 256 levels deep". The reader reports which bound
+fired, `canonical::ParseError` carries it (a crate-internal field), and the hint is derived from
+it, never from the message: `strings of no more than 1048576 code points`, `arrays of no more than
+100000 elements`, `objects of no more than 100000 members` and `a document of at most 33554432
+UTF-8 bytes`, the spellings the Go host uses. Pinned for every kind on the node path and the
+theme-manifest path, the two paths that report a breach this way.
+
+**Conformance statement — additive.** No function signature moves; a refusal's hint text changes
+for four limit kinds, and hints are not part of the corpus. One narrowing, stated rather than
+left to be found: `canonical::ParseError`'s new field is crate-internal, so code outside the crate
+can no longer build a `ParseError` with a struct literal. Its fields still read as before, and the
+crate's own reader is the only thing that has a reason to build one. It rides the current
+unreleased version.
+
 ## The Core boundary — `src/core/`
 
 The subsystems this host reimplements from the `Fuaran.Core` reference live in one

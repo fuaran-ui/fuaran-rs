@@ -4294,22 +4294,45 @@ pub(super) fn invalid_json(parse_message: &str) -> DecodeError {
 
 /// Turn a parse failure into a decode error, honouring §21.2 rule 2: a resource
 /// limit breach is `LIMIT_EXCEEDED`, never `INVALID_JSON`. Only the parser knows
-/// which of the two happened, so it flags the distinction rather than leaving it
-/// to be re-derived from a message string.
+/// which of the two happened, and which bound it was, so it carries the bound
+/// rather than leaving either to be re-derived from a message string.
 pub(crate) fn parse_failure(e: &crate::canonical::ParseError) -> DecodeError {
-    if e.limit {
-        make_error(
+    match e.breach {
+        Some(bound) => make_error(
             DecodeErrorCode::LimitExceeded,
             "$".to_string(),
             e.message.clone(),
-            Some(format!(
-                "a document nesting no more than {} levels deep",
-                crate::limits::MAX_JSON_DEPTH
-            )),
-        )
-    } else {
-        invalid_json(&e.message)
+            Some(syntactic_limit_hint(bound)),
+        ),
+        None => invalid_json(&e.message),
     }
+}
+
+/// The `expected_shape` hint for a breach of one §21.1 syntactic bound: the
+/// bound that was breached, and nothing else (Phase 2739).
+fn syntactic_limit_hint(bound: fuaran_core::json::JsonLimit) -> String {
+    use crate::limits::{MAX_ARRAY_LENGTH, MAX_JSON_DEPTH, MAX_STRING_LENGTH};
+    use fuaran_core::json::JsonLimit;
+    match bound {
+        JsonLimit::Depth => format!("a document nesting no more than {MAX_JSON_DEPTH} levels deep"),
+        JsonLimit::StringLength => {
+            format!("strings of no more than {MAX_STRING_LENGTH} code points")
+        }
+        JsonLimit::ArrayLength => format!("arrays of no more than {MAX_ARRAY_LENGTH} elements"),
+        // An object's members are bounded by `MAX_ARRAY_LENGTH` (the reader's
+        // `UI_LIMITS`), so the hint names that value.
+        JsonLimit::ObjectMembers => format!("objects of no more than {MAX_ARRAY_LENGTH} members"),
+        JsonLimit::DocumentBytes => document_bytes_hint(),
+    }
+}
+
+/// The hint for a document over the §21.7 ceiling, one spelling for the
+/// pre-parse check and a reader that reports the same bound.
+fn document_bytes_hint() -> String {
+    format!(
+        "a document of at most {} UTF-8 bytes",
+        crate::limits::MAX_DOCUMENT_BYTES
+    )
 }
 
 /// A §21 walk-bound refusal at `path`.
@@ -4345,10 +4368,7 @@ pub(crate) fn document_bytes_error(json: &str) -> Option<DecodeError> {
             json.len(),
             crate::limits::MAX_DOCUMENT_BYTES
         ),
-        Some(format!(
-            "a document of at most {} UTF-8 bytes",
-            crate::limits::MAX_DOCUMENT_BYTES
-        )),
+        Some(document_bytes_hint()),
     ))
 }
 
@@ -4488,5 +4508,131 @@ pub(crate) mod coerce {
     /// Phase 821 — the `Icon` display kind's size modifier.
     pub fn icon_size(v: &JVal) -> C<IconSize> {
         via(v, decode_icon_size)
+    }
+}
+
+#[cfg(test)]
+mod limit_hint_tests {
+    //! Phase 2739: a §21.1 limit refusal's `expected_shape` names the bound that
+    //! was breached, on every path that reports a breach through
+    //! [`parse_failure`] — the node path ([`decode_node`]) and the theme-manifest
+    //! path — and on the document-bytes check both run before parsing.
+
+    use super::*;
+    use crate::limits::{MAX_ARRAY_LENGTH, MAX_DOCUMENT_BYTES, MAX_JSON_DEPTH, MAX_STRING_LENGTH};
+
+    fn over_depth() -> String {
+        format!(
+            "{}{}",
+            "[".repeat(MAX_JSON_DEPTH + 1),
+            "]".repeat(MAX_JSON_DEPTH + 1)
+        )
+    }
+
+    fn over_string() -> String {
+        format!("{{\"s\":\"{}\"}}", "a".repeat(MAX_STRING_LENGTH + 1))
+    }
+
+    fn over_array() -> String {
+        format!("{{\"a\":[{}]}}", vec!["0"; MAX_ARRAY_LENGTH + 1].join(","))
+    }
+
+    fn over_object() -> String {
+        let members: Vec<String> = (0..=MAX_ARRAY_LENGTH)
+            .map(|i| format!("\"k{i}\":0"))
+            .collect();
+        format!("{{{}}}", members.join(","))
+    }
+
+    fn over_document_bytes() -> String {
+        format!("{{}}{}", " ".repeat(MAX_DOCUMENT_BYTES - 1))
+    }
+
+    /// Every limit kind, its over-limit document, and the hint it must carry.
+    fn cases() -> Vec<(&'static str, String, String)> {
+        vec![
+            (
+                "depth",
+                over_depth(),
+                format!("a document nesting no more than {MAX_JSON_DEPTH} levels deep"),
+            ),
+            (
+                "string",
+                over_string(),
+                format!("strings of no more than {MAX_STRING_LENGTH} code points"),
+            ),
+            (
+                "array",
+                over_array(),
+                format!("arrays of no more than {MAX_ARRAY_LENGTH} elements"),
+            ),
+            (
+                "object",
+                over_object(),
+                format!("objects of no more than {MAX_ARRAY_LENGTH} members"),
+            ),
+            (
+                "document bytes",
+                over_document_bytes(),
+                format!("a document of at most {MAX_DOCUMENT_BYTES} UTF-8 bytes"),
+            ),
+        ]
+    }
+
+    fn assert_names_its_bound(path: &str, kind: &str, e: &DecodeError, hint: &str) {
+        assert_eq!(e.code, DecodeErrorCode::LimitExceeded, "{path} {kind}: {e}");
+        assert_eq!(e.path, "$", "{path} {kind}: {e}");
+        assert_eq!(
+            e.expected_shape.as_deref(),
+            Some(hint),
+            "{path} {kind}: the hint must name the breached bound"
+        );
+        if kind != "depth" {
+            assert!(
+                !hint.contains("levels deep"),
+                "{path} {kind}: a non-depth breach carries the depth hint"
+            );
+        }
+    }
+
+    #[test]
+    fn each_limit_kind_names_its_own_bound_on_the_node_path() {
+        for (kind, doc, hint) in cases() {
+            let e = decode_node(&doc).expect_err(kind);
+            assert_names_its_bound("node", kind, &e, &hint);
+        }
+    }
+
+    #[test]
+    fn each_limit_kind_names_its_own_bound_on_the_manifest_path() {
+        for (kind, doc, hint) in cases() {
+            let e = crate::theme::manifest::try_decode(&doc).expect_err(kind);
+            assert_names_its_bound("manifest", kind, &e, &hint);
+        }
+    }
+
+    #[test]
+    fn the_hint_comes_from_the_breach_not_the_message() {
+        // A reader that reported the document-bytes bound itself (this host's
+        // checks it before parsing) is answered with that bound's hint, whatever
+        // its message says.
+        let e = parse_failure(&crate::canonical::ParseError {
+            message: "a message naming levels deep".to_string(),
+            offset: 0,
+            limit: true,
+            breach: Some(fuaran_core::json::JsonLimit::DocumentBytes),
+        });
+        assert_eq!(
+            e.expected_shape.as_deref(),
+            Some(format!("a document of at most {MAX_DOCUMENT_BYTES} UTF-8 bytes").as_str())
+        );
+        // No breach is malformed text, never a limit.
+        let e = parse_failure(&crate::canonical::ParseError {
+            message: "unexpected end".to_string(),
+            offset: 0,
+            limit: false,
+            breach: None,
+        });
+        assert_eq!(e.code, DecodeErrorCode::InvalidJson);
     }
 }
