@@ -20,10 +20,15 @@
 /// drop without a dry-run apply.
 pub mod placement;
 
+/// What a node's children are — the one enumeration of the parent/child
+/// relation, at an explicit [`Reach`](children::Reach) (Phase 2662).
+pub mod children;
+
+use self::children::Reach;
 use crate::canonical::{JVal, ordinal_cmp};
 use crate::limits::{MAX_NODE_DEPTH, MAX_NODES};
 use crate::wire::coerce;
-use crate::wire::{Accessibility, Binding, FragmentArg, Node, NodeKind, TreeOp};
+use crate::wire::{Accessibility, Binding, Node, NodeKind, TreeOp};
 
 // ─── Error + result surface ──────────────────────────────────────────────────
 
@@ -111,73 +116,18 @@ fn fail<T>(code: ApplyErrorCode, message: impl Into<String>) -> AResult<T> {
 }
 
 // ─── Tree walkers ────────────────────────────────────────────────────────────
+//
+// Every walk below reads the one child enumeration (`children`) at the reach it
+// means; none takes a `NodeKind` apart itself.
 
-/// The ordered `children` list of a child-bearing layout kind, or `None` — the
-/// discriminator every structural child op checks. Exhaustive over `NodeKind`
-/// so a future child-bearing kind cannot be silently skipped.
+/// The resizable ordered `children` list of a container kind, or `None` — the
+/// discriminator every structural child op checks.
 pub(crate) fn layout_children(n: &Node) -> Option<&Vec<Node>> {
-    match &n.kind {
-        NodeKind::Box(s) => Some(&s.children),
-        NodeKind::SplitPanel(s) => Some(&s.children),
-        NodeKind::Tabs(s) => Some(&s.children),
-        NodeKind::Stepper(s) => Some(&s.children),
-        NodeKind::SummaryList(s) => Some(&s.children),
-        NodeKind::Disclosure(s) => Some(&s.children),
-        NodeKind::Modal(s) => Some(&s.children),
-        NodeKind::ScrollArea(s) => Some(&s.children),
-        NodeKind::Heading(_)
-        | NodeKind::Markdown(_)
-        | NodeKind::Metric(_)
-        | NodeKind::Badge(_)
-        | NodeKind::Sparkline(_)
-        | NodeKind::Callout(_)
-        | NodeKind::Progress(_)
-        | NodeKind::Skeleton(_)
-        | NodeKind::Icon(_)
-        | NodeKind::LabelValueRow(_)
-        | NodeKind::Fact(_)
-        | NodeKind::Link(_)
-        | NodeKind::Image(_)
-        | NodeKind::Media(_)
-        // Neither carries a structural `children: Vec<Node>` — a frame's
-        // document is somebody else's tree, and a `TreeItem` is a record rather
-        // than a `Node`, so no structural child op addresses one.
-        | NodeKind::Embed(_)
-        | NodeKind::Tree(_)
-        | NodeKind::List(_)
-        | NodeKind::Toast(_)
-        | NodeKind::CodeBlock(_)
-        | NodeKind::Math(_)
-        | NodeKind::Form(_)
-        | NodeKind::Filters(_)
-        | NodeKind::Button(_)
-        | NodeKind::FileUpload(_)
-        | NodeKind::Select(_)
-        | NodeKind::DataGrid(_)
-        | NodeKind::Chart(_)
-        | NodeKind::Map(_)
-        | NodeKind::Custom(_)
-        | NodeKind::ErrorBoundary(_)
-        | NodeKind::Switch(_)
-        | NodeKind::FragmentDecl(_)
-        | NodeKind::FragmentRef(_)
-        | NodeKind::Drawing(_)
-        | NodeKind::Mount(_) => None,
-    }
+    children::ordered_list(&n.kind)
 }
 
 fn layout_children_mut(n: &mut Node) -> Option<&mut Vec<Node>> {
-    match &mut n.kind {
-        NodeKind::Box(s) => Some(&mut s.children),
-        NodeKind::SplitPanel(s) => Some(&mut s.children),
-        NodeKind::Tabs(s) => Some(&mut s.children),
-        NodeKind::Stepper(s) => Some(&mut s.children),
-        NodeKind::SummaryList(s) => Some(&mut s.children),
-        NodeKind::Disclosure(s) => Some(&mut s.children),
-        NodeKind::Modal(s) => Some(&mut s.children),
-        NodeKind::ScrollArea(s) => Some(&mut s.children),
-        _ => None,
-    }
+    children::ordered_list_mut(&mut n.kind)
 }
 
 /// A kind's short label for error messages (`ChildlessKind` hints).
@@ -192,59 +142,13 @@ fn kind_label(n: &Node) -> &'static str {
 }
 
 /// Every immediate sub-node, through every position a node holds another in
-/// (the reference's keyed walk, WIRE_FORMAT.md §34.2): what the kind holds
-/// (`kind_child_nodes`), then the `state` surfaces, then the envelope's
-/// author-declared `fallback`. The node and parent lookups, the id census and
-/// the size limits all walk this, so an op addressed to a node held in a slot
-/// argument or a `fallback` applies (Phase 2706).
+/// (`Reach::KEYED`, the reference's keyed walk, WIRE_FORMAT.md §34.2): what the
+/// kind holds, then the `state` surfaces, then the envelope's author-declared
+/// `fallback`. The node and parent lookups, the id census and the size limits
+/// all walk this, so an op addressed to a node held in a slot argument or a
+/// `fallback` applies (Phase 2706).
 pub(crate) fn child_nodes(n: &Node) -> Vec<&Node> {
-    let mut out = kind_child_nodes(&n.kind);
-    if let Some(b) = &n.state.on_loading {
-        out.push(b);
-    }
-    if let Some(b) = &n.state.on_empty {
-        out.push(b);
-    }
-    if let Some(f) = &n.fallback {
-        out.push(f);
-    }
-    out
-}
-
-/// The slot arguments a kind carries — a `FragmentRef`'s `args`, a `Mount`'s
-/// `inputs` — with their positions sorted by key (ordinal), the order the
-/// canonical encoding writes them in.
-fn slot_args(kind: &NodeKind) -> &[(String, FragmentArg)] {
-    match kind {
-        NodeKind::FragmentRef(s) => &s.args,
-        NodeKind::Mount(s) => &s.inputs,
-        _ => &[],
-    }
-}
-
-/// The subtree of every `SlotArg` in key order; a value argument holds no node.
-fn slot_trees(args: &[(String, FragmentArg)]) -> Vec<&Node> {
-    let mut keyed: Vec<(&str, &Node)> = args
-        .iter()
-        .filter_map(|(k, a)| match a {
-            FragmentArg::Slot { tree } => Some((k.as_str(), &**tree)),
-            FragmentArg::Value(_) => None,
-        })
-        .collect();
-    keyed.sort_by(|x, y| ordinal_cmp(x.0, y.0));
-    keyed.into_iter().map(|(_, t)| t).collect()
-}
-
-fn slot_trees_mut(args: &mut [(String, FragmentArg)]) -> Vec<&mut Node> {
-    let mut keyed: Vec<(&str, &mut Node)> = args
-        .iter_mut()
-        .filter_map(|(k, a)| match a {
-            FragmentArg::Slot { tree } => Some((k.as_str(), &mut **tree)),
-            FragmentArg::Value(_) => None,
-        })
-        .collect();
-    keyed.sort_by(|x, y| ordinal_cmp(x.0, y.0));
-    keyed.into_iter().map(|(_, t)| t).collect()
+    children::children(n, Reach::KEYED)
 }
 
 /// The sub-nodes a KIND holds — `child_nodes` without the node's envelope
@@ -252,101 +156,11 @@ fn slot_trees_mut(args: &mut [(String, FragmentArg)]) -> Vec<&mut Node> {
 /// and the subtree of every slot argument. What an `EditNode` puts below the
 /// node it rewrites, since the rewritten node keeps its existing envelope.
 pub(crate) fn kind_child_nodes(kind: &NodeKind) -> Vec<&Node> {
-    let mut out: Vec<&Node> = Vec::new();
-    match kind {
-        NodeKind::Box(s) => out.extend(&s.children),
-        NodeKind::SplitPanel(s) => out.extend(&s.children),
-        NodeKind::Tabs(s) => out.extend(&s.children),
-        NodeKind::Stepper(s) => out.extend(&s.children),
-        NodeKind::SummaryList(s) => out.extend(&s.children),
-        NodeKind::Disclosure(s) => out.extend(&s.children),
-        NodeKind::Modal(s) => out.extend(&s.children),
-        NodeKind::ScrollArea(s) => out.extend(&s.children),
-        NodeKind::ErrorBoundary(s) => {
-            out.push(&s.child);
-            out.push(&s.fallback);
-        }
-        NodeKind::Switch(s) => {
-            out.extend(s.cases.iter().map(|c| &c.child));
-            out.push(&s.default);
-        }
-        NodeKind::FragmentDecl(s) => out.push(&s.body),
-        NodeKind::Heading(_)
-        | NodeKind::Markdown(_)
-        | NodeKind::Metric(_)
-        | NodeKind::Badge(_)
-        | NodeKind::Sparkline(_)
-        | NodeKind::Callout(_)
-        | NodeKind::Progress(_)
-        | NodeKind::Skeleton(_)
-        | NodeKind::Icon(_)
-        | NodeKind::LabelValueRow(_)
-        | NodeKind::Fact(_)
-        | NodeKind::Link(_)
-        | NodeKind::Image(_)
-        | NodeKind::Media(_)
-        // Neither carries a structural `children: Vec<Node>` — a frame's
-        // document is somebody else's tree, and a `TreeItem` is a record rather
-        // than a `Node`, so no structural child op addresses one.
-        | NodeKind::Embed(_)
-        | NodeKind::Tree(_)
-        | NodeKind::List(_)
-        | NodeKind::Toast(_)
-        | NodeKind::CodeBlock(_)
-        | NodeKind::Math(_)
-        | NodeKind::Form(_)
-        | NodeKind::Filters(_)
-        | NodeKind::Button(_)
-        | NodeKind::FileUpload(_)
-        | NodeKind::Select(_)
-        | NodeKind::DataGrid(_)
-        | NodeKind::Chart(_)
-        | NodeKind::Map(_)
-        | NodeKind::Custom(_)
-        | NodeKind::FragmentRef(_)
-        | NodeKind::Drawing(_)
-        | NodeKind::Mount(_) => {}
-    }
-    out.extend(slot_trees(slot_args(kind)));
-    out
+    children::kind_children(kind, Reach::KEYED)
 }
 
 fn child_nodes_mut(n: &mut Node) -> Vec<&mut Node> {
-    let mut out: Vec<&mut Node> = Vec::new();
-    match &mut n.kind {
-        NodeKind::Box(s) => out.extend(s.children.iter_mut()),
-        NodeKind::SplitPanel(s) => out.extend(s.children.iter_mut()),
-        NodeKind::Tabs(s) => out.extend(s.children.iter_mut()),
-        NodeKind::Stepper(s) => out.extend(s.children.iter_mut()),
-        NodeKind::SummaryList(s) => out.extend(s.children.iter_mut()),
-        NodeKind::Disclosure(s) => out.extend(s.children.iter_mut()),
-        NodeKind::Modal(s) => out.extend(s.children.iter_mut()),
-        NodeKind::ScrollArea(s) => out.extend(s.children.iter_mut()),
-        NodeKind::ErrorBoundary(s) => {
-            out.push(&mut s.child);
-            out.push(&mut s.fallback);
-        }
-        NodeKind::Switch(s) => {
-            out.extend(s.cases.iter_mut().map(|c| &mut c.child));
-            out.push(&mut s.default);
-        }
-        NodeKind::FragmentDecl(s) => out.push(&mut s.body),
-        NodeKind::FragmentRef(s) => out.extend(slot_trees_mut(&mut s.args)),
-        NodeKind::Mount(s) => out.extend(slot_trees_mut(&mut s.inputs)),
-        _ => {}
-    }
-    // `state` and `fallback` are distinct fields from `kind`; the borrows are
-    // disjoint.
-    if let Some(b) = n.state.on_loading.as_deref_mut() {
-        out.push(b);
-    }
-    if let Some(b) = n.state.on_empty.as_deref_mut() {
-        out.push(b);
-    }
-    if let Some(f) = n.fallback.as_deref_mut() {
-        out.push(f);
-    }
-    out
+    children::children_mut(n, Reach::KEYED)
 }
 
 fn find_node<'a>(n: &'a Node, target: &str) -> Option<&'a Node> {
@@ -1888,9 +1702,9 @@ pub(crate) fn inserted_nodes(op: &TreeOp) -> Vec<&Node> {
         TreeOp::InsertChild { child, .. } => vec![child],
         TreeOp::ReplaceRoot { node } => vec![node],
         TreeOp::EditNode { new_kind, .. } => kind_child_nodes(new_kind),
-        TreeOp::UpdateState { state, .. } => [&state.on_loading, &state.on_empty]
+        TreeOp::UpdateState { state, .. } => children::state_slots(state)
             .into_iter()
-            .filter_map(|n| n.as_deref())
+            .map(|s| s.node)
             .collect(),
         TreeOp::Batch(inner) => inner.iter().flat_map(inserted_nodes).collect(),
         TreeOp::UpdateProp { .. }

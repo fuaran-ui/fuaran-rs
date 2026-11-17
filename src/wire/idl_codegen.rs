@@ -932,6 +932,33 @@ fn is_record_slot(ty: &JVal, bearing: &std::collections::BTreeSet<String>) -> bo
     ty_tag(el) == "record" && matches!(el.field("name"), Some(JVal::Str(n)) if bearing.contains(n))
 }
 
+/// Every member whose value is a node or a list of nodes, named as its construct
+/// token (the envelope's as `Node.<field>`), sorted.
+fn node_slot_members(idl: &Idl) -> Vec<String> {
+    let owners = idl
+        .kinds
+        .iter()
+        .map(|k| (format!("Kind.{}", k.owner.name), &k.owner.fields))
+        .chain(idl.records.iter().map(|r| (r.name.clone(), &r.fields)))
+        .chain(idl.unions.iter().flat_map(|u| {
+            u.cases
+                .iter()
+                .map(move |c| (format!("{}.{}", u.name, c.name), &c.fields))
+        }))
+        .chain(std::iter::once(("Node".to_string(), &idl.node_fields)));
+    let mut out: Vec<String> = owners
+        .flat_map(|(owner, fields)| {
+            fields
+                .iter()
+                .filter(|f| f.optionality != "hostOnly" && is_node_slot(&f.ty))
+                .map(move |f| format!("{owner}.{}", f.name))
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 fn str_list(items: &[String]) -> String {
     let mut out = String::from("&[\n");
     for i in items {
@@ -1244,9 +1271,16 @@ pub const NODE_SLOTS: &[&str] = {};
 /// Every wire field name whose value is a record, or a list of records, that
 /// carries a node somewhere inside it. With [`NODE_SLOTS`] these are the
 /// positions a walk over a wire tree descends through.
-pub const NODE_RECORD_SLOTS: &[&str] = {};",
+pub const NODE_RECORD_SLOTS: &[&str] = {};
+
+/// [`NODE_SLOTS`] scoped to the member that declares each one, spelled as its
+/// construct token (`Kind.<kind>.<field>`, `<record>.<field>`,
+/// `<union>.<case>.<field>`) and `Node.<field>` on the envelope: the slot list
+/// the host's one child enumeration (`ops::children`) is pinned against.
+pub const NODE_SLOT_MEMBERS: &[&str] = {};",
         str_list(&node_slots),
-        str_list(&record_slots)
+        str_list(&record_slots),
+        str_list(&node_slot_members(&idl))
     );
     let _ = writeln!(
         w,

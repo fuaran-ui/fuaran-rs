@@ -806,6 +806,35 @@ can no longer build a `ParseError` with a struct literal. Its fields still read 
 crate's own reader is the only thing that has a reason to build one. It rides the current
 unreleased version.
 
+## One child enumeration, at a stated reach — Phase 2662
+
+"What are a node's children?" is answered in one place, `ops::children`. Every position a node
+holds another node in has a class (`Position`: `Ordered`, `Arm`, `StateArm`, `Fallback`,
+`Argument`) and a walk names the classes it means (`Reach`: `STRUCTURAL`, `KIND_HELD`,
+`FRAGMENT_SCOPE`, `KEYED` — the reference host's names for the same sets). `children`,
+`children_mut`, `map_children`, `replace_children` and `slots` read one match over the kinds, and
+that match's rows are held equal to the generated `NODE_SLOT_MEMBERS` table (the IDL's node slots,
+each named by the member that declares it), so a node slot the vocabulary gains fails the suite
+until it is classed. Sixteen hand-written walks went — the apply engine's five, the renderer's
+three, the diff's two, the introspection pair, the bounded loop's two, the validator's and the
+merge footprint's — and each caller now folds over the enumeration at its reach.
+
+Four exported walks changed reach, each to the reference's:
+
+- `render_to_html` (and every renderer entry point) registers a `FragmentDecl` held in a
+  `state.onLoading` / `state.onEmpty` alternative, and an expanded fragment namespaces the ids in
+  its body's state alternatives. A reference to such a declaration used to render the unresolved
+  placeholder, and two expansions of such a body emitted one id twice.
+- `render_with_islands` finds an island in any `ErrorBoundary` arm or `Switch` case, where it used
+  to read the boundary's `child` only and no case at all.
+- `validator::validate` walks slot arguments and the envelope `fallback`, so a defect the apply
+  engine reaches there is reported.
+- `introspect`'s lookups (`get_node`, `all_nodes`, `find`, `any_match`, `all_facts`) find a node
+  held in a slot argument or the envelope `fallback`, as the apply engine does since Phase 2706.
+
+**Conformance statement — additive.** No signature moves; `ops::children` and
+`NODE_SLOT_MEMBERS` are new. It rides the current unreleased version.
+
 ## The Core boundary — `src/core/`
 
 The subsystems this host reimplements from the `Fuaran.Core` reference live in one
@@ -836,6 +865,7 @@ fuaran-rs/
 │   ├── wire/            # typed wire model + Node / TreeOp codec + DecodeError envelope
 │   ├── ops/             # tree-op apply engine + ApplyError envelope + dry-run
 │   │                    #   + placement.rs (placed insert / move / nudge + clone verbs)
+│   │                    #   + children.rs (the one child enumeration, at a stated reach)
 │   ├── validator/       # pre-emit structural validator (FUARAN### codes)
 │   ├── render/          # server-HTML renderer + islands + markdown + sanitise floor
 │   ├── bounded/         # the bounded program loop — interpreter, budget, effects, re-resolve

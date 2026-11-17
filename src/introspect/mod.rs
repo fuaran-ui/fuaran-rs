@@ -13,6 +13,7 @@
 
 pub mod layout;
 
+use crate::ops::children::{Reach, children, ordered_list};
 use crate::wire::{
     Binding, Emphasis, FontVoice, Node, NodeCategory, NodeKind, StyleRole, StyleWeight, TextSource,
     ToneVariant,
@@ -39,54 +40,18 @@ pub struct NodeFacts {
     pub text: Option<String>,
 }
 
-/// Every immediate sub-node the tree walk descends into (layout children +
-/// structural sub-trees + the `state` surfaces).
+/// Every immediate sub-node the tree walk descends into — every position a
+/// node holds another in (`Reach::KEYED`), the apply engine's own lookup walk,
+/// so a node the engine finds and edits in a slot argument or an envelope
+/// `fallback` is found here too.
 fn child_nodes(n: &Node) -> Vec<&Node> {
-    let mut out: Vec<&Node> = Vec::new();
-    match &n.kind {
-        NodeKind::Box(s) => out.extend(&s.children),
-        NodeKind::SplitPanel(s) => out.extend(&s.children),
-        NodeKind::Tabs(s) => out.extend(&s.children),
-        NodeKind::Stepper(s) => out.extend(&s.children),
-        NodeKind::SummaryList(s) => out.extend(&s.children),
-        NodeKind::Disclosure(s) => out.extend(&s.children),
-        NodeKind::Modal(s) => out.extend(&s.children),
-        NodeKind::ScrollArea(s) => out.extend(&s.children),
-        NodeKind::ErrorBoundary(s) => {
-            out.push(&s.child);
-            out.push(&s.fallback);
-        }
-        NodeKind::Switch(s) => {
-            out.extend(s.cases.iter().map(|c| &c.child));
-            out.push(&s.default);
-        }
-        NodeKind::FragmentDecl(s) => out.push(&s.body),
-        _ => {}
-    }
-    if let Some(b) = &n.state.on_loading {
-        out.push(b);
-    }
-    if let Some(b) = &n.state.on_empty {
-        out.push(b);
-    }
-    out
+    children(n, Reach::KEYED)
 }
 
 /// The immediate *structural children* whose ids `NodeFacts.child_ids` reports —
 /// the layout children only (the addressable structural list).
 fn structural_child_ids(n: &Node) -> Vec<String> {
-    let kids: &[Node] = match &n.kind {
-        NodeKind::Box(s) => &s.children,
-        NodeKind::SplitPanel(s) => &s.children,
-        NodeKind::Tabs(s) => &s.children,
-        NodeKind::Stepper(s) => &s.children,
-        NodeKind::SummaryList(s) => &s.children,
-        NodeKind::Disclosure(s) => &s.children,
-        NodeKind::Modal(s) => &s.children,
-        NodeKind::ScrollArea(s) => &s.children,
-        _ => &[],
-    };
-    kids.iter().map(|c| c.id.clone()).collect()
+    ordered_list(&n.kind).map_or_else(Vec::new, |kids| kids.iter().map(|c| c.id.clone()).collect())
 }
 
 fn literal_text(t: &TextSource) -> Option<String> {

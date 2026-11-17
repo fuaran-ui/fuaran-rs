@@ -38,6 +38,7 @@
 use std::collections::HashSet;
 
 use crate::canonical::{JVal, parse};
+use crate::ops::children::{Reach, children};
 use crate::wire::{
     Action, Binding, FormFieldKind, MediaKind, Node, NodeKind, StaticValue, SwitchCondition,
     TextSource, TreeOp, encode_node,
@@ -1048,68 +1049,12 @@ fn scan_edges(
     }
 }
 
-/// Every immediate sub-node the validator descends into — the same traversal
-/// the apply engine's structural checks run.
+/// Every immediate sub-node the validator descends into — every position a node
+/// holds another in (`Reach::KEYED`), the traversal the apply engine's lookup
+/// and id checks run, so a defect held in a slot argument or an envelope
+/// `fallback` is reported like any other.
 fn child_nodes(n: &Node) -> Vec<&Node> {
-    let mut out: Vec<&Node> = Vec::new();
-    match &n.kind {
-        NodeKind::Box(s) => out.extend(&s.children),
-        NodeKind::SplitPanel(s) => out.extend(&s.children),
-        NodeKind::Tabs(s) => out.extend(&s.children),
-        NodeKind::Stepper(s) => out.extend(&s.children),
-        NodeKind::SummaryList(s) => out.extend(&s.children),
-        NodeKind::Disclosure(s) => out.extend(&s.children),
-        NodeKind::Modal(s) => out.extend(&s.children),
-        NodeKind::ScrollArea(s) => out.extend(&s.children),
-        NodeKind::ErrorBoundary(s) => {
-            out.push(&s.child);
-            out.push(&s.fallback);
-        }
-        NodeKind::Switch(s) => {
-            out.extend(s.cases.iter().map(|c| &c.child));
-            out.push(&s.default);
-        }
-        NodeKind::FragmentDecl(s) => out.push(&s.body),
-        NodeKind::Heading(_)
-        | NodeKind::Markdown(_)
-        | NodeKind::Metric(_)
-        | NodeKind::Badge(_)
-        | NodeKind::Sparkline(_)
-        | NodeKind::Callout(_)
-        | NodeKind::Progress(_)
-        | NodeKind::Skeleton(_)
-        | NodeKind::Icon(_)
-        | NodeKind::LabelValueRow(_)
-        | NodeKind::Fact(_)
-        | NodeKind::Link(_)
-        | NodeKind::Image(_)
-        | NodeKind::Media(_)
-        | NodeKind::Embed(_)
-        | NodeKind::Tree(_)
-        | NodeKind::List(_)
-        | NodeKind::Toast(_)
-        | NodeKind::CodeBlock(_)
-        | NodeKind::Math(_)
-        | NodeKind::Form(_)
-        | NodeKind::Filters(_)
-        | NodeKind::Button(_)
-        | NodeKind::FileUpload(_)
-        | NodeKind::Select(_)
-        | NodeKind::DataGrid(_)
-        | NodeKind::Chart(_)
-        | NodeKind::Map(_)
-        | NodeKind::Custom(_)
-        | NodeKind::FragmentRef(_)
-        | NodeKind::Drawing(_)
-        | NodeKind::Mount(_) => {}
-    }
-    if let Some(b) = &n.state.on_loading {
-        out.push(b);
-    }
-    if let Some(b) = &n.state.on_empty {
-        out.push(b);
-    }
-    out
+    children(n, Reach::KEYED)
 }
 
 /// Validate a decoded tree pre-emit. Findings come back in walk order; an

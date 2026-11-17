@@ -40,30 +40,20 @@
 //! [`replace_children`], so an uncovered container still has its covered descendants resolved.
 
 use crate::canonical::JVal;
+use crate::ops::children::{self, Reach, kind_children};
 use crate::render::BindingSources;
 use crate::render::bindings::{Resolution, Value, resolve, try_scalar_string};
 use crate::wire::{Binding, Node, NodeKind, StaticValue, TextSource};
 
 use super::witness::{UiFold, UiWalk};
 
-/// The child nodes a kind carries as an ordered structural list — the same set
-/// the structural tree-ops address. A kind holding child nodes in some other
-/// shape (a switch's cases, an error boundary's two arms, a mount's inputs)
-/// answers with none, and is right to: those positions are not an ordered list,
-/// and treating them as one is how a traversal and an apply engine drift apart.
+/// The child nodes a kind carries as an ordered structural list — a container's
+/// children and a `FragmentDecl`'s body, the enumeration's `Reach::STRUCTURAL`.
+/// A kind holding child nodes in an arm (a switch's cases, an error boundary's
+/// two arms) or an argument (a mount's inputs) answers with none here: those
+/// positions are not the structural surface the loop's walks descend.
 pub fn structural_children(kind: &NodeKind) -> Vec<&Node> {
-    match kind {
-        NodeKind::Box(spec) => spec.children.iter().collect(),
-        NodeKind::SplitPanel(spec) => spec.children.iter().collect(),
-        NodeKind::Tabs(spec) => spec.children.iter().collect(),
-        NodeKind::Stepper(spec) => spec.children.iter().collect(),
-        NodeKind::SummaryList(spec) => spec.children.iter().collect(),
-        NodeKind::Disclosure(spec) => spec.children.iter().collect(),
-        NodeKind::Modal(spec) => spec.children.iter().collect(),
-        NodeKind::ScrollArea(spec) => spec.children.iter().collect(),
-        NodeKind::FragmentDecl(spec) => vec![spec.body.as_ref()],
-        _ => Vec::new(),
-    }
+    kind_children(kind, Reach::STRUCTURAL)
 }
 
 /// Substitute a binding with the concrete value it resolves to; leave it exactly
@@ -144,40 +134,11 @@ pub(crate) fn resolve_node(sources: &BindingSources, node: &Node) -> Node {
     }
 }
 
-macro_rules! with_children {
-    ($spec:expr, $children:expr) => {{
-        let mut spec = $spec.clone();
-        spec.children = $children;
-        spec
-    }};
-}
-
-/// The node with its structural child list replaced — the inverse of [`structural_children`],
-/// over exactly the kinds it reaches. A kind with no structural list takes none and is returned
-/// as it was.
+/// The node with its structural children replaced — the inverse of [`structural_children`],
+/// over exactly the positions it reaches. A kind with no structural child takes none and is
+/// returned as it was.
 pub(crate) fn replace_children(node: &Node, children: Vec<Node>) -> Node {
-    let kind = match &node.kind {
-        NodeKind::Box(spec) => NodeKind::Box(with_children!(spec, children)),
-        NodeKind::SplitPanel(spec) => NodeKind::SplitPanel(with_children!(spec, children)),
-        NodeKind::Tabs(spec) => NodeKind::Tabs(with_children!(spec, children)),
-        NodeKind::Stepper(spec) => NodeKind::Stepper(with_children!(spec, children)),
-        NodeKind::SummaryList(spec) => NodeKind::SummaryList(with_children!(spec, children)),
-        NodeKind::Disclosure(spec) => NodeKind::Disclosure(with_children!(spec, children)),
-        NodeKind::Modal(spec) => NodeKind::Modal(with_children!(spec, children)),
-        NodeKind::ScrollArea(spec) => NodeKind::ScrollArea(with_children!(spec, children)),
-        NodeKind::FragmentDecl(spec) => {
-            let mut spec = spec.clone();
-            if let Some(body) = children.into_iter().next() {
-                spec.body = Box::new(body);
-            }
-            NodeKind::FragmentDecl(spec)
-        }
-        other => other.clone(),
-    };
-    Node {
-        kind,
-        ..node.clone()
-    }
+    children::replace_children(node, Reach::STRUCTURAL, children)
 }
 
 /// The per-kind pass. Exhaustive with **no catch-all arm**, so a kind added to

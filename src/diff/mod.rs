@@ -21,24 +21,15 @@
 //! so two restyles of different fields of one node carry disjoint field sets
 //! wherever they were recorded.
 
-use crate::wire::{Node, NodeKind, SemanticStyle, StyleDelta, TreeOp, encode_node};
+use crate::ops::children::{ordered_list, ordered_list_mut};
+use crate::wire::{Node, SemanticStyle, StyleDelta, TreeOp, encode_node};
 
-// The structural (positional, layout) children of a node — the set a recursion
-// or an `InsertChild`/`RemoveNode` addresses. `None` for kinds whose children
-// are not a flat positional list (ErrorBoundary / Switch / FragmentDecl): any
-// difference there escalates to a whole-node replace.
+// The structural (positional, layout) children of a node — the resizable list a
+// recursion or an `InsertChild`/`RemoveNode` addresses. `None` for kinds whose
+// children are not a flat positional list (ErrorBoundary / Switch / FragmentDecl):
+// any difference there escalates to a whole-node replace.
 fn structural_children(node: &Node) -> Option<&[Node]> {
-    match &node.kind {
-        NodeKind::Box(s) => Some(&s.children),
-        NodeKind::SplitPanel(s) => Some(&s.children),
-        NodeKind::Tabs(s) => Some(&s.children),
-        NodeKind::Stepper(s) => Some(&s.children),
-        NodeKind::SummaryList(s) => Some(&s.children),
-        NodeKind::Disclosure(s) => Some(&s.children),
-        NodeKind::Modal(s) => Some(&s.children),
-        NodeKind::ScrollArea(s) => Some(&s.children),
-        _ => None,
-    }
+    ordered_list(&node.kind).map(Vec::as_slice)
 }
 
 // A clone of `node` with its structural children emptied — for comparing a
@@ -46,16 +37,8 @@ fn structural_children(node: &Node) -> Option<&[Node]> {
 // independently of what its children became.
 fn strip_structural_children(node: &Node) -> Node {
     let mut n = node.clone();
-    match &mut n.kind {
-        NodeKind::Box(s) => s.children.clear(),
-        NodeKind::SplitPanel(s) => s.children.clear(),
-        NodeKind::Tabs(s) => s.children.clear(),
-        NodeKind::Stepper(s) => s.children.clear(),
-        NodeKind::SummaryList(s) => s.children.clear(),
-        NodeKind::Disclosure(s) => s.children.clear(),
-        NodeKind::Modal(s) => s.children.clear(),
-        NodeKind::ScrollArea(s) => s.children.clear(),
-        _ => {}
+    if let Some(children) = ordered_list_mut(&mut n.kind) {
+        children.clear();
     }
     n
 }

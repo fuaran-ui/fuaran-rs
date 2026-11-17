@@ -32,6 +32,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::canonical::JVal;
+use crate::ops::children::{Reach, children, map_children};
 use crate::wire::{
     Action, Binding, BoxLayout, BoxRole, BoxSpec, CellFormat, CellKindErased, ChartSpec,
     ColumnErased, DisclosureSpec, EmbedPermission, FilterSpec, FormField, FormFieldKind, FormSpec,
@@ -99,104 +100,23 @@ struct Ctx<'a> {
 
 // ─── Fragment collection + namespacing ───────────────────────────────────────
 
+// Both walks descend the fragment scope (`Reach::FRAGMENT_SCOPE`): the kind-held
+// positions plus the two `state` alternatives, so a declaration held in an
+// alternative registers and an expansion's alternatives are namespaced with the
+// rest of the body.
 fn collect_fragments<'a>(acc: &mut HashMap<String, &'a Node>, node: &'a Node) {
-    match &node.kind {
-        NodeKind::FragmentDecl(spec) => {
-            acc.insert(spec.name.clone(), &spec.body);
-            collect_fragments(acc, &spec.body);
-        }
-        NodeKind::Box(spec) => spec.children.iter().for_each(|c| collect_fragments(acc, c)),
-        NodeKind::SplitPanel(spec) => spec.children.iter().for_each(|c| collect_fragments(acc, c)),
-        NodeKind::Tabs(spec) => spec.children.iter().for_each(|c| collect_fragments(acc, c)),
-        NodeKind::Stepper(spec) => spec.children.iter().for_each(|c| collect_fragments(acc, c)),
-        NodeKind::SummaryList(spec) => spec.children.iter().for_each(|c| collect_fragments(acc, c)),
-        NodeKind::Disclosure(spec) => spec.children.iter().for_each(|c| collect_fragments(acc, c)),
-        NodeKind::Modal(spec) => spec.children.iter().for_each(|c| collect_fragments(acc, c)),
-        NodeKind::ScrollArea(spec) => spec.children.iter().for_each(|c| collect_fragments(acc, c)),
-        NodeKind::ErrorBoundary(spec) => {
-            collect_fragments(acc, &spec.child);
-            collect_fragments(acc, &spec.fallback);
-        }
-        NodeKind::Switch(spec) => {
-            spec.cases
-                .iter()
-                .for_each(|c| collect_fragments(acc, &c.child));
-            collect_fragments(acc, &spec.default);
-        }
-        NodeKind::Heading(_)
-        | NodeKind::Markdown(_)
-        | NodeKind::Metric(_)
-        | NodeKind::Badge(_)
-        | NodeKind::Sparkline(_)
-        | NodeKind::Callout(_)
-        | NodeKind::Progress(_)
-        | NodeKind::Skeleton(_)
-        | NodeKind::Icon(_)
-        | NodeKind::LabelValueRow(_)
-        | NodeKind::Fact(_)
-        | NodeKind::Link(_)
-        | NodeKind::Image(_)
-        | NodeKind::Media(_)
-        // A frame's document is somebody else's tree, and a `TreeItem` is a
-        // record rather than a `Node` - neither can carry a FragmentDecl.
-        | NodeKind::Embed(_)
-        | NodeKind::Tree(_)
-        | NodeKind::List(_)
-        | NodeKind::Toast(_)
-        | NodeKind::CodeBlock(_)
-        | NodeKind::Math(_)
-        | NodeKind::Form(_)
-        | NodeKind::Filters(_)
-        | NodeKind::Button(_)
-        | NodeKind::FileUpload(_)
-        | NodeKind::Select(_)
-        | NodeKind::DataGrid(_)
-        | NodeKind::Chart(_)
-        | NodeKind::Map(_)
-        | NodeKind::Custom(_)
-        | NodeKind::FragmentRef(_)
-        | NodeKind::Drawing(_)
-        | NodeKind::Mount(_) => {}
+    if let NodeKind::FragmentDecl(spec) = &node.kind {
+        acc.insert(spec.name.clone(), &spec.body);
+    }
+    for child in children(node, Reach::FRAGMENT_SCOPE) {
+        collect_fragments(acc, child);
     }
 }
 
 fn namespace_node(prefix: &str, node: &Node) -> Node {
-    let mut out = node.clone();
+    let mut out = map_children(node, Reach::FRAGMENT_SCOPE, |c| namespace_node(prefix, c));
     out.id = format!("{prefix}{}", node.id);
-    namespace_kind_in_place(prefix, &mut out.kind);
     out
-}
-
-fn namespace_kind_in_place(prefix: &str, kind: &mut NodeKind) {
-    let namespace_children = |children: &mut Vec<Node>| {
-        for child in children.iter_mut() {
-            *child = namespace_node(prefix, child);
-        }
-    };
-    match kind {
-        NodeKind::Box(spec) => namespace_children(&mut spec.children),
-        NodeKind::SplitPanel(spec) => namespace_children(&mut spec.children),
-        NodeKind::Tabs(spec) => namespace_children(&mut spec.children),
-        NodeKind::Stepper(spec) => namespace_children(&mut spec.children),
-        NodeKind::SummaryList(spec) => namespace_children(&mut spec.children),
-        NodeKind::Disclosure(spec) => namespace_children(&mut spec.children),
-        NodeKind::Modal(spec) => namespace_children(&mut spec.children),
-        NodeKind::ScrollArea(spec) => namespace_children(&mut spec.children),
-        NodeKind::ErrorBoundary(spec) => {
-            *spec.child = namespace_node(prefix, &spec.child);
-            *spec.fallback = namespace_node(prefix, &spec.fallback);
-        }
-        NodeKind::Switch(spec) => {
-            for case in spec.cases.iter_mut() {
-                case.child = namespace_node(prefix, &case.child);
-            }
-            *spec.default = namespace_node(prefix, &spec.default);
-        }
-        NodeKind::FragmentDecl(spec) => {
-            *spec.body = namespace_node(prefix, &spec.body);
-        }
-        _ => {}
-    }
 }
 
 // ─── Unwired-action detection (UX hint only) ─────────────────────────────────
@@ -4839,29 +4759,15 @@ pub fn render_hydratable_with_egress(
     format!("{html}{script}")
 }
 
-/// DFS-collect the designated island nodes in document order.
+/// DFS-collect the designated island nodes in document order, over the
+/// kind-held relation (`Reach::KIND_HELD`): every container list, fragment body,
+/// `ErrorBoundary` arm and `Switch` case.
 fn collect_islands<'a>(node: &'a Node, islands: &HashSet<String>, out: &mut Vec<&'a Node>) {
     if islands.contains(&node.id) {
         out.push(node);
     }
-    for child in island_children(node) {
+    for child in children(node, Reach::KIND_HELD) {
         collect_islands(child, islands, out);
-    }
-}
-
-fn island_children(node: &Node) -> Vec<&Node> {
-    match &node.kind {
-        NodeKind::Box(spec) => spec.children.iter().collect(),
-        NodeKind::SplitPanel(spec) => spec.children.iter().collect(),
-        NodeKind::Tabs(spec) => spec.children.iter().collect(),
-        NodeKind::Stepper(spec) => spec.children.iter().collect(),
-        NodeKind::SummaryList(spec) => spec.children.iter().collect(),
-        NodeKind::Disclosure(spec) => spec.children.iter().collect(),
-        NodeKind::Modal(spec) => spec.children.iter().collect(),
-        NodeKind::ScrollArea(spec) => spec.children.iter().collect(),
-        NodeKind::ErrorBoundary(spec) => vec![&spec.child],
-        NodeKind::FragmentDecl(spec) => vec![&spec.body],
-        _ => vec![],
     }
 }
 

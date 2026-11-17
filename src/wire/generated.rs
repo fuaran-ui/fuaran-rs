@@ -6471,6 +6471,30 @@ pub const NODE_RECORD_SLOTS: &[&str] = &[
     "state",
 ];
 
+/// [`NODE_SLOTS`] scoped to the member that declares each one, spelled as its
+/// construct token (`Kind.<kind>.<field>`, `<record>.<field>`,
+/// `<union>.<case>.<field>`) and `Node.<field>` on the envelope: the slot list
+/// the host's one child enumeration (`ops::children`) is pinned against.
+pub const NODE_SLOT_MEMBERS: &[&str] = &[
+    "FragmentArg.SlotArg.tree",
+    "Kind.Box.children",
+    "Kind.Disclosure.children",
+    "Kind.ErrorBoundary.child",
+    "Kind.ErrorBoundary.fallback",
+    "Kind.FragmentDecl.body",
+    "Kind.Modal.children",
+    "Kind.ScrollArea.children",
+    "Kind.SplitPanel.children",
+    "Kind.Stepper.children",
+    "Kind.SummaryList.children",
+    "Kind.Switch.default",
+    "Kind.Tabs.children",
+    "Node.fallback",
+    "StateBehaviour.onEmpty",
+    "StateBehaviour.onLoading",
+    "SwitchCase.child",
+];
+
 // ─── Construct tokens (WIRE_FORMAT §27.2) ───────────────────────────────────
 
 /// Every construct token the wire types above author: every kind, every union

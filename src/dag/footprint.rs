@@ -61,6 +61,7 @@
 use std::collections::BTreeSet;
 
 use crate::canonical::ordinal_cmp;
+use crate::ops::children::{Position, Reach, children};
 use crate::ops::{apply, child_nodes, inserted_nodes, kind_child_nodes, layout_children};
 use crate::wire::{Node, StyleDelta, TreeOp};
 
@@ -104,13 +105,6 @@ fn id_set<const N: usize>(ids: [&str; N]) -> IdSet {
 /// A node's ordered child list — the surface the structural ops edit.
 pub(crate) fn structural_children(n: &Node) -> &[Node] {
     layout_children(n).map_or(&[], Vec::as_slice)
-}
-
-fn state_alternatives(n: &Node) -> Vec<&Node> {
-    [&n.state.on_loading, &n.state.on_empty]
-        .into_iter()
-        .filter_map(|b| b.as_deref())
-        .collect()
 }
 
 /// Adds every id in `n`'s subtree, `n` included, through every position — the
@@ -470,7 +464,7 @@ fn resolved_at(state: &Node, after: Option<&Node>, op: &TreeOp) -> Footprint {
             })
         }
         TreeOp::UpdateState { target, .. } => vertical_at(target, &|node| {
-            let mut touched = ids_of(&state_alternatives(node));
+            let mut touched = ids_of(&children(node, Reach::of(&[Position::StateArm])));
             touched.extend(ids_of(&inserted_nodes(op)));
             slotted(&one("state"), &[], target, touched)
         }),
