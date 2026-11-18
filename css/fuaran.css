@@ -377,6 +377,24 @@ body {
   gap: var(--fuaran-space-md, 12px);
 }
 
+/* Phase 2794 (DECISIONS.md D35) — a gap-spaced layout container owns the
+   spacing between its children, so a child node keeps no margin of its own
+   there. The `.fuaran-node` margin above is plain-flow spacing; inside a stack,
+   a grid or a dashboard it was ADDED to the container's gap, so a stack declared
+   at 12px read 20px, a grid's rows sat further apart than its columns, and a
+   child box carried one extra margin per level of nesting, which lifted its
+   controls above a lone control beside it in a bottom-aligned row. The selector
+   is the direct child, so the rule reaches exactly the nodes the container
+   spaces; a node nested deeper (in a card body, a pane, a disclosure) is in
+   plain flow again and keeps its margin. Masonry is not listed: multi-column
+   layout has no row gap, so its own `> *` rule below already owns its row
+   spacing. */
+.fuaran-layout-stack > .fuaran-node,
+.fuaran-layout-grid > .fuaran-node,
+.fuaran-layout-dashboard > .fuaran-node {
+  margin-bottom: 0;
+}
+
 /* Column-fill (masonry). Realised with the CSS MULTI-COLUMN family, which is
    normative in WIRE_FORMAT §3.6.7 — `column-count` rides inline from the
    renderer (like the grid's template, so hosts needn't safelist every N) and
