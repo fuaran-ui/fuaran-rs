@@ -366,6 +366,148 @@ fn corpus_control_kinds_are_all_recognised() {
     );
 }
 
+/// Phase 2345: one minimal control per `FormFieldKind` case, each carrying every
+/// member its case REQUIRES and no `value`. Keyed by the IDL tag, so the leg below
+/// can hold the table to the IDL's case list in both directions.
+const VALUE_OMITTED_CONTROLS: &[(&str, &str)] = &[
+    ("Checkbox", r#"{"$type":"Checkbox"}"#),
+    (
+        "Choice",
+        r#"{"$type":"Choice","options":{"$type":"Static","value":[{"label":"A","value":"a"}]}}"#,
+    ),
+    ("Color", r#"{"$type":"Color"}"#),
+    (
+        "Combobox",
+        r#"{"$type":"Combobox","options":{"$type":"Static","value":[{"label":"A","value":"a"}]}}"#,
+    ),
+    ("DateTime", r#"{"$type":"DateTime","variant":"Date"}"#),
+    (
+        "DateTimeRange",
+        r#"{"$type":"DateTimeRange","variant":"Date"}"#,
+    ),
+    ("Number", r#"{"$type":"Number"}"#),
+    ("Range", r#"{"$type":"Range"}"#),
+    ("RangedNumber", r#"{"$type":"RangedNumber"}"#),
+    ("Rating", r#"{"$type":"Rating","max":5}"#),
+    (
+        "SegmentedChoice",
+        r#"{"$type":"SegmentedChoice","options":{"$type":"Static","value":[{"label":"A","value":"a"}]}}"#,
+    ),
+    ("Text", r#"{"$type":"Text"}"#),
+    ("TextArea", r#"{"$type":"TextArea","rows":3}"#),
+    ("Toggle", r#"{"$type":"Toggle"}"#),
+    ("Tokens", r#"{"$type":"Tokens"}"#),
+];
+
+/// The corpus IDL's `FormFieldKind` cases, each with its `value` row's
+/// optionality (`None` when the case declares no `value` at all).
+fn form_field_kind_value_rows(idl: &str) -> Vec<(String, Option<String>)> {
+    let doc = parse(idl).expect("idl.json parses with the host's own JSON layer");
+    let Some(JVal::Arr(unions)) = doc.field("unions") else {
+        panic!("idl.json declares no unions array");
+    };
+    let union = unions
+        .iter()
+        .find(|u| matches!(u.field("name"), Some(JVal::Str(n)) if n == "FormFieldKind"))
+        .expect("idl.json declares the FormFieldKind union");
+    let Some(JVal::Arr(cases)) = union.field("cases") else {
+        panic!("FormFieldKind declares no cases");
+    };
+    cases
+        .iter()
+        .map(|case| {
+            let tag = str_field(case, "tag").expect("a FormFieldKind case has a tag");
+            let value = match case.field("fields") {
+                Some(JVal::Arr(fields)) => fields
+                    .iter()
+                    .find(|f| matches!(f.field("name"), Some(JVal::Str(n)) if n == "value"))
+                    .and_then(|f| f.field("optionality"))
+                    .and_then(|o| str_field(o, "$type")),
+                _ => None,
+            };
+            (tag, value)
+        })
+        .collect()
+}
+
+/// Phase 2345: the IDL declares every control's `value` optional, and this host
+/// accepts its absence on every case, in both contexts that carry a control
+/// (WIRE_FORMAT §1.1's 0.2.1 addendum): a form field auto-binds
+/// `State(<field id>, <typed placeholder>)` and a filter chip auto-binds
+/// `Filter(<name>)`, and the encoder omits exactly that auto-binding, so the
+/// document re-encodes byte-identically. The model carries the synthesised
+/// binding rather than `Option<Binding>` (the `BOUND_VALUE` dialect entries);
+/// this leg is what keeps that a representation choice and never a refusal. The
+/// case list is read from the corpus IDL, so a control the vocabulary gains
+/// fails here by name until it has a row.
+#[test]
+fn every_control_decodes_and_round_trips_without_a_value() {
+    let corpus = common::corpus_root();
+    let rows = form_field_kind_value_rows(&corpus_idl(&corpus));
+    assert!(
+        !rows.is_empty(),
+        "the IDL's FormFieldKind union listed no cases, so this leg would assert nothing"
+    );
+
+    let idl_tags: BTreeSet<&str> = rows.iter().map(|(t, _)| t.as_str()).collect();
+    let table_tags: BTreeSet<&str> = VALUE_OMITTED_CONTROLS.iter().map(|(t, _)| *t).collect();
+    assert_eq!(
+        idl_tags, table_tags,
+        "VALUE_OMITTED_CONTROLS must name exactly the IDL's FormFieldKind cases"
+    );
+
+    let mut failures = Vec::new();
+    for (tag, value) in &rows {
+        if value.as_deref() != Some("optional") {
+            failures.push(format!(
+                "{tag}: the IDL's value row is {value:?}, not optional — the absence this leg \
+                 certifies is no longer the vocabulary's rule"
+            ));
+            continue;
+        }
+        let control = VALUE_OMITTED_CONTROLS
+            .iter()
+            .find(|(t, _)| t == tag)
+            .map(|(_, c)| *c)
+            .expect("the table names every case, checked above");
+        let documents = [
+            (
+                "form field",
+                format!(
+                    r#"{{"id":"f","kind":{{"$type":"Form","fields":[{{"id":"x","kind":{control},"label":"X"}}],"onSubmit":{{"$type":"Chain","ops":[]}},"submitLabel":"Go"}}}}"#
+                ),
+            ),
+            (
+                "filter chip",
+                format!(
+                    r#"{{"id":"f","kind":{{"$type":"Filters","items":[{{"kind":{control},"label":"X","name":"x"}}]}}}}"#
+                ),
+            ),
+        ];
+        for (context, json) in documents {
+            match decode_node(&json) {
+                Err(e) => failures.push(format!(
+                    "{tag} as a {context}: refused without a value — {} at {}",
+                    e.code, e.path
+                )),
+                Ok(node) => {
+                    let encoded = encode_node(&node);
+                    if encoded != json {
+                        failures.push(format!(
+                            "{tag} as a {context}: re-encoded as {encoded}, not byte-identically"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "controls without a value:\n  {}",
+        failures.join("\n  ")
+    );
+}
+
 /// The round-trip legs: every node + op fixture must re-encode byte-identically.
 /// Round-trip fixtures this host does not certify yet, each with the reason and
 /// what lifts it. A listed fixture is still RUN: it must still fail, so an entry

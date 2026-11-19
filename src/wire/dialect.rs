@@ -119,8 +119,9 @@ const CLOSURE_UNMODELLED: &str = "a closure slot this host does not carry: the c
 const NODE_ID: &str = "spelled with the NodeId alias (the same type as String), which documents that the \
      value names a node";
 const POSITIONAL: &str = "a one-member case carried positionally (a tuple variant)";
-const BOUND_VALUE: &str = "always present: the control's value binding is required by this host, and an \
-     absent one is refused at decode";
+const BOUND_VALUE: &str = "always present in the model, optional on the wire: an absent value decodes to the \
+     context's auto-binding (Filter(name) on a chip, State(field id, typed placeholder) on a form field) and \
+     the encoder omits exactly that binding, so absence round-trips";
 
 /// One entry per IDL field this host maps differently from the uniform rules:
 /// `(owner, IDL field, the Rust members it becomes, reason)`. An empty member list
