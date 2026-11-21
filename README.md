@@ -806,6 +806,20 @@ can no longer build a `ParseError` with a struct literal. Its fields still read 
 crate's own reader is the only thing that has a reason to build one. It rides the current
 unreleased version.
 
+## The spine's head again, at 0.0.7-alpha.1 — Phase 2812
+
+The crate requires the Core spine `fuaran-core` at `0.0.7-alpha.1`, its head (`eb763c9`), where it
+required `0.0.3-alpha.1`; the Program core `fuaran-program`, which this crate builds by path, moved
+to the same requirement in the same change. For a `0.0.x` version Cargo admits only the stated
+patch, so from the spine's `0.0.4-alpha.1` on, CI's unpinned checkout of the spine stopped at
+version selection, and so did the native-binding jobs that build this crate beside it. The four
+versions between added the document value space (`ValueSpace::Document`), gave the policy gate a
+declaration and an argument type, and added the query declaration with its admission gate and its
+registry. This host calls none of that surface, so again the raise is the requirement alone: no
+call site moved, and the full suite, the wasm32 legs, the `no_std` build and the lints pass
+against the head unchanged, at stable and at the CI's Rust 1.100.0. It rides the current
+unreleased version.
+
 ## One child enumeration, at a stated reach — Phase 2662
 
 "What are a node's children?" is answered in one place, `ops::children`. Every position a node

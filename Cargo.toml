@@ -230,7 +230,7 @@ idl-codegen = []
 # pre-image. The path is the working layout; the version requirement keeps a
 # later crates.io publish open and fails this build loudly if the spine moves.
 # Third-party crates appear only as dev tooling if ever.
-fuaran-core = { version = "0.0.3-alpha.1", path = "../fuaran-core-rs", default-features = false }
+fuaran-core = { version = "0.0.7-alpha.1", path = "../fuaran-core-rs", default-features = false }
 # Phase 2267: the bounded loop's algebra — the fold over the eight view shapes, the budget's
 # cascade and tree costs, re-resolution of the fixed base tree — is Program's generic core,
 # `fuaran-program` (repository Fuaran-Core/fuaran-program-rs, checked out beside this one), and
