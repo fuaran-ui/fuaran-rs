@@ -141,6 +141,17 @@ fn contains_unwired_action(action: &Action) -> bool {
             contains_unwired_action(on_confirm)
                 || on_cancel.as_deref().is_some_and(contains_unwired_action)
         }
+        // Phase 2107 — a selection is unwired exactly when an arm is, on the
+        // `Confirm` reasoning; a guard reaches nothing itself.
+        Action::Choose {
+            when_true,
+            when_false,
+            ..
+        } => {
+            contains_unwired_action(when_true)
+                || when_false.as_deref().is_some_and(contains_unwired_action)
+        }
+        Action::Require { .. } => false,
         Action::Call { .. }
         | Action::Notify { .. }
         | Action::Navigate { .. }

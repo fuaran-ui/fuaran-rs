@@ -81,6 +81,10 @@ pub struct BoundedOutcome {
     pub store: BindingSources,
     pub effects: Vec<ClientEffect>,
     pub diagnostics: Vec<BoundedDiagnostic>,
+    /// Phase 2107 — the gesture stopped part-way: a `Require` that did not hold,
+    /// a `Choose` whose condition did not resolve, or an exit assertion violated.
+    /// Nothing after the halt ran; what ran before it is in `store` and `effects`.
+    pub halted: bool,
 }
 
 /// The action's discriminator — log-safe by construction, since the vocabulary
@@ -101,6 +105,8 @@ pub fn describe_action(action: &Action) -> &'static str {
         Action::Focus { .. } => "Focus",
         Action::ReadFileBody { .. } => "ReadFileBody",
         Action::Invoke { .. } => "Invoke",
+        Action::Choose { .. } => "Choose",
+        Action::Require { .. } => "Require",
     }
 }
 
@@ -179,8 +185,8 @@ pub fn run_gesture(
 }
 
 /// The one fold: the generic core's, over the UI witness, at the client placement — which answers
-/// no call. The UI vocabulary views nothing as a guard, so the outcome never halts and the core's
-/// halt flag carries nothing this outcome must keep.
+/// no call. Since Phase 2107 the vocabulary has a guard (`Require`) and a selection (`Choose`), so
+/// the core's halt flag is carried on the outcome.
 fn run_at(
     node_id: &str,
     at: UiAction,
@@ -188,11 +194,11 @@ fn run_at(
     store: BindingSources,
 ) -> BoundedOutcome {
     let outcome = fold::run_inert(&UiFold { flush }, node_id, &at, store);
-    debug_assert!(!outcome.halted, "no UI arm views as a guard");
     BoundedOutcome {
         store: outcome.store,
         effects: outcome.effects,
         diagnostics: outcome.diagnostics,
+        halted: outcome.halted,
     }
 }
 
@@ -300,6 +306,19 @@ pub(crate) fn flushed_value(numeric: bool, value: Option<&LiveValue>) -> Result<
 pub fn commit_writes(action: &Action, flush: Flush<'_>) -> Vec<Action> {
     match action {
         Action::Chain(inner) => inner.iter().flat_map(|a| commit_writes(a, flush)).collect(),
+        // Phase 2107 — whichever arm the condition picks at dispatch may run, so
+        // both arms' writes are put to the gate (the conservative reading).
+        Action::Choose {
+            when_true,
+            when_false,
+            ..
+        } => {
+            let mut writes = commit_writes(when_true, flush);
+            if let Some(when_false) = when_false {
+                writes.extend(commit_writes(when_false, flush));
+            }
+            writes
+        }
         Action::CommitLocal { node_id: field_id } => commit_destination(flush.tree, field_id)
             .and_then(|(key, numeric)| {
                 flushed_value(numeric, flush.payload.get(field_id))
@@ -345,6 +364,15 @@ pub fn addressed_confirm<'a>(
                         ..
                     },
                 ) => on_cancel,
+                // Phase 2107 — a selection's arms, named as continuations are.
+                ("whenTrue", Action::Choose { when_true, .. }) => when_true,
+                (
+                    "whenFalse",
+                    Action::Choose {
+                        when_false: Some(when_false),
+                        ..
+                    },
+                ) => when_false,
                 (index, Action::Chain(inner)) => {
                     let i: usize = index.parse().ok()?;
                     if i.to_string() != index {
@@ -382,7 +410,7 @@ pub fn answer_branch(confirm: &Action, accepted: bool) -> Option<&Action> {
     }
 }
 
-fn branch_path(path: &str, name: &str) -> String {
+pub(crate) fn branch_path(path: &str, name: &str) -> String {
     if path.is_empty() {
         name.to_string()
     } else {
@@ -414,6 +442,7 @@ pub fn run_answer(
             store,
             effects: Vec::new(),
             diagnostics: Vec::new(),
+            halted: false,
         },
     }
 }
@@ -555,7 +584,11 @@ pub(crate) fn lower_leaf(
 
         // Never views as a leaf: the core folds these arms itself. Declining is the answer that
         // could not do harm if the obligation ever broke.
-        Action::Chain(_) | Action::SetState { .. } | Action::Call { .. } => LeafOutcome::Decline,
+        Action::Chain(_)
+        | Action::SetState { .. }
+        | Action::Call { .. }
+        | Action::Choose { .. }
+        | Action::Require { .. } => LeafOutcome::Decline,
     }
 }
 
@@ -615,6 +648,14 @@ pub enum CoreArm {
         declares_target: bool,
     },
     Leaf(LeafDeclaration),
+    /// Phase 2107 — the core's selection: the two arms, each lowered. The
+    /// condition and any exit assertion resolve at dispatch.
+    Choose {
+        when_true: Box<CoreArm>,
+        when_false: Box<CoreArm>,
+    },
+    /// Phase 2107 — the core's halting guard; its condition resolves at dispatch.
+    Require,
     /// The round trip (Phase 2106): the gesture's leaf, which asks, and the
     /// two arms the ANSWER's selection chooses between — the core's `Choose`
     /// over the reader's answer.
@@ -718,6 +759,22 @@ fn lower(action: &Action, tree: Option<&Node>) -> CoreArm {
                     .unwrap_or(CoreArm::Sequence(Vec::new())),
             ),
         },
+        // Phase 2107 — the core's own arms, identity rows of §30.1. An absent
+        // `whenFalse` is the empty sequence, which is what "nothing happens" is.
+        Action::Choose {
+            when_true,
+            when_false,
+            ..
+        } => CoreArm::Choose {
+            when_true: Box::new(lower(when_true, tree)),
+            when_false: Box::new(
+                when_false
+                    .as_deref()
+                    .map(|a| lower(a, tree))
+                    .unwrap_or(CoreArm::Sequence(Vec::new())),
+            ),
+        },
+        Action::Require { .. } => CoreArm::Require,
         // Phase 2194 — a message for the host's own update, which no walk can
         // see into: an OPAQUE leaf, reason class `in-process`.
         Action::Dispatch => CoreArm::Leaf(LeafDeclaration {
@@ -910,5 +967,160 @@ mod tests {
             !described.contains("secret-endpoint"),
             "the endpoint came off the wire and must not be echoed: {described}"
         );
+    }
+
+    // ── Phase 2107 — the core's selection and guard on the UI loop ──────────
+
+    fn state(key: &str) -> crate::wire::Binding {
+        crate::wire::Binding::State {
+            default_declared: false,
+            key: key.into(),
+            default_value: StaticValue::StringOpt(None),
+        }
+    }
+
+    fn flag(key: &str, value: bool) -> BindingSources {
+        let mut sources = BindingSources::default();
+        sources.state.insert(key.to_string(), JVal::Bool(value));
+        sources
+    }
+
+    fn choose(when_false: Option<Action>, exit: Option<&str>) -> Action {
+        Action::Choose {
+            condition: state("flag"),
+            when_true: Box::new(set("out", "yes")),
+            when_false: when_false.map(Box::new),
+            exit: exit.map(state),
+        }
+    }
+
+    #[test]
+    fn choose_runs_the_true_arm_on_the_boolean_true_and_the_false_arm_otherwise() {
+        let yes = run_bounded_action(
+            "n",
+            &choose(Some(set("out", "no")), None),
+            flag("flag", true),
+        );
+        assert_eq!(yes.store.state.get("out"), Some(&JVal::Str("yes".into())));
+        assert!(!yes.halted);
+        let no = run_bounded_action(
+            "n",
+            &choose(Some(set("out", "no")), None),
+            store_with("flag", "true"),
+        );
+        assert_eq!(
+            no.store.state.get("out"),
+            Some(&JVal::Str("no".into())),
+            "a string is not the boolean"
+        );
+        let nothing = run_bounded_action("n", &choose(None, None), flag("flag", false));
+        assert_eq!(
+            nothing.store.state.get("out"),
+            None,
+            "an absent whenFalse does nothing"
+        );
+        assert!(!nothing.halted);
+    }
+
+    #[test]
+    fn choose_reads_its_condition_at_dispatch_and_halts_when_it_does_not_resolve() {
+        let action = Action::Chain(vec![
+            Action::SetState {
+                key: "flag".into(),
+                value: Some(JVal::Bool(true)),
+                value_from: None,
+            },
+            choose(Some(set("out", "no")), None),
+        ]);
+        let out = run_bounded_action("n", &action, flag("flag", false));
+        assert_eq!(out.store.state.get("out"), Some(&JVal::Str("yes".into())));
+        let unresolved = run_bounded_action("n", &choose(None, None), BindingSources::default());
+        assert!(unresolved.halted, "an unresolved entry halts");
+        assert_eq!(unresolved.store.state.get("out"), None);
+    }
+
+    #[test]
+    fn require_halts_the_gesture_keeping_what_ran_before_it() {
+        let action = Action::Chain(vec![
+            set("before", "1"),
+            Action::Require {
+                condition: state("ok"),
+            },
+            set("after", "2"),
+            Action::Print,
+        ]);
+        let held = run_bounded_action("n", &action, flag("ok", true));
+        assert!(!held.halted);
+        assert!(held.store.state.contains_key("after"));
+        let halted = run_bounded_action("n", &action, flag("ok", false));
+        assert!(halted.halted);
+        assert!(halted.store.state.contains_key("before"));
+        assert!(!halted.store.state.contains_key("after"));
+        assert!(
+            halted.effects.is_empty(),
+            "the effect after the guard never ran"
+        );
+    }
+
+    #[test]
+    fn a_violated_exit_assertion_halts_after_the_arm() {
+        // The true arm writes "out" but the exit names "flag", which stays true:
+        // it must hold after the true arm, so this one holds.
+        let held = run_bounded_action("n", &choose(None, Some("flag")), flag("flag", true));
+        assert!(!held.halted);
+        // After the false arm (empty) the exit must NOT hold; "flag" is false, so it holds the rule.
+        let held_false = run_bounded_action("n", &choose(None, Some("flag")), flag("flag", false));
+        assert!(!held_false.halted);
+        // An exit that resolves to true after the false arm is a violation.
+        let mut sources = flag("flag", false);
+        sources.state.insert("other".into(), JVal::Bool(true));
+        let violated = run_bounded_action(
+            "n",
+            &Action::Choose {
+                condition: state("flag"),
+                when_true: Box::new(set("out", "yes")),
+                when_false: None,
+                exit: Some(state("other")),
+            },
+            sources,
+        );
+        assert!(violated.halted, "the exit held after the false arm");
+    }
+
+    #[test]
+    fn choose_and_require_lower_to_the_cores_own_arms() {
+        assert_eq!(
+            lowers_to(&choose(None, None)),
+            CoreArm::Choose {
+                when_true: Box::new(CoreArm::Assign {
+                    key: "out".into(),
+                    from: false
+                }),
+                when_false: Box::new(CoreArm::Sequence(Vec::new())),
+            }
+        );
+        assert_eq!(
+            lowers_to(&Action::Require {
+                condition: state("ok")
+            }),
+            CoreArm::Require
+        );
+    }
+
+    #[test]
+    fn a_confirm_inside_a_choose_arm_is_addressed_under_the_arms_name() {
+        let action = Action::Choose {
+            condition: state("flag"),
+            when_true: Box::new(Action::Confirm {
+                prompt: TextSource::Literal("Sure?".into()),
+                on_confirm: Box::new(Action::Print),
+                on_cancel: None,
+            }),
+            when_false: None,
+            exit: None,
+        };
+        let found = addressed_confirm("n", "n#whenTrue", &action);
+        assert_eq!(found.map(|(p, _)| p), Some("whenTrue".to_string()));
+        assert!(addressed_confirm("n", "n#whenFalse", &action).is_none());
     }
 }

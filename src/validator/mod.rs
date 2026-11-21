@@ -849,6 +849,18 @@ impl Walker {
                     self.check_action(id, on_cancel);
                 }
             }
+            // Phase 2107 — a selection's arms carry ordinary actions too.
+            Action::Choose {
+                when_true,
+                when_false,
+                ..
+            } => {
+                self.check_action(id, when_true);
+                if let Some(when_false) = when_false {
+                    self.check_action(id, when_false);
+                }
+            }
+            Action::Require { .. } => {}
             Action::Dispatch
             | Action::Notify { .. }
             | Action::Navigate { .. }

@@ -118,6 +118,36 @@ impl DispatchFold for UiFold<'_> {
                 endpoint: endpoint.clone(),
                 declares_target: into.is_some(),
             },
+            // Phase 2107 — the core's own selection and guard (WIRE_FORMAT §30.1).
+            // Each arm keeps an address under its name, so a confirm inside one
+            // asks with a token its answer can name.
+            Action::Choose {
+                condition,
+                when_true,
+                when_false,
+                exit,
+            } => ActionView::Choose {
+                entry: condition.clone(),
+                when_true: UiAction {
+                    action: (**when_true).clone(),
+                    path: at
+                        .path
+                        .as_deref()
+                        .map(|p| crate::bounded::actions::branch_path(p, "whenTrue")),
+                },
+                when_false: UiAction {
+                    action: when_false
+                        .as_deref()
+                        .cloned()
+                        .unwrap_or_else(|| Action::Chain(Vec::new())),
+                    path: at
+                        .path
+                        .as_deref()
+                        .map(|p| crate::bounded::actions::branch_path(p, "whenFalse")),
+                },
+                exit: exit.clone(),
+            },
+            Action::Require { condition } => ActionView::Require(condition.clone()),
             Action::Notify { .. }
             | Action::Navigate { .. }
             | Action::AiTool { .. }

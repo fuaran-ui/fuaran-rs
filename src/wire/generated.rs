@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "243a7fc91cf5a737aea3ca3b6c6e6b6a7eb4cb46aa96eaa771ba1b62d44f3cef";
+pub const IDL_SHA256: &str = "a8dd5c77f261a21c83e87122c4f3c3aa76939d858d358df60db940e6173d4057";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -243,6 +243,8 @@ pub(crate) const ACTION_TAGS: &[&str] = &[
     "Print",
     "Confirm",
     "Focus",
+    "Choose",
+    "Require",
 ];
 
 pub(crate) const BINDING_TAGS: &[&str] = &[
@@ -1555,6 +1557,15 @@ pub enum Action {
     /// `TextSource` here.
     Focus {
         node_id: NodeId,
+    },
+    Choose {
+        condition: Binding,
+        when_true: Box<Action>,
+        when_false: Option<Box<Action>>,
+        exit: Option<Binding>,
+    },
+    Require {
+        condition: Binding,
     },
 }
 
@@ -3702,6 +3713,19 @@ pub(super) mod gen_encode {
             Action::Focus { node_id: m_node_id } => {
             case_obj("Focus", vec![field("nodeId", s(m_node_id))])
             }
+            Action::Choose { condition: m_condition, when_true: m_when_true, when_false: m_when_false, exit: m_exit } => {
+            let mut f: Vec<Field> = vec![field("condition", binding(m_condition)), field("whenTrue", action(m_when_true))];
+            if let Some(x) = m_when_false {
+                f.push(field("whenFalse", action(x)));
+            }
+            if let Some(x) = m_exit {
+                f.push(field("exit", binding(x)));
+            }
+            case_obj("Choose", f)
+            }
+            Action::Require { condition: m_condition } => {
+            case_obj("Require", vec![field("condition", binding(m_condition))])
+            }
         }
     }
 
@@ -5310,6 +5334,8 @@ pub(super) mod gen_decode {
             "Print" => decode_action_print(path, fields),
             "Confirm" => decode_action_confirm(path, fields),
             "Focus" => decode_action_focus(path, fields),
+            "Choose" => decode_action_choose(path, fields),
+            "Require" => decode_action_require(path, fields),
             other => Err(unknown_du_case(path, other, ACTION_TAGS)),
         }
     }
@@ -5390,6 +5416,19 @@ pub(super) mod gen_decode {
     pub(in super::super) fn decode_action_focus(path: &str, fields: &Fields) -> DResult<Action> {
         let m_node_id = field_req(path, fields, "nodeId", &[], "Action.Focus.nodeId: string", dec_string)?;
         Ok(Action::Focus { node_id: m_node_id })
+    }
+
+    pub(in super::super) fn decode_action_choose(path: &str, fields: &Fields) -> DResult<Action> {
+        let m_condition = field_req(path, fields, "condition", &[], "Action.Choose.condition: Binding<JSON value>", decode_binding)?;
+        let m_when_true = field_req(path, fields, "whenTrue", &[], "Action.Choose.whenTrue: Action", |p, j| (decode_action)(p, j).map(Box::new))?;
+        let m_when_false = field_opt(path, fields, "whenFalse", &[], |p, j| (decode_action)(p, j).map(Box::new))?;
+        let m_exit = field_opt(path, fields, "exit", &[], decode_binding)?;
+        Ok(Action::Choose { condition: m_condition, when_true: m_when_true, when_false: m_when_false, exit: m_exit })
+    }
+
+    pub(in super::super) fn decode_action_require(path: &str, fields: &Fields) -> DResult<Action> {
+        let m_condition = field_req(path, fields, "condition", &[], "Action.Require.condition: Binding<JSON value>", decode_binding)?;
+        Ok(Action::Require { condition: m_condition })
     }
 
 
@@ -6517,6 +6556,11 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Action.Call.onResult",
     "Action.Chain",
     "Action.Chain.ops",
+    "Action.Choose",
+    "Action.Choose.condition",
+    "Action.Choose.exit",
+    "Action.Choose.whenFalse",
+    "Action.Choose.whenTrue",
     "Action.CommitLocal",
     "Action.CommitLocal.nodeId",
     "Action.Confirm",
@@ -6540,6 +6584,8 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Action.ReadFileBody.encoding",
     "Action.ReadFileBody.fileRef",
     "Action.ReadFileBody.onRead",
+    "Action.Require",
+    "Action.Require.condition",
     "Action.SetState",
     "Action.SetState.key",
     "Action.SetState.value",

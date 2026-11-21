@@ -535,10 +535,12 @@ fn arm_index(action: &Action) -> usize {
         Action::Print => 11,
         Action::Focus { .. } => 12,
         Action::Confirm { .. } => 13,
+        Action::Choose { .. } => 14,
+        Action::Require { .. } => 15,
     }
 }
 
-const ARMS: [&str; 14] = [
+const ARMS: [&str; 16] = [
     "Dispatch",
     "Call",
     "Notify",
@@ -553,6 +555,8 @@ const ARMS: [&str; 14] = [
     "Print",
     "Focus",
     "Confirm",
+    "Choose",
+    "Require",
 ];
 
 struct LowersToVector {
@@ -728,6 +732,17 @@ fn reading(arm: &CoreArm) -> JVal {
             ));
             JVal::Obj(members)
         }
+        // Phase 2107 — the core's own selection and guard (§30.2): the
+        // condition and any exit resolve at dispatch and are not stated.
+        CoreArm::Choose {
+            when_true,
+            when_false,
+        } => obj(vec![
+            ("arm", s("Choose")),
+            ("whenFalse", reading(when_false)),
+            ("whenTrue", reading(when_true)),
+        ]),
+        CoreArm::Require => obj(vec![("arm", s("Require"))]),
     }
 }
 
@@ -760,7 +775,14 @@ fn declared_effect_kinds(arm: &CoreArm, into: &mut Vec<&'static str>) {
             declared_effect_kinds(when_true, into);
             declared_effect_kinds(when_false, into);
         }
-        CoreArm::Assign { .. } | CoreArm::Call { .. } => {}
+        CoreArm::Choose {
+            when_true,
+            when_false,
+        } => {
+            declared_effect_kinds(when_true, into);
+            declared_effect_kinds(when_false, into);
+        }
+        CoreArm::Assign { .. } | CoreArm::Call { .. } | CoreArm::Require => {}
     }
 }
 

@@ -2438,6 +2438,18 @@ pub(super) fn refuse_nested_confirm(action: &Action, path: &str) -> DResult<()> 
             }
             Ok(())
         }
+        // Phase 2107 — a selection's arms are as reachable as a chain's members.
+        Action::Choose {
+            when_true,
+            when_false,
+            ..
+        } => {
+            refuse_nested_confirm(when_true, &format!("{path}.whenTrue"))?;
+            if let Some(when_false) = when_false {
+                refuse_nested_confirm(when_false, &format!("{path}.whenFalse"))?;
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
