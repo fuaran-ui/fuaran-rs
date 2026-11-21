@@ -189,20 +189,6 @@ pub(super) const FIELDS: &[FieldEntry] = &[
          string",
     ),
     (
-        "MapMarker",
-        "label",
-        &[("label", "TextSource")],
-        "the host reads a full TextSource here; a plain string is its Literal case, which \
-         encodes back to the same string",
-    ),
-    (
-        "SelectOption",
-        "label",
-        &[("label", "TextSource")],
-        "the host reads a full TextSource here; a plain string is its Literal case, which \
-         encodes back to the same string",
-    ),
-    (
         "SwitchCase",
         "match",
         &[("condition", "SwitchCondition")],
@@ -1803,20 +1789,6 @@ pub(super) const ENCODE_HOOKS: &[(&str, &str, &str, Hook, &str)] = &[
         "a hosted JSON position this host carries as the role's token string",
     ),
     (
-        "MapMarker",
-        "label",
-        "encode_text_label",
-        Hook::Shape,
-        "the host reads a full TextSource where the IDL types a string",
-    ),
-    (
-        "SelectOption",
-        "label",
-        "encode_text_label",
-        Hook::Shape,
-        "the host reads a full TextSource where the IDL types a string",
-    ),
-    (
         "Binding.Static",
         "value",
         "encode_static_payload",
@@ -1969,20 +1941,6 @@ pub(super) const DECODE_HOOKS: &[(&str, &str, &str, Hook, &str)] = &[
         "decode_aria_role",
         Hook::Shape,
         "a hosted JSON position this host carries as the role's token string",
-    ),
-    (
-        "MapMarker",
-        "label",
-        "decode_text_label",
-        Hook::Shape,
-        "the host reads a full TextSource where the IDL types a string",
-    ),
-    (
-        "SelectOption",
-        "label",
-        "decode_text_label",
-        Hook::Shape,
-        "the host reads a full TextSource where the IDL types a string",
     ),
     (
         "CellKindErased.ButtonGroup",

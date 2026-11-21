@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "b49eb7256c1f9ade11f0c4c26b117dc2979b71cae0c0c665f4dae312715c3ad1";
+pub const IDL_SHA256: &str = "710cf74d1f084d3f0854c8d58f6cebbbbac629b97e9bfeeb379d40628b28197e";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -3452,13 +3452,7 @@ pub(super) mod gen_encode {
 
     pub(in super::super) fn map_marker(v: &MapMarker) -> String {
         let MapMarker { label: m_label, latitude: m_latitude, longitude: m_longitude } = v;
-        let mut f: Vec<Field> = vec![];
-        if let Some(j) = encode_text_label(m_label) {
-            f.push(field("label", j));
-        }
-        f.push(field("latitude", num(*m_latitude)));
-        f.push(field("longitude", num(*m_longitude)));
-        obj(f)
+        obj(vec![field("label", text_source(m_label)), field("latitude", num(*m_latitude)), field("longitude", num(*m_longitude))])
     }
 
     pub(in super::super) fn markdown_citation(v: &MarkdownCitation) -> String {
@@ -3486,12 +3480,7 @@ pub(super) mod gen_encode {
 
     pub(in super::super) fn select_option(v: &SelectOption) -> String {
         let SelectOption { label: m_label, value: m_value } = v;
-        let mut f: Vec<Field> = vec![];
-        if let Some(j) = encode_text_label(m_label) {
-            f.push(field("label", j));
-        }
-        f.push(field("value", s(m_value)));
-        obj(f)
+        obj(vec![field("label", text_source(m_label)), field("value", s(m_value))])
     }
 
     pub(in super::super) fn select_option_group(v: &SelectOptionGroup) -> String {
@@ -5171,7 +5160,7 @@ pub(super) mod gen_decode {
 
     pub(in super::super) fn decode_map_marker(path: &str, j: &JVal) -> DResult<MapMarker> {
         let fields = as_obj(path, j)?;
-        let m_label = decode_text_label(path, fields)?;
+        let m_label = field_req(path, fields, "label", &[], "MapMarker.label: TextSource", decode_text_source)?;
         let m_latitude = field_req(path, fields, "latitude", &[], "MapMarker.latitude: number", as_float)?;
         let m_longitude = field_req(path, fields, "longitude", &[], "MapMarker.longitude: number", as_float)?;
         Ok(MapMarker { label: m_label, latitude: m_latitude, longitude: m_longitude })
@@ -5199,7 +5188,7 @@ pub(super) mod gen_decode {
             return r;
         }
         let fields = as_obj(path, j)?;
-        let m_label = decode_text_label(path, fields)?;
+        let m_label = field_req(path, fields, "label", &[], "SelectOption.label: TextSource", decode_text_source)?;
         let m_value = field_req(path, fields, "value", &[], "SelectOption.value: string", dec_string)?;
         Ok(SelectOption { label: m_label, value: m_value })
     }

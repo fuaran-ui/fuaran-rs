@@ -3482,11 +3482,6 @@ pub(super) fn decode_aria_role(path: &str, fields: &Fields) -> DResult<Option<St
     opt_string(path, fields, "role")
 }
 
-/// `SelectOption.label` / `MapMarker.label` — read as a full `TextSource`.
-pub(super) fn decode_text_label(path: &str, fields: &Fields) -> DResult<TextSource> {
-    req_text_source(path, fields, "label", "label TextSource")
-}
-
 /// `SelectOption` — a bare JSON string is the option whose value and label are
 /// that string.
 pub(super) fn select_option_shorthand(_path: &str, j: &JVal) -> Option<DResult<SelectOption>> {

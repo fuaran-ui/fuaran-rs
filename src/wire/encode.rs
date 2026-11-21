@@ -997,12 +997,6 @@ pub(super) fn encode_aria_role(role: &Option<String>) -> Option<String> {
     role.as_deref().map(s)
 }
 
-/// `SelectOption.label` / `MapMarker.label` — the host reads a full `TextSource`
-/// where the IDL types a string; a literal re-encodes as the bare string.
-pub(super) fn encode_text_label(label: &TextSource) -> Option<String> {
-    Some(text_source(label))
-}
-
 /// `Binding.Static.value` — Phase 677: absence is structural, never a value, so an
 /// absent payload omits the key rather than emitting `null`. A typed empty
 /// (`Options(vec![])`) is NOT absent.
