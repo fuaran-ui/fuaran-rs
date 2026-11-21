@@ -114,7 +114,14 @@ name = "fuaran-ui"
 # pricing walk. New public items: `serverdriven::emitter::{price, Registration,
 # Figure, SpendSpec, Spend}`. No existing type's field set moved (`Image`,
 # `CompiledPanel` and `PanelSpec` are unchanged), and the wire is untouched.
-version = "0.0.6-alpha.1"
+#
+# Phase 2413 rides it, BREAKING in surface (the class the draft already carries)
+# and part of the announced breaking cut: `SelectSpec.multiple` returns from
+# `Option<bool>` to `bool` (default `false`), because the corpus IDL now declares
+# it omit-at-default. Write `multiple: true` / `false` where a literal wrote
+# `Some(true)` / `None`. WIRE-VISIBLE: an explicit `"multiple":false` decodes as a
+# single-select (a §16 lenient accept) and re-encodes WITHOUT the member.
+version ="0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Rust host of the Fuaran UI wire format — a dependency-light, idiomatic-Rust reference implementation of the canonical-JSON contract a Rust service, WASM client, or embedded host reads, writes, and drives."

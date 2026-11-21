@@ -233,7 +233,7 @@ impl Walker {
             NodeKind::Select(s) => {
                 if let Some(value) = &s.value
                     && s.on_change.is_none()
-                    && s.multiple != Some(true)
+                    && !s.multiple
                 {
                     self.check_writable(id, "value", value);
                 }

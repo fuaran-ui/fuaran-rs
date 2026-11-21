@@ -2586,7 +2586,7 @@ fn render_select(ctx: &Ctx<'_>, spec: &SelectSpec) -> String {
             .collect();
         format!("{grouped}{rest}")
     };
-    let control = if spec.multiple == Some(true) {
+    let control = if spec.multiple {
         el(
             "select",
             &[

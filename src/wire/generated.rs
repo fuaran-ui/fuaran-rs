@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "a8dd5c77f261a21c83e87122c4f3c3aa76939d858d358df60db940e6173d4057";
+pub const IDL_SHA256: &str = "b49eb7256c1f9ade11f0c4c26b117dc2979b71cae0c0c665f4dae312715c3ad1";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -1007,8 +1007,9 @@ pub struct SelectSpec {
     pub value: Option<Binding>,
     pub placeholder: Option<TextSource>,
     pub disabled: Option<Binding>,
-    /// Emitted only when `true` (Phase 291), so single-select stays byte-identical.
-    pub multiple: Option<bool>,
+    /// Omit-at-default `false` (Phase 2413): emitted only when `true`, so single-select stays
+    /// byte-identical, and an explicit `false` decodes and re-encodes without the member.
+    pub multiple: bool,
     pub values: Option<Binding>,
     pub affordance: Option<Affordance>,
     pub groups: Vec<SelectOptionGroup>,
@@ -2472,6 +2473,7 @@ pub(crate) mod defaults {
     pub(crate) const MODAL_MODALITY: ModalityKind = ModalityKind::Modal;
     pub(crate) const PROGRESS_INDETERMINATE: bool = false;
     pub(crate) const PROGRESS_TONE: ToneVariant = ToneVariant::Default;
+    pub(crate) const SELECT_MULTIPLE: bool = false;
     pub(crate) const TABS_ORIENTATION: Orientation = Orientation::Horizontal;
     pub(crate) const TOAST_DISMISSABLE: bool = true;
     pub(crate) const TOAST_TONE: ToneVariant = ToneVariant::Default;
@@ -3091,8 +3093,8 @@ pub(super) mod gen_encode {
         if let Some(x) = m_disabled {
             f.push(field("disabled", binding(x)));
         }
-        if let Some(x) = m_multiple {
-            f.push(field("multiple", boolean(*x)));
+        if *m_multiple != defaults::SELECT_MULTIPLE {
+            f.push(field("multiple", boolean(*m_multiple)));
         }
         if let Some(x) = m_values {
             f.push(field("values", binding(x)));
@@ -4705,7 +4707,7 @@ pub(super) mod gen_decode {
         let m_value = decode_select_value(path, fields)?;
         let m_placeholder = field_opt(path, fields, "placeholder", &[], decode_text_source)?;
         let m_disabled = field_opt(path, fields, "disabled", &[], |p, j| decode_binding_slot(p, j, StaticSlot::Bool))?;
-        let m_multiple = field_opt(path, fields, "multiple", &[], as_bool)?;
+        let m_multiple = field_or(path, fields, "multiple", &[], defaults::SELECT_MULTIPLE, as_bool)?;
         let m_values = field_opt(path, fields, "values", &[], |p, j| decode_binding_slot(p, j, StaticSlot::StringList))?;
         let m_affordance = field_opt(path, fields, "affordance", &[], decode_affordance)?;
         let m_groups = field_or(path, fields, "groups", &[], Vec::new(), |p, j| dec_list(p, j, decode_select_option_group))?;

@@ -1120,7 +1120,8 @@ key decodes to the auto binding `Filter(<chip name>)`."#,
     ),
     (
         "SelectSpec.multiple",
-        r#"Emitted only when `true` (Phase 291), so single-select stays byte-identical."#,
+        r#"Omit-at-default `false` (Phase 2413): emitted only when `true`, so single-select stays
+byte-identical, and an explicit `false` decodes and re-encodes without the member."#,
     ),
     (
         "FileUploadSpec.drop_target",
