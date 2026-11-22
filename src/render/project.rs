@@ -563,6 +563,9 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
                     })
                     .collect()
             }),
+            // Phase 2655 — the colour scale is a declaration, not text; projects
+            // through untouched.
+            scale: spec.scale.clone(),
             on_point_click: spec.on_point_click,
         }),
         NodeKind::Map(spec) => NodeKind::Map(spec.clone()),

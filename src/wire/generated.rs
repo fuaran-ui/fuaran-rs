@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "710cf74d1f084d3f0854c8d58f6cebbbbac629b97e9bfeeb379d40628b28197e";
+pub const IDL_SHA256: &str = "b63cc2baad57c2036ad56bb91071b6594f35d80d47af10ff99d82a6acedfc17d";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -318,6 +318,11 @@ pub(crate) const CHART_ANNOTATION_X_TAGS: &[&str] = &[
     "Date",
 ];
 
+pub(crate) const CHART_SCALE_TAGS: &[&str] = &[
+    "Sequential",
+    "Diverging",
+];
+
 pub(crate) const COLUMN_WIDTH_TAGS: &[&str] = &[
     "Auto",
     "Fixed",
@@ -566,6 +571,7 @@ pub struct ChartSpec {
     /// wire AND in the picture. An EMPTY list is a DIFFERENT document from an
     /// absent field and round-trips as `"annotations":[]`.
     pub annotations: Option<Vec<ChartAnnotation>>,
+    pub scale: Option<ChartScale>,
     pub on_point_click: Option<Closure>,
 }
 
@@ -1883,6 +1889,19 @@ pub enum ChartAnnotationX {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum ChartScale {
+    Sequential {
+        min: Option<f64>,
+        max: Option<f64>,
+    },
+    Diverging {
+        midpoint: Option<f64>,
+        min: Option<f64>,
+        max: Option<f64>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum ColumnWidth {
     Auto,
     Fixed {
@@ -2574,7 +2593,7 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn chart_spec(v: &ChartSpec) -> String {
-        let ChartSpec { kind: m_kind, source: m_source, stacked: m_stacked, x_field: m_x_field, y_fields: m_y_fields, title: m_title, value_format: m_value_format, x_title: m_x_title, y_title: m_y_title, subtitle: m_subtitle, legend_position: m_legend_position, data_labels: m_data_labels, x_scale: m_x_scale, annotations: m_annotations, on_point_click: m_on_point_click } = v;
+        let ChartSpec { kind: m_kind, source: m_source, stacked: m_stacked, x_field: m_x_field, y_fields: m_y_fields, title: m_title, value_format: m_value_format, x_title: m_x_title, y_title: m_y_title, subtitle: m_subtitle, legend_position: m_legend_position, data_labels: m_data_labels, x_scale: m_x_scale, annotations: m_annotations, scale: m_scale, on_point_click: m_on_point_click } = v;
         let mut f: Vec<Field> = vec![field("kind", s(m_kind.as_str())), field("source", binding(m_source))];
         if *m_stacked != defaults::CHART_STACKED {
             f.push(field("stacked", boolean(*m_stacked)));
@@ -2607,6 +2626,9 @@ pub(super) mod gen_encode {
         }
         if let Some(x) = m_annotations {
             f.push(field("annotations", enc_list(x, chart_annotation)));
+        }
+        if let Some(x) = m_scale {
+            f.push(field("scale", chart_scale(x)));
         }
         if m_on_point_click.is_some() {
             f.push(field("onPointClick", CLOSURE.to_string()));
@@ -4013,6 +4035,34 @@ pub(super) mod gen_encode {
         }
     }
 
+    pub(in super::super) fn chart_scale(v: &ChartScale) -> String {
+        match v {
+            ChartScale::Sequential { min: m_min, max: m_max } => {
+            let mut f: Vec<Field> = vec![];
+            if let Some(x) = m_min {
+                f.push(field("min", num(*x)));
+            }
+            if let Some(x) = m_max {
+                f.push(field("max", num(*x)));
+            }
+            case_obj("Sequential", f)
+            }
+            ChartScale::Diverging { midpoint: m_midpoint, min: m_min, max: m_max } => {
+            let mut f: Vec<Field> = vec![];
+            if let Some(x) = m_midpoint {
+                f.push(field("midpoint", num(*x)));
+            }
+            if let Some(x) = m_min {
+                f.push(field("min", num(*x)));
+            }
+            if let Some(x) = m_max {
+                f.push(field("max", num(*x)));
+            }
+            case_obj("Diverging", f)
+            }
+        }
+    }
+
     pub(in super::super) fn column_width(v: &ColumnWidth) -> String {
         match v {
             ColumnWidth::Auto => {
@@ -4389,8 +4439,9 @@ pub(super) mod gen_decode {
         let m_data_labels = field_opt(path, fields, "dataLabels", &[], decode_chart_data_labels)?;
         let m_x_scale = field_opt(path, fields, "xScale", &[], decode_chart_x_scale)?;
         let m_annotations = field_opt(path, fields, "annotations", &[], |p, j| dec_list(p, j, decode_chart_annotation))?;
+        let m_scale = field_opt(path, fields, "scale", &[], decode_chart_scale)?;
         let m_on_point_click = field_opt(path, fields, "onPointClick", &[], dec_closure)?;
-        Ok(ChartSpec { kind: m_kind, source: m_source, stacked: m_stacked, x_field: m_x_field, y_fields: m_y_fields, title: m_title, value_format: m_value_format, x_title: m_x_title, y_title: m_y_title, subtitle: m_subtitle, legend_position: m_legend_position, data_labels: m_data_labels, x_scale: m_x_scale, annotations: m_annotations, on_point_click: m_on_point_click })
+        Ok(ChartSpec { kind: m_kind, source: m_source, stacked: m_stacked, x_field: m_x_field, y_fields: m_y_fields, title: m_title, value_format: m_value_format, x_title: m_x_title, y_title: m_y_title, subtitle: m_subtitle, legend_position: m_legend_position, data_labels: m_data_labels, x_scale: m_x_scale, annotations: m_annotations, scale: m_scale, on_point_click: m_on_point_click })
     }
 
     pub(in super::super) fn decode_code_block_spec(path: &str, j: &JVal) -> DResult<CodeBlockSpec> {
@@ -5746,6 +5797,29 @@ pub(super) mod gen_decode {
     }
 
 
+    pub(in super::super) fn decode_chart_scale(path: &str, j: &JVal) -> DResult<ChartScale> {
+        let fields = as_obj(path, j)?;
+        match disc(path, fields)? {
+            "Sequential" => decode_chart_scale_sequential(path, fields),
+            "Diverging" => decode_chart_scale_diverging(path, fields),
+            other => Err(unknown_du_case(path, other, CHART_SCALE_TAGS)),
+        }
+    }
+
+    pub(in super::super) fn decode_chart_scale_sequential(path: &str, fields: &Fields) -> DResult<ChartScale> {
+        let m_min = field_opt(path, fields, "min", &[], as_float)?;
+        let m_max = field_opt(path, fields, "max", &[], as_float)?;
+        Ok(ChartScale::Sequential { min: m_min, max: m_max })
+    }
+
+    pub(in super::super) fn decode_chart_scale_diverging(path: &str, fields: &Fields) -> DResult<ChartScale> {
+        let m_midpoint = field_opt(path, fields, "midpoint", &[], as_float)?;
+        let m_min = field_opt(path, fields, "min", &[], as_float)?;
+        let m_max = field_opt(path, fields, "max", &[], as_float)?;
+        Ok(ChartScale::Diverging { midpoint: m_midpoint, min: m_min, max: m_max })
+    }
+
+
     pub(in super::super) fn decode_column_width(path: &str, j: &JVal) -> DResult<ColumnWidth> {
         let fields = as_obj(path, j)?;
         match disc(path, fields)? {
@@ -6722,6 +6796,13 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "ChartAnnotationX.Category.key",
     "ChartAnnotationX.Date",
     "ChartAnnotationX.Date.iso",
+    "ChartScale.Diverging",
+    "ChartScale.Diverging.max",
+    "ChartScale.Diverging.midpoint",
+    "ChartScale.Diverging.min",
+    "ChartScale.Sequential",
+    "ChartScale.Sequential.max",
+    "ChartScale.Sequential.min",
     "ColumnErased.editable",
     "ColumnErased.field",
     "ColumnErased.format",
@@ -6938,6 +7019,7 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Kind.Chart.kind",
     "Kind.Chart.legendPosition",
     "Kind.Chart.onPointClick",
+    "Kind.Chart.scale",
     "Kind.Chart.source",
     "Kind.Chart.stacked",
     "Kind.Chart.subtitle",
