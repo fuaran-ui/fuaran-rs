@@ -560,12 +560,25 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
                             range: range.clone(),
                             label: map_opt_text(sources, label),
                         },
+                        ChartAnnotation::ReferenceLineX { value, label } => {
+                            ChartAnnotation::ReferenceLineX {
+                                value: *value,
+                                label: map_opt_text(sources, label),
+                            }
+                        }
                     })
                     .collect()
             }),
             // Phase 2655 — the colour scale is a declaration, not text; projects
             // through untouched.
             scale: spec.scale.clone(),
+            // Phases 2809 / 2654 — column names and channel declarations, not
+            // text; they project through untouched.
+            withheld_field: spec.withheld_field.clone(),
+            interval: spec.interval.clone(),
+            size_field: spec.size_field.clone(),
+            sort_by: spec.sort_by.clone(),
+            path_field: spec.path_field.clone(),
             on_point_click: spec.on_point_click,
         }),
         NodeKind::Map(spec) => NodeKind::Map(spec.clone()),

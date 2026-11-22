@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "b63cc2baad57c2036ad56bb91071b6594f35d80d47af10ff99d82a6acedfc17d";
+pub const IDL_SHA256: &str = "e5e867dc804adc9788f1f80c00f9b3ad29403370d28dc28ee87bda98991132fa";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -306,6 +306,7 @@ pub(crate) const CHART_ANNOTATION_TAGS: &[&str] = &[
     "ReferenceLine",
     "EventMarker",
     "RangeBand",
+    "ReferenceLineX",
 ];
 
 pub(crate) const CHART_ANNOTATION_RANGE_TAGS: &[&str] = &[
@@ -572,6 +573,11 @@ pub struct ChartSpec {
     /// absent field and round-trips as `"annotations":[]`.
     pub annotations: Option<Vec<ChartAnnotation>>,
     pub scale: Option<ChartScale>,
+    pub withheld_field: Option<String>,
+    pub interval: Option<ChartInterval>,
+    pub size_field: Option<String>,
+    pub sort_by: Option<ChartSort>,
+    pub path_field: Option<String>,
     pub on_point_click: Option<Closure>,
 }
 
@@ -1141,6 +1147,18 @@ pub struct Affordance {
 pub struct AffordanceAlias {
     pub alias: String,
     pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChartInterval {
+    pub low: String,
+    pub high: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChartSort {
+    pub field: String,
+    pub direction: SortDirection,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1847,6 +1865,10 @@ pub enum ChartAnnotation {
     },
     RangeBand {
         range: ChartAnnotationRange,
+        label: Option<TextSource>,
+    },
+    ReferenceLineX {
+        value: f64,
         label: Option<TextSource>,
     },
 }
@@ -2593,7 +2615,7 @@ pub(super) mod gen_encode {
     }
 
     pub(in super::super) fn chart_spec(v: &ChartSpec) -> String {
-        let ChartSpec { kind: m_kind, source: m_source, stacked: m_stacked, x_field: m_x_field, y_fields: m_y_fields, title: m_title, value_format: m_value_format, x_title: m_x_title, y_title: m_y_title, subtitle: m_subtitle, legend_position: m_legend_position, data_labels: m_data_labels, x_scale: m_x_scale, annotations: m_annotations, scale: m_scale, on_point_click: m_on_point_click } = v;
+        let ChartSpec { kind: m_kind, source: m_source, stacked: m_stacked, x_field: m_x_field, y_fields: m_y_fields, title: m_title, value_format: m_value_format, x_title: m_x_title, y_title: m_y_title, subtitle: m_subtitle, legend_position: m_legend_position, data_labels: m_data_labels, x_scale: m_x_scale, annotations: m_annotations, scale: m_scale, withheld_field: m_withheld_field, interval: m_interval, size_field: m_size_field, sort_by: m_sort_by, path_field: m_path_field, on_point_click: m_on_point_click } = v;
         let mut f: Vec<Field> = vec![field("kind", s(m_kind.as_str())), field("source", binding(m_source))];
         if *m_stacked != defaults::CHART_STACKED {
             f.push(field("stacked", boolean(*m_stacked)));
@@ -2629,6 +2651,21 @@ pub(super) mod gen_encode {
         }
         if let Some(x) = m_scale {
             f.push(field("scale", chart_scale(x)));
+        }
+        if let Some(x) = m_withheld_field {
+            f.push(field("withheldField", s(x)));
+        }
+        if let Some(x) = m_interval {
+            f.push(field("interval", chart_interval(x)));
+        }
+        if let Some(x) = m_size_field {
+            f.push(field("sizeField", s(x)));
+        }
+        if let Some(x) = m_sort_by {
+            f.push(field("sortBy", chart_sort(x)));
+        }
+        if let Some(x) = m_path_field {
+            f.push(field("pathField", s(x)));
         }
         if m_on_point_click.is_some() {
             f.push(field("onPointClick", CLOSURE.to_string()));
@@ -3334,6 +3371,16 @@ pub(super) mod gen_encode {
         obj(vec![field("alias", s(m_alias)), field("value", s(m_value))])
     }
 
+    pub(in super::super) fn chart_interval(v: &ChartInterval) -> String {
+        let ChartInterval { low: m_low, high: m_high } = v;
+        obj(vec![field("low", s(m_low)), field("high", s(m_high))])
+    }
+
+    pub(in super::super) fn chart_sort(v: &ChartSort) -> String {
+        let ChartSort { field: m_field, direction: m_direction } = v;
+        obj(vec![field("field", s(m_field)), field("direction", s(m_direction.as_str()))])
+    }
+
     pub(in super::super) fn column_erased(v: &ColumnErased) -> String {
         let ColumnErased { field: m_field, sortable: m_sortable, editable: m_editable, format: m_format, kind: m_kind, label: m_label, value: m_value, width: m_width } = v;
         let mut f: Vec<Field> = vec![];
@@ -4010,6 +4057,13 @@ pub(super) mod gen_encode {
             }
             case_obj("RangeBand", f)
             }
+            ChartAnnotation::ReferenceLineX { value: m_value, label: m_label } => {
+            let mut f: Vec<Field> = vec![field("value", num(*m_value))];
+            if let Some(x) = m_label {
+                f.push(field("label", text_source(x)));
+            }
+            case_obj("ReferenceLineX", f)
+            }
         }
     }
 
@@ -4440,8 +4494,13 @@ pub(super) mod gen_decode {
         let m_x_scale = field_opt(path, fields, "xScale", &[], decode_chart_x_scale)?;
         let m_annotations = field_opt(path, fields, "annotations", &[], |p, j| dec_list(p, j, decode_chart_annotation))?;
         let m_scale = field_opt(path, fields, "scale", &[], decode_chart_scale)?;
+        let m_withheld_field = field_opt(path, fields, "withheldField", &[], dec_string)?;
+        let m_interval = field_opt(path, fields, "interval", &[], decode_chart_interval)?;
+        let m_size_field = field_opt(path, fields, "sizeField", &[], dec_string)?;
+        let m_sort_by = field_opt(path, fields, "sortBy", &[], decode_chart_sort)?;
+        let m_path_field = field_opt(path, fields, "pathField", &[], dec_string)?;
         let m_on_point_click = field_opt(path, fields, "onPointClick", &[], dec_closure)?;
-        Ok(ChartSpec { kind: m_kind, source: m_source, stacked: m_stacked, x_field: m_x_field, y_fields: m_y_fields, title: m_title, value_format: m_value_format, x_title: m_x_title, y_title: m_y_title, subtitle: m_subtitle, legend_position: m_legend_position, data_labels: m_data_labels, x_scale: m_x_scale, annotations: m_annotations, scale: m_scale, on_point_click: m_on_point_click })
+        Ok(ChartSpec { kind: m_kind, source: m_source, stacked: m_stacked, x_field: m_x_field, y_fields: m_y_fields, title: m_title, value_format: m_value_format, x_title: m_x_title, y_title: m_y_title, subtitle: m_subtitle, legend_position: m_legend_position, data_labels: m_data_labels, x_scale: m_x_scale, annotations: m_annotations, scale: m_scale, withheld_field: m_withheld_field, interval: m_interval, size_field: m_size_field, sort_by: m_sort_by, path_field: m_path_field, on_point_click: m_on_point_click })
     }
 
     pub(in super::super) fn decode_code_block_spec(path: &str, j: &JVal) -> DResult<CodeBlockSpec> {
@@ -5091,6 +5150,20 @@ pub(super) mod gen_decode {
         Ok(AffordanceAlias { alias: m_alias, value: m_value })
     }
 
+    pub(in super::super) fn decode_chart_interval(path: &str, j: &JVal) -> DResult<ChartInterval> {
+        let fields = as_obj(path, j)?;
+        let m_low = field_req(path, fields, "low", &[], "ChartInterval.low: string", dec_string)?;
+        let m_high = field_req(path, fields, "high", &[], "ChartInterval.high: string", dec_string)?;
+        Ok(ChartInterval { low: m_low, high: m_high })
+    }
+
+    pub(in super::super) fn decode_chart_sort(path: &str, j: &JVal) -> DResult<ChartSort> {
+        let fields = as_obj(path, j)?;
+        let m_field = field_req(path, fields, "field", &[], "ChartSort.field: string", dec_string)?;
+        let m_direction = field_req(path, fields, "direction", &[], "ChartSort.direction: SortDirection", decode_sort_direction)?;
+        Ok(ChartSort { field: m_field, direction: m_direction })
+    }
+
     pub(in super::super) fn decode_column_erased(path: &str, j: &JVal) -> DResult<ColumnErased> {
         let fields = as_obj(path, j)?;
         check_column_near_misses(path, fields)?;
@@ -5724,6 +5797,7 @@ pub(super) mod gen_decode {
             "ReferenceLine" => decode_chart_annotation_reference_line(path, fields),
             "EventMarker" => decode_chart_annotation_event_marker(path, fields),
             "RangeBand" => decode_chart_annotation_range_band(path, fields),
+            "ReferenceLineX" => decode_chart_annotation_reference_line_x(path, fields),
             other => Err(unknown_du_case(path, other, CHART_ANNOTATION_TAGS)),
         }
     }
@@ -5746,6 +5820,12 @@ pub(super) mod gen_decode {
         let m_range = field_req(path, fields, "range", &[], "ChartAnnotation.RangeBand.range: ChartAnnotationRange", decode_chart_annotation_range)?;
         let m_label = field_opt(path, fields, "label", &[], decode_text_source)?;
         Ok(ChartAnnotation::RangeBand { range: m_range, label: m_label })
+    }
+
+    pub(in super::super) fn decode_chart_annotation_reference_line_x(path: &str, fields: &Fields) -> DResult<ChartAnnotation> {
+        let m_value = field_req(path, fields, "value", &[], "ChartAnnotation.ReferenceLineX.value: number", as_float)?;
+        let m_label = field_opt(path, fields, "label", &[], decode_text_source)?;
+        Ok(ChartAnnotation::ReferenceLineX { value: m_value, label: m_label })
     }
 
 
@@ -6786,6 +6866,9 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "ChartAnnotation.ReferenceLine",
     "ChartAnnotation.ReferenceLine.label",
     "ChartAnnotation.ReferenceLine.value",
+    "ChartAnnotation.ReferenceLineX",
+    "ChartAnnotation.ReferenceLineX.label",
+    "ChartAnnotation.ReferenceLineX.value",
     "ChartAnnotationRange.ValueRange",
     "ChartAnnotationRange.ValueRange.from",
     "ChartAnnotationRange.ValueRange.to",
@@ -6796,6 +6879,8 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "ChartAnnotationX.Category.key",
     "ChartAnnotationX.Date",
     "ChartAnnotationX.Date.iso",
+    "ChartInterval.high",
+    "ChartInterval.low",
     "ChartScale.Diverging",
     "ChartScale.Diverging.max",
     "ChartScale.Diverging.midpoint",
@@ -6803,6 +6888,8 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "ChartScale.Sequential",
     "ChartScale.Sequential.max",
     "ChartScale.Sequential.min",
+    "ChartSort.direction",
+    "ChartSort.field",
     "ColumnErased.editable",
     "ColumnErased.field",
     "ColumnErased.format",
@@ -7016,15 +7103,20 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Kind.Chart",
     "Kind.Chart.annotations",
     "Kind.Chart.dataLabels",
+    "Kind.Chart.interval",
     "Kind.Chart.kind",
     "Kind.Chart.legendPosition",
     "Kind.Chart.onPointClick",
+    "Kind.Chart.pathField",
     "Kind.Chart.scale",
+    "Kind.Chart.sizeField",
+    "Kind.Chart.sortBy",
     "Kind.Chart.source",
     "Kind.Chart.stacked",
     "Kind.Chart.subtitle",
     "Kind.Chart.title",
     "Kind.Chart.valueFormat",
+    "Kind.Chart.withheldField",
     "Kind.Chart.xField",
     "Kind.Chart.xScale",
     "Kind.Chart.xTitle",
