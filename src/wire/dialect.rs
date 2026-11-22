@@ -2348,6 +2348,12 @@ pub(super) const DECODE_CHECKS: &[(&str, &str, Check, &str)] = &[
         "a finite value",
     ),
     (
+        "ChartAnnotation.ReferenceLineX",
+        "check_reference_line",
+        Check::Post,
+        "a finite value (Phase 2654: the same line on the continuous x axis)",
+    ),
+    (
         "BoxLayout.Masonry",
         "check_masonry",
         Check::Post,

@@ -4073,19 +4073,28 @@ pub(super) fn check_x_range(path: &str, _fields: &Fields, r: &ChartAnnotationRan
     Ok(())
 }
 
-/// `ChartAnnotation.ReferenceLine.value` — a finite place on the value axis.
+/// `ChartAnnotation.ReferenceLine.value` — a finite place on the value axis;
+/// `ChartAnnotation.ReferenceLineX.value` — the same line on the continuous x
+/// axis, so the two cases share the rule (Phase 2654).
 pub(super) fn check_reference_line(
     path: &str,
     _fields: &Fields,
     a: &ChartAnnotation,
 ) -> DResult<()> {
-    match a {
-        ChartAnnotation::ReferenceLine { value, .. } if !value.is_finite() => Err(wrong_type(
-            &format!("{path}.value"),
-            "a FINITE JSON number — a reference line names a place on the value axis, and NaN / Infinity names none; give the value in the axis's own units, or drop the annotation",
-        )),
-        _ => Ok(()),
+    let (value, axis) = match a {
+        ChartAnnotation::ReferenceLine { value, .. } => (*value, "value"),
+        ChartAnnotation::ReferenceLineX { value, .. } => (*value, "x"),
+        _ => return Ok(()),
+    };
+    if value.is_finite() {
+        return Ok(());
     }
+    Err(wrong_type(
+        &format!("{path}.value"),
+        &format!(
+            "a FINITE JSON number — a reference line names a place on the {axis} axis, and NaN / Infinity names none; give the value in the axis's own units, or drop the annotation"
+        ),
+    ))
 }
 
 /// `StyleDelta` — a patch naming nothing is a defect.

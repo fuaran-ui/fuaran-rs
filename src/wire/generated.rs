@@ -5825,7 +5825,9 @@ pub(super) mod gen_decode {
     pub(in super::super) fn decode_chart_annotation_reference_line_x(path: &str, fields: &Fields) -> DResult<ChartAnnotation> {
         let m_value = field_req(path, fields, "value", &[], "ChartAnnotation.ReferenceLineX.value: number", as_float)?;
         let m_label = field_opt(path, fields, "label", &[], decode_text_source)?;
-        Ok(ChartAnnotation::ReferenceLineX { value: m_value, label: m_label })
+        let v = ChartAnnotation::ReferenceLineX { value: m_value, label: m_label };
+        check_reference_line(path, fields, &v)?;
+        Ok(v)
     }
 
 
