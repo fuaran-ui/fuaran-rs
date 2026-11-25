@@ -773,6 +773,8 @@
     "Kind.Tabs.orientation",
     "Kind.Tabs.tabHeaders",
     "Kind.Tabs.tabTags",
+    "Kind.Text",
+    "Kind.Text.text",
     "Kind.Toast",
     "Kind.Toast.dismissable",
     "Kind.Toast.message",

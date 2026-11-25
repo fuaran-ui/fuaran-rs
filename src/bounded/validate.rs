@@ -136,6 +136,7 @@ pub fn legitimate_events(kind: &NodeKind) -> &'static [&'static str] {
         | NodeKind::ScrollArea(_)
         | NodeKind::Heading(_)
         | NodeKind::Markdown(_)
+        | NodeKind::Text(_)
         | NodeKind::Metric(_)
         | NodeKind::Badge(_)
         | NodeKind::Sparkline(_)

@@ -414,6 +414,12 @@ fn update_field(field: &str, value: &JVal, kind: &NodeKind) -> UpdateOutcome {
             }),
             _ => UnknownField,
         },
+        NodeKind::Text(_) => match field {
+            "Text" => patch(coerce::text_source(value), |x| {
+                NodeKind::Text(crate::wire::TextSpec { text: x })
+            }),
+            _ => UnknownField,
+        },
         NodeKind::Badge(s) => match field {
             "Label" => patch(coerce::text_source(value), |x| {
                 NodeKind::Badge(crate::wire::BadgeSpec {

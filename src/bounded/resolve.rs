@@ -197,6 +197,10 @@ fn resolve_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             }
             NodeKind::Markdown(spec)
         }
+        // Phase 2536 — the plain running-text node.
+        NodeKind::Text(spec) => NodeKind::Text(crate::wire::TextSpec {
+            text: resolve_text(sources, &spec.text),
+        }),
         NodeKind::Badge(spec) => {
             let mut spec = spec.clone();
             spec.label = resolve_text(sources, &spec.label);

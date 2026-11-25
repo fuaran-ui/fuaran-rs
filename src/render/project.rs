@@ -265,6 +265,9 @@ fn project_kind(sources: &BindingSources, kind: &NodeKind) -> NodeKind {
             icon: spec.icon.clone(),
             subtext: map_opt_text(sources, &spec.subtext),
         }),
+        NodeKind::Text(spec) => NodeKind::Text(crate::wire::TextSpec {
+            text: map_text(sources, &spec.text),
+        }),
         NodeKind::Badge(spec) => NodeKind::Badge(crate::wire::BadgeSpec {
             label: map_text(sources, &spec.label),
             variant: spec.variant,

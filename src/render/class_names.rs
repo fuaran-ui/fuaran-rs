@@ -135,6 +135,7 @@ pub fn kind_class(kind: &NodeKind) -> String {
         NodeKind::ScrollArea(_) => "fuaran-kind-scroll-area".to_string(),
         NodeKind::Heading(_) => "fuaran-kind-heading".to_string(),
         NodeKind::Markdown(_) => "fuaran-kind-markdown".to_string(),
+        NodeKind::Text(_) => "fuaran-kind-text".to_string(),
         NodeKind::Metric(_) => "fuaran-kind-metric".to_string(),
         NodeKind::Badge(_) => "fuaran-kind-badge".to_string(),
         NodeKind::Sparkline(_) => "fuaran-kind-sparkline".to_string(),

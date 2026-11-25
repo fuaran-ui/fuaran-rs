@@ -24,6 +24,7 @@ fn node_lines(node: &Node) -> Vec<String> {
             .map(|t| vec![format!("# {t}")])
             .unwrap_or_default(),
         NodeKind::Markdown(s) => literal(&s.text).map(|t| vec![t]).unwrap_or_default(),
+        NodeKind::Text(s) => literal(&s.text).map(|t| vec![t]).unwrap_or_default(),
         NodeKind::Metric(s) => {
             // The value is a live binding; a static digest carries the label and
             // marks the value as read at send time.

@@ -66,6 +66,7 @@ fn primary_text(n: &Node) -> Option<String> {
     match &n.kind {
         NodeKind::Heading(s) => literal_text(&s.text),
         NodeKind::Markdown(s) => literal_text(&s.text),
+        NodeKind::Text(s) => literal_text(&s.text),
         NodeKind::Badge(s) => literal_text(&s.label),
         NodeKind::Callout(s) => literal_text(&s.body),
         NodeKind::Link(s) => literal_text(&s.label),

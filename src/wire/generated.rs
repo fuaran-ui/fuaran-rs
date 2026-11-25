@@ -14,7 +14,7 @@ use crate::canonical::JVal;
 use std::collections::BTreeMap;
 
 /// SHA-256 of the exact `idl.json` bytes this module was generated from.
-pub const IDL_SHA256: &str = "e5e867dc804adc9788f1f80c00f9b3ad29403370d28dc28ee87bda98991132fa";
+pub const IDL_SHA256: &str = "eaad6e14392daebcec074a5d63b312977a484f2711eb88c6bf3340d26d8dbc6f";
 
 /// The `version` the IDL declared when this module was generated.
 pub const IDL_VERSION: u32 = 1;
@@ -113,6 +113,7 @@ pub const CANONICAL_NODE_KINDS: &[&str] = &[
     "SummaryList",
     "Switch",
     "Tabs",
+    "Text",
     "Toast",
     "Tree",
 ];
@@ -164,6 +165,7 @@ impl NodeKind {
             NodeKind::SummaryList(_) => "SummaryList",
             NodeKind::Switch(_) => "Switch",
             NodeKind::Tabs(_) => "Tabs",
+            NodeKind::Text(_) => "Text",
             NodeKind::Toast(_) => "Toast",
             NodeKind::Tree(_) => "Tree",
         }
@@ -213,6 +215,7 @@ impl NodeKind {
             NodeKind::SummaryList(_) => NodeCategory::Layout,
             NodeKind::Switch(_) => NodeCategory::Structural,
             NodeKind::Tabs(_) => NodeCategory::Layout,
+            NodeKind::Text(_) => NodeCategory::Display,
             NodeKind::Toast(_) => NodeCategory::Display,
             NodeKind::Tree(_) => NodeCategory::Display,
         }
@@ -220,7 +223,7 @@ impl NodeKind {
 }
 
 /// The `WRONG_NODE_KIND` refusal hint: every kind, grouped by category.
-pub(crate) const WRONG_NODE_KIND_HINT: &str = "a Layout primitive (Box | Disclosure | Modal | ScrollArea | SplitPanel | Stepper | SummaryList | Tabs), a Display primitive (Badge | Callout | CodeBlock | Drawing | Embed | Fact | Heading | Icon | Image | LabelValueRow | Link | List | Markdown | Math | Media | Metric | Progress | Skeleton | Sparkline | Toast | Tree), an Input primitive (Button | FileUpload | Filters | Form | Select), a Visualisation primitive (Chart | DataGrid | Map), or a Structural primitive (Custom | ErrorBoundary | FragmentDecl | FragmentRef | Mount | Switch)";
+pub(crate) const WRONG_NODE_KIND_HINT: &str = "a Layout primitive (Box | Disclosure | Modal | ScrollArea | SplitPanel | Stepper | SummaryList | Tabs), a Display primitive (Badge | Callout | CodeBlock | Drawing | Embed | Fact | Heading | Icon | Image | LabelValueRow | Link | List | Markdown | Math | Media | Metric | Progress | Skeleton | Sparkline | Text | Toast | Tree), an Input primitive (Button | FileUpload | Filters | Form | Select), a Visualisation primitive (Chart | DataGrid | Map), or a Structural primitive (Custom | ErrorBoundary | FragmentDecl | FragmentRef | Mount | Switch)";
 
 // ─── Discriminator sets (§3.3) ──────────────────────────────────────────────
 //
@@ -1090,6 +1093,11 @@ pub struct TabsSpec {
     pub tab_headers: Option<Vec<TabHeader>>,
     pub tab_tags: Option<Vec<String>>,
     pub active_tag: Option<Binding>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextSpec {
+    pub text: TextSource,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2354,6 +2362,7 @@ pub enum NodeKind {
     SummaryList(SummaryListSpec),
     Switch(SwitchSpec),
     Tabs(TabsSpec),
+    Text(TextSpec),
     Toast(ToastSpec),
     Tree(TreeSpec),
 }
@@ -3237,6 +3246,11 @@ pub(super) mod gen_encode {
         obj(f)
     }
 
+    pub(in super::super) fn text_spec(v: &TextSpec) -> String {
+        let TextSpec { text: m_text } = v;
+        obj(vec![field("text", text_source(m_text))])
+    }
+
     pub(in super::super) fn toast_spec(v: &ToastSpec) -> String {
         let ToastSpec { dismissable: m_dismissable, message: m_message, open: m_open, tone: m_tone } = v;
         let mut f: Vec<Field> = vec![];
@@ -3310,6 +3324,7 @@ pub(super) mod gen_encode {
             NodeKind::SummaryList(m_0) => case_obj_hoisted("SummaryList", summary_list_spec(m_0)),
             NodeKind::Switch(m_0) => case_obj_hoisted("Switch", switch_spec(m_0)),
             NodeKind::Tabs(m_0) => case_obj_hoisted("Tabs", tabs_spec(m_0)),
+            NodeKind::Text(m_0) => case_obj_hoisted("Text", text_spec(m_0)),
             NodeKind::Toast(m_0) => case_obj_hoisted("Toast", toast_spec(m_0)),
             NodeKind::Tree(m_0) => case_obj_hoisted("Tree", tree_spec(m_0)),
         }
@@ -4876,6 +4891,12 @@ pub(super) mod gen_decode {
         Ok(TabsSpec { active_index: m_active_index, children: m_children, orientation: m_orientation, on_select: m_on_select, on_select_tag: m_on_select_tag, tab_headers: m_tab_headers, tab_tags: m_tab_tags, active_tag: m_active_tag })
     }
 
+    pub(in super::super) fn decode_text_spec(path: &str, j: &JVal) -> DResult<TextSpec> {
+        let fields = as_obj(path, j)?;
+        let m_text = field_req(path, fields, "text", &[], "Text.text: TextSource", decode_text_source)?;
+        Ok(TextSpec { text: m_text })
+    }
+
     pub(in super::super) fn decode_toast_spec(path: &str, j: &JVal) -> DResult<ToastSpec> {
         let fields = as_obj(path, j)?;
         let m_dismissable = field_or(path, fields, "dismissable", &[], defaults::TOAST_DISMISSABLE, as_bool)?;
@@ -4940,6 +4961,7 @@ pub(super) mod gen_decode {
             "SummaryList" => kind_summary_list(path, j),
             "Switch" => kind_switch(path, j),
             "Tabs" => kind_tabs(path, j),
+            "Text" => kind_text(path, j),
             "Toast" => kind_toast(path, j),
             "Tree" => kind_tree(path, j),
             other => Err(wrong_node_kind(path, other)),
@@ -5108,6 +5130,10 @@ pub(super) mod gen_decode {
 
     fn kind_tabs(path: &str, j: &JVal) -> DResult<NodeKind> {
         Ok(NodeKind::Tabs(decode_tabs_spec(path, j)?))
+    }
+
+    fn kind_text(path: &str, j: &JVal) -> DResult<NodeKind> {
+        Ok(NodeKind::Text(decode_text_spec(path, j)?))
     }
 
     fn kind_toast(path: &str, j: &JVal) -> DResult<NodeKind> {
@@ -7346,6 +7372,8 @@ pub const CONSTRUCT_TOKENS: &[&str] = &[
     "Kind.Tabs.orientation",
     "Kind.Tabs.tabHeaders",
     "Kind.Tabs.tabTags",
+    "Kind.Text",
+    "Kind.Text.text",
     "Kind.Toast",
     "Kind.Toast.dismissable",
     "Kind.Toast.message",

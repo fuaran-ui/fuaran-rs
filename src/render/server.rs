@@ -619,6 +619,10 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
                 &parts.concat(),
             )
         }
+        // Phase 2536 — running text with no parse: the resolved words, escaped into
+        // one inline `<span>` (WIRE_FORMAT 3.6.38). The node wrapper carries
+        // `fuaran-kind-text`, so the span carries no class.
+        NodeKind::Text(spec) => text_el("span", &[], &render_text(ctx.sources, &spec.text)),
         NodeKind::Badge(spec) => text_el(
             "span",
             &[(

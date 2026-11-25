@@ -414,6 +414,7 @@ impl Walker {
                     self.check_text(id, label);
                 }
             }
+            NodeKind::Text(s) => self.check_text(id, &s.text),
             NodeKind::Badge(s) => self.check_text(id, &s.label),
             NodeKind::Callout(s) => {
                 self.check_text(id, &s.body);
