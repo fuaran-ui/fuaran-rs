@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:1dadf78ecced9225
+/* fuaran-vocabulary-fingerprint: fv1:c7b283b93867bf80
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -920,6 +920,79 @@ body {
   padding: 2px var(--fuaran-space-xs, 4px);
   border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
   text-align: start;
+}
+
+/* ── Chart data table (Phase 2776) ──────────────────────────────── */
+/* Host chrome under `RenderPolicy.ChartTable`, ON by default: a lowered chart
+   is followed by a native disclosure holding the values its marks were drawn
+   from as a real table, which the drawing names in `aria-details`. Off, none of
+   these classes is emitted. The disclosure opens in the flow, under the chart,
+   so the table pushes what follows rather than covering it; a wide table
+   scrolls inside the disclosure, whose summary keeps that box reachable by
+   keyboard, rather than widening the page. The table keeps `display: table`:
+   restyling it as a block costs it its table semantics in some engines. */
+.fuaran-chart-table-host {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-chart-table {
+  max-width: 100%;
+  overflow-x: auto;
+  font-size: var(--fuaran-text-sm, 13px);
+  color: var(--fuaran-tone-default-fg, #1f2937);
+}
+
+.fuaran-chart-table-toggle {
+  cursor: pointer;
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  border-radius: var(--fuaran-radius-sm, 4px);
+  padding: 0 var(--fuaran-space-xs, 4px);
+  width: fit-content;
+}
+
+.fuaran-chart-table-toggle:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: var(--fuaran-focus-ring-offset, 2px);
+}
+
+.fuaran-chart-table-grid {
+  margin-top: var(--fuaran-space-xs, 4px);
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.fuaran-chart-table-grid caption {
+  caption-side: top;
+  text-align: start;
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+  padding-bottom: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-chart-table-grid th,
+.fuaran-chart-table-grid td {
+  padding: 2px var(--fuaran-space-sm, 8px);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  text-align: start;
+}
+
+.fuaran-chart-table-grid td {
+  text-align: end;
+}
+
+.fuaran-chart-table-grid thead th {
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+}
+
+.fuaran-chart-table-grid tbody th {
+  font-weight: normal;
+}
+
+.fuaran-chart-table-limit {
+  margin: var(--fuaran-space-xs, 4px) 0 0;
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
 }
 
 /* ── Refresh marks (Phase 2751) ──────────────────────────────────── */
