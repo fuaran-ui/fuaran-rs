@@ -70,6 +70,9 @@
     "grid-window-writer": {
       "notApplicable": "this host renders a grid as inert HTML and leaves event-to-store wiring to the app, so no viewport of its, server or wasm32 client, measures a viewport or writes a window descriptor"
     },
+    "laws/canonicalFormLaws": {
+      "pending": "this host's wire codec is generated for the UI vocabulary alone and does not decode through the Core spine's IDL-driven codec (fuaran_core::canonical_form, which runs these vectors in its own suite), so this suite does not run them over the fixture vocabulary they carry; the UI vocabulary declares no presence condition or alias list until Phase 2340 (WIRE_FORMAT 3.6)"
+    },
     "laws/capabilityLaws": {
       "pending": "this host's suite does not yet run this law family's vectors"
     },
@@ -111,7 +114,8 @@
     },
     "teleport-reject": {
       "pending": "the teleport module is unit-tested by hand; this suite does not yet run the corpus teleport/ fixtures"
-    }
+    },
+    "validate": "covered"
   },
   "tokens": [
     "Accessibility.describedBy",

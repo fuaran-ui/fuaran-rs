@@ -26,12 +26,12 @@ fn clean_tree_passes() {
 }
 
 #[test]
-fn duplicate_node_id_is_fuaran001() {
+fn duplicate_node_id_is_fuaran_dup_id() {
     let dup = r#"{"id":"root","kind":{"$type":"Box","children":[
         {"id":"x","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"a"}}},
         {"id":"x","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"b"}}}
     ],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}"#;
-    assert_eq!(codes(dup), vec!["FUARAN001"]);
+    assert_eq!(codes(dup), vec!["FUARAN-DUP-ID"]);
 }
 
 #[test]

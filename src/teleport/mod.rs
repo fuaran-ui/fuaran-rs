@@ -232,7 +232,9 @@ pub fn decode(s: &str) -> Result<Bundle, TeleportError> {
 
     // 6. Pre-emit identity re-check — duplicate / empty NodeId refuses the bundle.
     for f in validate(&tree) {
-        if f.severity == Severity::Error && (f.code == "EMPTY_NODE_ID" || f.code == "FUARAN001") {
+        if f.severity == Severity::Error
+            && (f.code == "EMPTY_NODE_ID" || f.code == crate::validator::DUPLICATE_ID)
+        {
             return Err(TeleportError::TreeInvalid(format!(
                 "{}: {}",
                 f.code, f.node_id

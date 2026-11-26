@@ -14,7 +14,7 @@
 //! | Code | Severity | Rule |
 //! |---|---|---|
 //! | `EMPTY_NODE_ID` | Error | a node id is the empty string (the §8 identity invariant, re-checked pre-emit) |
-//! | `FUARAN001` | Error | duplicate NodeId within the tree (op-target stability) |
+//! | `FUARAN-DUP-ID` | Error | duplicate NodeId within the tree (op-target stability), one finding per occurrence after the first |
 //! | `FUARAN047` | Error | Tabs `tabHeaders` length ≠ children length |
 //! | `FUARAN048` | Error | Tabs `tabTags` length ≠ children length |
 //! | `FUARAN049` | Warning | Tabs `activeTag` set without `tabTags` |
@@ -43,6 +43,10 @@ use crate::wire::{
     Action, Binding, FormFieldKind, MediaKind, Node, NodeKind, StaticValue, SwitchCondition,
     TextSource, TreeOp, encode_node,
 };
+
+/// The code of a repeated node id, one finding per occurrence after the first
+/// (the vocabulary's `FUARAN-DUP-ID`).
+pub(crate) const DUPLICATE_ID: &str = "FUARAN-DUP-ID";
 
 /// Finding severity, matching the sibling validators' two-level surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,7 +92,7 @@ impl Walker {
     }
 
     fn walk(&mut self, n: &Node) {
-        // ── EMPTY_NODE_ID / FUARAN001 — node identity ──
+        // ── EMPTY_NODE_ID / FUARAN-DUP-ID — node identity ──
         if n.id.is_empty() {
             self.push(
                 Severity::Error,
@@ -1099,25 +1103,28 @@ fn validate_scoped(tree: &Node, options: ValidateOptions, scope: Scope) -> Vec<F
     if scope == Scope::WholeTree {
         walker.check_filter_edges(tree);
     }
-    // FUARAN001 — one finding per duplicated id (not per occurrence past the
-    // first: the id names the collision).
-    let mut duplicate_ids: Vec<&String> = walker
+    // FUARAN-DUP-ID — one finding at EACH occurrence of an id after the first
+    // (WIRE_FORMAT §27.8.2): the count of findings is the count of nodes to
+    // change. Each names the id.
+    let mut duplicate_ids: Vec<(&String, usize)> = walker
         .seen_ids
         .iter()
         .filter(|&(_, &count)| count > 1)
-        .map(|(id, _)| id)
+        .map(|(id, &count)| (id, count))
         .collect();
     duplicate_ids.sort();
     let mut findings = walker.findings.clone();
-    for id in duplicate_ids {
-        findings.push(Finding {
-            severity: Severity::Error,
-            code: "FUARAN001",
-            node_id: id.clone(),
-            message: format!(
-                "Duplicate NodeId \"{id}\" within the tree — every NodeId must be unique (op-target stability)."
-            ),
-        });
+    for (id, count) in duplicate_ids {
+        for _ in 1..count {
+            findings.push(Finding {
+                severity: Severity::Error,
+                code: DUPLICATE_ID,
+                node_id: id.clone(),
+                message: format!(
+                    "Duplicate NodeId \"{id}\" within the tree — every NodeId must be unique (op-target stability)."
+                ),
+            });
+        }
     }
     findings
 }

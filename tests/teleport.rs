@@ -113,6 +113,27 @@ fn encode_decode_round_trips_the_running_app() {
 }
 
 #[test]
+fn a_tree_repeating_an_id_refuses_the_bundle() {
+    // §17 step 6: the pre-emit identity re-check refuses a resumed tree that
+    // holds an id twice, whatever code the validator reports it under.
+    let tree = decode_node(
+        r#"{"id":"root","kind":{"$type":"Box","children":[
+        {"id":"x","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"a"}}},
+        {"id":"x","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"b"}}}
+    ],"layout":{"$type":"Flex","direction":"Vertical","wrap":false},"role":"Group"}}"#,
+    )
+    .expect("the tree decodes");
+    let s = encode(&Bundle {
+        tree,
+        state: vec![],
+        history: vec![],
+        chain_head: None,
+    })
+    .expect("encodes");
+    assert!(matches!(decode(&s), Err(TeleportError::TreeInvalid(_))));
+}
+
+#[test]
 fn the_string_round_trip_is_byte_exact() {
     // §17.6: encode(decode(s)) == s for a bundle this encoder produced.
     let s = encode(&wizard_bundle()).unwrap();

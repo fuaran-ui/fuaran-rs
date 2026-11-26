@@ -1201,6 +1201,12 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
             "this host renders a grid as inert HTML and leaves event-to-store wiring to the app, so no viewport of its, server or wasm32 client, measures a viewport or writes a window descriptor",
         ),
     ),
+    (
+        "laws/canonicalFormLaws",
+        FamilyAnswer::Pending(
+            "this host's wire codec is generated for the UI vocabulary alone and does not decode through the Core spine's IDL-driven codec (fuaran_core::canonical_form, which runs these vectors in its own suite), so this suite does not run them over the fixture vocabulary they carry; the UI vocabulary declares no presence condition or alias list until Phase 2340 (WIRE_FORMAT 3.6)",
+        ),
+    ),
     ("laws/capabilityLaws", FamilyAnswer::Pending(LAW_UNRUN)),
     ("laws/dataframeParity", FamilyAnswer::Covered),
     ("laws/decimal", FamilyAnswer::Covered),
@@ -1247,6 +1253,9 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
     ("style-observer", FamilyAnswer::Covered),
     ("teleport-decode", FamilyAnswer::Pending(TELEPORT_UNRUN)),
     ("teleport-reject", FamilyAnswer::Pending(TELEPORT_UNRUN)),
+    // corpus_validate_vectors_raise_the_expected_findings, below. A finding
+    // here carries no path, so the leg compares (code, node).
+    ("validate", FamilyAnswer::Covered),
 ];
 
 /// The corpus family set, derived from the corpus tree (§27.7): each root
@@ -2228,4 +2237,75 @@ fn the_emitter_writes_the_panel_revisions_vectors_byte_for_byte() {
             eprintln!("emitter artefacts written to {}", dir.display());
         }
     });
+}
+
+// ─── validate/manifest.json — the pre-emit validate family (§27.8.2) ─────────
+//
+// Each vector is a canonical tree and the pre-emit defects the reference
+// validator reports on it. Every tree is decoded with this host's decoder and
+// validated with `validator::validate`; its findings, restricted to the codes
+// `validator-coverage.json` declares `implemented`, must be exactly the
+// expected defects restricted to the same codes. A finding here carries its
+// code and the node it anchors to but no path, so the leg compares the
+// multiset of (code, node) pairs. A repeated id is one `FUARAN-DUP-ID` per
+// occurrence after the first, so the count of those pairs is what pins it.
+
+/// The codes this host's `validator-coverage.json` declares implemented.
+fn implemented_codes() -> BTreeSet<String> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("validator-coverage.json");
+    let raw = std::fs::read_to_string(&path).expect("reading validator-coverage.json");
+    let decl = parse(&raw).expect("validator-coverage.json parses");
+    match decl.field("implemented") {
+        Some(JVal::Arr(codes)) => codes
+            .iter()
+            .filter_map(|c| match c {
+                JVal::Str(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => panic!("validator-coverage.json carries no `implemented` list"),
+    }
+}
+
+#[test]
+fn corpus_validate_vectors_raise_the_expected_findings() {
+    let corpus = common::corpus_root();
+    let raw = read_fixture(&corpus, "validate/manifest.json");
+    let family = parse(&raw).expect("validate/manifest.json parses");
+    let Some(JVal::Arr(vectors)) = family.field("vectors") else {
+        panic!("validate/manifest.json carries no `vectors` array");
+    };
+    assert!(!vectors.is_empty(), "the validate family is empty");
+    let implemented = implemented_codes();
+    let mut exercised = 0;
+    for v in vectors {
+        let id = str_field(v, "id").expect("a validate vector carries an id");
+        let tree = decode_node(&str_field(v, "tree").expect("a validate vector carries a tree"))
+            .unwrap_or_else(|e| panic!("{id}: the tree does not decode: {e:?}"));
+        let mut got: Vec<(String, String)> = fuaran_rs::validator::validate(&tree)
+            .into_iter()
+            .filter(|f| implemented.contains(f.code))
+            .map(|f| (f.code.to_string(), f.node_id))
+            .collect();
+        let Some(JVal::Arr(expected)) = v.field("expected") else {
+            panic!("{id}: no `expected` array");
+        };
+        let mut want: Vec<(String, String)> = expected
+            .iter()
+            .filter_map(|e| {
+                let code = str_field(e, "code").expect("an expected defect carries a code");
+                implemented
+                    .contains(&code)
+                    .then(|| (code, str_field(e, "node").unwrap_or_default()))
+            })
+            .collect();
+        exercised += want.len();
+        got.sort();
+        want.sort();
+        assert_eq!(got, want, "{id}: (code, node) findings");
+    }
+    assert!(
+        exercised > 0,
+        "no validate vector exercises a code this host implements, so the leg asserts nothing"
+    );
 }
