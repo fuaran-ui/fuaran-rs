@@ -57,6 +57,27 @@ struct Fixture {
     expected_path: Option<String>,
 }
 
+/// WIRE_FORMAT §6: an `expectedPath` is a prefix of the reported path at a SEGMENT boundary, so it
+/// matches the whole path or the path followed by `.` or `[` — `$.kind.map.40` never accepts
+/// `$.kind.map.404`, and `$.kind.items` never accepts `$.kind.itemsX`.
+fn path_extends(path: &str, expected: &str) -> bool {
+    path == expected
+        || path
+            .strip_prefix(expected)
+            .is_some_and(|rest| rest.starts_with('.') || rest.starts_with('['))
+}
+
+#[test]
+fn an_expected_path_matches_only_whole_segments() {
+    assert!(path_extends("$.kind.map.404", "$.kind.map.404"));
+    assert!(path_extends("$.kind.map.404.tone", "$.kind.map.404"));
+    assert!(path_extends("$.kind.items[0]", "$.kind.items"));
+    assert!(path_extends("$.kind", "$"));
+    assert!(!path_extends("$.kind.map.404", "$.kind.map.40"));
+    assert!(!path_extends("$.kind.itemsX", "$.kind.items"));
+    assert!(!path_extends("$.kind", "$.kind.map"));
+}
+
 fn str_field(fields: &JVal, key: &str) -> Option<String> {
     match fields.field(key) {
         Some(JVal::Str(s)) => Some(s.clone()),
@@ -626,7 +647,7 @@ fn corpus_rejects_surface_canonical_code_and_path() {
                         e.path,
                         e.message
                     ));
-                } else if !e.path.starts_with(expected_path) {
+                } else if !path_extends(&e.path, expected_path) {
                     failures.push(format!(
                         "{}: wrong path — expected prefix {expected_path}, got {}",
                         fixture.id, e.path
@@ -744,7 +765,7 @@ fn corpus_envelope_rejects_surface_canonical_code_and_path() {
                         e.code.as_str(),
                         e.path
                     ));
-                } else if !e.path.starts_with(expected_path) {
+                } else if !path_extends(&e.path, expected_path) {
                     failures.push(format!(
                         "{}: wrong path — expected prefix {expected_path}, got {}",
                         fixture.id, e.path
@@ -872,7 +893,7 @@ fn corpus_elicitation_rejects_and_answers_conform() {
                                 "{}: wrong code — expected {expected_code}, got {code} at {path}",
                                 fixture.id
                             ));
-                        } else if !path.starts_with(expected_path) {
+                        } else if !path_extends(&path, expected_path) {
                             failures.push(format!(
                                 "{}: wrong path — expected prefix {expected_path}, got {path}",
                                 fixture.id
