@@ -78,6 +78,9 @@
     },
     "laws/dataframeParity": "covered",
     "laws/decimal": "covered",
+    "laws/derivationTraceLaws": {
+      "pending": "this host does not implement the derivation trace (WIRE_FORMAT 35) yet, so its suite does not run these vectors; its evaluator already runs transformLaws, the pipelines they are drawn from"
+    },
     "laws/fieldLaws": "covered",
     "laws/propagationLaws": {
       "pending": "this host's suite does not yet run this law family's vectors"

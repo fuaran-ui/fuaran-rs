@@ -1151,6 +1151,7 @@ const NO_CARD_CODEC: &str =
     "this host has no contract-card codec (§25) for the card fixtures to run against yet";
 const TELEPORT_UNRUN: &str = "the teleport module is unit-tested by hand; this suite does not yet run the corpus teleport/ fixtures";
 const LAW_UNRUN: &str = "this host's suite does not yet run this law family's vectors";
+const NO_DERIVATION_TRACE: &str = "this host does not implement the derivation trace (WIRE_FORMAT 35) yet, so its suite does not run these vectors; its evaluator already runs transformLaws, the pipelines they are drawn from";
 const HOSTED_OPAQUE: &str = "this host's generated type model carries each hosted slot opaquely, so it holds no enumeration of the discriminators inside one (§27.5) and this host makes no claim in this family";
 
 /// One host answer for a corpus family (§27.7).
@@ -1231,6 +1232,10 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
     ("laws/capabilityLaws", FamilyAnswer::Pending(LAW_UNRUN)),
     ("laws/dataframeParity", FamilyAnswer::Covered),
     ("laws/decimal", FamilyAnswer::Covered),
+    (
+        "laws/derivationTraceLaws",
+        FamilyAnswer::Pending(NO_DERIVATION_TRACE),
+    ),
     ("laws/fieldLaws", FamilyAnswer::Covered),
     ("laws/propagationLaws", FamilyAnswer::Pending(LAW_UNRUN)),
     ("laws/transformLaws", FamilyAnswer::Covered),
