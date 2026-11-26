@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:7fac522a220713bf
+/* fuaran-vocabulary-fingerprint: fv1:437e9eb14e029a60
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -820,6 +820,106 @@ body {
 .fuaran-dir-ltr,
 .fuaran-dir-rtl {
   unicode-bidi: isolate;
+}
+
+/* ── Derivation affordance (Phase 2749) ───────────────────────────── */
+/* Host chrome under `RenderPolicy.DerivationTrace`, off by default: a native
+   disclosure after a pipeline-bound Metric or data-bound grid that lists how
+   its value was computed, step by step. Off, none of these classes is emitted.
+   The host keeps its value's layout and stacks the disclosure after it; the
+   panel opens over the content that follows, so opening it moves nothing. */
+.fuaran-derivation-host {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-derivation {
+  align-self: flex-start;
+  font-size: var(--fuaran-text-sm, 13px);
+  color: var(--fuaran-tone-default-fg, #1f2937);
+}
+
+.fuaran-derivation-toggle {
+  cursor: pointer;
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+  border-radius: var(--fuaran-radius-sm, 4px);
+  padding: 0 var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-derivation-toggle:focus-visible {
+  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
+    var(--fuaran-focus-ring-color, #93c5fd);
+  outline-offset: var(--fuaran-focus-ring-offset, 2px);
+}
+
+.fuaran-derivation-panel {
+  position: absolute;
+  z-index: 20;
+  inset-inline-start: 0;
+  max-width: min(40rem, 90vw);
+  max-height: 24rem;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-sm, 8px);
+  padding: var(--fuaran-space-md, 12px);
+  background: var(--fuaran-tone-default-bg, #ffffff);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  border-radius: var(--fuaran-radius-md, 6px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.fuaran-derivation-steps {
+  margin: 0;
+  padding-inline-start: var(--fuaran-space-lg, 16px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-sm, 8px);
+}
+
+.fuaran-derivation-input,
+.fuaran-derivation-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fuaran-space-xs, 4px);
+}
+
+.fuaran-derivation-verb {
+  font-weight: var(--fuaran-font-weight-semibold, 600);
+}
+
+.fuaran-derivation-wire {
+  font-family: var(--fuaran-font-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  font-size: var(--fuaran-text-xs, 12px);
+  overflow-wrap: anywhere;
+}
+
+.fuaran-derivation-schema,
+.fuaran-derivation-rows,
+.fuaran-derivation-pruned {
+  color: var(--fuaran-tone-subdued-fg, #6b7280);
+}
+
+.fuaran-derivation-step-pruned .fuaran-derivation-verb {
+  text-decoration: line-through;
+}
+
+.fuaran-derivation-refusal {
+  color: var(--fuaran-tone-critical-fg, #b91c1c);
+}
+
+.fuaran-derivation-table {
+  border-collapse: collapse;
+  font-size: var(--fuaran-text-xs, 12px);
+}
+
+.fuaran-derivation-table th,
+.fuaran-derivation-table td {
+  padding: 2px var(--fuaran-space-xs, 4px);
+  border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
+  text-align: start;
 }
 
 /* ── Metric ───────────────────────────────────────────────────────── */
