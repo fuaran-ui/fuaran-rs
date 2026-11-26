@@ -118,6 +118,33 @@ fn duplicate_switch_match_is_fuaran082() {
         {"child":{"id":"b","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"b"}}},"match":"x"}
     ],"default":{"id":"d","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"d"}}},"stateKey":"mode"}}"#;
     assert!(codes(dup).contains(&"FUARAN082".to_string()));
+    // The vocabulary's severity (Error: the later case is dead) and one
+    // sentence of message text, with no embedded line break or run of spaces.
+    let tree = decode_node(dup).expect("test tree decodes");
+    let found = validate(&tree);
+    let f = found
+        .iter()
+        .find(|f| f.code == "FUARAN082")
+        .expect("FUARAN082 is raised");
+    assert_eq!(f.severity, Severity::Error);
+    assert_eq!(
+        f.message,
+        "Switch declares duplicate case match \"x\" — first-match-wins shadows the later case; give each case a distinct match value."
+    );
+}
+
+#[test]
+fn empty_node_id_is_fuaran_empty_id() {
+    // The decoder refuses an empty id (EMPTY_NODE_ID, a decode code), so the
+    // tree is built by hand, as a host-constructed tree reaches the validator.
+    let mut tree = decode_node(
+        r#"{"id":"x","kind":{"$type":"Markdown","text":{"$type":"Literal","text":"a"}}}"#,
+    )
+    .expect("test tree decodes");
+    tree.id = String::new();
+    let found = validate(&tree);
+    let codes: Vec<(&str, Severity)> = found.iter().map(|f| (f.code, f.severity)).collect();
+    assert_eq!(codes, vec![("FUARAN-EMPTY-ID", Severity::Error)]);
 }
 
 #[test]

@@ -13,7 +13,7 @@
 //!
 //! | Code | Severity | Rule |
 //! |---|---|---|
-//! | `EMPTY_NODE_ID` | Error | a node id is the empty string (the §8 identity invariant, re-checked pre-emit) |
+//! | `FUARAN-EMPTY-ID` | Error | a node id is the empty string (the §8 identity invariant, re-checked pre-emit) |
 //! | `FUARAN-DUP-ID` | Error | duplicate NodeId within the tree (op-target stability), one finding per occurrence after the first |
 //! | `FUARAN047` | Error | Tabs `tabHeaders` length ≠ children length |
 //! | `FUARAN048` | Error | Tabs `tabTags` length ≠ children length |
@@ -25,7 +25,7 @@
 //! | `FUARAN069` | Warning | inert control: omitted handler over a non-writable value binding (write-back default cannot arm; `Local` exempt) |
 //! | `FUARAN073` | Warning | fire-and-forget `Action.Call` (no `into`, no `onResult`) |
 //! | `FUARAN075` | Error | a DECLARED filter edge (`Query.dependsOn`, or a `Transform` / `Expr` param whose `from` is a `Filter`) naming a chip no `Filters` node in the tree declares (Phase 1836) |
-//! | `FUARAN082` | Warning | duplicate `Switch` case match values (first-match-wins shadows the rest) |
+//! | `FUARAN082` | Error | duplicate `Switch` case match values (first-match-wins shadows the rest) |
 //! | `FUARAN083` | Warning | ungrounded `Switch` selector: an empty-key `State` binding can never resolve a case (any other `Binding` names its source and is grounded by construction) |
 //! | `FUARAN086` | Error | chart field reference absent from the statically-known data schema (Phase 640) |
 //! | `FUARAN087` | Error | grounded chart value field of a non-numeric column type (silently flat series; Phase 640) |
@@ -48,6 +48,11 @@ use crate::wire::{
 /// (the vocabulary's `FUARAN-DUP-ID`).
 pub(crate) const DUPLICATE_ID: &str = "FUARAN-DUP-ID";
 
+/// The code of an empty node id (the vocabulary's `FUARAN-EMPTY-ID`). The
+/// decoder refuses one as `EMPTY_NODE_ID`; this is the pre-emit re-check of a
+/// tree built by hand.
+pub(crate) const EMPTY_ID: &str = "FUARAN-EMPTY-ID";
+
 /// Finding severity, matching the sibling validators' two-level surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
@@ -59,8 +64,9 @@ pub enum Severity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
     pub severity: Severity,
-    /// The stable, cross-host defect code (`FUARAN###`, or `EMPTY_NODE_ID` for
-    /// the §8 identity re-check).
+    /// The stable, cross-host defect code from the corpus vocabulary
+    /// (`FUARAN###`, or `FUARAN-EMPTY-ID` / `FUARAN-DUP-ID` for the §8
+    /// identity re-check).
     pub code: &'static str,
     /// The id of the node the finding anchors to.
     pub node_id: String,
@@ -92,11 +98,11 @@ impl Walker {
     }
 
     fn walk(&mut self, n: &Node) {
-        // ── EMPTY_NODE_ID / FUARAN-DUP-ID — node identity ──
+        // ── FUARAN-EMPTY-ID / FUARAN-DUP-ID — node identity ──
         if n.id.is_empty() {
             self.push(
                 Severity::Error,
-                "EMPTY_NODE_ID",
+                EMPTY_ID,
                 &n.id,
                 "Node id is the empty string — every node carries a non-empty stable id."
                     .to_string(),
@@ -296,11 +302,11 @@ impl Walker {
                         SwitchCondition::Match(value) => {
                             if !seen.insert(value) {
                                 self.push(
-                                    Severity::Warning,
+                                    Severity::Error,
                                     "FUARAN082",
                                     id,
                                     format!(
-                                        "Switch declares duplicate case match \"{value}\" — first-match-wins shadows the later \n                 case; give each case a distinct match value."
+                                        "Switch declares duplicate case match \"{value}\" — first-match-wins shadows the later case; give each case a distinct match value."
                                     ),
                                 );
                             }

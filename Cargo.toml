@@ -129,6 +129,10 @@ name = "fuaran-ui"
 # under the vocabulary's `FUARAN-DUP-ID`, where it reported one `FUARAN001`
 # per repeated id. No signature moves; a consumer matching the code string
 # reads the new one.
+# It also takes the vocabulary's spelling and severity for two more findings:
+# an empty node id is `FUARAN-EMPTY-ID` (was `EMPTY_NODE_ID`, which stays the
+# DECODE code), and `FUARAN082` (a duplicate `Switch` match) is an Error (was
+# a Warning), its message one line.
 version ="0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"

@@ -2246,9 +2246,10 @@ fn the_emitter_writes_the_panel_revisions_vectors_byte_for_byte() {
 // validated with `validator::validate`; its findings, restricted to the codes
 // `validator-coverage.json` declares `implemented`, must be exactly the
 // expected defects restricted to the same codes. A finding here carries its
-// code and the node it anchors to but no path, so the leg compares the
-// multiset of (code, node) pairs. A repeated id is one `FUARAN-DUP-ID` per
-// occurrence after the first, so the count of those pairs is what pins it.
+// code, its severity and the node it anchors to but no path, so the leg
+// compares the multiset of (code, severity, node) triples. A repeated id is one
+// `FUARAN-DUP-ID` per occurrence after the first, so the count of those
+// triples is what pins it.
 
 /// The codes this host's `validator-coverage.json` declares implemented.
 fn implemented_codes() -> BTreeSet<String> {
@@ -2282,27 +2283,29 @@ fn corpus_validate_vectors_raise_the_expected_findings() {
         let id = str_field(v, "id").expect("a validate vector carries an id");
         let tree = decode_node(&str_field(v, "tree").expect("a validate vector carries a tree"))
             .unwrap_or_else(|e| panic!("{id}: the tree does not decode: {e:?}"));
-        let mut got: Vec<(String, String)> = fuaran_rs::validator::validate(&tree)
+        let mut got: Vec<(String, String, String)> = fuaran_rs::validator::validate(&tree)
             .into_iter()
             .filter(|f| implemented.contains(f.code))
-            .map(|f| (f.code.to_string(), f.node_id))
+            .map(|f| (f.code.to_string(), format!("{:?}", f.severity), f.node_id))
             .collect();
         let Some(JVal::Arr(expected)) = v.field("expected") else {
             panic!("{id}: no `expected` array");
         };
-        let mut want: Vec<(String, String)> = expected
+        let mut want: Vec<(String, String, String)> = expected
             .iter()
             .filter_map(|e| {
                 let code = str_field(e, "code").expect("an expected defect carries a code");
+                let severity =
+                    str_field(e, "severity").expect("an expected defect carries a severity");
                 implemented
                     .contains(&code)
-                    .then(|| (code, str_field(e, "node").unwrap_or_default()))
+                    .then(|| (code, severity, str_field(e, "node").unwrap_or_default()))
             })
             .collect();
         exercised += want.len();
         got.sort();
         want.sort();
-        assert_eq!(got, want, "{id}: (code, node) findings");
+        assert_eq!(got, want, "{id}: (code, severity, node) findings");
     }
     assert!(
         exercised > 0,

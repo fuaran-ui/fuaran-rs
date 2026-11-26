@@ -194,7 +194,7 @@ for f in validate(&tree) {
 ```rust
 pub struct Finding {
     pub severity: Severity,   // Warning | Error
-    pub code: &'static str,   // FUARAN###, or EMPTY_NODE_ID for the §8 identity re-check
+    pub code: &'static str,   // FUARAN###, or FUARAN-EMPTY-ID / FUARAN-DUP-ID for the §8 identity re-check
     pub node_id: String,
     pub message: String,
 }

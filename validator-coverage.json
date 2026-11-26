@@ -7,6 +7,7 @@
   "postureReason": "The widest sibling coverage, and the only one carrying the code as a first-class value on the finding rather than inside the message prose — which is why it is the only sibling whose declaration can be machine-checked against its implementation.",
   "implemented": [
     "FUARAN-DUP-ID",
+    "FUARAN-EMPTY-ID",
     "FUARAN047",
     "FUARAN048",
     "FUARAN049",
