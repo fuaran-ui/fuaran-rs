@@ -1254,7 +1254,8 @@ const HOST_CORPUS_FAMILIES: &[(&str, FamilyAnswer)] = &[
     ("teleport-decode", FamilyAnswer::Pending(TELEPORT_UNRUN)),
     ("teleport-reject", FamilyAnswer::Pending(TELEPORT_UNRUN)),
     // corpus_validate_vectors_raise_the_expected_findings, below. A finding
-    // here carries no path, so the leg compares (code, node).
+    // here carries no path, so the leg compares (code, severity, node); the
+    // README publishes that limit (WIRE_FORMAT 27.7 gives `covered` none).
     ("validate", FamilyAnswer::Covered),
 ];
 

@@ -849,6 +849,16 @@ Four exported walks changed reach, each to the reference's:
 **Conformance statement — additive.** No signature moves; `ops::children` and
 `NODE_SLOT_MEMBERS` are new. It rides the current unreleased version.
 
+## What the corpus family legs do not compare
+
+`host-capability-manifest.json` declares each corpus family `covered`, `notApplicable` or `pending`
+(WIRE_FORMAT §27.7). That grammar gives `covered` no qualifier, so a covered family whose leg compares
+less than its vectors state says so here.
+
+| Family | The leg compares | The leg does not compare |
+|---|---|---|
+| `validate` | the multiset of (code, severity, node) of each finding, restricted to the codes `validator-coverage.json` declares `implemented` | the `path` of a finding: a `validator::Finding` carries a code, a severity and the node it anchors to, and no path. A vector that pins a path or an order (a repeated id at index 10, in a list of twelve, in the node envelope) is observed here only through its count of (code, severity, node) triples. |
+
 ## The Core boundary — `src/core/`
 
 The subsystems this host reimplements from the `Fuaran.Core` reference live in one

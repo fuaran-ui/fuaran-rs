@@ -25,7 +25,7 @@
 //! | `FUARAN069` | Warning | inert control: omitted handler over a non-writable value binding (write-back default cannot arm; `Local` exempt) |
 //! | `FUARAN073` | Warning | fire-and-forget `Action.Call` (no `into`, no `onResult`) |
 //! | `FUARAN075` | Error | a DECLARED filter edge (`Query.dependsOn`, or a `Transform` / `Expr` param whose `from` is a `Filter`) naming a chip no `Filters` node in the tree declares (Phase 1836) |
-//! | `FUARAN082` | Error | duplicate `Switch` case match values (first-match-wins shadows the rest) |
+//! | `FUARAN082` | Error | duplicate `Switch` case match values (first-match-wins shadows the rest), one finding per case after the first that repeats a value |
 //! | `FUARAN083` | Warning | ungrounded `Switch` selector: an empty-key `State` binding can never resolve a case (any other `Binding` names its source and is grounded by construction) |
 //! | `FUARAN086` | Error | chart field reference absent from the statically-known data schema (Phase 640) |
 //! | `FUARAN087` | Error | grounded chart value field of a non-numeric column type (silently flat series; Phase 640) |
