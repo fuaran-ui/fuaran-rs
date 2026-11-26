@@ -121,6 +121,14 @@ name = "fuaran-ui"
 # it omit-at-default. Write `multiple: true` / `false` where a literal wrote
 # `Some(true)` / `None`. WIRE-VISIBLE: an explicit `"multiple":false` decodes as a
 # single-select (a §16 lenient accept) and re-encodes WITHOUT the member.
+#
+# Phase 2381 rides it, a BEHAVIOUR change: a defect inside an array-form
+# `Binding.Transform` param's `from` is reported at `params[i].from` (the
+# entry's index, WIRE_FORMAT §29.3), where it was `params[].from`; and the
+# validator reports a repeated node id once at EACH occurrence after the first,
+# under the vocabulary's `FUARAN-DUP-ID`, where it reported one `FUARAN001`
+# per repeated id. No signature moves; a consumer matching the code string
+# reads the new one.
 version ="0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"

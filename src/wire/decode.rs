@@ -928,10 +928,13 @@ pub(super) fn decode_binding_params(
         }
         Some(v) => {
             let items = as_arr(&format!("{path}.params"), v)?;
-            let p = format!("{path}.params[]");
             let mut out = Vec::with_capacity(items.len());
-            for item in items {
-                out.push(decode_transform_param(&p, item)?);
+            for (i, item) in items.iter().enumerate() {
+                // Each entry is located by its index (WIRE_FORMAT §29.3).
+                out.push(decode_transform_param(
+                    &format!("{path}.params[{i}]"),
+                    item,
+                )?);
             }
             Ok(Some(out))
         }
@@ -2291,9 +2294,10 @@ pub(super) fn decode_binding_slot(path: &str, j: &JVal, slot: StaticSlot) -> DRe
                 }
                 Some(v) => {
                     let items = as_arr(&format!("{path}.params"), v)?;
-                    let p = format!("{path}.params[]");
                     let mut out = Vec::with_capacity(items.len());
-                    for item in items {
+                    for (i, item) in items.iter().enumerate() {
+                        // Each entry is located by its index (WIRE_FORMAT §29.3).
+                        let p = format!("{path}.params[{i}]");
                         let pf = as_obj(&p, item)?;
                         let name = req_string(&p, pf, "name", "param name string")?;
                         let from_j = req(&p, pf, "from", "param source Binding")?;
