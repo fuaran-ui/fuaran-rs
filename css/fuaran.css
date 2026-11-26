@@ -52,7 +52,7 @@
        symmetric, so no inline-axis mirroring applies.
    ============================================================================ */
 
-/* fuaran-vocabulary-fingerprint: fv1:437e9eb14e029a60
+/* fuaran-vocabulary-fingerprint: fv1:1dadf78ecced9225
    The class vocabulary this stylesheet is written against (Phase 433). A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
@@ -920,6 +920,53 @@ body {
   padding: 2px var(--fuaran-space-xs, 4px);
   border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
   text-align: start;
+}
+
+/* ── Refresh marks (Phase 2751) ──────────────────────────────────── */
+/* Host chrome under `RenderPolicy.RefreshMarking`, off by default: the cells a
+   live refresh's row delta names, and a Metric value it recomputed, are marked
+   for that one refresh. Off, none of these classes is emitted. The mark is an
+   outline as well as a tint, so it is never colour alone, and the host's live
+   region says in words what changed. The tint fades once; under reduced motion
+   it does not animate and the outline stays. */
+.fuaran-refresh-host {
+  position: relative;
+}
+
+.fuaran-refresh-status {
+  /* Visually hidden; read by assistive technology as a polite status. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.fuaran-grid-cell.fuaran-refresh-changed,
+.fuaran-refresh-moved .fuaran-metric-value {
+  outline: var(--fuaran-border-width, 1px) dashed var(--fuaran-tone-info-border, #93c5fd);
+  outline-offset: -1px;
+  animation: fuaran-refresh-fade 1.6s ease-out 1;
+}
+
+@keyframes fuaran-refresh-fade {
+  from {
+    background-color: var(--fuaran-tone-info-bg, #eff6ff);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fuaran-grid-cell.fuaran-refresh-changed,
+  .fuaran-refresh-moved .fuaran-metric-value {
+    animation: none;
+  }
 }
 
 /* ── Metric ───────────────────────────────────────────────────────── */
