@@ -722,7 +722,7 @@ body {
   font-size: var(--fuaran-text-sm, 13px);
   font-variant-numeric: tabular-nums;
   color: var(--fuaran-tone-default-fg, #1f2937);
-  text-align: end;
+  text-align: var(--fuaran-dir-context-end, end);
 }
 
 .fuaran-label-value-row-emphasis {
@@ -816,10 +816,43 @@ body {
    1.3.2, Meaningful Sequence). It is stated here rather than left to the user
    agent's own `[dir]` rule so the isolation does not depend on which UA
    stylesheet a host ships — and it is markup and CSS only, so it holds with no
-   script running at all. */
+   script running at all.
+
+   The declaration changes the run's direction and isolation and NOTHING ELSE
+   (WIRE_FORMAT rule 5; Phase 2867). `dir` also decides which edge `start`
+   names, so left alone a node declaring `ltr` inside right-to-left prose
+   start-aligns to the left while its neighbours align right. Two rules take
+   that back:
+     - `match-parent` resolves the node's inherited alignment against its
+       PARENT's direction and computes to a physical edge, so the node and
+       every descendant that inherits its alignment keep the side they had
+       undeclared. Chromium and WebKit parse only the `-webkit-` spelling, so
+       both are stated, the standard one last.
+     - A descendant whose own rule names `start` or `end` would resolve against
+       the declared direction instead, so the OUTERMOST declared node records
+       the surrounding direction's physical edges, and every such rule in this
+       sheet is written `var(--fuaran-dir-context-start, start)` (or `-end,
+       end`): the recorded edge inside a declared subtree, the logical value
+       everywhere else. A new `start` / `end` alignment is written the same
+       way; RenderObligationTests refuses a bare one.
+   The context is read with `:dir()`, so it follows the `dir` attributes the
+   document and its nodes carry. Neither rule moves flex or grid placement
+   inside the node; that is decided by where the declaration lands (D43). */
 .fuaran-dir-ltr,
 .fuaran-dir-rtl {
   unicode-bidi: isolate;
+  text-align: -webkit-match-parent;
+  text-align: match-parent;
+}
+
+:dir(ltr) > :is(.fuaran-dir-ltr, .fuaran-dir-rtl):not(:is(.fuaran-dir-ltr, .fuaran-dir-rtl) *) {
+  --fuaran-dir-context-start: left;
+  --fuaran-dir-context-end: right;
+}
+
+:dir(rtl) > :is(.fuaran-dir-ltr, .fuaran-dir-rtl):not(:is(.fuaran-dir-ltr, .fuaran-dir-rtl) *) {
+  --fuaran-dir-context-start: right;
+  --fuaran-dir-context-end: left;
 }
 
 /* ── Derivation affordance (Phase 2749) ───────────────────────────── */
@@ -921,7 +954,7 @@ body {
 .fuaran-derivation-table td {
   padding: 2px var(--fuaran-space-xs, 4px);
   border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
-  text-align: start;
+  text-align: var(--fuaran-dir-context-start, start);
 }
 
 /* ── Chart data table (Phase 2776) ──────────────────────────────── */
@@ -960,7 +993,7 @@ body {
 
 .fuaran-chart-table-grid caption {
   caption-side: top;
-  text-align: start;
+  text-align: var(--fuaran-dir-context-start, start);
   font-weight: var(--fuaran-font-weight-semibold, 600);
   padding-bottom: var(--fuaran-space-xs, 4px);
 }
@@ -969,11 +1002,11 @@ body {
 .fuaran-chart-table-grid td {
   padding: 2px var(--fuaran-space-sm, 8px);
   border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
-  text-align: start;
+  text-align: var(--fuaran-dir-context-start, start);
 }
 
 .fuaran-chart-table-grid td {
-  text-align: end;
+  text-align: var(--fuaran-dir-context-end, end);
 }
 
 .fuaran-chart-table-grid thead th {
@@ -2383,7 +2416,7 @@ body {
 .fuaran-table-header {
   background: var(--fuaran-tone-subdued-bg, #f3f4f6);
   color: var(--fuaran-tone-subdued-fg, #6b7280);
-  text-align: start;
+  text-align: var(--fuaran-dir-context-start, start);
   padding: var(--fuaran-space-sm, 8px) var(--fuaran-space-md, 12px);
   font-weight: var(--fuaran-font-weight-medium, 500);
   font-size: var(--fuaran-text-xs, 12px);
