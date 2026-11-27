@@ -19,8 +19,8 @@
 
    Token vocabulary (full enumeration: HOST-STYLING-CHECKLIST.md §1):
      --fuaran-tone-{default|subdued|brand|success|warning|critical|info}-{bg|fg|border}
-     --fuaran-tone-{tone}-{hover|focus|active|disabled}-{bg|fg|border}   (Phase 12.N)
-     --fuaran-focus-ring-{color|width|offset|style}                       (Phase 12.N)
+     --fuaran-tone-{tone}-{hover|focus|active|disabled}-{bg|fg|border}
+     --fuaran-focus-ring-{color|width|offset|style}
      --fuaran-space-{xs|sm|md|lg|xl}
      --fuaran-text-{xs|sm|base|lg|xl|2xl|3xl}
      --fuaran-font-weight-{regular|medium|semibold|bold}
@@ -28,9 +28,9 @@
      --fuaran-button-pad-{y|x}
      --fuaran-radius-{sm|md|lg|full}
      --fuaran-border-width
-     --fuaran-segmented-{bg|active-bg|active-fg|divider-color}              (Phase 66)
+     --fuaran-segmented-{bg|active-bg|active-fg|divider-color}
 
-   Writing direction (Phase 1114). Every inline-axis rule below is expressed in
+   Writing direction. Every inline-axis rule below is expressed in
    CSS LOGICAL properties (`margin-inline-start`, `padding-inline-end`,
    `border-inline-start`, `inset-inline-{start|end}`, `float: inline-end`, and
    `text-align: start|end`, spelled `var(--fuaran-dir-context-start, start)` so
@@ -55,7 +55,7 @@
    ============================================================================ */
 
 /* fuaran-vocabulary-fingerprint: fv1:c7b283b93867bf80
-   The class vocabulary this stylesheet is written against (Phase 433). A host
+   The class vocabulary this stylesheet is written against. A host
    serving this file can assert it matches the renderer emitting the classes —
    see docs/HOST-STYLING-CHECKLIST.md §1.5d for the contract and the recommended
    startup check. STAMPED, not hand-edited: the value is generated from
@@ -128,7 +128,7 @@
   --fuaran-radius-full: 9999px;
   --fuaran-border-width: 1px;
 
-  /* ── interaction state matrix (Phase 12.N) ────────────────────────
+  /* ── interaction state matrix ────────────────────────
      7 tones × 4 states × 3 slots = 84 vars, plus 4 focus-ring globals.
      Static colour values (no color-mix()) so the cascade is consistent
      across browsers (sRGB vs OKLCH drift was the anti-pattern flagged
@@ -235,7 +235,7 @@
   --fuaran-focus-ring-offset: 2px;
   --fuaran-focus-ring-style: solid;
 
-  /* Phase 69 (2026-05-29): tab-bar shape — visual parity with SDK
+  /* Tab-bar shape — visual parity with SDK
      `Layout.Tabs.tabGroup`. Indicator is the bottom-border accent; tab
      text colours follow the tone-brand scale by default but the surface
      is overridable per-theme. */
@@ -247,7 +247,7 @@
   --fuaran-tab-text-active-color: var(--fuaran-tone-brand-fg, #1d4ed8);
   --fuaran-tab-text-hover-color: var(--fuaran-tone-brand-hover-fg, #1e40af);
 
-  /* Phase 66 (2026-05-30): segmented-control / radio-group surface.
+  /* Segmented-control / radio-group surface.
      Background is the rest-state tray colour; active-bg / active-fg are
      the selected segment's pill; divider-color is the inter-segment
      hairline (Horizontal only). Defaults route through the tone palette
@@ -257,7 +257,7 @@
   --fuaran-segmented-active-fg: var(--fuaran-tone-brand-fg, #1d4ed8);
   --fuaran-segmented-divider-color: var(--fuaran-tone-default-border, #e5e7eb);
 
-  /* Phase 58 (2026-07-11): responsive breakpoint thresholds — the min-width
+  /* Responsive breakpoint thresholds — the min-width
      boundaries the `@media` rules at the foot of this file collapse layout
      at. Exposed as tokens so consumer JS / container queries can read the
      same thresholds; the `@media` conditions below repeat these px values
@@ -314,7 +314,7 @@ body {
   align-items: center;
 }
 
-/* Phase 431 — the `IconSize` modifiers the standalone `Icon` kind emits
+/* The `IconSize` modifiers the standalone `Icon` kind emits
    (`Theme.iconSizeClass`). They shipped unstyled, so a declared `IconSize` had
    no effect in this sheet at all. Sized in `em` rather than against the font
    scale deliberately: an icon reads relative to the text it sits beside, and
@@ -353,9 +353,9 @@ body {
   flex-direction: row;
 }
 
-/* Phase 12.P Feliz-parity additive (2026-05-26): `StackSpec.Wrap = true`
+/* Feliz-parity additive: `StackSpec.Wrap = true`
    adds this class so a horizontal stack wraps its children at narrow
-   viewports instead of overflowing. CSS-only — pre-12.P stacks unaffected. */
+   viewports instead of overflowing. CSS-only — stacks that do not wrap are unaffected. */
 .fuaran-stack-wrap {
   flex-wrap: wrap;
 }
@@ -379,7 +379,7 @@ body {
   gap: var(--fuaran-space-md, 12px);
 }
 
-/* Phase 2794 (DECISIONS.md D35) — a gap-spaced layout container owns the
+/* A gap-spaced layout container owns the
    spacing between its children, so a child node keeps no margin of its own
    there. The `.fuaran-node` margin above is plain-flow spacing; inside a stack,
    a grid or a dashboard it was ADDED to the container's gap, so a stack declared
@@ -444,7 +444,7 @@ body {
   padding: 0 var(--fuaran-space-md, 12px);
 }
 
-/* Vertical tab orientation — Phase 69 (2026-05-29). The
+/* Vertical tab orientation. The
    aria-orientation="vertical" attribute switches the keyboard nav
    between Arrow Left/Right and Arrow Up/Down; the visual layout follows
    here. */
@@ -462,7 +462,7 @@ body {
 .fuaran-tab {
   background: transparent;
   border: none;
-  /* Phase 69 (2026-05-29): tab tokens replace the prior space-sm/lg pair so
+  /* Tab tokens replace the prior space-sm/lg pair so
      consumers override the tab-bar shape independent of the wider spacing
      scale. */
   padding: var(--fuaran-tab-padding-y, 8px) var(--fuaran-tab-padding-x, 24px);
@@ -477,7 +477,7 @@ body {
 }
 
 .fuaran-tab::after {
-  /* Phase 69 (2026-05-29): bottom-border indicator. Hidden by default;
+  /* Bottom-border indicator. Hidden by default;
      `.fuaran-tab-active::after` shows the brand-coloured bar. The
      ::after pseudo-element gives the indicator independent height/colour
      controls without forcing a fixed border on the button itself. */
@@ -512,7 +512,7 @@ body {
   background: var(--fuaran-tab-indicator-color, #1d4ed8);
 }
 
-/* Phase 69 (2026-05-29): disabled tab — greyed text + no pointer + the
+/* Disabled tab — greyed text + no pointer + the
    ::after indicator stays hidden. Matches the SDK disabled-tab posture. */
 .fuaran-tab-disabled {
   color: var(--fuaran-tone-default-disabled-fg, #6b7280);
@@ -527,7 +527,7 @@ body {
   background: transparent;
 }
 
-/* Phase 69 (2026-05-29): per-tab icon span + label span. The renderer
+/* Per-tab icon span + label span. The renderer
    emits the icon span whenever the header carries an `Icon` — since the
    icon-contract change it is the uniform empty `data-icon` hook (see the
    `.fuaran-icon` block), not the icon name as text. Authors who only
@@ -545,7 +545,7 @@ body {
   padding: var(--fuaran-space-lg, 16px);
 }
 
-/* Phase 69 (2026-05-29): the active tab body now renders inside a typed
+/* The active tab body now renders inside a typed
    `role="tabpanel"` wrapper so screen-readers + keyboard nav have a
    stable focus target. */
 .fuaran-tabs-panel:focus-visible {
@@ -592,7 +592,7 @@ body {
   border: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-brand-border, #93c5fd);
 }
 
-/* ── stat list (Phase 12.P) ───────────────────────────────────── */
+/* ── stat list ───────────────────────────────────── */
 /* Single-card-of-rows shape — typically wraps LabelValueRow children.
    Distinct from `.fuaran-layout-card`: no per-child padding around the
    body, divider rules between children. The body's divider rules use
@@ -621,7 +621,7 @@ body {
   border-bottom: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
 }
 
-/* ── disclosure (Phase 65, 2026-05-28) ──────────────────────────── */
+/* ── disclosure ──────────────────────────── */
 /* HTML-native `<details>` / `<summary>` accordion. Visual shape mirrors
    `.fuaran-layout-card`: same border / radius / surface tone so disclosure
    sections integrate with the existing visual contract. The summary picks
@@ -667,7 +667,7 @@ body {
   transform: rotate(90deg);
 }
 
-/* The ONLY direction-conditional pair in this sheet (Phase 1114). A chevron is a
+/* The ONLY direction-conditional pair in this sheet. A chevron is a
    DIRECTIONAL GLYPH and no logical property mirrors glyph content — the
    `float: inline-end` above puts it on the correct edge, but `▸` still points
    right. Transforms apply right-to-left, so in the open state the rotation runs
@@ -691,7 +691,7 @@ body {
   padding: var(--fuaran-space-lg, 16px);
 }
 
-/* ── label/value row (Phase 12.P) ─────────────────────────────── */
+/* ── label/value row ─────────────────────────────── */
 /* Baseline-aligned label-left / value-right row. The label-block holds
    the primary label + an optional small-print help line stacked
    vertically; the value sits flush right. */
@@ -736,7 +736,7 @@ body {
   font-weight: var(--fuaran-font-weight-semibold, 600);
 }
 
-/* ── heading variants (Phase 12.P) ────────────────────────────── */
+/* ── heading variants ────────────────────────────── */
 /* Variants compose on top of `.fuaran-heading`; the underlying `<h{Level}>`
    tag is preserved across variants for screen-reader semantics. */
 .fuaran-heading-eyebrow {
@@ -760,7 +760,7 @@ body {
   font-weight: var(--fuaran-font-weight-semibold, 600);
 }
 
-/* ── semantic content roles + font voice (Phase 147) ──────────────── */
+/* ── semantic content roles + font voice ──────────────── */
 /* `StyleRole` (`.fuaran-role-{role}`) and `FontVoice` (`.fuaran-voice-{voice}`)
    compose on ANY node — the renderer appends them to the node className only
    when non-default, so a tree that sets neither renders byte-identically.
@@ -804,7 +804,7 @@ body {
   line-height: var(--fuaran-line-height-normal, 1.5);
 }
 
-/* ── declared text direction (Phase 1472) ─────────────────────────── */
+/* ── declared text direction ─────────────────────────── */
 /* `TextDirection` (`.fuaran-dir-{direction}`) rides the same className the
    role and voice fragments do, appended only when the value declares a
    direction of its own, so a tree that declares none renders byte-identically.
@@ -821,7 +821,7 @@ body {
    script running at all.
 
    The declaration changes the run's direction and isolation and NOTHING ELSE
-   (WIRE_FORMAT rule 5; Phase 2867). `dir` also decides which edge `start`
+   (WIRE_FORMAT rule 5). `dir` also decides which edge `start`
    names and which way a flex row or a table runs, so left alone a node
    declaring `ltr` inside right-to-left prose start-aligns to the left, and a
    Fact packs its value to the left, while its neighbours run right. Four rules
@@ -831,8 +831,8 @@ body {
        every descendant that inherits its alignment keep the side they had
        undeclared. Chromium parses only the `-webkit-` spelling, so both are
        stated, the standard one last.
-     - A descendant that carries a `dir` of its own (a bound leaf's `auto`,
-       Phase 1114) resolves `start` against its own direction, as it does
+     - A descendant that carries a `dir` of its own (a bound leaf's `auto`)
+       resolves `start` against its own direction, as it does
        undeclared, rather than inheriting that physical edge. It is stated
        with no specificity, so any rule of this sheet that aligns the element
        still wins. It takes `start`, so under an ancestor that aligns
@@ -899,7 +899,7 @@ body {
   unicode-bidi: isolate;
 }
 
-/* ── Derivation affordance (Phase 2749) ───────────────────────────── */
+/* ── Derivation affordance ───────────────────────────── */
 /* Host chrome under `RenderPolicy.DerivationTrace`, off by default: a native
    disclosure after a pipeline-bound Metric or data-bound grid that lists how
    its value was computed, step by step. Off, none of these classes is emitted.
@@ -1001,7 +1001,7 @@ body {
   text-align: var(--fuaran-dir-context-start, start);
 }
 
-/* ── Chart data table (Phase 2776) ──────────────────────────────── */
+/* ── Chart data table ──────────────────────────────── */
 /* Host chrome under `RenderPolicy.ChartTable`, ON by default: a lowered chart
    is followed by a native disclosure holding the values its marks were drawn
    from as a real table, which the drawing names in `aria-details`. Off, none of
@@ -1066,7 +1066,7 @@ body {
   color: var(--fuaran-tone-subdued-fg, #6b7280);
 }
 
-/* ── Refresh marks (Phase 2751) ──────────────────────────────────── */
+/* ── Refresh marks ──────────────────────────────────── */
 /* Host chrome under `RenderPolicy.RefreshMarking`, off by default: the cells a
    live refresh's row delta names, and a Metric value it recomputed, are marked
    for that one refresh. Off, none of these classes is emitted. The mark is an
@@ -1121,8 +1121,8 @@ body {
   padding: var(--fuaran-space-lg, 16px);
 }
 
-/* Per-tone Metric rules — Phase 12.H propagated `MetricSpec.Tone` through
-   `renderMetric` so each tone emits its own class suffix; the older outer-
+/* Per-tone Metric rules — `MetricSpec.Tone` is propagated through
+   `renderMetric`, so each tone emits its own class suffix; the older outer-
    scoped `.fuaran-tone-brand .fuaran-metric` shape no longer applies (the new
    direct rules below are the canonical form, consistent with callout /
    progress / pill). */
@@ -1355,7 +1355,7 @@ body {
   margin: 0 0 var(--fuaran-space-sm, 8px) 0;
 }
 
-/* Phase 2591 — a cited figure inside a sentence. It stays in the line of text: no box, no
+/* A cited figure inside a sentence. It stays in the line of text: no box, no
    padding, nothing to break the run of words. The label says what the figure is for a screen
    reader; the sentence already says it for everyone else, so it is never printed. */
 .fuaran-cited {
@@ -1454,8 +1454,8 @@ body {
   font-size: var(--fuaran-text-sm, 13px);
 }
 
-/* Complete 7×N tone matrix — Phase 12.H added default/subdued/brand/info;
-   warning/critical/success were already present. */
+/* Complete 7×N tone matrix: default, subdued, brand, info, warning, critical
+   and success. */
 .fuaran-callout-default {
   border-left-color: var(--fuaran-tone-default-border, #e5e7eb);
   background: var(--fuaran-tone-default-bg, #ffffff);
@@ -1535,7 +1535,7 @@ body {
   transition: width 0.2s ease;
 }
 
-/* Per-tone progress fill — Phase 12.H completed the matrix.
+/* Per-tone progress fill, completing the tone matrix.
    Each `.fuaran-progress-{tone} .fuaran-progress-fill` overrides the
    default brand fill. */
 .fuaran-progress-default .fuaran-progress-fill {
@@ -1624,7 +1624,7 @@ body {
 }
 
 /* ── sparkline ────────────────────────────────────────────────── */
-/* Phase 1098 - the sparkline is now a lowered `Drawing` INSIDE this element
+/* The sparkline is now a lowered `Drawing` INSIDE this element
    rather than a bespoke `<svg class="fuaran-sparkline">`, so the hook is a
    CONTAINER. `inline-block` keeps the inline flow an `<svg>` had by default (a
    trend line sits beside text, which is the whole use case), and the box stays
@@ -1645,10 +1645,10 @@ body {
 }
 
 /* ── pill (grid-cell-tone-bearing) ────────────────────────────── */
-/* Phase 12.H — added the 7×N tone matrix for pill cells. The renderer
+/* The 7×N tone matrix for pill cells. The renderer
    emits `fuaran-grid-cell-pill fuaran-pill-{tone}` from `Render.fs`'s
-   pill cell branch; pre-12.H no `.fuaran-pill-{tone}` rule existed and
-   every pill rendered the default styling regardless of `tone row`. */
+   pill cell branch; without a `.fuaran-pill-{tone}` rule every pill would
+   render the default styling regardless of `tone row`. */
 .fuaran-pill-default {
   background: var(--fuaran-tone-default-bg, #ffffff);
   color: var(--fuaran-tone-default-fg, #1f2937);
@@ -1710,9 +1710,9 @@ body {
   border-color: var(--fuaran-tone-brand-fg, #1d4ed8);
 }
 
-/* Phase 12.N — interaction states per button variant. The pre-12.N
-   `filter: brightness(0.92)` opinion is replaced by tone-state tokens
-   so consumers can theme hover / focus / active / disabled per the
+/* Interaction states per button variant. A fixed
+   `filter: brightness(0.92)` opinion would leave nothing to theme, so these use tone-state tokens
+   that consumers can theme for hover / focus / active / disabled per the
    `--fuaran-tone-{tone}-{state}-{slot}` surface (HOST-STYLING-CHECKLIST.md
    §1.6). Primary / destructive buttons use the filled tone-fg slot as
    their background, so their state tokens consume the `*-{state}-fg`
@@ -1842,7 +1842,7 @@ body {
    renderer's inert form-field vocabulary (`Renderer.Server/Render.fs
    renderFormField`); aliasing them into the client-vocabulary rules keeps
    SSR form fields styled identically to their hydrated counterparts. */
-/* Phase 431 — `.fuaran-field-range-{min,max}` / `.fuaran-filter-range-{min,max}`
+/* `.fuaran-field-range-{min,max}` / `.fuaran-filter-range-{min,max}`
    are the pair-control input halves. The RangedNumber arm of the Range control
    emits them WITHOUT `.fuaran-form-input`, so before this alias landed a
    `FormFieldKind.Range` rendered two bare browser inputs beside every styled
@@ -1869,7 +1869,7 @@ body {
   color: inherit;
 }
 
-/* Phase 12.N — focus-visible ring on every text-input-shaped surface.
+/* Focus-visible ring on every text-input-shaped surface.
    The ring is the outline; the border slot picks up the per-tone focus
    border colour so consumers can override either independently. */
 .fuaran-select-control:focus-visible,
@@ -1889,7 +1889,7 @@ body {
   border-color: var(--fuaran-tone-default-focus-border, #93c5fd);
 }
 
-/* Phase 1113 — the typeahead / autocomplete control. The wrapper is the
+/* The typeahead / autocomplete control. The wrapper is the
    positioning context for the popup and nothing else; the input inside it is a
    `.fuaran-form-field-control` / `.fuaran-filter-input` and takes those rules
    above, so the control looks like every other field until it opens.
@@ -1941,7 +1941,7 @@ body {
   color: var(--fuaran-tone-brand-fg, #1e3a8a);
 }
 
-/* Phase 1130 — the rating control. Two markups share these rules, because the
+/* The rating control. Two markups share these rules, because the
    two tiers emit what each medium can honour: the client renders a
    `role="slider"` span (or a `role="img"` one for a bound average that nothing
    can write), and the SSR floor renders native radios beside the same star row.
@@ -1954,7 +1954,7 @@ body {
    all. The fill fraction rides as `--fuaran-rating-fill`, which is a VALUE the
    renderer computes; the three-state class beside it is the vocabulary. */
 .fuaran-rating {
-  /* Phase 1130 — the rating glyph, as a MASK image rather than a text
+  /* The rating glyph, as a MASK image rather than a text
      character. A star typed as text inherits the reader's font, renders as a
      colour emoji on some platforms and a hollow outline on others, and cannot
      be half-filled at all; a mask is one shape everywhere and clips to any
@@ -2071,7 +2071,7 @@ body {
   cursor: default;
 }
 
-/* Phase 1130 — the box a non-input chip control sits in. `fuaran-filter-input`
+/* The box a non-input chip control sits in. `fuaran-filter-input`
    styles an `<input>`; a chip whose control is a composed element (today, the
    rating's star row) needs the same inline box without the input chrome. */
 .fuaran-filter-control {
@@ -2079,7 +2079,7 @@ body {
   align-items: center;
 }
 
-/* Phase 1130 — the colour control. A native `<input type="color">` on every
+/* The colour control. A native `<input type="color">` on every
    tier, so all this does is give the swatch the same box the other fields have;
    the picker itself is the platform's and is not ours to style. The
    vendor-prefixed inner selectors strip the default padding that would
@@ -2105,7 +2105,7 @@ body {
   border-radius: var(--fuaran-radius-sm, 4px);
 }
 
-/* Phase 1121 — the multi-token control. The wrapper is the positioning context
+/* The multi-token control. The wrapper is the positioning context
    for the suggestion popup and the box that holds the chip row and the entry
    input; the input inside it keeps `.fuaran-form-field-control` /
    `.fuaran-filter-input`, so a token field reads as the same family of control
@@ -2253,7 +2253,7 @@ body {
   gap: var(--fuaran-space-md, 12px);
 }
 
-/* Phase 130: optional <fieldset> wrapper emitted when a form binds the
+/* Optional <fieldset> wrapper emitted when a form binds the
    `Disabled` slot. Reset the native fieldset chrome and carry the form's
    own flex-column gap so a disabled-capable form lays out identically to a
    plain one; `:disabled` cascades to every descendant control natively. */
@@ -2342,7 +2342,7 @@ body {
   border-radius: var(--fuaran-radius-sm, 4px);
 }
 
-/* Phase 431 — the FORM twin of `.fuaran-filter-range` above. The filter half
+/* The FORM twin of `.fuaran-filter-range` above. The filter half
    has been styled since the filter bar shipped; this half never was, so
    `FormFieldKind.Range` — and `FormFieldKind.DateRange`, which reuses the same
    class family — laid its two inputs and separator out as bare inline content
@@ -2365,7 +2365,7 @@ body {
   gap: var(--fuaran-space-xs, 4px);
 }
 
-/* Phase 1115 — the drop / paste ingress affordance. The zone is the SAME
+/* The drop / paste ingress affordance. The zone is the SAME
    <label> the plain picker is, with a dashed boundary added so a reader can
    see there is somewhere to drop; the control inside it is untouched, because
    the drop is an additional route and never a replacement for click-to-pick.
@@ -2395,7 +2395,7 @@ body {
   font-size: var(--fuaran-text-sm, 13px);
 }
 
-/* ── upload streaming (Phase 1117) ────────────────────────────────
+/* ── upload streaming ────────────────────────────────
    The shell an upload gets when it declares a host-registered `destination`.
    It wraps the control rather than replacing it — a `<div>` and not a
    `<label>`, because the drop zone above is already a label and both may be
@@ -2442,7 +2442,7 @@ body {
    deterministic "[Grid: N rows — hydrates client-side]" body (never a
    blank) that hydration replaces. Styled like `.fuaran-custom-placeholder`
    so a no-JS reader sees a deliberate placeholder, not a bare text run.
-   Phase 431 — the chart and map arms emit the same shape and were missed when
+   The chart and map arms emit the same shape and were missed when
    the grid one was styled, so their placeholders rendered as bare text runs;
    the coverage test now enumerates all three. */
 .fuaran-grid-ssr-placeholder,
@@ -2479,7 +2479,7 @@ body {
   background: var(--fuaran-tone-subdued-hover-bg, #e5e7eb);
 }
 
-/* Phase 1701 — the pointer is the ROW-ACTION affordance, and it used to sit in
+/* The pointer is the ROW-ACTION affordance, and it used to sit in
    the rule above, where it told every reader that every row was clickable when
    only a row whose grid declares `onRowClick` is. A pointer over inert content
    is a promise the markup does not keep, and it is the kind of thing a reader
@@ -2494,7 +2494,7 @@ body {
   cursor: pointer;
 }
 
-/* Phase 431 — row selection had a class and no rule, so a selected row was
+/* Row selection had a class and no rule, so a selected row was
    indistinguishable from an unselected one. Declared after the hover rule and
    with the `:hover` companion, because a bare `.fuaran-grid-row-selected`
    loses to `.fuaran-grid-row:hover` on specificity and the selection would
@@ -2510,7 +2510,7 @@ body {
    match on a server-rendered page until sorting actually works: a table never
    advertises an interaction it cannot perform, and the SSR bytes are untouched.
    The indicator rides ::after for the same reason — no markup change.
-   Phase 818 — `.fuaran-grid-header` joins each selector: a DATA-BOUND grid
+   `.fuaran-grid-header` joins each selector: a DATA-BOUND grid
    declaring `sortStateKey` renders the same affordance vocabulary from the
    client renderer (which sets `data-sortable` / `aria-sort` itself), so the
    two tabular surfaces stay visually symmetric. */
@@ -2543,7 +2543,7 @@ body {
   opacity: 1;
 }
 
-/* Phase 862 — the renderer-owned pager of a grid declaring `pageStateKey` +
+/* The renderer-owned pager of a grid declaring `pageStateKey` +
    `pageSize`. The wrapper exists only on a paged grid, so an unpaged grid's
    markup and cascade are untouched. Every token has a literal fallback, per
    the reference sheet's contract. */
@@ -2592,7 +2592,7 @@ body {
   outline-offset: 1px;
 }
 
-/* Phase 1125 — the grid export affordance. The wrapper exists only on a grid
+/* The grid export affordance. The wrapper exists only on a grid
    that declares `exportable`, so every other grid's markup and cascade are
    untouched. The control is placed after the grid and aligned to its trailing
    edge, beside where a pager would sit: an export is a thing you do to a table
@@ -2623,7 +2623,7 @@ body {
   outline-offset: 1px;
 }
 
-/* Phase 934 — the declarative row-reorder affordance. The handle is a real
+/* The declarative row-reorder affordance. The handle is a real
    <button> (focusable, keyboard-activatable); the cell column is as narrow as
    the glyph, so a non-reorderable grid loses nothing and a reorderable one
    gains one slim leading column. `cursor: grab` telegraphs the pointer
@@ -2658,7 +2658,7 @@ body {
   outline-offset: 1px;
 }
 
-/* Phase 1123 — cross-container transfer. Four classes, all of them STATE or
+/* Cross-container transfer. Four classes, all of them STATE or
    CHROME rather than layout: the handle, the header cell and the row are the
    reorder affordance's, unchanged, because one handle serves both routes.
 
@@ -2796,13 +2796,13 @@ body {
 }
 
 /* ── custom placeholder ───────────────────────────────────────── */
-/* Phase 12.F: the placeholder body lives inside the outer
+/* The placeholder body lives inside the outer
    `data-fuaran-node-id`-bearing wrapper (so LayoutObserver / SnapshotRegistry
    pick up Custom nodes the same way they pick up every other Kind), and
    only the `fuaran-custom-placeholder` child gets the dashed-border styling
    so consumers who register a renderer via `IFuaranRuntime.TryRenderCustom`
    don't inherit the placeholder visuals.
-   Phase 431 — the SERVER renderer emits `fuaran-kind-custom-placeholder` for
+   The SERVER renderer emits `fuaran-kind-custom-placeholder` for
    the same body (Renderer.Server/Registry.fs), so it is aliased in here on the
    `.fuaran-form-field-control` precedent: one vocabulary difference between the
    two renderers must not become a styling difference. Aliased in alongside it,
@@ -2811,7 +2811,7 @@ body {
    two fragment-resolution refusals. Each rendered as an unstyled text run,
    which is precisely what this rule exists to prevent; that they were the
    `fuaran-custom-placeholder` case all along is what the coverage enumeration
-   made visible. Phase 1812 adds `fuaran-unknown-placeholder`: the WIRE_FORMAT
+   made visible. `fuaran-unknown-placeholder` is the same kind of degrade: the WIRE_FORMAT
    §15.3 labelled degrade a BEHIND reader renders for a kind it cannot read and
    for which no `fallback` was authored ("needs core@1.4") — the same visible
    bracketed-diagnostic class, emitted by both renderers' `renderBehind`. */
@@ -2841,7 +2841,7 @@ body {
   color: var(--fuaran-tone-subdued-fg, #6b7280);
 }
 
-/* Phase 1108 — the CARDED degradation. An unregistered Custom node for which a
+/* The CARDED degradation. An unregistered Custom node for which a
    contract card is available renders the card's one-line summary and, where the
    node's prop bag violates the card's declared schema, the defects. Both sit
    inside the same dashed placeholder box; the summary reads as prose (it is a
@@ -2861,7 +2861,7 @@ body {
   margin-top: var(--fuaran-space-xs, 4px);
 }
 
-/* ── motion vocabulary (Phase 12.F) ───────────────────────────── */
+/* ── motion vocabulary ───────────────────────────── */
 /* The 8-token vocabulary §4h declares as the typed escape valve for
    AI-emittable animation. The renderer emits `fuaran-motion-{token}` on
    the outer wrapper when `Node.Motion` is `Some token`; this stylesheet
@@ -2942,7 +2942,7 @@ body {
 .fuaran-motion-expand-collapse {
 }
 
-/* ── Transition pair (Phase 1122) ───────────────────────────────
+/* ── Transition pair ───────────────────────────────
    `cross-fade` and `slide-between` are the two tokens whose subject
    is a TRANSITION BETWEEN renderings rather than the arrival or the
    state of one. They therefore key on the node's CHILD, not on the
@@ -2996,7 +2996,7 @@ body {
   animation: fuaran-motion-slide-between 260ms ease-out both;
 }
 
-/* The auto-advance stage wrapper (Phase 1122). Structural only — it
+/* The auto-advance stage wrapper. Structural only — it
    exists so the timed advance has an element to hang its pause and
    stop affordances on, and it must not change the layout of a switch
    that gains an interval. `display: contents` would remove the box
@@ -3020,8 +3020,8 @@ body {
 /* Respect the user's reduced-motion preference — `Motion` is a typed
    intent token, not a hard motion mandate.
 
-   Phase 1122 extends the existing rule to the transition pair rather
-   than writing a second block, so there is one place a reader looks
+   This rule covers the transition pair as well as the existing tokens rather
+   than a second block, so there is one place a reader looks
    to find out what the preference suppresses. Note what this rule can
    and cannot do: it makes the TRANSITION inert, and it cannot make
    the timed ADVANCE stop — the content would still change under the
@@ -3042,7 +3042,7 @@ body {
 }
 
 /* ============================================================================
-   Phase 66 (2026-05-30): Segmented control / radio-group surface.
+   Segmented control / radio-group surface.
 
    Horizontal: an inline "pill tray" of buttons with `role="radio"` — the
    selected segment gets `aria-checked="true"` + a contrasting pill. Inter-
@@ -3152,7 +3152,7 @@ body {
   outline-offset: var(--fuaran-focus-ring-offset, 2px);
 }
 
-/* ── Server-driven UX quick wins (Phase 158) ────────────────────────────────
+/* ── Server-driven UX quick wins ────────────────────────────────
    Affordances the generic server-driven shim (fuaran-live-patch.js) toggles via
    reserved attributes. All opt-in / shim-driven; a non-server-driven render
    never sets these, so they cost nothing there. */
@@ -3187,7 +3187,7 @@ html[data-fuaran-disconnected]::before {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Wave 43 — component-vocabulary completion (Phases 287–289).
+   Wave 43 — component-vocabulary completion.
    Image / List / Divider (Display); Modal / Toast / ScrollArea (overlays +
    overflow). The overlay classes carry the SSR↔CSR render-fidelity contract:
    overlays render INLINE (no portal), positioned + z-indexed purely by CSS,
@@ -3195,7 +3195,7 @@ html[data-fuaran-disconnected]::before {
    mismatch). Closed overlays use the native `[hidden]` attribute.
    ═══════════════════════════════════════════════════════════════════════ */
 
-/* ── Image (Phase 287) ─────────────────────────────────────────── */
+/* ── Image ─────────────────────────────────────────── */
 .fuaran-image {
   display: block;
   max-width: 100%;
@@ -3214,7 +3214,7 @@ html[data-fuaran-disconnected]::before {
   border-radius: var(--fuaran-radius-lg, 8px);
 }
 
-/* ── Image presentation (Phase 1077) ──────────────────────────────
+/* ── Image presentation ──────────────────────────────
    `fit` and `aspectRatio` are closed token vocabularies mapped to classes —
    no value from the tree ever reaches a style attribute. `Natural` emits no
    class on either axis, so the rules below are strictly additive and a
@@ -3266,7 +3266,7 @@ html[data-fuaran-disconnected]::before {
   object-fit: contain;
 }
 
-/* ── Image figure / caption (Phase 1078) ─────────────────────────
+/* ── Image figure / caption ─────────────────────────
    Present only when the image declares a `caption`; an uncaptioned image emits
    no `<figure>` at all, so these rules cannot reach it. The reset is the
    load-bearing part: a UA stylesheet gives `<figure>` a 1em block margin and a
@@ -3286,7 +3286,7 @@ html[data-fuaran-disconnected]::before {
   color: var(--fuaran-tone-muted-fg, #6b7280);
 }
 
-/* ── Expandable image (Phase 1079) ───────────────────────────────
+/* ── Expandable image ───────────────────────────────
    The anchor is emitted by BOTH renderers and is a real link to the full-size
    asset — the no-JS path. `display: block` and the zeroed line box are the
    whole visual contribution: an inline anchor around an `<img>` inherits the
@@ -3357,7 +3357,7 @@ html[data-fuaran-disconnected]::before {
   inset-inline-end: var(--fuaran-space-md, 12px);
 }
 
-/* ── Media (Phase 1076) ────────────────────────────────────────────
+/* ── Media ────────────────────────────────────────────
    Deliberately minimal. A `<video>` / `<audio>` with `controls` is drawn by the
    browser's own player chrome, which is the one control surface a user already
    knows how to operate and which follows their platform's accessibility
@@ -3386,7 +3386,7 @@ html[data-fuaran-disconnected]::before {
   width: 100%;
 }
 
-/* Phase 1110 - the transcript disclosure. It exists only when a media node
+/* The transcript disclosure. It exists only when a media node
    declares a transcript, so the group wrapper appears only then too: a media
    node without one emits the bare element it always emitted, and no rule here
    can reach it.
@@ -3445,7 +3445,7 @@ html[data-fuaran-disconnected]::before {
   white-space: pre-wrap;
 }
 
-/* ── Embed (Phase 1111) ────────────────────────────────────────── */
+/* ── Embed ────────────────────────────────────────── */
 /* The sandboxed third-party frame. A browser gives an `<iframe>` a 2px inset
    border and a 300x150 intrinsic box by default, both of which are wrong for
    an embedded document in a page's flow, so the reset is the whole of the
@@ -3485,7 +3485,7 @@ html[data-fuaran-disconnected]::before {
   aspect-ratio: 16 / 9;
 }
 
-/* ── Tooltip trait (Phase 1112) ────────────────────────────────── */
+/* ── Tooltip trait ────────────────────────────────── */
 /* The node-level hint. `.fuaran-has-tooltip` is the WRAPPER of any node whose
    `tooltip` trait resolved to text; `.fuaran-tooltip` is the hint element the
    renderers emit as that wrapper's last child, carrying `role="tooltip"` and
@@ -3527,7 +3527,7 @@ html[data-fuaran-disconnected]::before {
      implement; this is the declaration that makes it true. */
   box-sizing: border-box;
 
-  /* Tokenised against the existing vocabulary — this phase mints no new theme
+  /* Tokenised against the existing vocabulary — this rule mints no new theme
      token. The hint reads as a subdued surface with the default border, which
      is what a host re-binding the tone families already controls. */
   margin-block-start: var(--fuaran-space-xs, 4px);
@@ -3546,7 +3546,7 @@ html[data-fuaran-disconnected]::before {
   visibility: hidden;
   opacity: 0;
 
-  /* AND COLLAPSED, which is a separate claim from hidden (Phase 1702).
+  /* AND COLLAPSED, which is a separate claim from hidden.
      `visibility: hidden` keeps the box in layout, and an absolutely positioned
      box still contributes its bounds to the scrollable overflow region of the
      viewport — so a hint nobody has hovered was widening the document. Measured
@@ -3631,7 +3631,7 @@ html[data-fuaran-disconnected]::before {
   }
 }
 
-/* ── List (Phase 287) ──────────────────────────────────────────── */
+/* ── List ──────────────────────────────────────────── */
 .fuaran-list {
   margin: 0;
   padding-inline-start: var(--fuaran-space-xl, 24px);
@@ -3642,7 +3642,7 @@ html[data-fuaran-disconnected]::before {
   margin: var(--fuaran-space-xs, 4px) 0;
 }
 
-/* ── Tree (Phase 1120) ─────────────────────────────────────────── */
+/* ── Tree ─────────────────────────────────────────── */
 /* The WAI-ARIA tree pattern's stylesheet half. Two things here are
    load-bearing rather than decorative, and both are accessibility rather
    than looks.
@@ -3695,7 +3695,7 @@ html[data-fuaran-disconnected]::before {
   font-weight: 600;
 }
 
-/* ── Link (Phase 139) ──────────────────────────────────────────── */
+/* ── Link ──────────────────────────────────────────── */
 /* The crawlable `<a href>` primitive. Tokenised so reference-theme links
    read as brand-coloured rather than user-agent blue; hosts re-bind
    `--fuaran-tone-brand-fg` and the link follows. */
@@ -3716,7 +3716,7 @@ html[data-fuaran-disconnected]::before {
   border-radius: var(--fuaran-radius-sm, 4px);
 }
 
-/* ── Divider (Phase 287) ───────────────────────────────────────── */
+/* ── Divider ───────────────────────────────────────── */
 .fuaran-divider-horizontal {
   border: none;
   border-top: var(--fuaran-border-width, 1px) solid var(--fuaran-tone-default-border, #e5e7eb);
@@ -3751,7 +3751,7 @@ html[data-fuaran-disconnected]::before {
   padding: 0 var(--fuaran-space-md, 12px);
 }
 
-/* ── ScrollArea (Phase 289) ────────────────────────────────────── */
+/* ── ScrollArea ────────────────────────────────────── */
 .fuaran-scrollarea {
   position: relative;
 }
@@ -3770,7 +3770,7 @@ html[data-fuaran-disconnected]::before {
   overflow: auto;
 }
 
-/* ── Toast (Phase 289 — overlay render-fidelity contract) ──────── */
+/* ── Toast (overlay render-fidelity contract) ──────── */
 /* Inline (no portal); CSS owns position + stacking so SSR and CSR agree. */
 .fuaran-toast {
   position: fixed;
@@ -3821,7 +3821,7 @@ html[data-fuaran-disconnected]::before {
   padding: var(--fuaran-space-xs, 4px);
 }
 
-/* ── Modal (Phase 289 — overlay render-fidelity contract) ──────── */
+/* ── Modal (overlay render-fidelity contract) ──────── */
 /* Inline (no portal); the overlay is ALWAYS in the DOM, closed via [hidden].
    CSS owns the fixed-position backdrop + centring + z-index so the server and
    client emit identical structure. Focus-trap is a client-only enhancement
@@ -3865,7 +3865,7 @@ html[data-fuaran-disconnected]::before {
   inset-inline-end: var(--fuaran-space-md, 12px);
 }
 
-/* ── Popover (Phase 1119 — the non-blocking Modal modality) ─────── */
+/* ── Popover (the non-blocking Modal modality) ─────── */
 /* The wrapper carries NO positioning. That is the SSR floor made a property of
    the stylesheet rather than of one renderer: a no-script host cannot measure
    an anchor, so the surface renders IN FLOW at the position the node occupies
@@ -3910,14 +3910,14 @@ html[data-fuaran-disconnected]::before {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Wave 43 — CodeBlock (Phase 290) + Math (Phase 293).
+   CodeBlock + Math.
    Both carry a deterministic-render contract: the parity-checked output is the
    bare escaped structure (CodeBlock: <pre><code>; Math: the raw source). Syntax
    highlighting (CodeBlock) and KaTeX (Math) are client-only post-hydration
    enhancements applied OUTSIDE the cross-host / SSR↔CSR byte-diff.
    ═══════════════════════════════════════════════════════════════════════ */
 
-/* ── CodeBlock (Phase 290) ─────────────────────────────────────── */
+/* ── CodeBlock ─────────────────────────────────────── */
 .fuaran-codeblock {
   position: relative;
   margin: var(--fuaran-space-md, 12px) 0;
@@ -3961,7 +3961,7 @@ html[data-fuaran-disconnected]::before {
   cursor: pointer;
 }
 
-/* The deterministic highlighting tier (Phase 1854) — class-only token spans the
+/* The deterministic highlighting tier — class-only token spans the
    renderers emit for a CodeBlock whose language has a grammar (F*, F#; see
    fuaran-dotnet/docs/CODE-HIGHLIGHT.md). Colours are EXISTING theme tokens, read
    on the code surface (`--fuaran-code-bg`); every pair clears the 4.5:1 text
@@ -3992,7 +3992,7 @@ html[data-fuaran-disconnected]::before {
   font-style: italic;
 }
 
-/* ── Math (Phase 293) ──────────────────────────────────────────── */
+/* ── Math ──────────────────────────────────────────── */
 .fuaran-math-block {
   display: block;
   margin: var(--fuaran-space-md, 12px) 0;
@@ -4013,7 +4013,7 @@ html[data-fuaran-disconnected]::before {
 }
 
 /* ============================================================================
-   Responsive / mobile layout collapse — Phase 58 (2026-07-11)
+   Responsive / mobile layout collapse
 
    The `@media` thresholds below repeat the `--fuaran-breakpoint-{sm|md|lg}`
    token px values LITERALLY: a media-query condition cannot reference a
@@ -4103,12 +4103,12 @@ html[data-fuaran-disconnected]::before {
   }
 }
 
-/* ── print defaults (Phase 1124) ──────────────────────────────────── */
-/* The paged rendering of everything the document did NOT declare. Phase 1473
+/* ── print defaults ──────────────────────────────────── */
+/* The paged rendering of everything the document did NOT declare. The print break control
    below supplies the authored half — `keepTogether`, `breakBefore`,
    `keepRowsTogether`, `repeatHeader`, four classes a tree opts into. This block
    is the other half: what a page does on paper when its author said nothing at
-   all, which is the ordinary case and was, until this phase, "whatever the
+   all, which is the ordinary case and would otherwise be "whatever the
    browser happened to do with a stylesheet written for a screen".
 
    THE ORDER OF THE TWO BLOCKS IS LOAD-BEARING and this one comes FIRST. At
@@ -4168,7 +4168,7 @@ html[data-fuaran-disconnected]::before {
      container, so it keeps a real domain.
 
    The `page-break-*` spellings ride alongside the modern properties throughout,
-   for the reason Phase 1473 gives: an engine that honours only the retired
+   for the reason the print break control below gives: an engine that honours only the retired
    names would otherwise silently do nothing, which is worse than no rule. */
 @media print {
   /* -- 1 + 2: transient, pointer-only, and glyph-only controls ----- */
@@ -4255,7 +4255,7 @@ html[data-fuaran-disconnected]::before {
   /* -- 5: units that read wrong when halved ----------------------- */
   /* A card, a metric tile and a fact tile are each ONE statement: a figure split
      from its label, or a heading from the body it introduces, is not a smaller
-     version of the tile but a misleading one. `keepTogether` (Phase 1473)
+     version of the tile but a misleading one. `keepTogether`
      remains the way to say this about any OTHER container — this default covers
      only the shapes that are always atomic. */
   .fuaran-layout-card,
@@ -4275,7 +4275,7 @@ html[data-fuaran-disconnected]::before {
 
   /* A heading stranded at the foot of a page introduces nothing. `break-after`
      is used nowhere else in this sheet, which is also what keeps this block
-     clear of Phase 1473's `break-before` vocabulary — the two properties never
+     clear of the print break control's `break-before` vocabulary — the two properties never
      meet. */
   .fuaran-heading,
   .fuaran-card-heading,
@@ -4366,7 +4366,7 @@ html[data-fuaran-disconnected]::before {
   }
 }
 
-/* ── print break control (Phase 1473) ─────────────────────────────── */
+/* ── print break control ─────────────────────────────── */
 /* The paged rendering of subtree COHESION. Four classes, appended to a
    container's own className only when the document declares them, so a tree
    that declares nothing renders a byte-identical class string and this block
