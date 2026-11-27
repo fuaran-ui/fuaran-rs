@@ -32,8 +32,10 @@
 
    Writing direction (Phase 1114). Every inline-axis rule below is expressed in
    CSS LOGICAL properties (`margin-inline-start`, `padding-inline-end`,
-   `border-inline-start`, `inset-inline-{start|end}`, `text-align: start|end`,
-   `float: inline-end`), so the whole sheet's LAYOUT mirrors under `dir="rtl"`
+   `border-inline-start`, `inset-inline-{start|end}`, `float: inline-end`, and
+   `text-align: start|end`, spelled `var(--fuaran-dir-context-start, start)` so
+   a declared direction cannot re-resolve it: see "declared text direction"),
+   so the whole sheet's LAYOUT mirrors under `dir="rtl"`
    with no RTL override block and no second stylesheet. The document's `dir` is
    the only input — a host that sets it on `<html>` gets a mirrored layout for
    free, and a subtree that sets it locally mirrors only itself. The one
@@ -820,14 +822,21 @@ body {
 
    The declaration changes the run's direction and isolation and NOTHING ELSE
    (WIRE_FORMAT rule 5; Phase 2867). `dir` also decides which edge `start`
-   names, so left alone a node declaring `ltr` inside right-to-left prose
-   start-aligns to the left while its neighbours align right. Two rules take
-   that back:
+   names and which way a flex row or a table runs, so left alone a node
+   declaring `ltr` inside right-to-left prose start-aligns to the left, and a
+   Fact packs its value to the left, while its neighbours run right. Four rules
+   take that back:
      - `match-parent` resolves the node's inherited alignment against its
        PARENT's direction and computes to a physical edge, so the node and
        every descendant that inherits its alignment keep the side they had
-       undeclared. Chromium and WebKit parse only the `-webkit-` spelling, so
-       both are stated, the standard one last.
+       undeclared. Chromium parses only the `-webkit-` spelling, so both are
+       stated, the standard one last.
+     - A descendant that carries a `dir` of its own (a bound leaf's `auto`,
+       Phase 1114) resolves `start` against its own direction, as it does
+       undeclared, rather than inheriting that physical edge. It is stated
+       with no specificity, so any rule of this sheet that aligns the element
+       still wins. It takes `start`, so under an ancestor that aligns
+       `center` or `justify` such a descendant starts instead of inheriting it.
      - A descendant whose own rule names `start` or `end` would resolve against
        the declared direction instead, so the OUTERMOST declared node records
        the surrounding direction's physical edges, and every such rule in this
@@ -835,14 +844,31 @@ body {
        end`): the recorded edge inside a declared subtree, the logical value
        everywhere else. A new `start` / `end` alignment is written the same
        way; RenderObligationTests refuses a bare one.
+     - On a kind with a LABEL AND A VALUE (Fact, LabelValueRow, Metric) the
+       declared value is one run inside a laid-out tile, and a `dir` on the
+       wrapper mirrors the tile: the value and its icon pack to the other edge,
+       a row swaps its label and value sides. So the wrapper takes its
+       context's direction back, which an author `direction` does over the
+       `dir` attribute while `:dir()` still reads the attribute, and the
+       declared direction and the isolation go on the value's own run. Each
+       such kind names its run element here, and a new one is added beside them
+       (D43).
    The context is read with `:dir()`, so it follows the `dir` attributes the
-   document and its nodes carry. Neither rule moves flex or grid placement
-   inside the node; that is decided by where the declaration lands (D43). */
+   document and its nodes carry; a host that sets the document's direction
+   with CSS alone gets the logical fallbacks. What no rule here can do is tell
+   a bound value's wrapper from a literal one: the renderer emits the same
+   markup for both once a direction is declared, so a declared node aligns
+   with its CONTEXT, which is what an undeclared literal node does and not
+   what an undeclared bound node's `dir="auto"` does (D43). */
 .fuaran-dir-ltr,
 .fuaran-dir-rtl {
   unicode-bidi: isolate;
   text-align: -webkit-match-parent;
   text-align: match-parent;
+}
+
+:where(.fuaran-dir-ltr, .fuaran-dir-rtl) :where([dir]:not(.fuaran-dir-ltr, .fuaran-dir-rtl)) {
+  text-align: start;
 }
 
 :dir(ltr) > :is(.fuaran-dir-ltr, .fuaran-dir-rtl):not(:is(.fuaran-dir-ltr, .fuaran-dir-rtl) *) {
@@ -853,6 +879,24 @@ body {
 :dir(rtl) > :is(.fuaran-dir-ltr, .fuaran-dir-rtl):not(:is(.fuaran-dir-ltr, .fuaran-dir-rtl) *) {
   --fuaran-dir-context-start: right;
   --fuaran-dir-context-end: left;
+}
+
+:dir(ltr) > :is(.fuaran-dir-ltr, .fuaran-dir-rtl):is(.fuaran-kind-fact, .fuaran-kind-label-value-row, .fuaran-kind-metric) {
+  direction: ltr;
+}
+
+:dir(rtl) > :is(.fuaran-dir-ltr, .fuaran-dir-rtl):is(.fuaran-kind-fact, .fuaran-kind-label-value-row, .fuaran-kind-metric) {
+  direction: rtl;
+}
+
+.fuaran-dir-ltr :is(.fuaran-fact-value > :not(.fuaran-fact-icon), .fuaran-label-value-row-value, .fuaran-metric-value) {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.fuaran-dir-rtl :is(.fuaran-fact-value > :not(.fuaran-fact-icon), .fuaran-label-value-row-value, .fuaran-metric-value) {
+  direction: rtl;
+  unicode-bidi: isolate;
 }
 
 /* ── Derivation affordance (Phase 2749) ───────────────────────────── */
