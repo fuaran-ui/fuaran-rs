@@ -133,6 +133,14 @@ name = "fuaran-ui"
 # an empty node id is `FUARAN-EMPTY-ID` (was `EMPTY_NODE_ID`, which stays the
 # DECODE code), and `FUARAN082` (a duplicate `Switch` match) is an Error (was
 # a Warning), its message one line.
+#
+# Phase 2804 rides it, a BEHAVIOUR change in rendered output plus ADDITIVE items:
+# the server renderer draws a lowered chart's data table after the drawing (a
+# "View as table" `<details>` the drawing names in `aria-details`), by default.
+# New public items: `render::chart_lowering::{table_model, ChartTable,
+# TABLE_ROW_LIMIT}` and `render::server::{ChartTablePolicy, chart_table_id,
+# render_to_html_with_chart_table}`; `ChartTablePolicy::Off` renders every chart
+# byte for byte as before. No signature moves.
 version ="0.0.6-alpha.1"
 edition = "2024"
 rust-version = "1.85"

@@ -1,0 +1,1 @@
+{"id":"chart-line-temporal","kind":{"$type":"Chart","kind":"Line","source":{"$type":"Static","value":[{"day":"2026-01-01","users":30},{"day":"2026-01-02","users":45},{"day":"2026-01-03"},{"day":"2026-01-04","users":60}]},"title":"Active users","xField":"day","xScale":"Temporal","yFields":["users"]}}

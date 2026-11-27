@@ -4030,6 +4030,128 @@ pub fn project_row(row: &crate::canonical::JVal, x_field: &str, y_fields: &[Stri
     }
 }
 
+// ═══ The data-table alternative (Phase 2804) ════════════════════════════════
+//
+// The Rust twin of the reference host's `Charts.tableModel` (Phase 2776). A
+// lowered chart is an image to assistive technology: `role="img"` with a title
+// and a summary. The summary is not the data. This is the data: beside the
+// drawing, the values its marks were drawn from as a table, which the server
+// renderer offers behind a "View as table" disclosure the drawing names in
+// `aria-details`.
+//
+// WHAT A TABLE HOLDS — the reference's lowering rule, pinned for every host by
+// the corpus's `chart-lowering/table-model/` goldens: the caption is the chart's
+// `title`, carried unresolved, or a `Literal` minted from its kind ("Bar chart
+// data"); one column per plotted field under its declared name, the x field
+// first; one row per plotted row; each value cell the hover tip's exact readout
+// through the declared `value_format`, a missing value an empty cell (never a
+// zero for a value that is not there). The cost caps apply: a chart the caps
+// refuse offers no table, nor does a chart with no rows; past `TABLE_ROW_LIMIT`
+// rows the table holds the first that many and states how many there were.
+//
+// THE TABLE IS THE DRAWING'S VALUES, so this host offers one only for a chart
+// whose every plotted field this lowering reads. It does not yet read the
+// reference's withheld rows (Phase 2809), the interval, size, path and sort
+// channels (Phase 2654), the heatmap grid (Phase 2655) or series read off the
+// rows (Phase 2568). A chart declaring one of those where it applies is drawn
+// here without it, and a table built by the reference's rule would then state
+// values, or an order, that this host's drawing does not; one built from this
+// drawing would show what the author withheld. Such a chart offers no table.
+
+/// The most rows a chart's data table holds: the bound grid's limit.
+pub const TABLE_ROW_LIMIT: usize = 1000;
+
+/// The reference host's cost caps (`ChartLimits.defaults`).
+const TABLE_MAX_SERIES: usize = 32;
+const TABLE_MAX_POINTS: usize = 10_000;
+
+/// A chart's data table: what the server renderer draws behind the disclosure.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChartTable {
+    /// The chart's `title`, unresolved, or a `Literal` minted from its kind.
+    pub caption: TextSource,
+    /// One header per plotted field, in its declared name.
+    pub columns: Vec<String>,
+    /// One row per plotted row, in draw order; at most [`TABLE_ROW_LIMIT`].
+    pub rows: Vec<Vec<String>>,
+    /// How many rows the chart plotted — more than `rows` holds past the limit.
+    pub row_count: usize,
+}
+
+/// Whether a chart declares, where it applies, a field this lowering does not
+/// read (see the section comment): such a chart offers no table.
+fn declares_an_unread_field(spec: &crate::wire::ChartSpec) -> bool {
+    let one_series_kind = matches!(
+        spec.kind,
+        ChartKind::Bar | ChartKind::Line | ChartKind::Area | ChartKind::Scatter
+    );
+    let sortable_kind = matches!(
+        spec.kind,
+        ChartKind::Bar | ChartKind::Line | ChartKind::Area | ChartKind::Pie
+    );
+    let scatter = matches!(spec.kind, ChartKind::Scatter);
+    matches!(spec.kind, ChartKind::Heatmap)
+        || spec.y_fields.is_empty()
+        || spec.withheld_field.is_some()
+        || (spec.interval.is_some() && spec.y_fields.len() == 1 && one_series_kind)
+        || (scatter && (spec.size_field.is_some() || spec.path_field.is_some()))
+        || (spec.sort_by.is_some() && sortable_kind && spec.x_scale != Some(ChartXScale::Temporal))
+}
+
+/// A row's PRESENT value at `field`: a finite number, a boolean as 1 or 0, else
+/// none — the reference's `presentValueOf`.
+fn present_value_of(row: &crate::canonical::JVal, field: &str) -> Option<f64> {
+    use crate::canonical::JVal;
+    match row.field(field) {
+        Some(JVal::Num(v)) if v.is_finite() => Some(*v),
+        Some(JVal::Bool(b)) => Some(if *b { 1.0 } else { 0.0 }),
+        _ => None,
+    }
+}
+
+/// The data-table alternative of a chart over its resolved rows, or `None` when
+/// there are none to read: no rows, a chart the cost caps refuse, or one whose
+/// plotted fields this lowering does not all read.
+pub fn table_model(
+    spec: &crate::wire::ChartSpec,
+    rows: &[crate::canonical::JVal],
+) -> Option<ChartTable> {
+    if rows.is_empty()
+        || rows.len() > TABLE_MAX_POINTS
+        || spec.y_fields.len() > TABLE_MAX_SERIES
+        || declares_an_unread_field(spec)
+    {
+        return None;
+    }
+    let fmt = spec.value_format.as_ref();
+    let stacked = spec.stacked && matches!(spec.kind, ChartKind::Bar | ChartKind::Area);
+    let caption = spec.title.clone().unwrap_or_else(|| {
+        TextSource::Literal(format!("{} data", summary_kind_words(spec.kind, stacked)))
+    });
+    let mut columns = Vec::with_capacity(spec.y_fields.len() + 1);
+    columns.push(spec.x_field.clone());
+    columns.extend(spec.y_fields.iter().cloned());
+    let table_rows = rows
+        .iter()
+        .take(TABLE_ROW_LIMIT)
+        .map(|row| {
+            let mut cells = Vec::with_capacity(columns.len());
+            cells.push(project_row(row, &spec.x_field, &[]).category);
+            cells.extend(spec.y_fields.iter().map(|f| {
+                present_value_of(row, f)
+                    .map_or_else(String::new, |v| format_value(fmt, 1.0, false, v, v))
+            }));
+            cells
+        })
+        .collect();
+    Some(ChartTable {
+        caption,
+        columns,
+        rows: table_rows,
+        row_count: rows.len(),
+    })
+}
+
 #[cfg(test)]
 mod extent_tests {
     use super::{reference_max, reference_min};

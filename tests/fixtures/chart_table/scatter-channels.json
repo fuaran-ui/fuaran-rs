@@ -1,0 +1,1 @@
+{"id":"chart-scatter-channels","kind":{"$type":"Chart","interval":{"high":"hi","low":"lo"},"kind":"Scatter","pathField":"t","sizeField":"n","source":{"$type":"Static","value":[{"x":1,"y":2,"lo":1.5,"hi":2.5,"n":10,"t":1},{"x":2,"y":3.5,"lo":4,"hi":3,"n":20,"t":2},{"x":3,"y":3,"n":5,"t":3}]},"xField":"x","yFields":["y"]}}

@@ -1,0 +1,1 @@
+{"id":"chart-pie-percent","kind":{"$type":"Chart","kind":"Pie","source":{"$type":"Static","value":[{"channel":"Search","share":0.45},{"channel":"Social","share":0.3},{"channel":"Direct","share":0.25}]},"valueFormat":{"$type":"Percent"},"xField":"channel","yFields":["share"]}}

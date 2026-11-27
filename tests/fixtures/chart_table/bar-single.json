@@ -1,0 +1,1 @@
+{"id":"chart-bar-single","kind":{"$type":"Chart","kind":"Bar","source":{"$type":"Static","value":[{"quarter":"Q1","revenue":120},{"quarter":"Q2","revenue":150},{"quarter":"Q3","revenue":90.5},{"quarter":"Q4","revenue":175}]},"title":"Revenue by quarter","xField":"quarter","yFields":["revenue"]}}

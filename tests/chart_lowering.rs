@@ -16,9 +16,13 @@
 mod common;
 
 use fuaran_rs::canonical::{JVal, parse};
+use fuaran_rs::render::BindingSources;
 use fuaran_rs::render::chart_lowering::{
-    ChartAxisUnitMode, ChartLowerStyle, ChartTitles, lower_chart_with, project_row,
+    ChartAxisUnitMode, ChartLowerStyle, ChartTable, ChartTitles, TABLE_ROW_LIMIT, lower_chart_with,
+    project_row, table_model,
 };
+use fuaran_rs::render::egress::deny_non_local_egress;
+use fuaran_rs::render::server::{ChartTablePolicy, render_to_html_with_chart_table};
 use fuaran_rs::wire::{
     Binding, ChartAnnotation, ChartAnnotationRange, ChartAnnotationX, ChartDataLabels, ChartKind,
     ChartLegendPosition, ChartXScale, Format, I18nArg, Node, NodeKind, SemanticStyle,
@@ -408,5 +412,370 @@ fn lowering_is_deterministic() {
         let a = lowered_json(&name, input.trim());
         let b = lowered_json(&name, input.trim());
         assert_eq!(a, b, "{name}: non-deterministic");
+    }
+}
+
+// ── Phase 2804 — the data-table alternative ──────────────────────────────────
+//
+// The table model against the corpus's `chart-lowering/table-model/` goldens (the
+// reference host's Phase 2776 subfamily: each case a byte copy of an existing
+// input beside `<name>.table.json`, the model in canonical JSON or `null` where
+// the cost caps refuse the chart), and the server renderer's disclosure against
+// the reference SERVER renderer's bytes for the documents in
+// `tests/fixtures/chart_table/` (`<name>.reference.txt`, produced by
+// `render-oracle.fsx` there; its header carries the command).
+
+/// The cases this host does not certify, and why: each declares a field this
+/// host's lowering does not yet read (series read off the rows, the heatmap grid,
+/// withheld rows, the interval / size / path / sort channels — the subfamilies
+/// this suite does not run either), so its drawing here is drawn without it and
+/// the chart offers no table rather than one that disagrees with its drawing.
+const TABLE_MODEL_NOT_CERTIFIED: &[&str] = &[
+    "derived-mixed-columns",
+    "derived-over-series-cap",
+    "heatmap-missing-cells",
+    "heatmap-refusal-cell-cap",
+    "bar-withheld",
+    "pie-withheld",
+    "scatter-withheld",
+    "bar-sort-desc",
+    "bar-interval",
+    "scatter-all-channels",
+];
+
+/// A neutral chart-lowering input as the wire `Chart` it describes, and its rows.
+/// The `table-model/` cases: every input, each with its `<name>.table.json`.
+fn table_model_cases(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .expect("table-model dir readable")
+        .filter_map(|e| {
+            e.ok()?
+                .file_name()
+                .into_string()
+                .ok()?
+                .strip_suffix(".input.json")
+                .map(String::from)
+        })
+        .collect();
+    names.sort();
+    for name in &names {
+        assert!(
+            dir.join(format!("{name}.table.json")).is_file(),
+            "{name}: no table golden"
+        );
+    }
+    names
+}
+
+fn chart_of_input(input: &str) -> (fuaran_rs::wire::ChartSpec, Vec<JVal>) {
+    let JVal::Obj(members) = parse(input).expect("input parses") else {
+        panic!("an input is an object");
+    };
+    let mut rows = Vec::new();
+    let mut kind = vec![("$type".to_string(), JVal::Str("Chart".into()))];
+    for (k, v) in members {
+        match k.as_str() {
+            "data" => {
+                if let JVal::Arr(items) = &v {
+                    rows.clone_from(items);
+                }
+                kind.push((
+                    "source".into(),
+                    JVal::Obj(vec![
+                        ("$type".into(), JVal::Str("Static".into())),
+                        ("value".into(), v),
+                    ]),
+                ));
+            }
+            // A style selector, not a wire field.
+            "axisUnitMode" => {}
+            _ => kind.push((k, v)),
+        }
+    }
+    let doc = JVal::Obj(vec![
+        ("id".into(), JVal::Str("c".into())),
+        ("kind".into(), JVal::Obj(kind)),
+    ]);
+    let node = fuaran_rs::wire::decode_node(&fuaran_rs::canonical::render_canonical(&doc))
+        .expect("the input decodes as a Chart");
+    let NodeKind::Chart(spec) = node.kind else {
+        panic!("the input is a Chart");
+    };
+    (spec, rows)
+}
+
+fn table_json(table: Option<&ChartTable>) -> String {
+    let Some(t) = table else {
+        return "null".into();
+    };
+    let TextSource::Literal(caption) = &t.caption else {
+        panic!("a table-model caption is a Literal in every corpus case");
+    };
+    let strs = |v: &[String]| JVal::Arr(v.iter().map(|s| JVal::Str(s.clone())).collect());
+    fuaran_rs::canonical::render_canonical(&JVal::Obj(vec![
+        ("caption".into(), JVal::Str(caption.clone())),
+        ("columns".into(), strs(&t.columns)),
+        ("rowCount".into(), JVal::Num(t.row_count as f64)),
+        (
+            "rows".into(),
+            JVal::Arr(t.rows.iter().map(|r| strs(r)).collect()),
+        ),
+    ]))
+}
+
+#[test]
+fn every_certified_table_model_case_yields_its_golden_byte_for_byte() {
+    let dir = common::corpus_root()
+        .join("chart-lowering")
+        .join("table-model");
+    let names = table_model_cases(&dir);
+    // A subfamily that lost its cases would make the sweep vacuous, and an
+    // exclusion naming a case that is gone would outlive its reason.
+    assert!(
+        names.len() >= 25,
+        "table-model/ holds {} cases",
+        names.len()
+    );
+    for excluded in TABLE_MODEL_NOT_CERTIFIED {
+        assert!(
+            names.iter().any(|n| n == excluded),
+            "{excluded} is no longer a case"
+        );
+    }
+    let mut certified = 0;
+    for name in names
+        .iter()
+        .filter(|n| !TABLE_MODEL_NOT_CERTIFIED.contains(&n.as_str()))
+    {
+        let input = std::fs::read_to_string(dir.join(format!("{name}.input.json"))).expect("input");
+        let golden =
+            std::fs::read_to_string(dir.join(format!("{name}.table.json"))).expect("golden");
+        let (spec, rows) = chart_of_input(input.trim());
+        assert_eq!(
+            table_json(table_model(&spec, &rows).as_ref()),
+            golden.trim(),
+            "{name}"
+        );
+        certified += 1;
+    }
+    assert!(certified >= 14, "only {certified} cases certified");
+}
+
+#[test]
+fn an_uncertified_case_offers_no_table_rather_than_a_disagreeing_one() {
+    let dir = common::corpus_root()
+        .join("chart-lowering")
+        .join("table-model");
+    for name in TABLE_MODEL_NOT_CERTIFIED {
+        let input = std::fs::read_to_string(dir.join(format!("{name}.input.json"))).expect("input");
+        let (spec, rows) = chart_of_input(input.trim());
+        assert_eq!(table_model(&spec, &rows), None, "{name}");
+    }
+}
+
+#[test]
+fn the_caption_is_the_title_unresolved_or_minted_from_the_kind_and_the_caps_apply() {
+    let doc = |kind: &str, extra: &str, rows: &str| {
+        chart_of_input(&format!(
+            r#"{{"kind":"{kind}","xField":"x","yFields":["a","b"],"stacked":true{extra},"data":{rows}}}"#
+        ))
+    };
+    let (spec, rows) = doc("Area", "", r#"[{"x":"p","a":1,"b":2}]"#);
+    let table = table_model(&spec, &rows).expect("a table");
+    assert_eq!(
+        table.caption,
+        TextSource::Literal("Stacked area chart data".into())
+    );
+    let (spec, rows) = doc(
+        "Bar",
+        r#","title":{"$type":"Bound","binding":{"$type":"State","key":"t"}}"#,
+        "[]",
+    );
+    assert_eq!(table_model(&spec, &rows), None, "no rows, no table");
+    let (spec, _) = doc(
+        "Bar",
+        r#","title":{"$type":"Bound","binding":{"$type":"State","key":"t"}}"#,
+        "[]",
+    );
+    let one = vec![parse(r#"{"x":"p","a":1,"b":2}"#).unwrap()];
+    assert!(matches!(
+        table_model(&spec, &one).unwrap().caption,
+        TextSource::Bound(_)
+    ));
+    let many: Vec<JVal> = (0..=TABLE_ROW_LIMIT + 2)
+        .map(|i| parse(&format!(r#"{{"x":"r{i}","a":{i},"b":0}}"#)).unwrap())
+        .collect();
+    let long = table_model(&spec, &many).unwrap();
+    assert_eq!(
+        (long.rows.len(), long.row_count),
+        (TABLE_ROW_LIMIT, TABLE_ROW_LIMIT + 3)
+    );
+}
+
+fn chart_table_fixture(name: &str) -> String {
+    std::fs::read_to_string(format!("tests/fixtures/chart_table/{name}")).expect("fixture")
+}
+
+fn chart_table_documents() -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir("tests/fixtures/chart_table")
+        .expect("fixtures")
+        .filter_map(|e| {
+            e.ok()?
+                .file_name()
+                .into_string()
+                .ok()?
+                .strip_suffix(".json")
+                .map(String::from)
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+fn render_fixture(name: &str, chart_table: ChartTablePolicy) -> String {
+    let node = fuaran_rs::wire::decode_node(&chart_table_fixture(&format!("{name}.json")))
+        .expect("decodes");
+    render_to_html_with_chart_table(
+        &deny_non_local_egress(),
+        chart_table,
+        &node,
+        &BindingSources::default(),
+    )
+}
+
+/// The disclosure and the host element's opening: from `<details` to its close.
+fn disclosure(html: &str) -> Option<&str> {
+    let start = html.find("<details class=\"fuaran-chart-table\"")?;
+    let stop = html[start..].find("</details>")? + start + "</details>".len();
+    Some(&html[start..stop])
+}
+
+/// The documents whose charts this host offers a table for: those declaring no
+/// field its lowering does not read.
+const CHART_TABLE_OFFERED: &[&str] = &[
+    "bar-single",
+    "bar-stacked-currency",
+    "line-limit",
+    "line-temporal",
+    "pie-percent",
+];
+
+#[test]
+fn the_disclosure_is_the_reference_server_renderers_byte_for_byte() {
+    let names = chart_table_documents();
+    assert!(names.len() >= 8, "the fixture folder lost its documents");
+    for name in &names {
+        let html = render_fixture(name, ChartTablePolicy::Offer);
+        if CHART_TABLE_OFFERED.contains(&name.as_str()) {
+            let reference = chart_table_fixture(&format!("{name}.reference.txt"));
+            assert_eq!(disclosure(&html), disclosure(&reference), "{name}");
+            assert!(disclosure(&html).is_some(), "{name}: no disclosure");
+            let id = format!("chart-{name}-data-table");
+            assert!(html.contains(&format!(
+                "<div class=\"fuaran-chart-table-host\"><div><svg class=\"fuaran-drawing\" role=\"img\" aria-details=\"{id}\""
+            )));
+            assert_eq!(html.matches(&format!("id=\"{id}\"")).count(), 1, "{name}");
+            assert!(!html.contains("<script"), "{name}");
+        } else {
+            assert_eq!(
+                disclosure(&html),
+                None,
+                "{name}: a chart this host draws without a field offers no table"
+            );
+        }
+    }
+}
+
+#[test]
+fn with_the_table_off_every_chart_renders_its_pre_phase_bytes() {
+    let mut checked = 0;
+    for name in chart_table_documents() {
+        let Ok(before) =
+            std::fs::read_to_string(format!("tests/fixtures/chart_table/{name}.pre-phase.txt"))
+        else {
+            continue;
+        };
+        assert_eq!(
+            render_fixture(&name, ChartTablePolicy::Off),
+            before,
+            "{name}"
+        );
+        checked += 1;
+    }
+    assert!(checked >= 7, "only {checked} pre-phase captures");
+}
+
+/// The accessibility contract's `chartTable` rules, each checked structurally
+/// over every offered disclosure; a rule the contract names that this suite has
+/// no check for fails, so the contract and this host cannot drift apart.
+#[test]
+fn the_a11y_contracts_chart_table_rules_hold() {
+    let contract =
+        parse(&std::fs::read_to_string(common::corpus_root().join("a11y-contract.json")).unwrap())
+            .unwrap();
+    let JVal::Arr(rules) = contract
+        .field("chartTable")
+        .and_then(|c| c.field("rules"))
+        .expect("rules")
+        .clone()
+    else {
+        panic!("rules is an array");
+    };
+    let ids: Vec<String> = rules
+        .iter()
+        .filter_map(|r| match r.field("id") {
+            Some(JVal::Str(s)) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(ids.len() >= 8);
+    let between = |s: &str, open: &str, close: &str| -> Vec<String> {
+        s.split(open)
+            .skip(1)
+            .filter_map(|p| p.split(close).next().map(String::from))
+            .collect()
+    };
+    for name in CHART_TABLE_OFFERED {
+        let html = render_fixture(name, ChartTablePolicy::Offer);
+        let d = disclosure(&html).expect("a disclosure");
+        let id = between(d, "id=\"", "\"")
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        let thead = between(d, "<thead>", "</thead>").concat();
+        let header = between(&thead, "<th scope=\"col\">", "</th>");
+        let body_rows = between(&between(d, "<tbody>", "</tbody>").concat(), "<tr>", "</tr>");
+        for rule in &ids {
+            let ok = match rule.as_str() {
+                "disclosure-summary" => d.contains(
+                    "\"><summary class=\"fuaran-chart-table-toggle\">View as table</summary>",
+                ),
+                "referenced-from-chart" => {
+                    !id.is_empty()
+                        && html.matches(&format!("id=\"{id}\"")).count() == 1
+                        && html.contains(&format!("role=\"img\" aria-details=\"{id}\""))
+                }
+                "one-table" => d.matches("<table").count() == 1,
+                "caption" => {
+                    d.contains("<table class=\"fuaran-chart-table-grid\"><caption>")
+                        && !d.contains("<caption></caption>")
+                }
+                "column-headers" => {
+                    !header.is_empty()
+                        && header.iter().all(|h| !h.is_empty())
+                        && thead.matches("<th").count() == header.len()
+                        && !thead.contains("<td")
+                }
+                "row-headers" => body_rows
+                    .iter()
+                    .all(|r| r.starts_with("<th scope=\"row\">") && r.matches("<th").count() == 1),
+                "rectangular" => body_rows
+                    .iter()
+                    .all(|r| r.matches("<th").count() + r.matches("<td").count() == header.len()),
+                "no-empty-body" => !body_rows.is_empty(),
+                other => panic!("the contract names {other}, which this suite has no check for"),
+            };
+            assert!(ok, "{name}: {rule}");
+        }
     }
 }

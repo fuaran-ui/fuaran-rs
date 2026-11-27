@@ -1,0 +1,1 @@
+{"id":"chart-bar-stacked-currency","kind":{"$type":"Chart","kind":"Bar","source":{"$type":"Static","value":[{"region":"North","web":1200,"store":3400.25},{"region":"South <&> \"quoted\" 'x'","web":900,"store":2100}]},"stacked":true,"valueFormat":{"$type":"Currency","isoCode":"GBP"},"xField":"region","yFields":["web","store"]}}

@@ -96,6 +96,8 @@ struct Ctx<'a> {
     fragments: HashMap<String, &'a Node>,
     islands: &'a HashSet<String>,
     expanding: std::cell::RefCell<HashSet<String>>,
+    /// Phase 2804 — whether a lowered chart offers its data table.
+    chart_table: ChartTablePolicy,
 }
 
 // ─── Fragment collection + namespacing ───────────────────────────────────────
@@ -1599,7 +1601,7 @@ fn render_kind(ctx: &Ctx<'_>, node: &Node, semantic_attrs: &[Attr]) -> String {
             Some(rows) => render_static_table(ctx, rows, spec),
             None => render_grid(ctx, &node.state, spec),
         },
-        NodeKind::Chart(spec) => render_chart(ctx, &node.state, spec),
+        NodeKind::Chart(spec) => render_chart(ctx, &node.id, &node.state, spec),
         NodeKind::Map(spec) => render_map(ctx, &node.state, spec),
         // Structural
         NodeKind::Custom(spec) => {
@@ -4513,7 +4515,7 @@ fn render_static_table(ctx: &Ctx<'_>, spec: &StaticRows, grid: &GridSpec) -> Str
 // drawing region, never a silent blank. When the source binding has not yet
 // resolved to rows, the on-loading placeholder (or an empty drawing) shows — the
 // same not-resolved discipline every data-bound kind follows.
-fn render_chart(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &ChartSpec) -> String {
+fn render_chart(ctx: &Ctx<'_>, node_id: &str, state: &StateBehaviour, spec: &ChartSpec) -> String {
     let rows: std::borrow::Cow<'_, [JVal]> = match resolve_rows(ctx.sources, &spec.source) {
         ResolvedRows::NotResolved => {
             if let Some(loading) = &state.on_loading {
@@ -4565,12 +4567,111 @@ fn render_chart(ctx: &Ctx<'_>, state: &StateBehaviour, spec: &ChartSpec) -> Stri
         &super::chart_lowering::ChartLowerStyle::default(),
         &lowered_rows,
     );
+    // Phase 2804 — the data table, when the policy offers it and the lowering has
+    // values to give (`table_model`): the drawing and its disclosure in one host
+    // element, the drawing naming the disclosure, the markup the reference server
+    // renderer emits for them. `Off` never computes it.
+    let table = match ctx.chart_table {
+        ChartTablePolicy::Off => None,
+        ChartTablePolicy::Offer => super::chart_lowering::table_model(spec, rows),
+    };
+    let inner = match table {
+        None => render_drawing(ctx, &drawing),
+        Some(table) => chart_table_host(ctx, node_id, &drawing_svg(ctx, &drawing), &table),
+    };
     // Render the lowered Drawing through the shared Drawing renderer (inline SVG),
     // wrapped in the chart class so host CSS + the demo target it consistently.
-    el(
-        "div",
-        &[("class", s("fuaran-chart"))],
-        &render_drawing(ctx, &drawing),
+    el("div", &[("class", s("fuaran-chart"))], &inner)
+}
+
+// ─── A lowered chart's data table (Phase 2804) ───────────────────────────────
+//
+// The Rust twin of the reference host's `ElementPlan.ChartTablePlan`: a native
+// `<details>` disclosure after the drawing, which the drawing's `role="img"` root
+// names in `aria-details` (the disclosure rather than the table inside it,
+// because a closed `<details>` keeps its content out of the accessibility tree),
+// holding a real table — a `<caption>`, one `<th scope="col">` per column, and
+// each row's first cell (its x value) a `<th scope="row">`. It needs no script.
+// The disclosure's bytes are the reference server renderer's
+// (`tests/chart_lowering.rs` holds them to its output).
+
+/// Whether a lowered chart offers its data table: host chrome, never wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChartTablePolicy {
+    /// The default: every chart with values to read offers its table.
+    #[default]
+    Offer,
+    /// No chart offers one: every chart renders byte for byte as before.
+    Off,
+}
+
+/// The opening of every drawing's root element, up to its first varying attribute.
+const DRAWING_ROOT_OPEN: &str = "<svg class=\"fuaran-drawing\" role=\"img\"";
+
+/// The DOM id of a chart's disclosure, which its drawing names in `aria-details`.
+pub fn chart_table_id(node_id: &str) -> String {
+    format!("{node_id}-data-table")
+}
+
+/// Text as the reference server renderer escapes it, quotes included.
+fn chart_table_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// A lowered chart with its table: the drawing in its own element, its root
+/// naming the disclosure, then the disclosure, the two in one
+/// `fuaran-chart-table-host` element.
+fn chart_table_host(
+    ctx: &Ctx<'_>,
+    node_id: &str,
+    svg: &str,
+    table: &super::chart_lowering::ChartTable,
+) -> String {
+    let id = chart_table_text(&chart_table_id(node_id));
+    let svg = svg.strip_prefix(DRAWING_ROOT_OPEN).map_or_else(
+        || svg.to_string(),
+        |rest| format!("{DRAWING_ROOT_OPEN} aria-details=\"{id}\"{rest}"),
+    );
+    let header: String = table
+        .columns
+        .iter()
+        .map(|c| format!("<th scope=\"col\">{}</th>", chart_table_text(c)))
+        .collect();
+    let body: String = table
+        .rows
+        .iter()
+        .map(|cells| {
+            let cells: String = cells
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    if i == 0 {
+                        format!("<th scope=\"row\">{}</th>", chart_table_text(c))
+                    } else {
+                        format!("<td>{}</td>", chart_table_text(c))
+                    }
+                })
+                .collect();
+            format!("<tr>{cells}</tr>")
+        })
+        .collect();
+    let shown = table.rows.len();
+    let limit = if shown < table.row_count {
+        format!(
+            "<p class=\"fuaran-chart-table-limit\">Rows 1–{shown} of {}</p>",
+            table.row_count
+        )
+    } else {
+        String::new()
+    };
+    let caption = chart_table_text(&render_text(ctx.sources, &table.caption));
+    format!(
+        "<div class=\"fuaran-chart-table-host\"><div>{svg}</div><details class=\"fuaran-chart-table\" id=\"{id}\"><summary class=\"fuaran-chart-table-toggle\">View as table</summary><table class=\"fuaran-chart-table-grid\"><caption>{caption}</caption><thead><tr>{header}</tr></thead><tbody>{body}</tbody></table>{limit}</details></div>"
     )
 }
 
@@ -4703,6 +4804,17 @@ pub fn render_to_html_with_egress(
     tree: &Node,
     sources: &BindingSources,
 ) -> String {
+    render_to_html_with_chart_table(policy, ChartTablePolicy::default(), tree, sources)
+}
+
+/// [`render_to_html_with_egress`] with the chart data-table policy stated (Phase
+/// 2804): `ChartTablePolicy::Off` renders every chart byte for byte as before.
+pub fn render_to_html_with_chart_table(
+    policy: &EgressPolicy,
+    chart_table: ChartTablePolicy,
+    tree: &Node,
+    sources: &BindingSources,
+) -> String {
     let no_islands = HashSet::new();
     let mut fragments = HashMap::new();
     collect_fragments(&mut fragments, tree);
@@ -4717,6 +4829,7 @@ pub fn render_to_html_with_egress(
         fragments,
         islands: &no_islands,
         expanding: std::cell::RefCell::new(HashSet::new()),
+        chart_table,
     };
     render_node(&ctx, tree)
 }
@@ -4815,6 +4928,7 @@ pub fn render_with_islands_with_egress(
         fragments,
         islands: &islands,
         expanding: std::cell::RefCell::new(HashSet::new()),
+        chart_table: ChartTablePolicy::default(),
     };
     let static_html = render_node(&ctx, tree);
 
