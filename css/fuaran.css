@@ -841,14 +841,16 @@ body {
   color: var(--fuaran-tone-default-fg, #1f2937);
 }
 
-.fuaran-derivation-toggle {
+.fuaran-derivation-toggle,
+.fuaran-chart-table-toggle {
   cursor: pointer;
   color: var(--fuaran-tone-subdued-fg, #6b7280);
   border-radius: var(--fuaran-radius-sm, 4px);
   padding: 0 var(--fuaran-space-xs, 4px);
 }
 
-.fuaran-derivation-toggle:focus-visible {
+.fuaran-derivation-toggle:focus-visible,
+.fuaran-chart-table-toggle:focus-visible {
   outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
     var(--fuaran-focus-ring-color, #93c5fd);
   outline-offset: var(--fuaran-focus-ring-offset, 2px);
@@ -944,18 +946,10 @@ body {
   color: var(--fuaran-tone-default-fg, #1f2937);
 }
 
+/* The toggle shares the derivation toggle's rules above; it sits in a column
+   host, so it is held to its own width rather than the column's. */
 .fuaran-chart-table-toggle {
-  cursor: pointer;
-  color: var(--fuaran-tone-subdued-fg, #6b7280);
-  border-radius: var(--fuaran-radius-sm, 4px);
-  padding: 0 var(--fuaran-space-xs, 4px);
   width: fit-content;
-}
-
-.fuaran-chart-table-toggle:focus-visible {
-  outline: var(--fuaran-focus-ring-width, 2px) var(--fuaran-focus-ring-style, solid)
-    var(--fuaran-focus-ring-color, #93c5fd);
-  outline-offset: var(--fuaran-focus-ring-offset, 2px);
 }
 
 .fuaran-chart-table-grid {
